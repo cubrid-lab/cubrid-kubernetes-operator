@@ -69,6 +69,30 @@ const (
 	fieldDisplayName   = "displayName"
 )
 
+// requiredAfterTheFrozenRuns are the results the lanes came to require after
+// the frozen runs were written: the deletion of a standalone cluster with each
+// retention policy (S13/retain, S13/delete). A frozen run cannot gain results
+// it never recorded, so it is judged by the registry frozen, whose lanes are
+// the ones it ran under.
+var requiredAfterTheFrozenRuns = []string{"cluster-deletion-retention-retain", "cluster-deletion-retention-delete"}
+
+// frozen is the registry with the lanes the frozen runs were written under;
+// every result stays registered.
+var frozen = func() scenarioRegistry {
+	r := registry
+	r.lanes = slices.Clone(registry.lanes)
+	for i, lane := range r.lanes {
+		r.lanes[i].Keys = slices.DeleteFunc(slices.Clone(lane.Keys), func(k string) bool {
+			return slices.Contains(requiredAfterTheFrozenRuns, k)
+		})
+	}
+	return r
+}()
+
+// readFixture is ReadRun for a frozen run, or one made from it, under the
+// lanes it was written under.
+func readFixture(dir string) (RecordedRun, error) { return frozen.readRun(dir) }
+
 // copyRun copies a frozen run into a directory of the test's own and adds an
 // empty file for each evidence path it lists, then returns the directory.
 func copyRun(t *testing.T, name string) string {
@@ -225,7 +249,7 @@ func TestReadRunResolvesAVersion1BundleUnderItsOriginalLaneAndLevel(t *testing.T
 	}
 	for fixture, tc := range tests {
 		t.Run(fixture, func(t *testing.T) {
-			run, err := ReadRun(copyRun(t, fixture))
+			run, err := readFixture(copyRun(t, fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -242,7 +266,7 @@ func TestReadRunResolvesAVersion1BundleUnderItsOriginalLaneAndLevel(t *testing.T
 			if got := resultOf(t, run, testAlias); got.Key != tc.key || got.Judged != Pass {
 				t.Errorf("S06/restart = %+v, want key %s and a pass", got, tc.key)
 			}
-			lane, _ := registry.lane(tc.lane)
+			lane, _ := frozen.lane(tc.lane)
 			keys := make([]string, 0, len(run.Results))
 			for _, result := range run.Results {
 				keys = append(keys, result.Key)
@@ -261,7 +285,7 @@ func TestReadRunKeepsTheRecordIntactAndChangesNothing(t *testing.T) {
 		t.Run(fixture, func(t *testing.T) {
 			dir := copyRun(t, fixture)
 			before := snapshot(t, dir)
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,7 +314,7 @@ func TestReadRunKeepsTheRecordIntactAndChangesNothing(t *testing.T) {
 // did, its recorded pass stays readable. The result is neither the Kind suite's
 // nor a VM-lab result, so no key may claim it.
 func TestReadRunKeepsALabLaneRecordedAtTheKindLevelUnresolved(t *testing.T) {
-	run, err := ReadRun(copyRun(t, labSmokeRun))
+	run, err := readFixture(copyRun(t, labSmokeRun))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +466,7 @@ func TestReadRunNeverValidatesABundleThatDoesNotProveItsLane(t *testing.T) {
 			t.Run(version+"/"+name, func(t *testing.T) {
 				dir := copyRunOf(t, version, kindRun)
 				tc.change(t, dir)
-				run, err := ReadRun(dir)
+				run, err := readFixture(dir)
 				if err != nil {
 					t.Fatalf("a readable bundle was refused: %v", err)
 				}
@@ -464,7 +488,7 @@ func TestReadRunNeverValidatesABundleThatDoesNotProveItsLane(t *testing.T) {
 func TestReadRunKeepsTheOriginalVerdictOfAResultItRejects(t *testing.T) {
 	dir := copyRun(t, kindRun)
 	removeFirstEvidence(t, dir)
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +509,7 @@ func TestReadRunReportsACheckpointAsProvisional(t *testing.T) {
 	if err := summary.Checkpoint(dir, NewRedactor(), kindLaneName, time.Unix(2, 0)); err != nil {
 		t.Fatal(err)
 	}
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +530,7 @@ func TestReadRunReadsWhatTheWriterWrites(t *testing.T) {
 	if err := summary.Conclude(dir, NewRedactor(), lane); err != nil {
 		t.Fatal(err)
 	}
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +584,7 @@ func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {
 			} else {
 				inSummary(tc.change)(t, dir)
 			}
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want one containing %q", err, tc.want)
 			}

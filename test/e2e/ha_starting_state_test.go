@@ -112,7 +112,8 @@ func breakStepLabel() (string, error) {
 	}
 	var choices []string
 	for _, req := range kindLane.Required {
-		if req.ID == "S00" || req.ID == "S01" {
+		// S00 and S13 run on standalone clusters of their own.
+		if req.ID == "S00" || req.ID == "S01" || req.ID == "S13" {
 			continue
 		}
 		alias := evidence.Scenario{ID: req.ID, Variant: req.Variant}.Name()

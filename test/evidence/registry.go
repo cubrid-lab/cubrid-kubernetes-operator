@@ -114,6 +114,7 @@ const (
 	standaloneText  = "Standalone database installation and real SQL"
 	brokerHAText    = "Three-member HA and read-write/read-only Broker access"
 	replicationText = "Normal HA replication"
+	deletionText    = "Cluster deletion and data-retention policy"
 	accessText      = "Instance Manager network isolation, token-checked requests, service-account permissions " +
 		"and a search for leaked credentials"
 	smokeText   = "Installed Operator standalone connection and SQL smoke"
@@ -178,8 +179,7 @@ var registry = scenarioRegistry{
 		{"S10", "ha-pvc-loss-rebuild", "Rebuild after persistent-volume data loss", "s10-rebuild-after-pvc-loss"},
 		{"S11", "installed-backup", backupText, "s11-backup-failure-and-restart"},
 		{"S12", "installed-restore-new-cluster", restoreText, "s12-restore-into-a-new-cluster"},
-		{"S13", "cluster-deletion-retention", "Cluster deletion and data-retention policy",
-			"s13-deletion-and-retention"},
+		{"S13", "cluster-deletion-retention", deletionText, "s13-deletion-and-retention"},
 		{"S14", "instance-manager-access-and-secret-protection", accessText, "s14-authentication-and-secrets"},
 		{"S15", "node-drain-disruption-policy", "Node drain and PodDisruptionBudget behavior",
 			"s15-node-drain-and-poddisruptionbudget"},
@@ -201,6 +201,8 @@ var registry = scenarioRegistry{
 		kindResult("operator-failure-recovery-restart", "S06/restart", operatorText+" - restart"),
 		kindResult("operator-failure-recovery-absent-during-failover", "S06/absent-during-failover",
 			operatorText+" - absent during failover"),
+		kindResult("cluster-deletion-retention-retain", "S13/retain", deletionText+" - retain"),
+		kindResult("cluster-deletion-retention-delete", "S13/delete", deletionText+" - delete"),
 		kindResult("instance-manager-access-and-secret-protection", "S14", accessText),
 		kindResult("ha-token-rotation", "S14/token-rotation", "HA Instance Manager token rotation"),
 		kindResult("ha-legacy-token-migration", "S14/token-migration", "Migration from legacy Instance Manager token"),
@@ -256,6 +258,7 @@ var registry = scenarioRegistry{
 			"ha-primary-pod-recovery-graceful",
 			"broker-failure-recovery-process", "broker-failure-recovery-one-pod", "broker-failure-recovery-all-rw-pods",
 			"operator-failure-recovery-restart", "operator-failure-recovery-absent-during-failover",
+			"cluster-deletion-retention-retain", "cluster-deletion-retention-delete",
 			"ha-token-rotation", "ha-legacy-token-migration"}},
 		{Name: "lab-installed-smoke", Level: LevelVMLab, Keys: []string{"installed-standalone-sql-smoke"}},
 		{Name: "lab-preallocated-component-smoke", Level: LevelVMLab,

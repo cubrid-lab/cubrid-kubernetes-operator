@@ -270,6 +270,10 @@ var _ = Describe("Manager", func() {
 	// S00: a real database (linux/amd64 only).
 	s00Scenario()
 
+	// S13: deleting a standalone cluster with each retention policy, and
+	// creating it again over the retained PVC (linux/amd64 only).
+	s13Scenario()
+
 	// HA bootstrap on a real engine: one database, seeded peers (linux/amd64 only).
 	haBootstrapScenario()
 

@@ -34,11 +34,11 @@ Tests compare the registry with its sources in both directions: `kindRequired` b
 
 ## Contract families: readable names
 
-These names are registered. The keys of the Kind results, and the family keys of S00, S01, S02, S03, S05, S06 and S14, are also Ginkgo labels that select Kind steps; the keys of the VM-lab results are what `-check` of the installed commands takes, and the keys of the HA steps after the cluster is formed are what `E2E_BREAK_STEP` takes. None of them is yet an evidence key. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
+These names are registered. The keys of the Kind results, and the family keys of S00, S01, S02, S03, S05, S06, S13 and S14, are also Ginkgo labels that select Kind steps; the keys of the VM-lab results are what `-check` of the installed commands takes, and the keys of the HA steps after the cluster is formed are what `E2E_BREAK_STEP` takes. None of them is yet an evidence key. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
 
 **How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key identifies one test. Only a result a run records today has a concrete key; the tables list those and the current lane definitions.
 
-The following have a family and no concrete key, because no run records them: S07, S08, S09, S10, S13, S15, and the S11 contract variant `interrupted-pod`. S04 applies only to the lab, and S16 and S17 are reserved. A family key is not a result, so it does not resolve to one.
+The following have a family and no concrete key, because no run records them: S07, S08, S09, S10, S15, and the S11 contract variant `interrupted-pod`. S04 applies only to the lab, and S16 and S17 are reserved. A family key is not a result, so it does not resolve to one.
 
 | Existing contract | What is checked | Descriptive family key |
 | --- | --- | --- |
@@ -56,6 +56,8 @@ The following have a family and no concrete key, because no run records them: S0
 | S11 | Backup completion, faults and recovery | `installed-backup` |
 | S12 | Restore into a new cluster and fault handling | `installed-restore-new-cluster` |
 | S13 | Cluster deletion and data-retention policy | `cluster-deletion-retention` |
+| S13/retain | Cluster deletion and data-retention policy - retain | `cluster-deletion-retention-retain` |
+| S13/delete | Cluster deletion and data-retention policy - delete | `cluster-deletion-retention-delete` |
 | S14 (base) | Instance Manager network isolation, token-checked requests, service-account permissions and a search for leaked credentials | `instance-manager-access-and-secret-protection` |
 | S14/token-rotation | HA Instance Manager token rotation | `ha-token-rotation` |
 | S14/token-migration | Migration from legacy Instance Manager token | `ha-legacy-token-migration` |
@@ -77,6 +79,7 @@ The `kind` lane requires the results below; the [required-lane contract](scenari
 | S03/abrupt-first-member, S03/abrupt, S03/graceful | `ha-primary-pod-recovery-abrupt-first-member`, `ha-primary-pod-recovery-abrupt-later-master`, `ha-primary-pod-recovery-graceful` |
 | S05/broker-process, S05/one-broker-pod, S05/all-rw-brokers | `broker-failure-recovery-process`, `broker-failure-recovery-one-pod`, `broker-failure-recovery-all-rw-pods` |
 | S06/restart, S06/absent-during-failover | `operator-failure-recovery-restart`, `operator-failure-recovery-absent-during-failover` |
+| S13/retain, S13/delete | `cluster-deletion-retention-retain`, `cluster-deletion-retention-delete` |
 | S14, S14/token-rotation, S14/token-migration | `instance-manager-access-and-secret-protection`, `ha-token-rotation`, `ha-legacy-token-migration` |
 
 The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The key's `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.

@@ -83,7 +83,7 @@ func TestReadRunResolvesAVersion2Bundle(t *testing.T) {
 	}
 	for fixture, tc := range tests {
 		t.Run(fixture, func(t *testing.T) {
-			run, err := ReadRun(copyRunOf(t, version2, fixture))
+			run, err := readFixture(copyRunOf(t, version2, fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,11 +107,11 @@ func TestReadRunResolvesAVersion2Bundle(t *testing.T) {
 func TestReadRunReadsTheTwoVersionsOfARunTheSame(t *testing.T) {
 	for _, fixture := range []string{kindRun, labRestartRun} {
 		t.Run(fixture, func(t *testing.T) {
-			before, err := ReadRun(copyRunOf(t, version1, fixture))
+			before, err := readFixture(copyRunOf(t, version1, fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
-			after, err := ReadRun(copyRunOf(t, version2, fixture))
+			after, err := readFixture(copyRunOf(t, version2, fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,7 +146,7 @@ func TestReadRunReadsTheTwoVersionsOfARunTheSame(t *testing.T) {
 func TestReadRunKeepsAVersion2RecordIntactAndChangesNothing(t *testing.T) {
 	dir := copyRunOf(t, version2, kindRun)
 	before := snapshot(t, dir)
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestWriterAddsOnlyTheIdentityToTheVersion1Record(t *testing.T) {
 					t.Errorf("junit.xml has no %s", want)
 				}
 			}
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,7 +243,7 @@ func TestReadRunComparesAJUnitKeyWithTheSummary(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := copyRunOf(t, tc.version, kindRun)
 			editJUnit(t, dir, s03AbruptCase, keyed(tc.key))
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -309,7 +309,7 @@ func TestWriterRecordsNoIdentityForAResultTheRegistryDoesNotHold(t *testing.T) {
 	if junit := snapshot(t, dir)[filepath.Join(dir, junitFile)]; junitKeyProperties.MatchString(junit) {
 		t.Errorf("a result of a lab lane at the kind level has a key in junit.xml:\n%s", junit)
 	}
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestReadRunNeverValidatesAVersion2ResultWhoseIdentityDoesNotHold(t *testing
 		t.Run(name, func(t *testing.T) {
 			dir := copyRunOf(t, version2, kindRun)
 			tc.change(t, dir)
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err != nil {
 				t.Fatalf("a readable bundle was refused: %v", err)
 			}
@@ -402,7 +402,7 @@ func TestReadRunDoesNotLetTwoResultsExchangeTheirKeys(t *testing.T) {
 	dir := copyRunOf(t, version2, kindRun)
 	abruptKeyIs(gracefulKey)(t, dir)
 	inScenario(s03, s03Graceful, func(scenario map[string]any) { scenario[fieldKey] = abruptKey })(t, dir)
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestReadRunKeepsTheRecordedDisplayNameAndDoesNotMatchOnIt(t *testing.T) {
 	const earlierWords = "Earlier wording of the primary Pod recovery check"
 	dir := copyRunOf(t, version2, kindRun)
 	inScenario(s03, abrupt, func(scenario map[string]any) { scenario[fieldDisplayName] = earlierWords })(t, dir)
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestWriterNeverTurnsAnUnprovenRequiredResultIntoAPass(t *testing.T) {
 			if err := summary.Conclude(dir, NewRedactor(), requirementsOf(t, kindLaneName)); err == nil {
 				t.Error("the run passed its lane")
 			}
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -515,7 +515,7 @@ func TestReadRunReportsAVersion2CheckpointAsProvisional(t *testing.T) {
 	if err := frozenSummary(t, dir).Checkpoint(dir, NewRedactor(), kindLaneName, time.Unix(2, 0)); err != nil {
 		t.Fatal(err)
 	}
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,7 @@ func TestReadRunRefusesWhatItCannotInterpretAtVersion2(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := copyRunOf(t, version2, kindRun)
 			inSummary(tc.change)(t, dir)
-			run, err := ReadRun(dir)
+			run, err := readFixture(dir)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want one containing %q", err, tc.want)
 			}
@@ -569,7 +569,7 @@ func TestReadRunRefusesWhatItCannotInterpretAtVersion2(t *testing.T) {
 func TestReadRunDoesNotValidateAVersion1FileThatCallsItselfVersion2(t *testing.T) {
 	dir := copyRun(t, kindRun)
 	inSummary(func(summary map[string]any) { summary[fieldSchemaVersion] = schemaV2 })(t, dir)
-	run, err := ReadRun(dir)
+	run, err := readFixture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
