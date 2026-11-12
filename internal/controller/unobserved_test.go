@@ -133,10 +133,16 @@ func TestProbeRole_ReasonIsOneLineAndCut(t *testing.T) {
 }
 
 // switchAnswer answers every request with the status it holds at the time.
+// A master or slave answer names the member that was asked, as an Instance
+// Manager does: without the name the role would not count (#839).
 type switchAnswer struct{ status instancemanager.HAStatus }
 
 func (s *switchAnswer) RoundTrip(req *http.Request) (*http.Response, error) {
-	return answerWith{s.status}.RoundTrip(req)
+	st := s.status
+	if st.Role == instancemanager.RoleMaster || st.Role == instancemanager.RoleSlave {
+		st.Current, _, _ = strings.Cut(req.URL.Hostname(), ".")
+	}
+	return answerWith{st}.RoundTrip(req)
 }
 
 // The line logged for a member that turns unknown carries the cleaned and cut

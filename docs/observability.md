@@ -444,6 +444,7 @@ The `reason` of `member_role_unobserved` is one of:
 | `unreadable answer` | The answer was not a role answer |
 | `the Instance Manager reported no role`, followed by `: ` and the reason it gave when it gave one, for example `current node state 'unknown' is not an authoritative role` | The member does not report an authoritative role |
 | `the answer names the member <name>` | The answer came from another member |
+| `the answer names no member` | The answer reports master or slave without naming the member it came from, so it cannot be told apart from another member's answer and the role does not count |
 | `the role <role> contradicts the HA node list` | The answer contradicts itself |
 | `a master whose server is not registered_and_active` | The member reports itself master while its server is not active |
 | `the answer is older than 15s` | The answer came too long ago to count |
