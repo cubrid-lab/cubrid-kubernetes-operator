@@ -101,6 +101,13 @@ type Server struct {
 	// defaults (backupSourceRole).
 	backupRoleBound time.Duration
 	backupRolePoll  time.Duration
+	// dbaCheckMu lets one check of the DBA password run at a time
+	// (checkDBAPassword); dbaCheckBound overrides how long it may take, zero
+	// keeps dbaPasswordCheckBound. dbaCheckLast is the last answer, guarded
+	// by dbaCheckMu, so that only a change is logged at info.
+	dbaCheckMu    sync.Mutex
+	dbaCheckBound time.Duration
+	dbaCheckLast  DBAPasswordCheck
 	// procRoot is the process list that wait reads; empty is defaultProcRoot.
 	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
@@ -293,6 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/operations", s.auth(s.findOperations))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
+	mux.HandleFunc("GET /v1/dba-password", s.auth(s.dbaPassword))
 	return s.logRequests(mux)
 }
 

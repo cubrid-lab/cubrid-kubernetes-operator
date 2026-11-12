@@ -162,6 +162,13 @@ type CubridClusterReconciler struct {
 	// Secrets, so this check is what lets the cluster go on once the Secret
 	// is created or corrected.
 	DBAPasswordRecheck time.Duration
+	// DBAPassword asks the member of a cluster with a DBA password Secret
+	// whether the Secret's value is still the database's DBA password. Nil
+	// asks nothing, and a changed value is not reported.
+	DBAPassword DBAPasswordChecker
+	// DBAPasswordPoll is how often that is asked while nothing else brings
+	// the cluster back; zero is defaultDBAPasswordPoll.
+	DBAPasswordPoll time.Duration
 
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
@@ -1093,8 +1100,8 @@ type stepResult struct {
 //
 //   - a recovery bootstrap that has not completed (reconcileRecovery), which
 //     ends the reconcile with its own status (ADR-0008);
-//   - for a standalone cluster, the engine guard and the Broker tier
-//     (reconcileStandaloneMembers);
+//   - for a standalone cluster, the engine guard, the Broker tier and the
+//     check of its DBA password Secret (reconcileStandaloneMembers);
 //   - for an HA cluster with a role prober, the HA bootstrap, the role
 //     observation, the Broker tier and the rolling update
 //     (reconcileHAMembers).
@@ -1172,7 +1179,9 @@ func (r *CubridClusterReconciler) updateRecoveryStatus(ctx context.Context, clus
 }
 
 // reconcileStandaloneMembers observes the member of a standalone cluster,
-// applies the engine guard to it (ADR-0009) and reconciles its Broker tier.
+// applies the engine guard to it (ADR-0009), reconciles its Broker tier and
+// asks whether its DBA password Secret still holds the database's password
+// (reconcileDBAPasswordRotation).
 func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	sts *appsv1.StatefulSet) stepResult {
 	desired := cluster.Spec.Topology.PromotableMembers
@@ -1188,6 +1197,10 @@ func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context
 	available, ok, steps := r.brokerTier(ctx, cluster, sts, nil)
 	if ok {
 		setStandaloneBrokerConditions(cluster, sts.Status.ReadyReplicas >= desired && desired > 0, available)
+	}
+	// The sooner of the two retries is kept.
+	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, sts); poll > 0 && (steps.retry == 0 || poll < steps.retry) {
+		steps.retry = poll
 	}
 	return steps
 }

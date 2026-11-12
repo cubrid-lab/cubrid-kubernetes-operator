@@ -36,9 +36,10 @@ import (
 
 // conditionDBAPasswordSecretResolved says whether the key that
 // spec.dbaPasswordSecretRef names exists and holds a value the Instance
-// Manager accepts. True says nothing about the database: the DB container
-// sets the password, or checks it, before its server starts, so a member that
-// is ready already has it. A cluster without the reference has no such
+// Manager accepts. The DB container sets the password, or checks it, before
+// its server starts, so a member that is ready already has it; afterwards the
+// ready member is asked whether the value is still the database's password
+// (reconcileDBAPasswordRotation). A cluster without the reference has no such
 // condition.
 const conditionDBAPasswordSecretResolved = "DBAPasswordSecretResolved"
 
@@ -141,8 +142,12 @@ func (r *CubridClusterReconciler) dbaPasswordProblem(ctx context.Context,
 	case bytes.IndexByte(value, '\n') >= 0:
 		return invalid("holds a line feed other than one at its end")
 	}
-	return reasonDBAPasswordSecretResolved,
-		fmt.Sprintf("the key %q of the Secret %s holds a DBA password the DB container can read", ref.Key, ref.Name), nil
+	return reasonDBAPasswordSecretResolved, dbaPasswordResolvedMessage(ref), nil
+}
+
+// dbaPasswordResolvedMessage is the message of a resolved DBA password Secret.
+func dbaPasswordResolvedMessage(ref *corev1.SecretKeySelector) string {
+	return fmt.Sprintf("the key %q of the Secret %s holds a DBA password the DB container can read", ref.Key, ref.Name)
 }
 
 // reconcileDBAPasswordSecret reports whether the DBA password the cluster
@@ -164,11 +169,15 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordSecret(ctx context.Context
 		return false, 0, nil
 	}
 	reason, msg, readErr := r.dbaPasswordProblem(ctx, cluster)
+	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	if reason == reasonDBAPasswordSecretResolved {
-		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue, reason, msg)
+		// A value that resolves may still not be the database's password;
+		// only the member's answer clears that (reconcileDBAPasswordRotation).
+		if was == nil || was.Reason != reasonDBAPasswordRotationUnsupported {
+			setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue, reason, msg)
+		}
 		return false, 0, nil
 	}
-	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	same := was != nil && was.Status == metav1.ConditionFalse && was.Reason == reason && was.Message == msg
 	setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionFalse, reason, msg)
 
@@ -216,4 +225,88 @@ func (r *CubridClusterReconciler) dbaPasswordRecheck() time.Duration {
 // file (instancemanager.DBAPasswordFileEnv).
 func dbaPasswordEnv() corev1.EnvVar {
 	return corev1.EnvVar{Name: instancemanager.DBAPasswordFileEnv, Value: dbaPasswordFile}
+}
+
+// DBAPasswordChecker asks a member's Instance Manager whether the value of
+// its mounted DBA password file is the running database's DBA password (GET
+// /v1/dba-password). It is an interface so the reconciler can be tested
+// without a live manager.
+type DBAPasswordChecker interface {
+	CheckDBAPassword(ctx context.Context, podName, namespace string) (instancemanager.DBAPasswordCheck, error)
+}
+
+// reasonDBAPasswordRotationUnsupported is the reason of
+// conditionDBAPasswordSecretResolved while the Secret's value is not the
+// database's DBA password: it was changed after the password was set, or the
+// password was changed in the database. The database keeps its password.
+const reasonDBAPasswordRotationUnsupported = "DBAPasswordRotationUnsupported"
+
+// defaultDBAPasswordPoll is how often, by default, the member of a cluster
+// with a DBA password Secret is asked whether the Secret's value is still the
+// database's password. The operator does not watch the user's Secrets (#282),
+// so this is how long a changed value may go unreported.
+const defaultDBAPasswordPoll = 5 * time.Minute
+
+func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
+	if r.DBAPasswordPoll > 0 {
+		return r.DBAPasswordPoll
+	}
+	return defaultDBAPasswordPoll
+}
+
+// reconcileDBAPasswordRotation asks the member of a standalone cluster with a
+// DBA password Secret whether the Secret's value is still the database's DBA
+// password, and returns the delay after which to ask again; zero for a
+// cluster without the reference.
+//
+// Differs sets conditionDBAPasswordSecretResolved False with
+// reasonDBAPasswordRotationUnsupported, and records a Warning Event when it
+// was not already so. Matches sets it back to True. The new value is never
+// applied, and neither the StatefulSet nor its Pod is changed. An answer that
+// cannot tell (Unknown, a failed call, no member ready) leaves the condition
+// as it is, so that it does not flap. Nothing is kept between reconciles: an
+// operator that restarts asks again.
+func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
+	cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) time.Duration {
+	ref := cluster.Spec.DBAPasswordSecretRef
+	if ref == nil || cluster.Spec.HighAvailability.Enabled {
+		return 0
+	}
+	poll := r.dbaPasswordPoll()
+	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
+	// A Secret that does not resolve is reported as such, and is what has to
+	// be corrected first.
+	if r.DBAPassword == nil || sts.Status.ReadyReplicas < 1 || was == nil ||
+		(was.Status != metav1.ConditionTrue && was.Reason != reasonDBAPasswordRotationUnsupported) {
+		return poll
+	}
+	log := logf.FromContext(ctx)
+	member := memberNames(cluster, 1)[0]
+	check, err := r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace)
+	switch {
+	case err != nil:
+		log.V(1).Info("Could not check the DBA password Secret against the database", "member", member,
+			"error", err.Error())
+	case check.State == instancemanager.DBAPasswordDiffers:
+		msg := fmt.Sprintf("the key %q of the Secret %s is not the database's current DBA password: the Secret's value "+
+			"or the database's password was changed after it was set, and changing the DBA password is not supported. "+
+			"The database keeps its password and the new value is not used; put the database's current DBA password "+
+			"back into the Secret", ref.Key, ref.Name)
+		if was.Reason != reasonDBAPasswordRotationUnsupported {
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonDBAPasswordRotationUnsupported,
+				msg+"; the DB Pod is not restarted, and a DB container that starts again does not start its server until they match")
+		}
+		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionFalse,
+			reasonDBAPasswordRotationUnsupported, msg)
+	case check.State == instancemanager.DBAPasswordMatches:
+		if was.Reason == reasonDBAPasswordRotationUnsupported {
+			log.Info("DBA password Secret holds the database's DBA password again", "secret", ref.Name)
+			setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue,
+				reasonDBAPasswordSecretResolved, dbaPasswordResolvedMessage(ref))
+		}
+	default:
+		log.V(1).Info("Could not tell whether the DBA password Secret is the database's password", "member", member,
+			"reason", check.Reason)
+	}
+	return poll
 }

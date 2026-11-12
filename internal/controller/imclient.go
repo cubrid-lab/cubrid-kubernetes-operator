@@ -645,3 +645,34 @@ func decodeOperation(resp *http.Response) (instancemanager.Operation, error) {
 	}
 	return op, nil
 }
+
+// CheckDBAPassword asks the member whether the value of its DBA password file
+// is the running database's DBA password (GET /v1/dba-password). It changes
+// nothing on the member. An answer other than Matches, Differs or Unknown is
+// an error.
+func (c *HTTPBackupClient) CheckDBAPassword(ctx context.Context, podName, namespace string) (instancemanager.DBAPasswordCheck, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(podName, namespace)+"/v1/dba-password", nil)
+	if err != nil {
+		return instancemanager.DBAPasswordCheck{}, err
+	}
+	resp, err := c.do(ctx, httpReq, podName, namespace)
+	if err != nil {
+		return instancemanager.DBAPasswordCheck{}, fmt.Errorf("check the DBA password on %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return instancemanager.DBAPasswordCheck{}, fmt.Errorf("check the DBA password on %s: %w", podName, unexpectedStatus(resp))
+	}
+	var check instancemanager.DBAPasswordCheck
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxErrorBody)).Decode(&check); err != nil {
+		return instancemanager.DBAPasswordCheck{}, fmt.Errorf("check the DBA password on %s: unreadable answer%s", podName, requestRef(resp))
+	}
+	switch check.State {
+	case instancemanager.DBAPasswordMatches, instancemanager.DBAPasswordDiffers, instancemanager.DBAPasswordUnknown:
+	default:
+		return instancemanager.DBAPasswordCheck{}, fmt.Errorf("check the DBA password on %s: unknown state %q%s",
+			podName, cleanMessage(string(check.State)), requestRef(resp))
+	}
+	check.Reason = cleanMessage(check.Reason)
+	return check, nil
+}

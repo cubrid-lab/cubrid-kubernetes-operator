@@ -77,8 +77,9 @@ namespace, or run commands in the DB container, can read the password.
 ## What the cluster reports
 
 The cluster has the Condition `DBAPasswordSecretResolved`
-([Conditions](../observability.md#conditions)). `True` says only that the key
-exists and holds a usable value, not that the database has the password.
+([Conditions](../observability.md#conditions)). `True` says that the key
+exists and holds a usable value, and that the last check of the running
+database, if one could tell, accepted it.
 
 | Reason | Meaning |
 |---|---|
@@ -88,6 +89,7 @@ exists and holds a usable value, not that the database has the password.
 | `DBAPasswordKeyEmpty` | The key is empty, or holds only a line feed |
 | `DBAPasswordValueInvalid` | The value is longer than 256 bytes, or holds a NUL byte, a carriage return or a line feed other than one at its end |
 | `DBAPasswordSecretReadFailed` | The Operator could not read the Secret, for example for lack of permission; it retries with backoff |
+| `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused: it is not the database's current DBA password (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
 
 The message names the Secret and the key, never the value. A new problem also
 records a Warning Event with the same reason.
@@ -125,17 +127,48 @@ one.
 
 ## Changing the password is not supported
 
-The reference cannot change, and a changed value in the Secret is not detected
-or applied:
+The reference cannot change, and a changed value in the Secret is never
+applied. The running server keeps the password the database has; the kubelet
+updates the mounted file, but nothing sets it as the password.
 
-- The running server keeps the password the database has. The kubelet updates
-  the mounted file, but nothing applies it.
-- At the next start of the container, the Instance Manager finds a password
-  already set and leaves it as it is (`dba_password_already_set`), so clients
-  must still use the old password. When the Instance Manager checks the
-  requested password at each start (#819), that start fails instead, and the
-  server is not started, because the database's password is not the requested
-  one.
-- The cluster's status does not report the change.
+**How a changed value is reported.** While the cluster's member is ready, the
+Operator asks its Instance Manager every 5 minutes, and at each reconcile of
+the cluster, whether the value is still the database's DBA password
+(`GET /v1/dba-password`). The Instance Manager logs in as `dba` through the
+running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
+and types the file's value at csql's `Enter Password` prompt on a
+pseudo-terminal, as the password step does. The login changes nothing, and no
+copy or hash of the value is stored. So it also notices a password changed in
+the database by hand with `ALTER USER`.
 
-Put the old value back in the Secret to undo such a change.
+- **The login is refused for its password:** `DBAPasswordSecretResolved`
+  becomes `False` with the reason `DBAPasswordRotationUnsupported`, and a
+  Warning Event with the same reason is recorded once. The message names the
+  Secret and the key, never the value. The StatefulSet and the Pod are not
+  changed, and nothing is restarted.
+- **The login is accepted again**, for example after the old value was put
+  back: the Condition returns to `True` with `DBAPasswordSecretResolved`.
+- **The check cannot tell** (the server is not running, the Instance Manager
+  cannot be reached, another check is running, or csql neither accepted nor
+  refused the login): the Condition is left as it is, and the Operator asks
+  again later. It is never reported as a changed password.
+
+A change is therefore reported within about 5 minutes, plus the time the
+kubelet takes to update the mounted file (up to its sync period, about a
+minute by default). An Operator that restarts keeps nothing about the check:
+it asks again at its next reconcile and reports the same state.
+
+**At the next start of the container**, the Instance Manager finds a password
+already set and checks that it is the value of the file; when it is not, the
+server is not started, because the database's password is not the requested
+one (`dba_password_failed`). A cluster that reports
+`DBAPasswordRotationUnsupported` is in that state: correct the Secret before
+its DB Pod is started again.
+
+To undo such a change, put the database's current DBA password back in the
+Secret.
+
+The client-mode login on a terminal is tested with a stand-in for csql, not
+yet against a running CUBRID server (POC-61, question 5, tested the same login
+with `-p`). If a real csql does not prompt in that mode, the check answers
+that it cannot tell, and no change is reported.

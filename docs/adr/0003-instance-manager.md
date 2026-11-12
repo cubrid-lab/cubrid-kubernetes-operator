@@ -123,6 +123,11 @@ Operator endpoints (bearer-token authenticated, `/v1/`):
 - `POST /v1/ha/bootstrap`, `POST /v1/shutdown`, `POST /v1/backup`,
   `POST /v1/restore/prepare`
 - `GET /v1/operations/{operationID}`
+- `GET /v1/dba-password`: whether the value of the DBA password file is the
+  running standalone database's DBA password, as
+  `{"state":"Matches"|"Differs"|"Unknown","reason":"..."}`. It logs in as
+  `dba` in client mode on a pseudo-terminal and changes nothing; the answer
+  never holds the value or what csql printed (#824)
 - `GET /v1/operations?idempotencyKey=<key>`: the operations recorded under
   the key, as `{"operations": [...]}`; an empty list means none. It only
   reads the operation store and starts nothing. A manager without a store

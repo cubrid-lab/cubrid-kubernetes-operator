@@ -270,6 +270,7 @@ func main() {
 		Restore:      controller.NewHTTPBackupClient(tokens),
 		HABootstrap:  controller.NewHTTPBackupClient(tokens),
 		Backup:       controller.NewHTTPBackupClient(tokens),
+		DBAPassword:  controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
 		OperatorNS:   operatorNamespace,
 		Positions:    positions,
