@@ -152,6 +152,7 @@ func TestAlertRulesAreWellFormed(t *testing.T) {
 		t.Error("no alert found")
 	}
 }
+
 // The metric-name regex above deliberately inspects raw text so a removed
 // metric cannot escape checks. Also parse the dashboard structure: invalid
 // JSON, duplicate panel IDs, or an empty query must not reach users as a
