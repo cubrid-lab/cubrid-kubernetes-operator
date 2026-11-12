@@ -103,7 +103,7 @@ that joins a group holding data.
 
 ### Why object storage remains required for HA seeding
 
-**Proposed transport decision for #256 (2026-11-12): keep the current
+**Transport decision for #256 (accepted 2026-11-12 UTC): keep the current
 object-storage-backed backup and restore path as the only supported HA seeding
 transport.** This is a transport prerequisite, not a requirement of the
 CUBRID HA engine. It does not change the decision to create one authoritative
@@ -153,7 +153,6 @@ and observable failure, cleanup and resource limits. The maintainers must
 approve any changed API prerequisite and amend the related lifecycle and
 recovery ADRs before enabling that path. Until then the bucket remains
 required and no fallback is provided.
-
 
 Reconcile order (bootstrap):
 
