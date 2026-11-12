@@ -156,6 +156,12 @@ type CubridClusterReconciler struct {
 	// keeps the readings in a store of this reconciler's own.
 	Positions    *ApplierPositions
 	ownPositions ApplierPositions
+	// DBAPasswordRecheck is how long a cluster whose DBA password Secret does
+	// not resolve waits before it is checked again; zero is
+	// defaultDBAPasswordRecheck. The operator does not watch the user's
+	// Secrets, so this check is what lets the cluster go on once the Secret
+	// is created or corrected.
+	DBAPasswordRecheck time.Duration
 
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
@@ -412,6 +418,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// StatefulSet exists, so that it tells a new cluster from an old one.
 	if err := r.recordMemberSpreadDefault(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, "PlacementReconcileFailed", err)
+	}
+
+	// A database is never created without the DBA password its cluster
+	// names: the StatefulSet waits for the Secret.
+	if stop, recheck, err := r.reconcileDBAPasswordSecret(ctx, &cluster); stop {
+		return ctrl.Result{RequeueAfter: recheck}, err
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -859,6 +871,13 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		volumes = append(volumes, haConfVolume(cluster))
 		mounts = append(mounts, haConfMount())
 	}
+	env := append(instanceManagerEnv(cluster), r.timeLimitEnv()...)
+	// Only the DB container mounts the DBA password, read-only.
+	if ref := cluster.Spec.DBAPasswordSecretRef; ref != nil {
+		volumes = append(volumes, dbaPasswordVolumeFor(ref))
+		mounts = append(mounts, corev1.VolumeMount{Name: dbaPasswordVolume, MountPath: dbaPasswordMountPath, ReadOnly: true})
+		env = append(env, dbaPasswordEnv())
+	}
 	// Pod Security Standards "restricted" (#18).
 	security := &corev1.SecurityContext{
 		RunAsNonRoot:             &runAsNonRoot,
@@ -889,7 +908,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		Containers: []corev1.Container{{
 			Name:      appName,
 			Image:     image,
-			Env:       append(instanceManagerEnv(cluster), r.timeLimitEnv()...),
+			Env:       env,
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
 			// local Instance Manager; the command sends the Pod's IM_TOKEN.

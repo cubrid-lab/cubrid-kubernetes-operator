@@ -29,9 +29,11 @@ spec:
 - **They are not encryption or database authentication.** Traffic between
   clients, Brokers, DB Pods and the operator is not encrypted. The Instance
   Manager requires its bearer token whether or not a policy admits the
-  caller. The database is created with an empty DBA password
-  (`dbaPasswordSecretRef` is rejected in `v1alpha1`), so every client the
-  Broker policy admits can connect as `dba`.
+  caller. A database is created with an empty DBA password, so every client
+  the Broker policy admits can connect as `dba`, unless a standalone cluster
+  names a password with `spec.dbaPasswordSecretRef`
+  ([DBA password](dba-password.md)); the API refuses the field on an HA
+  cluster.
 - A Pod may start before the NetworkPolicies that apply to it are in effect
   (Kubernetes NetworkPolicy documentation, "Pod lifecycle"). As a mitigation,
   the init container `wait-for-peer` of an HA member holds back CUBRID until
