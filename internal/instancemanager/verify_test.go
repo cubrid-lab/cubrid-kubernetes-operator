@@ -163,7 +163,7 @@ func TestManifest_VerifyAVersion1Manifest(t *testing.T) {
 		Level:           0,
 		SourceRole:      string(RoleMaster),
 		SourceInstance:  "m-0",
-		Objects:         []ManifestObject{{Key: "backup/x", SizeBytes: 3, SHA256: strings.Repeat("0", 64)}},
+		Objects:         []ManifestObject{{Key: objectKeyRoot + "/x", SizeBytes: 3, SHA256: strings.Repeat("0", 64)}},
 	}
 	if ManifestVersion == 1 {
 		t.Fatal("ManifestVersion is still 1: a manifest of this build cannot be told from one written before #756")
