@@ -89,7 +89,7 @@ database, if one could tell, accepted it.
 | `DBAPasswordSecretNotFound` | No Secret of that name in the cluster's namespace |
 | `DBAPasswordKeyNotFound` | The Secret has no such key |
 | `DBAPasswordKeyEmpty` | The key is empty, or holds only a line feed |
-| `DBAPasswordValueInvalid` | The value is longer than 256 bytes, or holds a NUL byte, a carriage return or a line feed other than one at its end |
+| `DBAPasswordValueInvalid` | The value exceeds 256 bytes or contains NUL, CR, a line feed other than the one optional trailing newline, another ASCII control byte (including tab and Ctrl+C), or DEL. These bytes are refused because a terminal password prompt may interpret them as editing, signals or flow control |
 | `DBAPasswordSecretReadFailed` | The Operator could not read the Secret, for example for lack of permission; it retries with backoff |
 | `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused: it is not the database's current DBA password (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
 
