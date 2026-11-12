@@ -42,6 +42,22 @@ const DBAPasswordFileEnv = "CUBRID_DBA_PASSWORD_FILE"
 // longer value is refused, never cut.
 const maxDBAPasswordBytes = 256
 
+// HasDBAPasswordControlByte reports bytes that csql's password terminal can
+// interpret as editing, flow control or signals instead of literal password
+// input. RunOnTerminal disables echo, but retains the terminal line
+// discipline (ISIG and ICANON). Reject these values before creating a
+// database: setting one via SQL stdin then failing to confirm it over a
+// terminal could strand the member on subsequent starts. This predicate is
+// also used by the Operator's Secret check.
+func HasDBAPasswordControlByte(value []byte) bool {
+	for _, b := range value {
+		if b < 0x20 || b == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // Events of the DBA password step.
 const (
 	eventDBAPasswordApplied    = "dba_password_applied"
@@ -53,7 +69,8 @@ var errNoStdin = errors.New("the command runner cannot feed standard input")
 
 // ReadDBAPassword reads the DBA password from path: the file's content
 // without at most one trailing line feed. An empty value, one that holds a
-// NUL, a carriage return or a line feed, or one longer than
+// NUL, a carriage return, a line feed, another ASCII control byte or DEL,
+// or one longer than
 // maxDBAPasswordBytes is refused. No error carries the content.
 func ReadDBAPassword(path string) (string, error) {
 	f, err := os.Open(path) // #nosec G304 -- the manager's own mounted Secret path
@@ -79,6 +96,8 @@ func ReadDBAPassword(path string) (string, error) {
 		return "", fmt.Errorf("the DBA password in %s holds a carriage return", path)
 	case bytes.IndexByte(data, '\n') >= 0:
 		return "", fmt.Errorf("the DBA password in %s holds a line feed other than one at its end", path)
+	case HasDBAPasswordControlByte(data):
+		return "", fmt.Errorf("the DBA password in %s holds an ASCII control byte", path)
 	}
 	return string(data), nil
 }
