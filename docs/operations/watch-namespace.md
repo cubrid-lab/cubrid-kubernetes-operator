@@ -42,7 +42,7 @@ manager holds in memory, not what its role allows it to read.
 The DBA password Secret a cluster names with `spec.dbaPasswordSecretRef` is
 not in that cache either: the Operator reads it from the API server, with the
 `get` it already has on Secrets, and does not watch it. A cluster waiting for
-that Secret checks it again every 30 seconds ([DBA password](dba-password.md)).
+that Secret checks it again about every 30 seconds ([DBA password](dba-password.md)).
 
 **Cache scope is not API authorization.** Client writes go directly to the API
 server; explicitly injected uncached readers/clients and any cluster-scoped

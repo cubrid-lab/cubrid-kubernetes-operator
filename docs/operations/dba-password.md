@@ -96,8 +96,9 @@ records a Warning Event with the same reason.
 does not create the cluster's StatefulSet, so no database is created without
 its password. `Ready` and `Progressing` are `False` with the same reason. The
 Operator does not watch Secrets it did not create; it checks the Secret again
-every 30 seconds, so once the Secret is created or corrected the cluster goes
-on by itself within that time.
+about every 30 seconds, so once the Secret is created or corrected the
+cluster goes on by itself. The 30 seconds are the interval between checks, not
+a bound: a busy Operator or a throttled API server can take longer.
 
 **After the database exists.** The StatefulSet is left as it is; nothing is
 deleted or created again. A running member keeps the file it mounted. A DB
@@ -105,19 +106,22 @@ Pod that is started again while the Secret or key is missing cannot mount the
 volume: it stays in `ContainerCreating`, and the kubelet records `FailedMount`
 Events on the Pod, until the Secret is back. With an empty or unusable value,
 the container's password step fails (`dba_password_failed`) and the server is
-not started.
+not started. Once the StatefulSet exists, the Operator does not check the
+Secret again on a schedule: `DBAPasswordSecretResolved` is brought up to date
+only by the cluster's next reconcile, for any other reason, and can stay
+`True` after the Secret was removed or changed until then (#824). A `True`
+condition says the Secret was usable when last checked, not that a login with
+it works.
 
 ## Restoring from a backup
 
 A cluster created with `spec.bootstrap.recovery` gets the same file. The
 restored database keeps the DBA password of the database the backup was taken
 from (docs/poc/RESULTS.md, POC-61, question 4), so the key must hold that
-password. The Operator does not compare the two. When the Instance Manager
-checks the requested password against a restored database (#819), a source
-with another password fails the restore visibly, and a source without a
-password gets the requested one. Without that check the restored database
-keeps whatever password it has, an empty one included, and a mismatch shows
-only when a client logs in with the key's value.
+password. The Operator does not compare the two; the Instance Manager does,
+before the restored database first starts: a source with another password
+fails the restore visibly, and a source without a password gets the requested
+one.
 
 ## Changing the password is not supported
 
