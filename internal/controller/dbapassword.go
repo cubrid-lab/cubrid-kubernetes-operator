@@ -140,6 +140,8 @@ func (r *CubridClusterReconciler) dbaPasswordProblem(ctx context.Context,
 		return invalid("holds a carriage return")
 	case bytes.IndexByte(value, '\n') >= 0:
 		return invalid("holds a line feed other than one at its end")
+	case instancemanager.HasDBAPasswordControlByte(value):
+		return invalid("holds an ASCII control byte")
 	}
 	return reasonDBAPasswordSecretResolved,
 		fmt.Sprintf("the key %q of the Secret %s holds a DBA password the DB container can read", ref.Key, ref.Name), nil
