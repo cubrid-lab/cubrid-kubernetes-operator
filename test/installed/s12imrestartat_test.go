@@ -1539,3 +1539,51 @@ func TestRunS12InstanceManagerRestartSeedBackupLimitsTheTargetBeforeItsContainer
 			"pass with the limit installed first", restart, err, limitedFirst)
 	}
 }
+
+// Retry candidates must match both the *new* attempt number and the specific
+// member/fault that was observed. A message of an earlier attempt or another
+// member cannot stand in for the required post-kill evidence.
+func TestRetryFromMatchingEvent(t *testing.T) {
+	at := time.Unix(1_760_000_000, 0)
+	rise := attemptRise{at: at, from: 0, to: 1}
+	events := []string{
+		"on seed-1: instance manager restarted; starting attempt 3 of 3",
+		"on seed-2: instance manager restarted; starting attempt 2 of 3",
+		"on seed-1: instance manager restarted; starting attempt 2 of 3",
+	}
+	matchSeed := func(message string) bool {
+		return strings.HasPrefix(message, "on seed-1: instance manager restarted;")
+	}
+	got := retryFromMatchingEvent(events, rise, s12SeedRetryReason, matchSeed)
+	if got == nil {
+		t.Fatal("the matching member and attempt did not produce a retry")
+	}
+	if got.Message != events[2] || got.Reason != s12SeedRetryReason || got.From != 0 || got.To != 1 ||
+		!got.At.Equal(at) || !got.FromEvent {
+		t.Errorf("retry = %+v, want the exact seed-1/attempt-2 event", *got)
+	}
+	if rejected := retryFromMatchingEvent(events[:2], rise, s12SeedRetryReason, matchSeed); rejected != nil {
+		t.Errorf("another member or an old attempt matched: %+v", rejected)
+	}
+	// Restore and seed use different reasons and cause predicates, not one
+	// shared fault policy. The helper only extracts a matched event.
+	restore := retryFromMatchingEvent(events, rise, s12RetryReason, func(message string) bool {
+		return strings.Contains(message, "instance manager restarted")
+	})
+	if restore == nil || restore.Reason != s12RetryReason || restore.Message != events[1] {
+		t.Errorf("restore retry = %+v, want the first matching attempt-2 event", restore)
+	}
+}
+
+// Reading-derived retries and event-derived retries must preserve their order
+// even if the event is recovered after a later bootstrap observation.
+func TestAppendSortedRetryPreservesOrder(t *testing.T) {
+	earlier := s12Retry{At: time.Unix(10, 0), Reason: "earlier"}
+	later := s12Retry{At: time.Unix(30, 0), Reason: "later"}
+	fromEvent := s12Retry{At: time.Unix(20, 0), Reason: "from event", FromEvent: true}
+	got := appendSortedRetry([]s12Retry{earlier, later}, fromEvent)
+	if len(got) != 3 || got[0].Reason != earlier.Reason || got[1].Reason != fromEvent.Reason ||
+		got[2].Reason != later.Reason {
+		t.Errorf("retries = %+v, want earlier, from event, later", got)
+	}
+}
