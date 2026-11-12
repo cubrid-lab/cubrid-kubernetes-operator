@@ -112,37 +112,56 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 
 // brokerTier reconciles the Broker tier with the image the DB Pods run and
 // reports whether the caller is to set the conditions from what it returns.
-// A conflicting write that is still young, or a write the API server refused
-// because the namespace is being deleted, leaves the conditions as they are;
-// after a conflict the next reconcile writes again. Any other failure marks
-// the Brokers unobserved (res is nil for a standalone cluster).
+// Whatever the outcome, the reconcile goes on to its other steps and writes
+// the status; the stepResult says what it returns after that:
+//
+//   - A conflicting write that is still young leaves the conditions as they
+//     are and asks for a retry after a second, as a conflicting write of the
+//     cluster's other children does (failed).
+//   - A write the API server refused because the namespace is being deleted
+//     leaves the conditions as they are and asks for nothing.
+//   - A Broker object the cluster does not control marks the Brokers
+//     unobserved and is reported with a Warning Event; it is no error, since
+//     only a person can free the name, and the reconcile comes back after
+//     refusedBrokerRetryInterval (idleRetry) or haResyncInterval.
+//   - Any other failure, a conflict that lasted longer than conflictPatience
+//     included, marks the Brokers unobserved and is returned as the
+//     reconcile's error, so that controller-runtime retries it with backoff.
+//
+// res is nil for a standalone cluster.
 func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	sts *appsv1.StatefulSet, res *PrimaryResolution) (map[string]int32, bool) {
+	sts *appsv1.StatefulSet, res *PrimaryResolution) (map[string]int32, bool, stepResult) {
 	available, err := r.reconcileBrokerTier(ctx, cluster, r.imageToRun(cluster, sts))
 	young, err := r.lastingConflict(cluster, brokerWrites, err)
 	switch {
 	case young:
 		logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write")
+		return nil, false, stepResult{retry: time.Second}
 	case namespaceTerminating(err):
 		logf.FromContext(ctx).V(1).Info("Skipped broker tier because the namespace is being deleted")
+		return nil, false, stepResult{}
 	case err != nil:
 		logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
-		r.reportBrokerRefusal(cluster, err)
+		refused := r.reportBrokerRefusal(cluster, err)
 		setBrokerConditionsUnobserved(cluster, res, err)
+		if refused {
+			return nil, false, stepResult{}
+		}
+		return nil, false, stepResult{err: fmt.Errorf("reconcile the Broker tier: %w", err)}
 	default:
-		return available, true
+		return available, true, stepResult{}
 	}
-	return nil, false
 }
 
 // reportBrokerRefusal records a Warning Event for a Broker object refused
 // because the cluster does not control it, once while the refusal stays the
 // same, and notes it for the reconcile's report: removing such an object sends
 // the operator no event, so the reconcile has to come back by itself. Any other
-// failure of the Broker tier is reported by the conditions alone.
-func (r *CubridClusterReconciler) reportBrokerRefusal(cluster *databasev1alpha1.CubridCluster, err error) {
+// failure of the Broker tier is reported by the conditions alone. It reports
+// whether err is such a refusal.
+func (r *CubridClusterReconciler) reportBrokerRefusal(cluster *databasev1alpha1.CubridCluster, err error) bool {
 	if _, refused := errors.AsType[*childNotOwnedError](err); !refused {
-		return
+		return false
 	}
 	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 		report.(*reconcileReport).brokerRefused = true
@@ -151,6 +170,7 @@ func (r *CubridClusterReconciler) reportBrokerRefusal(cluster *databasev1alpha1.
 	if was == nil || was.Reason != reasonBrokerReconcileFailed || was.Message != err.Error() {
 		r.statusEvent(cluster, corev1.EventTypeWarning, reasonBrokerReconcileFailed, err.Error())
 	}
+	return true
 }
 
 func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, cluster *databasev1alpha1.CubridCluster,

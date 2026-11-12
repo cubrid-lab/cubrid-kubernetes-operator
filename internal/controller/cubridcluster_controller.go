@@ -43,6 +43,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -426,7 +427,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 
-	return r.updateStatus(ctx, &cluster, sts)
+	return r.reconcileMembers(ctx, &cluster, sts)
 }
 
 // reportDeferredRotation records that a requested token rotation waits for
@@ -1057,9 +1058,31 @@ func preStopShutdown(_ *databasev1alpha1.CubridCluster) *corev1.Lifecycle {
 	}
 }
 
-// updateStatus computes Conditions from the StatefulSet's observed state.
-func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) (ctrl.Result, error) {
-	desired := cluster.Spec.Topology.PromotableMembers
+// stepResult is what a step that writes child objects leaves for the end of
+// the reconcile. The status is written first, so that the Conditions that
+// explain a failed write reach the API server; err is then returned, and
+// controller-runtime retries the reconcile with backoff. retry, when not zero,
+// is the longest the reconcile waits before it runs again, as after a write
+// rejected as a conflict that is still young (lastingConflict).
+type stepResult struct {
+	retry time.Duration
+	err   error
+}
+
+// reconcileMembers runs the steps that act on the members and on the Broker
+// tier, in this order, and then writes the status (updateStatus):
+//
+//   - a recovery bootstrap that has not completed (reconcileRecovery), which
+//     ends the reconcile with its own status (ADR-0008);
+//   - for a standalone cluster, the engine guard and the Broker tier
+//     (reconcileStandaloneMembers);
+//   - for an HA cluster with a role prober, the HA bootstrap, the role
+//     observation, the Broker tier and the rolling update
+//     (reconcileHAMembers).
+//
+// Each step sets the Conditions its outcome says, in the order the steps run.
+func (r *CubridClusterReconciler) reconcileMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet) (ctrl.Result, error) {
 	ready := sts.Status.ReadyReplicas
 	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 		report.(*reconcileReport).readyReplicas = &ready
@@ -1076,31 +1099,8 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	// Recovery bootstrap gates Ready: while restoring, the operator must never
 	// advertise a half-restored DB as healthy (ADR-0008).
 	if recoveryActive(cluster) {
-		res, active := r.reconcileRecovery(ctx, cluster)
-		if active {
-			reason, msg := "BootstrapRecoveryInProgress", "restoring from backup"
-			progressing := metav1.ConditionTrue
-			switch cluster.Status.Bootstrap.Phase {
-			case databasev1alpha1.BootstrapSeedingReplicas:
-				reason, msg = "RecoverySeedingReplicas", "copying the restored database to the other members"
-			case databasev1alpha1.BootstrapFailed:
-				// Terminal: nothing is in progress, and BootstrapReady says why.
-				reason, msg, progressing = reasonBootstrapRecoveryFailed, "the recovery failed", metav1.ConditionFalse
-				if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil && c.Message != "" {
-					msg += ": " + c.Message
-				}
-			}
-			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
-			setCondition(cluster, conditionProgressing, progressing, reason, msg)
-			r.markRolesNotObserved(cluster, reason)
-			setRecoveryFailedHAReady(cluster, msg)
-			if err := r.writeStatus(ctx, cluster); err != nil {
-				if apierrors.IsConflict(err) {
-					return ctrl.Result{RequeueAfter: time.Second}, nil
-				}
-				return ctrl.Result{}, err
-			}
-			return res, nil
+		if res, active := r.reconcileRecovery(ctx, cluster); active {
+			return r.updateRecoveryStatus(ctx, cluster, res)
 		}
 	}
 
@@ -1109,43 +1109,109 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	// Ready is decided after it, because two observed masters keep Ready from
 	// True.
 	multiplePrimaries := false
-	if !cluster.Spec.HighAvailability.Enabled {
-		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
-			"highAvailability.enabled is false")
-		// The member has no HA role, but it reports its engine version, and
-		// the same guard as for an HA cluster applies to it (ADR-0009).
-		if r.Prober != nil {
-			r.reconcileStandaloneUpdate(ctx, cluster, sts, desired)
-		}
-		// Its Brokers need no role prober: they connect to the one server,
-		// whose readiness the Pod reports.
-		if available, ok := r.brokerTier(ctx, cluster, sts, nil); ok {
-			setStandaloneBrokerConditions(cluster, ready >= desired && desired > 0, available)
-		}
-	} else if r.Prober == nil {
+	var steps stepResult
+	switch {
+	case !cluster.Spec.HighAvailability.Enabled:
+		steps = r.reconcileStandaloneMembers(ctx, cluster, sts)
+	case r.Prober == nil:
 		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "RoleDiscoveryDisabled",
 			"no role prober configured")
-	} else {
-		// The first database is created once, on one member (ADR-0010).
-		r.reconcileHABootstrap(ctx, cluster)
-		res := r.reconcileHAStatus(ctx, cluster, desired)
-		multiplePrimaries = res.MultipleMasters
-		// Reconcile the broker tier and set routing conditions from the same
-		// safety-first primary resolution (ADR-0002/0005).
-		// A conflicting write leaves the broker conditions as they are; the
-		// next reconcile writes again.
-		if available, ok := r.brokerTier(ctx, cluster, sts, &res); ok {
-			r.setBrokerConditions(cluster, res, available)
-		}
-		// Rolling update (ADR-0009): only when the engine-version guard permits
-		// (no blocked upgrade / unverifiable version), roll outdated slaves one at
-		// a time, gated on the same primary resolution. Never during recovery.
-		if r.reconcileUpdateGuard(cluster) && !recoveryActive(cluster) {
-			r.reconcileRollingUpdate(ctx, cluster, sts, res)
+	default:
+		multiplePrimaries, steps = r.reconcileHAMembers(ctx, cluster, sts)
+	}
+	return r.updateStatus(ctx, cluster, sts, updatingBefore, multiplePrimaries, steps)
+}
+
+// updateRecoveryStatus writes the status of a cluster whose recovery
+// bootstrap has not completed: Ready is False and says how far the recovery
+// is. res is what the recovery step asks the reconcile to return.
+func (r *CubridClusterReconciler) updateRecoveryStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	res ctrl.Result) (ctrl.Result, error) {
+	reason, msg := "BootstrapRecoveryInProgress", "restoring from backup"
+	progressing := metav1.ConditionTrue
+	switch cluster.Status.Bootstrap.Phase {
+	case databasev1alpha1.BootstrapSeedingReplicas:
+		reason, msg = "RecoverySeedingReplicas", "copying the restored database to the other members"
+	case databasev1alpha1.BootstrapFailed:
+		// Terminal: nothing is in progress, and BootstrapReady says why.
+		reason, msg, progressing = reasonBootstrapRecoveryFailed, "the recovery failed", metav1.ConditionFalse
+		if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil && c.Message != "" {
+			msg += ": " + c.Message
 		}
 	}
+	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
+	setCondition(cluster, conditionProgressing, progressing, reason, msg)
+	r.markRolesNotObserved(cluster, reason)
+	setRecoveryFailedHAReady(cluster, msg)
+	if err := r.writeStatus(ctx, cluster); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	return res, nil
+}
 
-	r.setReady(cluster, ready, desired, multiplePrimaries)
+// reconcileStandaloneMembers observes the member of a standalone cluster,
+// applies the engine guard to it (ADR-0009) and reconciles its Broker tier.
+func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet) stepResult {
+	desired := cluster.Spec.Topology.PromotableMembers
+	setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
+		"highAvailability.enabled is false")
+	// The member has no HA role, but it reports its engine version, and
+	// the same guard as for an HA cluster applies to it (ADR-0009).
+	if r.Prober != nil {
+		r.reconcileStandaloneUpdate(ctx, cluster, sts, desired)
+	}
+	// Its Brokers need no role prober: they connect to the one server,
+	// whose readiness the Pod reports.
+	available, ok, steps := r.brokerTier(ctx, cluster, sts, nil)
+	if ok {
+		setStandaloneBrokerConditions(cluster, sts.Status.ReadyReplicas >= desired && desired > 0, available)
+	}
+	return steps
+}
+
+// reconcileHAMembers runs the steps of an HA cluster with a role prober: the
+// HA bootstrap (ADR-0010), the role observation, the Broker tier and the
+// rolling update. It reports whether more than one master was observed.
+func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet) (bool, stepResult) {
+	// The first database is created once, on one member (ADR-0010).
+	r.reconcileHABootstrap(ctx, cluster)
+	res := r.reconcileHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	// Reconcile the broker tier and set routing conditions from the same
+	// safety-first primary resolution (ADR-0002/0005).
+	// A conflicting write leaves the broker conditions as they are; the
+	// reconcile is retried soon and writes again.
+	available, ok, steps := r.brokerTier(ctx, cluster, sts, &res)
+	if ok {
+		r.setBrokerConditions(cluster, res, available)
+	}
+	// Rolling update (ADR-0009): only when the engine-version guard permits
+	// (no blocked upgrade / unverifiable version), roll outdated slaves one at
+	// a time, gated on the same primary resolution. Never during recovery.
+	if r.reconcileUpdateGuard(cluster) && !recoveryActive(cluster) {
+		if err := r.reconcileRollingUpdate(ctx, cluster, sts, res); err != nil {
+			steps.err = errors.Join(steps.err, err)
+		}
+	}
+	return res.MultipleMasters, steps
+}
+
+// updateStatus sets Ready and the Updating condition of an image change from
+// what the steps left, writes the status and decides what the reconcile
+// returns. It writes no child object and calls no Instance Manager.
+//
+// A step's failed write is returned as the reconcile's error once the status
+// that explains it is written, or together with the error of a status write
+// that failed. Without one, the reconcile is retried after haResyncInterval
+// for an HA cluster with a role prober, or else after idleRetry, unless a
+// step asks to be retried sooner.
+func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet,
+	updatingBefore *metav1.Condition, multiplePrimaries bool, steps stepResult) (ctrl.Result, error) {
+	r.setReady(cluster, sts.Status.ReadyReplicas, cluster.Spec.Topology.PromotableMembers, multiplePrimaries)
 
 	// An image the spec asks for but nobody accepted is reported last, so that
 	// it is what the Updating condition says.
@@ -1166,17 +1232,27 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	}
 
 	if err := r.writeStatus(ctx, cluster); err != nil {
+		if steps.err != nil {
+			return ctrl.Result{}, errors.Join(steps.err, err)
+		}
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
+	if steps.err != nil {
+		return ctrl.Result{}, steps.err
+	}
+	result := ctrl.Result{RequeueAfter: r.idleRetry(cluster)}
 	// A CUBRID failover changes no Kubernetes object, and /readyz answers 200
 	// for a master and a slave alike, so no event would bring the new roles in.
 	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil {
-		return ctrl.Result{RequeueAfter: haResyncInterval}, nil
+		result.RequeueAfter = haResyncInterval
 	}
-	return ctrl.Result{RequeueAfter: r.idleRetry(cluster)}, nil
+	if steps.retry > 0 && (result.RequeueAfter == 0 || steps.retry < result.RequeueAfter) {
+		result.RequeueAfter = steps.retry
+	}
+	return result, nil
 }
 
 // bootstrapProgress says where the HA bootstrap stands, in BootstrapReady's
@@ -1394,6 +1470,7 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Named("cubridcluster").
+		WithOptions(controller.Options{RateLimiter: clusterRateLimiter()}).
 		Complete(r)
 }
 
