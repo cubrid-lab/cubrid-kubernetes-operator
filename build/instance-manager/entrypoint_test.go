@@ -93,8 +93,8 @@ fi
 	// exits with ${WAIT_EXIT} when set, and records a SIGTERM that ends it.
 	waitVolumeStub = `if [ "${1:-}" = "wait-volume-free" ]; then
   [ -n "${VOLUME_HELD:-}" ] || exit "${WAIT_EXIT:-0}"
-  echo "manager wait-volume-free" >> "${CALLS}"
   trap 'echo "manager wait-volume-free term" >> "${CALLS}"; exit 1' TERM
+  echo "manager wait-volume-free" >> "${CALLS}"
   while [ -e "${VOLUME_HELD}" ]; do sleep 0.05; done
   exit "${WAIT_EXIT:-0}"
 fi
@@ -114,10 +114,13 @@ echo "manager start" >> "${CALLS}"
 exit "${IM_EXIT:-0}"
 `
 	// blockingManagerStub runs until it is told to stop, like the real one.
+	// Each stub installs its TERM handler before it records that it started:
+	// a test signals as soon as it reads that record, and a signal that came
+	// before the handler would end the stub with 143 instead (#837).
 	blockingManagerStub = `#!/bin/bash
 ` + waitVolumeStub + `if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
-echo "manager start" >> "${CALLS}"
 trap 'echo "manager term" >> "${CALLS}"; exit 0' TERM
+echo "manager start" >> "${CALLS}"
 while :; do sleep 0.05; done
 `
 )
