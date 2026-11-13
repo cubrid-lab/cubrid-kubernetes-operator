@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -26,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -50,19 +52,76 @@ const (
 	// sets the nodes of both claims within seconds; the grace keeps the
 	// Operator from deleting a claim the scheduler is still writing.
 	splitClaimsGrace = 60 * time.Second
+	// splitClaimsRepairInterval is the least time between two repairs of
+	// the same member. A split that comes back sooner is reported and left
+	// alone, so that a cause the repair does not remove cannot make the
+	// Operator delete the member's log claim again and again.
+	splitClaimsRepairInterval = 10 * time.Minute
+	// claimCreationSkew is how much older than the data claim the log claim
+	// may be. Creation times have a resolution of one second, and the
+	// StatefulSet controller creates both claims of a member together.
+	claimCreationSkew = 2 * time.Second
 
 	// reasonMemberLogClaimDeleted is the Warning Event recorded when the
 	// log claim and the Pod of a split member were deleted.
 	reasonMemberLogClaimDeleted = "MemberLogClaimDeleted"
+	// reasonMemberClaimsStillSplit is the Warning Event recorded once when a
+	// member is found split again within splitClaimsRepairInterval of its
+	// last repair.
+	reasonMemberClaimsStillSplit = "MemberClaimsStillSplit"
 	// reasonMemberClaimRecoveryFailed is the Ready reason when the log claim
 	// or the Pod of a split member could not be deleted.
 	reasonMemberClaimRecoveryFailed = "MemberClaimRecoveryFailed"
 )
 
+// claimRepairKey names one member of one cluster; the UID keeps a cluster
+// created again under the same name apart.
+type claimRepairKey struct {
+	cluster types.UID
+	member  string
+}
+
+// claimRepair is the last repair of a member's claims.
+type claimRepair struct {
+	at time.Time
+	// reported is set once the split was seen again and reported.
+	reported bool
+}
+
+// claimRepairs holds the last repair of each member, in the manager's memory.
+// A restart of the manager forgets them, so a member can be repaired once
+// more after a restart.
+type claimRepairs struct {
+	mu   sync.Mutex
+	last map[claimRepairKey]claimRepair
+}
+
+// recent returns the last repair of the member when it was made less than
+// splitClaimsRepairInterval before now.
+func (c *claimRepairs) recent(key claimRepairKey, now time.Time) (claimRepair, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	last, ok := c.last[key]
+	if !ok || now.Sub(last.at) >= splitClaimsRepairInterval {
+		delete(c.last, key)
+		return claimRepair{}, false
+	}
+	return last, true
+}
+
+func (c *claimRepairs) record(key claimRepairKey, repair claimRepair) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.last == nil {
+		c.last = map[claimRepairKey]claimRepair{}
+	}
+	c.last[key] = repair
+}
+
 // recoverSplitMemberClaims deletes the log claim and the Pod of each member
 // whose claims are split (splitMember). It returns when the members should be
-// checked again: the end of the grace period of a split member that has not
-// waited that long yet, or zero.
+// checked again: the end of the grace period or of the repair interval of a
+// split member, or zero.
 func (r *CubridClusterReconciler) recoverSplitMemberClaims(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	sts *appsv1.StatefulSet) (time.Duration, error) {
 	if !hasEngineLogClaims(sts) || sts.Spec.Selector == nil {
@@ -92,82 +151,178 @@ func hasEngineLogClaims(sts *appsv1.StatefulSet) bool {
 	return false
 }
 
-// recoverSplitMember deletes the log claim and the Pod of the member when its
-// claims are split, and otherwise leaves everything as it is. The claims are
-// split when all of these hold:
+// splitMember is a member whose claims are split, as read.
+type splitMember struct {
+	pod           corev1.Pod
+	data, log     corev1.PersistentVolumeClaim
+	unschedulable *corev1.PodCondition
+}
+
+// readSplitMember reads the member's Pod and claims through reader and
+// returns them when the claims are split, nil otherwise. They are split when
+// all of these hold:
 //
-//   - the Pod is controlled by the cluster's StatefulSet, has no node, is
-//     Pending and has PodScheduled=False with reason Unschedulable;
+//   - the Pod is controlled by the cluster's StatefulSet, is not being
+//     deleted, has no node, is Pending and has PodScheduled=False with reason
+//     Unschedulable (splitPod);
 //   - no container of the Pod ever started;
-//   - the data claim belongs to the StatefulSet and is Pending, with no
-//     selected node and no volume;
-//   - the log claim belongs to the StatefulSet and has a selected node, a
-//     volume or the phase Bound;
-//   - the Pod has been unschedulable for splitClaimsGrace.
+//   - both claims belong to the StatefulSet (claimOfStatefulSet);
+//   - the data claim is Pending, with no selected node and no volume;
+//   - the log claim has the node the scheduler selected for it;
+//   - the log claim is not older than the data claim, so it is not the log
+//     claim of a member that ran before its data claim was replaced.
 //
-// The wait until the grace period ends is returned when only the last does
-// not hold yet.
-func (r *CubridClusterReconciler) recoverSplitMember(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	sts *appsv1.StatefulSet, name string) (time.Duration, error) {
-	var pod corev1.Pod
-	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: cluster.Namespace}, &pod); err != nil {
-		return 0, client.IgnoreNotFound(err)
+// The grace period is not checked here.
+func readSplitMember(ctx context.Context, reader client.Reader, sts *appsv1.StatefulSet,
+	namespace, name string) (*splitMember, error) {
+	m := &splitMember{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &m.pod); err != nil {
+		return nil, client.IgnoreNotFound(err)
 	}
-	unschedulable := unschedulableCondition(&pod)
-	if unschedulable == nil || !metav1.IsControlledBy(&pod, sts) || pod.DeletionTimestamp != nil ||
-		pod.Spec.NodeName != "" || pod.Status.Phase != corev1.PodPending || everStarted(&pod) {
-		return 0, nil
+	if m.unschedulable = splitPod(&m.pod, sts); m.unschedulable == nil {
+		return nil, nil
 	}
-	var data, log corev1.PersistentVolumeClaim
 	for _, c := range []struct {
 		pvc  *corev1.PersistentVolumeClaim
 		name string
-	}{{&data, "data-" + name}, {&log, engineLogVolume + "-" + name}} {
-		if err := r.Get(ctx, client.ObjectKey{Name: c.name, Namespace: cluster.Namespace}, c.pvc); err != nil {
-			return 0, client.IgnoreNotFound(err)
+	}{{&m.data, "data-" + name}, {&m.log, engineLogVolume + "-" + name}} {
+		if err := reader.Get(ctx, client.ObjectKey{Name: c.name, Namespace: namespace}, c.pvc); err != nil {
+			return nil, client.IgnoreNotFound(err)
 		}
 		if !claimOfStatefulSet(c.pvc, sts) {
-			return 0, nil
+			return nil, nil
 		}
 	}
-	dataUnbound := data.Status.Phase == corev1.ClaimPending && data.Spec.VolumeName == "" &&
-		data.Annotations[selectedNodeAnnotation] == ""
-	logNode := log.Annotations[selectedNodeAnnotation]
-	logPinned := logNode != "" || log.Spec.VolumeName != "" || log.Status.Phase == corev1.ClaimBound
-	if !dataUnbound || !logPinned {
-		return 0, nil
+	dataUnbound := m.data.Status.Phase == corev1.ClaimPending && m.data.Spec.VolumeName == "" &&
+		m.data.Annotations[selectedNodeAnnotation] == ""
+	logPinned := m.log.Annotations[selectedNodeAnnotation] != ""
+	logNotOlder := !m.log.CreationTimestamp.Add(claimCreationSkew).Before(m.data.CreationTimestamp.Time)
+	if !dataUnbound || !logPinned || !logNotOlder {
+		return nil, nil
 	}
-	if waited := r.now().Sub(unschedulable.LastTransitionTime.Time); waited < splitClaimsGrace {
+	return m, nil
+}
+
+// splitPod returns the Pod's Unschedulable condition when the Pod is one the
+// repair may delete: controlled by the StatefulSet, not being deleted, with
+// no node, Pending, and with no container that ever started. It returns nil
+// otherwise.
+func splitPod(pod *corev1.Pod, sts *appsv1.StatefulSet) *corev1.PodCondition {
+	if !metav1.IsControlledBy(pod, sts) || pod.DeletionTimestamp != nil || pod.Spec.NodeName != "" ||
+		pod.Status.Phase != corev1.PodPending || everStarted(pod) {
+		return nil
+	}
+	return unschedulableCondition(pod)
+}
+
+// recoverSplitMember deletes the log claim and the Pod of the member when its
+// claims are split (readSplitMember), its Pod has been unschedulable for
+// splitClaimsGrace, and the member was not repaired in the last
+// splitClaimsRepairInterval. The cache is read first; the API server is then
+// read again, and every condition is checked again on what it returns, so a
+// cache that has not caught up with the scheduler cannot cause a delete.
+//
+// It returns the wait until the member should be checked again, when it
+// only waits for the grace period or the repair interval to end.
+func (r *CubridClusterReconciler) recoverSplitMember(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet, name string) (time.Duration, error) {
+	cached, err := readSplitMember(ctx, r.Client, sts, cluster.Namespace, name)
+	if cached == nil || err != nil {
+		return 0, err
+	}
+	now := r.now()
+	if waited := now.Sub(cached.unschedulable.LastTransitionTime.Time); waited < splitClaimsGrace {
 		return splitClaimsGrace - waited, nil
 	}
-
-	// The preconditions refuse the delete if the log claim changed since it
-	// was read, as when the scheduler is writing it after all. Kubernetes
-	// also keeps a claim a scheduled Pod uses until that Pod is gone, and
-	// this member's Pod has no node.
-	if err := r.Delete(ctx, &log, client.Preconditions{UID: &log.UID, ResourceVersion: &log.ResourceVersion}); err != nil {
-		if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
-			return time.Second, nil
+	key := claimRepairKey{cluster: cluster.UID, member: name}
+	if last, ok := r.claimRepairs.recent(key, now); ok {
+		if !last.reported {
+			last.reported = true
+			r.claimRepairs.record(key, last)
+			r.event(cluster, corev1.EventTypeWarning, reasonMemberClaimsStillSplit,
+				fmt.Sprintf("member %s is unschedulable again with its log claim %s on node %s and its data claim %s with no node, "+
+					"%s after its log claim and Pod were deleted for the same reason; the Operator repairs a member at most once in %s "+
+					"and leaves it as it is until then. Scheduler: %s",
+					name, cached.log.Name, cached.log.Annotations[selectedNodeAnnotation], cached.data.Name,
+					now.Sub(last.at).Round(time.Second), splitClaimsRepairInterval, cached.unschedulable.Message))
 		}
-		return 0, fmt.Errorf("delete PersistentVolumeClaim %s of member %s: %w", log.Name, name, err)
+		return splitClaimsRepairInterval - now.Sub(last.at), nil
 	}
-	if err := r.Delete(ctx, &pod, client.Preconditions{UID: &pod.UID}); client.IgnoreNotFound(err) != nil {
-		return 0, fmt.Errorf("delete Pod %s after deleting its log claim %s: %w", name, log.Name, err)
+
+	fresh, err := readSplitMember(ctx, r.apiReader(), sts, cluster.Namespace, name)
+	if fresh == nil || err != nil {
+		return 0, err
 	}
-	where := "on node " + logNode
-	if logNode == "" {
-		where = "to volume " + log.Spec.VolumeName
+	if waited := now.Sub(fresh.unschedulable.LastTransitionTime.Time); waited < splitClaimsGrace {
+		return splitClaimsGrace - waited, nil
 	}
-	logf.FromContext(ctx).Info("Deleted the log claim and the Pod of a member whose log claim was bound without its data claim",
+	return 0, r.deleteSplitMember(ctx, cluster, sts, key, fresh)
+}
+
+// apiReader reads from the API server, or through Client when the reconciler
+// has no APIReader.
+func (r *CubridClusterReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
+// deleteSplitMember deletes the log claim and then the Pod of a split member,
+// each only if it has not changed since the API server's read. The log claim
+// goes first, as in the manual repair that worked on the VM lab: a Pod
+// deleted first is created again at once and would be scheduled against the
+// same pinned claim. If the Pod's delete then fails, the error is returned and
+// the Pod stays Pending without its log claim; the StatefulSet controller
+// creates the missing claims of a Pending Pod, with no node, so the scheduler
+// can bind both claims together (upstream StatefulSet behavior, not tested
+// here). The member is recorded as repaired once its log claim is deleted.
+func (r *CubridClusterReconciler) deleteSplitMember(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet, key claimRepairKey, m *splitMember) error {
+	log, pod := &m.log, &m.pod
+	if err := r.Delete(ctx, log, client.Preconditions{UID: &log.UID, ResourceVersion: &log.ResourceVersion}); err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+			// Changed or gone since the read: the next reconcile reads again.
+			return nil
+		}
+		return fmt.Errorf("delete PersistentVolumeClaim %s of member %s: %w", log.Name, key.member, err)
+	}
+	r.claimRepairs.record(key, claimRepair{at: r.now()})
+	podErr := client.IgnoreNotFound(r.Delete(ctx, pod,
+		client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
+	if apierrors.IsConflict(podErr) {
+		// The Pod's status changed since the read; it is deleted if it still
+		// is the Pod of the split member.
+		podErr = r.deleteSplitPod(ctx, sts, pod)
+	}
+	node := log.Annotations[selectedNodeAnnotation]
+	logf.FromContext(ctx).Info("Deleted the log claim of a member whose log claim was bound without its data claim",
 		"event", "member_log_claim_deleted", "namespace", cluster.Namespace, "cluster", cluster.Name,
-		"member", name, "logClaim", log.Name, "logClaimNode", logNode, "logClaimVolume", log.Spec.VolumeName,
-		"dataClaim", data.Name, "scheduler", unschedulable.Message)
+		"member", key.member, "logClaim", log.Name, "logClaimNode", node, "logClaimVolume", log.Spec.VolumeName,
+		"dataClaim", m.data.Name, "podDeleted", podErr == nil, "scheduler", m.unschedulable.Message)
 	r.event(cluster, corev1.EventTypeWarning, reasonMemberLogClaimDeleted,
-		fmt.Sprintf("member %s stayed unschedulable for %s: its log claim %s was bound %s while its data claim %s has no node; "+
+		fmt.Sprintf("member %s stayed unschedulable for %s: its log claim %s was bound on node %s while its data claim %s has no node; "+
 			"deleted the log claim and the Pod so the StatefulSet creates them again and both claims are bound together; "+
 			"the data claim was not changed. Scheduler: %s",
-			name, splitClaimsGrace, log.Name, where, data.Name, unschedulable.Message))
-	return 0, nil
+			key.member, splitClaimsGrace, log.Name, node, m.data.Name, m.unschedulable.Message))
+	if podErr != nil {
+		return fmt.Errorf("delete Pod %s after deleting its log claim %s: %w", key.member, log.Name, podErr)
+	}
+	return nil
+}
+
+// deleteSplitPod reads the Pod from the API server again and deletes it if it
+// still is the same Pod and still is one the repair may delete (splitPod).
+func (r *CubridClusterReconciler) deleteSplitPod(ctx context.Context, sts *appsv1.StatefulSet, was *corev1.Pod) error {
+	var pod corev1.Pod
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(was), &pod); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if pod.UID != was.UID || splitPod(&pod, sts) == nil {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, &pod,
+		client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
 }
 
 // unschedulableCondition is the Pod's PodScheduled condition when it is False

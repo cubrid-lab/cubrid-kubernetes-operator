@@ -49,20 +49,31 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 	var (
 		recorder *record.FakeRecorder
 		now      time.Time
+		// One reconciler per test, as one manager runs all of a cluster's
+		// reconciles and remembers the repairs it made.
+		r *CubridClusterReconciler
+		// cached is what the reconciler reads through its cache; the API
+		// server is read through k8sClient.
+		cached client.Client
 	)
 
 	BeforeEach(func() {
 		recorder = record.NewFakeRecorder(500)
 		now = time.Now()
+		r = nil
+		cached = k8sClient
 	})
 
 	reconciler := func(c *databasev1alpha1.CubridCluster) *CubridClusterReconciler {
-		return &CubridClusterReconciler{
-			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
-			Prober:       &memberProber{master: c.Name + "-0"},
-			DefaultImage: claimSplitImage,
-			Clock:        func() time.Time { return now },
+		if r == nil {
+			r = &CubridClusterReconciler{
+				Client: cached, APIReader: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
+				Prober:       &memberProber{master: c.Name + "-0"},
+				DefaultImage: claimSplitImage,
+				Clock:        func() time.Time { return now },
+			}
 		}
+		return r
 	}
 	reconcileOnce := func(c *databasev1alpha1.CubridCluster) reconcile.Result {
 		GinkgoHelper()
@@ -92,6 +103,15 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 		}
 		Expect(err).NotTo(HaveOccurred())
 		return obj.GetDeletionTimestamp() != nil
+	}
+	// nextSeconds waits until the API server's second-resolution creation
+	// timestamps of objects created from now on are at least n seconds after
+	// that of obj.
+	nextSeconds := func(obj client.Object, n int) {
+		GinkgoHelper()
+		after := obj.GetCreationTimestamp().Add(time.Duration(n) * time.Second)
+		Eventually(func() bool { return !time.Now().Truncate(time.Second).Before(after) }).
+			WithTimeout(time.Duration(n+2) * time.Second).WithPolling(100 * time.Millisecond).Should(BeTrue())
 	}
 	newCluster := func(name string) (*databasev1alpha1.CubridCluster, appsv1.StatefulSet) {
 		GinkgoHelper()
@@ -153,6 +173,11 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 				Containers: []corev1.Container{{Name: appName, Image: claimSplitImage}},
 			},
 		}
+		// edit is applied before the create, for the Pod's metadata and
+		// spec, and again before the status update, for its status.
+		if edit != nil {
+			edit(pod)
+		}
 		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 		DeferCleanup(removeWithFinalizers, pod)
 		pod.Status.Phase = corev1.PodPending
@@ -185,6 +210,17 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 		Expect(gone(m.pod)).To(BeFalse(), "the Pod must be left in place")
 		Expect(gone(m.data)).To(BeFalse(), "the data claim must never be deleted")
 		Expect(eventsWith(recorder, "MemberLogClaimDeleted")).To(BeEmpty())
+	}
+	// pinnedLog writes member 1's log claim with the node the scheduler
+	// selected and its volume provisioned; unboundData writes its data claim
+	// Pending with no node.
+	pinnedLog := func(c *databasev1alpha1.CubridCluster, edit func(*corev1.PersistentVolumeClaim)) *corev1.PersistentVolumeClaim {
+		GinkgoHelper()
+		return claim(c, "log-"+c.Name+"-1", "worker-3", "pv-log-1", corev1.ClaimBound, edit)
+	}
+	unboundData := func(c *databasev1alpha1.CubridCluster) *corev1.PersistentVolumeClaim {
+		GinkgoHelper()
+		return claim(c, "data-"+c.Name+"-1", "", "", corev1.ClaimPending, nil)
 	}
 
 	It("deletes only the log claim and the Pod once the member has been unschedulable for the grace period", func() {
@@ -259,6 +295,105 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 		expectUntouched(m)
 	})
 
+	It("deletes nothing when the log claim is bound to a volume without a node the scheduler selected", func() {
+		c, sts := newCluster("split-log-no-node")
+		m := member{
+			data: unboundData(c),
+			log:  claim(c, "log-"+c.Name+"-1", "", "pv-log-1", corev1.ClaimBound, nil),
+			pod:  pendingPod(c, sts, 2*time.Minute, nil),
+		}
+		reconcileOnce(c)
+		expectUntouched(m)
+	})
+
+	// A member ran, its node was lost, and an administrator deleted its data
+	// claim to rebuild it. Its log claim, still bound to the lost node, holds
+	// the logs the member wrote and is older than the new data claim.
+	It("deletes nothing when the log claim is older than the data claim", func() {
+		c, sts := newCluster("split-log-older")
+		log := pinnedLog(c, nil)
+		nextSeconds(log, 3)
+		m := member{data: unboundData(c), log: log, pod: pendingPod(c, sts, 2*time.Minute, nil)}
+		reconcileOnce(c)
+		expectUntouched(m)
+	})
+
+	It("deletes nothing when the claims were created before the StatefulSet", func() {
+		c := haCluster("split-before-sts")
+		data, log := unboundData(c), pinnedLog(c, nil)
+		nextSeconds(log, 2)
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+		reconcileOnce(c)
+		var sts appsv1.StatefulSet
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), &sts)).To(Succeed())
+		Expect(log.CreationTimestamp.Before(&sts.CreationTimestamp)).To(BeTrue(), "the test needs claims older than the StatefulSet")
+		m := member{data: data, log: log, pod: pendingPod(c, sts, 2*time.Minute, nil)}
+		reconcileOnce(c)
+		expectUntouched(m)
+	})
+
+	It("deletes nothing when the Pod has a node", func() {
+		c, sts := newCluster("split-pod-node")
+		m := member{data: unboundData(c), log: pinnedLog(c, nil),
+			pod: pendingPod(c, sts, 2*time.Minute, func(p *corev1.Pod) { p.Spec.NodeName = "worker-1" })}
+		reconcileOnce(c)
+		expectUntouched(m)
+	})
+
+	It("deletes nothing when the Pod is being deleted", func() {
+		c, sts := newCluster("split-pod-deleting")
+		m := member{data: unboundData(c), log: pinnedLog(c, nil),
+			pod: pendingPod(c, sts, 2*time.Minute, func(p *corev1.Pod) { p.Finalizers = []string{"example.com/hold"} })}
+		Expect(k8sClient.Delete(ctx, m.pod)).To(Succeed())
+		reconcileOnce(c)
+		Expect(gone(m.log)).To(BeFalse(), "the log claim must be left in place")
+		Expect(gone(m.data)).To(BeFalse(), "the data claim must never be deleted")
+		Expect(eventsWith(recorder, "MemberLogClaimDeleted")).To(BeEmpty())
+	})
+
+	It("repairs a member at most once in ten minutes, and reports a split seen again", func() {
+		c, sts := newCluster("split-again")
+		m := split(c, sts)
+		reconcileOnce(c)
+		Expect(gone(m.log)).To(BeTrue())
+		Expect(eventsWith(recorder, "MemberLogClaimDeleted")).To(HaveLen(1))
+		removeWithFinalizers(m.log)
+		removeWithFinalizers(m.pod)
+
+		// The StatefulSet creates both again and the scheduler splits them
+		// again, five minutes later.
+		now = now.Add(5 * time.Minute)
+		again := member{data: m.data, log: pinnedLog(c, nil), pod: pendingPod(c, sts, 2*time.Minute, nil)}
+		res := reconcileOnce(c)
+		Expect(gone(again.log)).To(BeFalse(), "a member repaired less than ten minutes ago must not be repaired again")
+		Expect(gone(again.pod)).To(BeFalse())
+		Expect(gone(again.data)).To(BeFalse())
+		events := eventsWith(recorder, "MemberClaimsStillSplit")
+		Expect(events).To(HaveLen(1))
+		Expect(events[0]).To(HavePrefix("Warning"))
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+
+		// The same split seen again in the window is reported once.
+		reconcileOnce(c)
+		Expect(eventsWith(recorder, "MemberClaimsStillSplit")).To(BeEmpty())
+		Expect(gone(again.log)).To(BeFalse())
+	})
+
+	// The cache may still show the data claim without a node after the
+	// scheduler set one; the API server's object is what counts.
+	It("deletes nothing when the API server's data claim has a node that the cache does not show yet", func() {
+		c, sts := newCluster("split-stale-cache")
+		m := split(c, sts)
+		stale := m.data.DeepCopy()
+		m.data.Annotations = map[string]string{selectedNodeKey: "worker-2"}
+		Expect(k8sClient.Update(ctx, m.data)).To(Succeed())
+		cached = staleClaim{Client: k8sClient, claim: stale}
+		r = nil
+		reconcileOnce(c)
+		expectUntouched(m)
+	})
+
 	It("deletes nothing when the log claim has no node and no volume", func() {
 		c, sts := newCluster("split-log-free")
 		m := member{
@@ -312,6 +447,21 @@ var _ = Describe("A new member whose log claim was bound to a node without its d
 		expectUntouched(m)
 	})
 })
+
+// staleClaim is a client whose reads of one claim return an older copy, as a
+// cache that has not caught up does.
+type staleClaim struct {
+	client.Client
+	claim *corev1.PersistentVolumeClaim
+}
+
+func (c staleClaim) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if pvc, ok := obj.(*corev1.PersistentVolumeClaim); ok && key == client.ObjectKeyFromObject(c.claim) {
+		c.claim.DeepCopyInto(pvc)
+		return nil
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
 
 // eventsWith drains the recorder and returns the Events whose text names reason.
 func eventsWith(recorder *record.FakeRecorder, reason string) []string {

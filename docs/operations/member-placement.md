@@ -60,9 +60,12 @@ spec:
   cluster to `Required`, set it explicitly. If the cluster then reports
   `SpreadBlockedByVolume`, its data has to move by a backup and a restore
   into a new cluster; the Operator never moves or deletes a data PVC
-  (ADR-0006). It deletes only the log claim of a new member that never
-  started and stayed unschedulable because that claim was bound to a node
-  without its data claim
+  (ADR-0006). It deletes only the log claim of a member whose Pod never
+  started and has been unschedulable for 60 seconds, when the scheduler
+  selected a node for that log claim and none for its data claim and the log
+  claim was created with or after the data claim, at most once in 10 minutes
+  per member; under a `Retain` reclaim policy that leaves a `Released` 1Gi
+  volume
   ([docs/observability.md](../observability.md#cubrids-own-log-files), #856).
 - The `MemberPlacement` Condition reports where the members run, and an
   Event is recorded when it reports a problem, once until another one or the

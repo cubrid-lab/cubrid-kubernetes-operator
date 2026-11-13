@@ -87,7 +87,10 @@ one. What every build does promise:
    artifact to fit a newer build. ADR-0006 and ADR-0008 keep applying: a data
    PVC is never deleted by the Operator, and a restore never writes over an
    existing database. The one PVC the Operator deletes is the log claim of a
-   new member that never started, bound to a node without its data claim
+   member whose Pod never started and has been unschedulable for 60 seconds,
+   when the scheduler selected a node for that log claim and none for its
+   data claim, and the log claim was created with or after the data claim; at
+   most once in 10 minutes per member
    ([observability](observability.md#cubrids-own-log-files), #856).
 3. **A refusal names what to do.** When a later build cannot take over a
    cluster, the reason says so and the documentation names the way out:

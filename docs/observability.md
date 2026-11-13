@@ -430,7 +430,7 @@ underscores.
 | A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
 | A seeded member has not caught up with its source 10 minutes after the first reconcile that found its restore completed and it not caught up (`status.databases[].seeding.catchUpSince`); a warning while the bootstrap still waits, not a failure: the member is not recorded as seeded, and a person decides | `SeedCatchUpOverdue`, once per copy (`seeding.catchUpWarnedAt`) | Warning | `condition_changed` only if `BootstrapReady` changes (it stays `SeedCatchUpInProgress`) |
 | A member is replaced for a new image | `RollingUpdate`; not produced by the manager as built from `cmd/main.go`, which never deletes a Pod for an update (see `Updating` above) | Normal | none |
-| A new member's log claim was bound to a node without its data claim, and the Operator deleted the log claim and the Pod (see [CUBRID's own log files](#cubrids-own-log-files)) | `MemberLogClaimDeleted`, naming the member, the log claim's node or volume, the data claim and the scheduler's message | Warning | `member_log_claim_deleted`, with `member`, `logClaim`, `logClaimNode`, `logClaimVolume`, `dataClaim` and `scheduler` |
+| A new member's log claim was bound to a node without its data claim, and the Operator deleted the log claim and the Pod, or found the member split again within 10 minutes of that and left it (see [CUBRID's own log files](#cubrids-own-log-files)) | `MemberLogClaimDeleted`, naming the member, the log claim's node, the data claim and the scheduler's message; `MemberClaimsStillSplit`, once in those 10 minutes | Warning | `member_log_claim_deleted`, with `member`, `logClaim`, `logClaimNode`, `logClaimVolume`, `dataClaim`, `podDeleted` and `scheduler`; none for `MemberClaimsStillSplit` |
 | The Instance Manager token is rotated, its overlap ends, a requested rotation waits, or a new token is generated under running Pods (ADR-0003) | `InstanceManagerTokenRotated`, `InstanceManagerTokenOverlapEnded`, `InstanceManagerTokenRotationDeferred`, all Normal; `InstanceManagerTokenRegenerated`, a Warning; none carries the token | | none |
 | A CubridBackup reaches a phase: `Pending`, `Running`, `Uploading`, `Completed`, `Failed` | on the CubridBackup: `BackupPending`, `BackupStarted`, `BackupUploading`, `BackupCompleted`, `BackupFailed` | Normal; `BackupFailed` is a Warning | `backup_pending`, `backup_started`, `backup_uploading`, `backup_completed`, `backup_failed` |
 | A recovery bootstrap takes a step: a restore operation is started (once for each attempt), restoredb begins after the download, the recovery ends | `RestoreStarted`, `RestoreRunning`, `RestoreCompleted`, `RestoreFailed` | Normal; `RestoreFailed` is a Warning | `restore_started`, `restore_running`, `restore_completed`, `restore_failed` |
@@ -575,26 +575,40 @@ with no node, and stay unschedulable (#856). The Operator deletes the log claim
 and the Pod of such a member, so that the StatefulSet creates both again and
 the scheduler binds both claims together, only when all of these hold:
 
-- the Pod is controlled by the cluster's StatefulSet, has no node, is
-  `Pending`, and has had `PodScheduled=False` with reason `Unschedulable` for
-  60 seconds (from the condition's `lastTransitionTime`), so that a binding
-  still being written is not disturbed;
+- the Pod is controlled by the cluster's StatefulSet, is not being deleted,
+  has no node, is `Pending`, and has had `PodScheduled=False` with reason
+  `Unschedulable` for 60 seconds (from the condition's `lastTransitionTime`),
+  so that a binding still being written is not disturbed;
 - no container of the Pod ever started, ended or restarted;
 - the data claim `data-<cluster>-<ordinal>` is `Pending`, with no
   `volume.kubernetes.io/selected-node` and no volume;
-- the log claim `log-<cluster>-<ordinal>` has a selected node, a volume or the
-  phase `Bound`;
+- the log claim `log-<cluster>-<ordinal>` has the
+  `volume.kubernetes.io/selected-node` the scheduler writes; a log claim
+  bound to a volume without it is left alone;
+- the log claim was created with or after the data claim (at most 2 seconds
+  earlier, the resolution of creation times). A log claim older than its data
+  claim, as when the data claim of a member that ran was deleted to rebuild
+  it, is left alone with the logs that member wrote;
 - both claims carry the StatefulSet's selector labels, were created no earlier
   than the StatefulSet, are not being deleted, and name no owner other than
-  the StatefulSet.
+  the StatefulSet;
+- the member was not repaired in the last 10 minutes. A split seen again
+  sooner is left as it is and reported once with a `MemberClaimsStillSplit`
+  Warning Event, and checked again when the 10 minutes end. The time of the
+  last repair is kept in the manager's memory, so a restarted manager may
+  repair the member once more.
 
-The log claim is deleted only if it has not changed since it was read, and the
-Pod only if it is the Pod that was read. A data claim is never deleted or
-changed. A `MemberLogClaimDeleted` Warning Event and the log line
+These conditions are read from the cache and then read again from the API
+server, and checked again on what it returns. The log claim and then the Pod
+are deleted only if they have not changed since that read (UID and
+`resourceVersion`). A data claim is never deleted or changed. A
+`MemberLogClaimDeleted` Warning Event and the log line
 `member_log_claim_deleted` say what was deleted; if a delete fails, `Ready`
 takes the reason `MemberClaimRecoveryFailed`. This is why the Operator's role
-may delete PVCs. A StatefulSet created without the log claim has one claim
-per member and is not concerned.
+may delete PVCs. Under a StorageClass whose `reclaimPolicy` is `Retain`, the
+deleted log claim leaves its 1Gi PersistentVolume `Released`, for an
+administrator to remove. A StatefulSet created without the log claim has one
+claim per member and is not concerned.
 
 A StatefulSet's volume claim templates cannot be changed. A cluster whose
 StatefulSet was created by an Operator without this volume keeps its CUBRID

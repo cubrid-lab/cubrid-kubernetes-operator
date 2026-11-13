@@ -298,8 +298,10 @@ func TestGeneratedRoleGrantsOnlyWhatTheManagerCalls(t *testing.T) {
 		// The token Secret is created and updated, never removed.
 		"/secrets": writes,
 		// Replacing a member during an update deletes its Pod.
-		"/pods":                   read + " delete",
-		"/persistentvolumeclaims": read,
+		"/pods": read + " delete",
+		// The log claim of a new member whose log claim was bound to a node
+		// without its data claim is deleted (#856); a data claim never is.
+		"/persistentvolumeclaims": read + " delete",
 		// The recorder creates an Event and patches a repeated one.
 		"/events":           "create patch",
 		"apps/statefulsets": writes,

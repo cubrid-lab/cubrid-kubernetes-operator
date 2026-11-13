@@ -188,6 +188,10 @@ type CubridClusterReconciler struct {
 	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
 	// does not log in to the database once each.
 	dbaPasswordCheckedAt sync.Map
+	// claimRepairs holds when each member's split claims were last repaired
+	// (recoverSplitMember), so that a member is repaired at most once in
+	// splitClaimsRepairInterval.
+	claimRepairs claimRepairs
 }
 
 // conflictKey names one group of a cluster's writes in conflicts.
