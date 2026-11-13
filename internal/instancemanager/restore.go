@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // RestoreRequest asks the manager to restore a backup artifact into an empty,
@@ -448,7 +449,7 @@ func hasExistingDB(targetDir, database string) bool {
 // the staging directory, so neither a key nor a symbolic link inside the
 // directory can place a file outside it.
 func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string, exp ManifestExpectation, stagingDir string) (BackupManifest, error) {
-	data, err := readObject(ctx, store, bucket, path.Join(prefix, ManifestObjectName))
+	data, err := readObject(ctx, store, bucket, path.Join(prefix, ManifestObjectName), MaxManifestBytes)
 	if err != nil {
 		return BackupManifest{}, fmt.Errorf("read manifest: %w", err)
 	}
@@ -472,6 +473,9 @@ func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string
 		return BackupManifest{}, fmt.Errorf("open the staging directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
+	if err := checkStagingSpace(manifest, root, stagingDir); err != nil {
+		return BackupManifest{}, err
+	}
 	for _, obj := range manifest.Objects {
 		if err := stageObject(ctx, store, bucket, prefix, obj, root); err != nil {
 			return BackupManifest{}, err
@@ -480,8 +484,45 @@ func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string
 	return manifest, nil
 }
 
+// stagingFreeBytes returns the bytes an unprivileged writer can still use on
+// the file system that holds dir. Tests replace it.
+// Tests that replace it must not run in parallel.
+var stagingFreeBytes = func(dir string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil //nolint:gosec // Bsize is a positive block size
+}
+
+// checkStagingSpace refuses a restore whose manifest declares more bytes than
+// the staging volume can still hold, before any object is downloaded. A file
+// already staged under one of the manifest's keys, left by an earlier attempt,
+// is overwritten, so its size counts as free. The check does not reserve the
+// space: it only refuses a restore that cannot fit when it starts.
+func checkStagingSpace(manifest BackupManifest, root *os.Root, stagingDir string) error {
+	free, err := stagingFreeBytes(stagingDir)
+	if err != nil {
+		return fmt.Errorf("read the free space of the staging directory: %w", err)
+	}
+	var reusable uint64
+	for _, obj := range manifest.Objects {
+		if fi, err := root.Lstat(filepath.FromSlash(obj.Key)); err == nil && fi.Mode().IsRegular() {
+			reusable += uint64(fi.Size()) //nolint:gosec // a regular file's size is not negative
+		}
+	}
+	need := uint64(manifest.TotalSize()) //nolint:gosec // ParseManifest refuses negative sizes and overflow
+	if need > free+reusable {
+		return fmt.Errorf("the backup's objects need %d bytes, but the staging volume has %d bytes free", need, free+reusable)
+	}
+	return nil
+}
+
 // stageObject downloads one object into the staging root and checks what was
-// written against the manifest entry.
+// written against the manifest entry. It writes at most one byte more than the
+// entry's size: a longer body fails as soon as that byte arrives, the rest of
+// it is not read, and the incomplete file is removed, so a store that returns
+// more than the manifest declares cannot fill the staging volume.
 func stageObject(ctx context.Context, store ObjectStore, bucket, prefix string, obj ManifestObject, root *os.Root) (err error) {
 	name := filepath.FromSlash(obj.Key)
 	if err := root.MkdirAll(filepath.Dir(name), 0o750); err != nil {
@@ -504,9 +545,12 @@ func stageObject(ctx context.Context, store ObjectStore, bucket, prefix string, 
 	}()
 
 	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(f, hash), r)
+	size, err := io.Copy(io.MultiWriter(f, hash), io.LimitReader(r, beyond(obj.SizeBytes)))
 	if err != nil {
 		return fmt.Errorf("write staged %s: %w", obj.Key, err)
+	}
+	if size > obj.SizeBytes {
+		return fmt.Errorf("object %s is larger than its manifest size %d", obj.Key, obj.SizeBytes)
 	}
 	if size != obj.SizeBytes {
 		return fmt.Errorf("object %s size %d does not match manifest %d", obj.Key, size, obj.SizeBytes)

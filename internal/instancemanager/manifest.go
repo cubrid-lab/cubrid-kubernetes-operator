@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path"
 	"strings"
 )
@@ -49,6 +50,21 @@ const manifestVersionRequestedRole = 1
 func readableManifestVersion(v int) bool {
 	return v == ManifestVersion || v == manifestVersionRequestedRole
 }
+
+// MaxManifestBytes is the largest manifest.json a restore or verification
+// reads. The manifest comes from the bucket, so it is read through a reader
+// that stops one byte past this limit, and a longer one is refused before it
+// is decoded: a wrong or hostile store cannot fill the Instance Manager's
+// memory with it. UploadBackup writes an entry of a few hundred bytes per
+// object (key, size, SHA-256 and indentation), so 16 MiB holds
+// MaxManifestObjects entries with keys of up to about 1.5 KiB each.
+const MaxManifestBytes = 16 << 20
+
+// MaxManifestObjects is the largest number of objects a manifest may list.
+// backupdb writes one volume per database volume and backup level and a few
+// small files beside them, so a real backup lists tens of objects, not
+// thousands.
+const MaxManifestObjects = 10000
 
 // ManifestObjectName is the manifest's object key within a backup prefix. It is
 // written LAST and is the atomic completion marker: a backup is trustworthy only
@@ -132,8 +148,15 @@ func (m BackupManifest) Digest() (string, error) {
 }
 
 // ParseManifest decodes a manifest and rejects an unknown schema version so a
-// consumer never silently mis-reads a future format (ADR-0007/0008).
+// consumer never silently mis-reads a future format (ADR-0007/0008). It also
+// rejects a manifest longer than MaxManifestBytes, and an object list no
+// backup can have, before any object is downloaded: more than
+// MaxManifestObjects objects, a negative size, sizes whose sum does not fit in
+// an int64, or a checksum that is not a lowercase hex SHA-256.
 func ParseManifest(data []byte) (BackupManifest, error) {
+	if len(data) > MaxManifestBytes {
+		return BackupManifest{}, fmt.Errorf("manifest is larger than %d bytes", MaxManifestBytes)
+	}
 	var m BackupManifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return BackupManifest{}, fmt.Errorf("decode manifest: %w", err)
@@ -142,7 +165,48 @@ func ParseManifest(data []byte) (BackupManifest, error) {
 		return BackupManifest{}, fmt.Errorf("unsupported manifest version %d (want %d or %d)",
 			m.ManifestVersion, ManifestVersion, manifestVersionRequestedRole)
 	}
+	if err := m.validateObjectList(); err != nil {
+		return BackupManifest{}, err
+	}
 	return m, nil
+}
+
+// validateObjectList checks the count, sizes and checksums of the listed
+// objects. Object keys are checked separately by ValidateObjectKeys.
+func (m BackupManifest) validateObjectList() error {
+	if len(m.Objects) > MaxManifestObjects {
+		return fmt.Errorf("manifest lists %d objects, more than the %d allowed", len(m.Objects), MaxManifestObjects)
+	}
+	var total int64
+	// An object is named by its position: its key is not checked yet, and the
+	// manifest bound alone does not keep it short enough to quote.
+	for i, obj := range m.Objects {
+		if obj.SizeBytes < 0 {
+			return fmt.Errorf("manifest object %d has negative size %d", i, obj.SizeBytes)
+		}
+		if total > math.MaxInt64-obj.SizeBytes {
+			return fmt.Errorf("manifest object sizes add up to more than %d bytes", int64(math.MaxInt64))
+		}
+		total += obj.SizeBytes
+		if !isSHA256Hex(obj.SHA256) {
+			return fmt.Errorf("manifest object %d has a checksum that is not a lowercase hex SHA-256", i)
+		}
+	}
+	return nil
+}
+
+// isSHA256Hex reports whether s is a SHA-256 digest in lowercase hex, the
+// form UploadBackup writes and the form a staged file's digest is compared in.
+func isSHA256Hex(s string) bool {
+	if len(s) != sha256.Size*2 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // ManifestExpectation is what a restore/rebuild consumer requires of a manifest

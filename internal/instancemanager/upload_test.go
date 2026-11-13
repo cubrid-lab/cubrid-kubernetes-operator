@@ -195,7 +195,7 @@ func TestBackupManifest_RoundTripAndDigest(t *testing.T) {
 	m := BackupManifest{
 		ManifestVersion: ManifestVersion,
 		Database:        dbName,
-		Objects:         []ManifestObject{{Key: "backup/x", SizeBytes: 3, SHA256: "abc"}},
+		Objects:         []ManifestObject{{Key: "backup/x", SizeBytes: 3, SHA256: strings.Repeat("a", 64)}},
 	}
 	data, err := m.Marshal()
 	if err != nil {
