@@ -606,6 +606,9 @@ func dbaPasswordHAScenario() {
 				// The password only this test knows; it is on no command line
 				// of the test process.
 				password = "E2e-Dba-Password-834"
+				// changed is the value the Secret is changed to once the
+				// cluster is Ready; it is never the database's password.
+				changed = "E2e-Dba-Password-845-changed"
 				// marker is the row written through -rw and read on every
 				// member.
 				marker = "written-through-rw"
@@ -789,14 +792,81 @@ spec:
 				}
 			})
 
+			// The Operator asks the primary at most once every 5 minutes, and at
+			// once after it restarts (docs/operations/dba-password.md). The step
+			// waits until the kubelet has written the changed value into the
+			// primary's file and then restarts the Operator, so that it does not
+			// wait out the poll (#845).
+			It("reports a changed Secret value as an unsupported rotation, and True again once it is put back", func() {
+				primary, err := h.clusterField(clusterName, "{.status.currentPrimary}")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(primary).To(BeElementOf(members), "no primary is resolved")
+				resolved := func(g Gomega) (string, string) {
+					status, err := h.clusterField(clusterName,
+						`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					reason, err := h.clusterField(clusterName,
+						`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].reason}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					return status, reason
+				}
+				// changeTo puts value into the Secret, waits until the primary's
+				// mounted file holds it, compared in the container with the value
+				// read from stdin, and restarts the Operator.
+				changeTo := func(value string) {
+					h.apply(dbaPasswordSecret(haNamespace, secretName, value))
+					Eventually(func() error {
+						cmd := exec.Command("kubectl", "-n", haNamespace, "exec", "-i", primary, "-c", "cubrid", "--",
+							"bash", "-c", `IFS= read -r v; [ "$v" = "$(cat "$0")" ]`, dbaPasswordFile)
+						cmd.Stdin = strings.NewReader(value + "\n")
+						_, err := utils.RunQuiet(cmd)
+						return err
+					}, 3*time.Minute, 3*time.Second).Should(Succeed(), "the kubelet did not update the file on %s", primary)
+					// A restart loses the Operator's log, so it is read first.
+					expectNoDBAPassword(password, map[string][]string{"the Operator log": operatorLogArgs()})
+					expectNoDBAPassword(changed, map[string][]string{"the Operator log": operatorLogArgs()})
+					_, err := utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "restart", operatorDeployment))
+					Expect(err).NotTo(HaveOccurred())
+					_, err = utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "status", operatorDeployment,
+						"--timeout=3m"))
+					Expect(err).NotTo(HaveOccurred())
+				}
+
+				By("changing the Secret's value after the cluster became Ready")
+				changeTo(changed)
+				Eventually(func(g Gomega) {
+					status, reason := resolved(g)
+					g.Expect(status).To(Equal("False"))
+					g.Expect(reason).To(Equal("DBAPasswordRotationUnsupported"))
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+				events, err := h.kubectl("get", "events", "--field-selector", "reason=DBAPasswordRotationUnsupported",
+					"-o", "jsonpath={.items[*].type}")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.Fields(events)).To(ContainElement("Warning"))
+
+				By("putting the database's password back")
+				changeTo(password)
+				Eventually(func(g Gomega) {
+					status, reason := resolved(g)
+					g.Expect(status).To(Equal("True"))
+					g.Expect(reason).To(Equal("DBAPasswordSecretResolved"))
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+			})
+
 			It("writes the password into no status, Event, StatefulSet, Broker client or Operator log line", func() {
-				expectNoDBAPassword(password, map[string][]string{
+				places := map[string][]string{
 					"the cluster":        {"-n", haNamespace, "get", "cubridcluster", clusterName, "-o", "json"},
 					"the StatefulSet":    {"-n", haNamespace, "get", "statefulset", clusterName, "-o", "json"},
 					"the Events":         {"-n", haNamespace, "get", "events", "-o", "json"},
 					"the Broker clients": {"-n", clientNamespace, "get", "pods", "-o", "json"},
 					"the Operator log":   operatorLogArgs(),
-				})
+				}
+				for _, member := range members {
+					places["the log of "+member] = []string{"-n", haNamespace, "logs", member, "--all-containers",
+						"--tail=-1"}
+				}
+				expectNoDBAPassword(password, places)
+				expectNoDBAPassword(changed, places)
 			})
 		})
 }

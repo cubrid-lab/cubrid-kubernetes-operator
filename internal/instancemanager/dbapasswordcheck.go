@@ -64,20 +64,27 @@ func (s *Server) dbaPassword(w http.ResponseWriter, r *http.Request) {
 // The login runs SELECT 1 and changes nothing, and no record of the value is
 // kept, so a password changed by hand with ALTER USER is seen as well.
 //
-// Only a standalone member is checked. An HA member answers Unknown, and the
-// operator does not ask it (reconcileDBAPasswordRotation), so a changed value
-// on an HA cluster is not reported. A check that cannot tell answers Unknown, never Differs: the
-// file is not set or cannot be used, the server does not run, an operation
-// that stops the server runs, or the login was neither accepted nor refused
-// for its password. One check runs at a time; one that arrives while another
-// runs answers Unknown at once rather than wait, so callers cannot pile up
-// logins. The operator asks again later.
+// A standalone member is checked while its server runs. An HA member is
+// checked only while heartbeat reports it as the master with its server
+// registered_and_active: the operator asks the cluster's primary, the password
+// was set on it, and a slave or a member in transition answers Unknown. The
+// same login in client mode, csql -u dba <db>@localhost, logs in on every
+// member of an HA cluster in the Kind HA scenario with a DBA password
+// (test/e2e/dba_password_test.go, CUBRID 11.4.7.1995).
+//
+// A check that cannot tell answers Unknown, never Differs: the member was
+// told no database, the file is not set or cannot be used, the server does
+// not run or is not the active master, an operation that stops the server
+// runs, or the login was neither accepted nor refused for its password. One
+// check runs at a time; one that arrives while another runs answers Unknown at
+// once rather than wait, so callers cannot pile up logins. The operator asks
+// again later.
 func (s *Server) checkDBAPassword(ctx context.Context) DBAPasswordCheck {
 	unknown := func(reason string) DBAPasswordCheck {
 		return DBAPasswordCheck{State: DBAPasswordUnknown, Reason: reason}
 	}
-	if s.standaloneDB == "" {
-		return unknown("the DBA password is not checked on an HA member")
+	if s.standaloneDB == "" && s.replicationDB == "" {
+		return unknown("the member was told no database")
 	}
 	if s.ha.DBAPasswordFile == "" {
 		return unknown("no DBA password file is set (" + DBAPasswordFileEnv + "): the cluster asks for no DBA password")
@@ -114,15 +121,12 @@ func (s *Server) runDBAPasswordCheck(ctx context.Context) DBAPasswordCheck {
 	if err != nil {
 		return unknown(err.Error())
 	}
-	running, err := ServerRunning(ctx, s.cli, s.standaloneDB)
-	switch {
-	case err != nil:
-		return unknown(err.Error())
-	case !running:
-		return unknown("server " + s.standaloneDB + " is not running")
+	database, reason := s.dbaCheckDatabase(ctx)
+	if database == "" {
+		return unknown(reason)
 	}
 	// dbaPasswordAccepted's errors carry nothing csql printed.
-	accepted, err := runningDBAPasswordAccepted(ctx, terminal, s.standaloneDB, password)
+	accepted, err := runningDBAPasswordAccepted(ctx, terminal, database, password)
 	switch {
 	case err != nil:
 		return unknown(err.Error())
@@ -131,6 +135,33 @@ func (s *Server) runDBAPasswordCheck(ctx context.Context) DBAPasswordCheck {
 			Reason: "a dba login with the value of the DBA password file was refused for its password"}
 	}
 	return DBAPasswordCheck{State: DBAPasswordMatches}
+}
+
+// dbaCheckDatabase returns the database to log in to when its server may be
+// asked now, or "" and why not. A standalone server must be listed by
+// `cubrid server status`. An HA member must be reported by `cubrid heartbeat
+// status` as the master whose server is registered_and_active; the server
+// status of an HA member is not used, since no POC records its form there.
+func (s *Server) dbaCheckDatabase(ctx context.Context) (string, string) {
+	if s.standaloneDB != "" {
+		running, err := ServerRunning(ctx, s.cli, s.standaloneDB)
+		switch {
+		case err != nil:
+			return "", err.Error()
+		case !running:
+			return "", "server " + s.standaloneDB + " is not running"
+		}
+		return s.standaloneDB, ""
+	}
+	st := HeartbeatStatus(ctx, s.cli)
+	if st.Role != RoleMaster || !st.ServerActive {
+		why := "heartbeat reports role " + string(st.Role)
+		if st.Reason != "" {
+			why += " (" + st.Reason + ")"
+		}
+		return "", "the member is not the active master of its HA cluster: " + why
+	}
+	return s.replicationDB, ""
 }
 
 // logDBAPasswordCheck logs a check's answer, at info when it differs from the

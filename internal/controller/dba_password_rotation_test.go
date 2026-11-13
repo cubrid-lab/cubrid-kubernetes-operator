@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -274,28 +276,122 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		Expect(res.RequeueAfter).To(Equal(poll))
 	})
 
-	// An HA member's Instance Manager answers Unknown to the check, so the
-	// operator does not ask it, and a changed value on an HA cluster is not
-	// reported; the condition says only that the key resolves (#834).
-	It("never asks the members of an HA cluster", func() {
-		checker := &fakeDBAPasswordChecker{}
-		checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
-		r := newReconciler(checker)
-		r.Prober = &memberProber{master: "dba-rotation-ha-0"}
-		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dba-rotation-ha-secret", Namespace: testNamespace},
+	// On an HA cluster the operator asks the resolved primary, the member that
+	// heartbeat reports as the active master, and only once the HA bootstrap
+	// admitted every member (#845). The primary is ha-1 here, not ordinal 0.
+	haRunning := func(name string, r *CubridClusterReconciler, prober *haDBAProber) types.NamespacedName {
+		r.Prober = prober
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-secret", Namespace: testNamespace},
 			Data: map[string][]byte{dbaTestKey: []byte(dbaTestPassword)}}
 		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed()) })
-		c := haCluster("dba-rotation-ha")
+		c := haCluster(name)
 		c.Spec.DBAPasswordSecretRef = dbaPasswordRef(secret.Name, dbaTestKey)
 		Expect(k8sClient.Create(ctx, c)).To(Succeed())
 		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
 		key := client.ObjectKeyFromObject(c)
 		reconcileOnce(r, key)
-		setReadyReplicas(ctx, key, 1)
+		return key
+	}
+
+	It("asks the primary of an HA cluster and reports a value that is not the database's password", func() {
+		checker := &fakeDBAPasswordChecker{}
+		checker.set(instancemanager.DBAPasswordMatches, "", nil)
+		r := newReconciler(checker)
+		key := haRunning("dba-rotation-ha", r, &haDBAProber{master: "dba-rotation-ha-1", now: now})
+		reconcileOnce(r, key)
+		Expect(checker.calls()).NotTo(BeEmpty())
+		for _, asked := range checker.calls() {
+			Expect(asked).To(Equal(testNamespace+"/dba-rotation-ha-1"), "only the primary is asked")
+		}
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+		drain(r.Recorder.(*record.FakeRecorder))
+
+		By("reporting the value that no longer logs in, once")
+		checker.set(instancemanager.DBAPasswordDiffers, "a dba login with the value was refused for its password", nil)
+		res := reconcileOnce(r, key)
+		resolved := resolvedOf(key)
+		Expect(resolved.Status).To(Equal(metav1.ConditionFalse))
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		Expect(resolved.Message).To(ContainSubstring("dba-rotation-ha-secret"))
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(res.RequeueAfter).To(BeNumerically("<=", poll))
+		events := drain(r.Recorder.(*record.FakeRecorder))
+		warnings := 0
+		for _, e := range events {
+			if strings.HasPrefix(e, corev1.EventTypeWarning+" "+reasonDBAPasswordRotationUnsupported) {
+				warnings++
+			}
+		}
+		Expect(warnings).To(Equal(1), "one Warning Event: %q", events)
+		reconcileOnce(r, key)
+		Expect(drain(r.Recorder.(*record.FakeRecorder))).NotTo(ContainElement(ContainSubstring(reasonDBAPasswordRotationUnsupported)))
+		expectNoValue(key, events)
+
+		By("keeping it while the primary cannot tell or the call fails")
+		reported := resolvedOf(key)
+		for name, set := range map[string]func(){
+			"an Unknown answer":  func() { checker.set(instancemanager.DBAPasswordUnknown, "not the active master", nil) },
+			"a call that failed": func() { checker.set("", "", errors.New("connection refused")) },
+		} {
+			set()
+			reconcileOnce(r, key)
+			kept := resolvedOf(key)
+			Expect(kept.Reason).To(Equal(reported.Reason), name)
+			Expect(kept.LastTransitionTime).To(Equal(reported.LastTransitionTime), name)
+		}
+
+		By("asking at most once per poll")
+		asked := len(checker.calls())
+		for range 3 {
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(checker.calls()).To(HaveLen(asked), "the primary was asked again before the poll interval ended")
+
+		By("clearing it once the value logs in again")
+		checker.set(instancemanager.DBAPasswordMatches, "", nil)
+		reconcileOnce(r, key)
+		resolved = resolvedOf(key)
+		Expect(resolved.Status).To(Equal(metav1.ConditionTrue))
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordSecretResolved))
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)))
+	})
+
+	It("asks no member of an HA cluster without a resolved primary or before its bootstrap admitted every member", func() {
+		checker := &fakeDBAPasswordChecker{}
+		checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+		r := newReconciler(checker)
+		prober := &haDBAProber{master: "dba-rotation-ha-gate-0", now: now, unknown: true}
+		key := haRunning("dba-rotation-ha-gate", r, prober)
+
+		By("not asking while no primary is resolved")
+		res := reconcileOnce(r, key)
+		Expect(checker.calls()).To(BeEmpty())
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+
+		By("not asking while two members claim to be the master")
+		prober.set(false, "dba-rotation-ha-gate-0", "dba-rotation-ha-gate-1")
+		reconcileOnce(r, key)
+		Expect(checker.calls()).To(BeEmpty())
+
+		By("not asking while the HA bootstrap has not admitted every member")
+		prober.set(false, "dba-rotation-ha-gate-0")
+		c := getCluster(key)
+		c.Status.Databases = []databasev1alpha1.DatabaseStatus{{Name: testDatabase, PrimaryCreated: true}}
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
 		reconcileOnce(r, key)
 		Expect(checker.calls()).To(BeEmpty())
 		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+
+		By("asking the primary once every member is admitted")
+		c = getCluster(key)
+		c.Status.Databases[0].HAConfigured = true
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+		reconcileOnce(r, key)
+		Expect(checker.calls()).To(Equal([]string{testNamespace + "/dba-rotation-ha-gate-0"}))
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
 	})
 
 	It("asks the member at most once per poll, however often the cluster is reconciled", func() {
@@ -329,4 +425,42 @@ func setReadyReplicas(ctx context.Context, key types.NamespacedName, ready int32
 	Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
 	sts.Status.Replicas, sts.Status.ReadyReplicas = 1, ready
 	Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+}
+
+// haDBAProber answers like memberProber, at the test's clock: master for
+// every member in masters and slave for the others, or unknown for every
+// member while unknown is set.
+type haDBAProber struct {
+	mu      sync.Mutex
+	master  string
+	masters []string
+	unknown bool
+	now     func() time.Time
+}
+
+func (p *haDBAProber) set(unknown bool, masters ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unknown, p.masters = unknown, masters
+}
+
+func (p *haDBAProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	at := p.now()
+	masters := p.masters
+	if len(masters) == 0 {
+		masters = []string{p.master}
+	}
+	switch {
+	case p.unknown:
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: at}
+	case slices.Contains(masters, podName):
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: at,
+			LogEnd: &databasev1alpha1.LogAddress{Page: 10}, Capabilities: allCapabilities}
+	}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: at,
+		Replication: &ReplicationObservation{Source: masters[0], AppliedChanges: 1,
+			FinalLSA: &databasev1alpha1.LogAddress{Page: 10}, CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}},
+		Capabilities: allCapabilities}
 }

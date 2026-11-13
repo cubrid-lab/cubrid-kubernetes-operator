@@ -36,6 +36,13 @@ import (
 // client mode, through the running server, on a terminal.
 const callClientLogin = "terminal csql -u dba -c SELECT 1 appdb@localhost"
 
+// callHeartbeatStatus is the heartbeat status an HA member's check runs.
+const callHeartbeatStatus = "cubrid heartbeat status"
+
+// notActiveMaster is what the check of an HA member that is not the active
+// master says.
+const notActiveMaster = "not the active master"
+
 // checkCLI stands in for CUBRID on a member whose server runs: `cubrid server
 // status` lists appdb while running is set, and a csql login on a terminal is
 // accepted only with current, the database's DBA password, as POC-61 Q5 saw
@@ -48,6 +55,8 @@ type checkCLI struct {
 	running bool
 	// statusErr is what `cubrid server status` fails with, when set.
 	statusErr error
+	// heartbeat is what `cubrid heartbeat status` prints on an HA member.
+	heartbeat string
 	current   string
 	// terminal, when set, answers every login on a terminal.
 	terminal *terminalAnswer
@@ -62,6 +71,9 @@ func (c *checkCLI) Run(_ context.Context, name string, args ...string) (string, 
 	defer c.mu.Unlock()
 	call := name + " " + strings.Join(args, " ")
 	c.calls = append(c.calls, call)
+	if call == callHeartbeatStatus && c.heartbeat != "" {
+		return c.heartbeat, nil
+	}
 	if call != "cubrid server status" {
 		return "", errors.New("unexpected command " + call)
 	}
@@ -210,8 +222,8 @@ func TestDBAPasswordCheck_AnswersUnknownWhenItCannotTell(t *testing.T) {
 			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "not running"},
 		{name: "the server status fails", cli: &checkCLI{statusErr: timeout, current: testPassword},
 			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "server status failed"},
-		{name: "the member is an HA member", ha: true, cli: &checkCLI{running: true, current: testPassword},
-			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "HA member"},
+		{name: "the member was told no database", ha: true, cli: &checkCLI{running: true, current: testPassword},
+			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "was told no database"},
 		{name: "csql does not prompt", login: true,
 			cli:  &checkCLI{running: true, terminal: &terminalAnswer{err: errors.New("exit status 0")}},
 			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "did not prompt"},
@@ -292,5 +304,101 @@ func TestDBAPasswordCheck_RunsOneAtATime(t *testing.T) {
 	}
 	if logins != 1 {
 		t.Errorf("%d logins ran, want 1", logins)
+	}
+}
+
+// haMasterHeartbeat is `cubrid heartbeat status` on the active master of a
+// three-member cluster, in the form of the POC output (role_test.go).
+const haMasterHeartbeat = ` HA-Node Info (current ha-0, state master)
+   Node ha-2 (priority 3, state slave)
+   Node ha-1 (priority 2, state slave)
+   Node ha-0 (priority 1, state master)
+ HA-Process Info (master 13, state master)
+   Server appdb (pid 30, state registered_and_active)
+`
+
+// checkHAServer is an HA member of appdb whose DBA password file is file.
+func checkHAServer(cli CLI, file string, logged *bytes.Buffer) *Server {
+	logger := slog.New(slog.NewJSONHandler(logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return NewServer(LoggingCLI{CLI: cli, Logger: logger}, "tok").
+		WithLogger(logger).
+		WithReplication(dbName, "/var/lib/cubrid/databases").
+		WithHAConfig(HAConfig{DBAPasswordFile: file})
+}
+
+// On an HA member that heartbeat reports as the active master, the same dba
+// login in client mode, typed at csql's prompt, tells whether the mounted
+// value is the database's DBA password (#845). The Kind HA scenario logs in
+// with csql -u dba appdb@localhost on every member on CUBRID 11.4.7.1995. The
+// check reads only: the heartbeat status and one login, and the value is
+// typed on the terminal, never put on an argv.
+func TestDBAPasswordCheck_HAMasterTellsWhetherTheValueMatches(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current string
+		want    DBAPasswordState
+	}{
+		{name: "the database's password", current: testPassword, want: DBAPasswordMatches},
+		{name: "a changed password", current: testPassword + "-changed", want: DBAPasswordDiffers},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &checkCLI{t: t, heartbeat: haMasterHeartbeat, current: tc.current}
+			var logged bytes.Buffer
+			got, answer := askDBAPassword(t, checkHAServer(cli, passwordFile(t, testPassword), &logged))
+			if got.State != tc.want {
+				t.Fatalf("state = %q (%s), want %q", got.State, answer, tc.want)
+			}
+			if calls := cli.recorded(); !slices.Equal(calls, []string{callHeartbeatStatus, callClientLogin}) {
+				t.Errorf("ran %q, want the heartbeat status and one login in client mode", calls)
+			}
+			if !slices.Equal(cli.typed, []string{testPassword}) {
+				t.Errorf("typed %d lines, want the password once", len(cli.typed))
+			}
+			for _, call := range cli.recorded() {
+				if strings.Contains(call, testPassword) {
+					t.Errorf("the password is on an argv: %q", call)
+				}
+			}
+			wantNothingLeaked(t, answer, &logged)
+		})
+	}
+}
+
+// An HA member that is not the active master, whose heartbeat status fails,
+// or whose password file cannot be read answers Unknown and runs no login:
+// the operator asks only the active master, and a member in another state
+// cannot say what the database's password is (#845).
+func TestDBAPasswordCheck_HAMemberAnswersUnknownWhenItCannotTell(t *testing.T) {
+	notActive := strings.Replace(haMasterHeartbeat, "registered_and_active", "registered", 1)
+	for _, tc := range []struct {
+		name      string
+		heartbeat string
+		file      func(t *testing.T) string
+		says      string
+	}{
+		{name: "the password file cannot be read", heartbeat: haMasterHeartbeat,
+			file: func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing") }, says: "open the DBA password file"},
+		{name: "the member is a slave", heartbeat: slaveHeartbeat,
+			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: notActiveMaster},
+		{name: "the master's server is not active", heartbeat: notActive,
+			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: notActiveMaster},
+		{name: "heartbeat reports no role", heartbeat: "@ cubrid heartbeat status\n",
+			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: notActiveMaster},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &checkCLI{t: t, heartbeat: tc.heartbeat, current: testPassword}
+			var logged bytes.Buffer
+			got, answer := askDBAPassword(t, checkHAServer(cli, tc.file(t), &logged))
+			if got.State != DBAPasswordUnknown {
+				t.Fatalf("state = %q (%s), want Unknown", got.State, answer)
+			}
+			if !strings.Contains(got.Reason, tc.says) {
+				t.Errorf("reason = %q, want it to say %q", got.Reason, tc.says)
+			}
+			if slices.Contains(cli.recorded(), callClientLogin) {
+				t.Errorf("a login ran: %q", cli.recorded())
+			}
+			wantNothingLeaked(t, answer, &logged)
+		})
 	}
 }

@@ -143,12 +143,19 @@ resolve, so no member runs and the HA bootstrap does not start until it does.
   HA cluster with the Secret and logs in on every member and through
   `<cluster>-rw` and `<cluster>-ro`; Kind runs all members on one node.
 
-The check of a changed value described under
-[Changing the password is not supported](#changing-the-password-is-not-supported)
-is made only on a standalone cluster. On an HA cluster a changed value is not
-reported: `DBAPasswordSecretResolved` says only whether the key resolves. A
-member whose container starts again still refuses to start its server when
-the database's password is not the file's value.
+A changed value is reported on an HA cluster as on a standalone one (see
+[Changing the password is not supported](#changing-the-password-is-not-supported)),
+except that the Operator asks only the cluster's primary: the member in
+`status.currentPrimary`, resolved and ready in the same reconcile. The
+password was set on it and reaches the slaves from it by replication, and its
+Instance Manager checks only while `cubrid heartbeat status` reports it as the
+master with its server `registered_and_active`. No member is asked while no
+primary is resolved, while two members claim to be the master, or while the
+HA bootstrap has not admitted every member (a member that is still being
+seeded is never asked); the Condition is then left as it is. A slave that
+lags does not stop the check. A member whose container starts again still
+refuses to start its server when the database's password is not the file's
+value.
 
 An HA cluster restored from a backup (`spec.bootstrap.recovery`) follows the
 rules of the next section.
@@ -169,9 +176,11 @@ The reference cannot change, and a changed value in the Secret is never
 applied. The running server keeps the password the database has; the kubelet
 updates the mounted file, but nothing sets it as the password.
 
-**How a changed value is reported** on a standalone cluster. While the
-cluster's member is ready, the Operator asks its Instance Manager, at most once every 5 minutes and at once
-after the Operator restarts, whether the value is still the database's DBA
+**How a changed value is reported.** While the member of a standalone
+cluster is ready, or while an HA cluster has a resolved primary
+([HA clusters](#ha-clusters)), the Operator asks that member's Instance
+Manager, at most once every 5 minutes per cluster and at once after the
+Operator restarts, whether the value is still the database's DBA
 password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
 through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
 and types the file's value at csql's `Enter Password` prompt on a
@@ -186,9 +195,9 @@ the database by hand with `ALTER USER`.
   changed, and nothing is restarted.
 - **The login is accepted again**, for example after the old value was put
   back: the Condition returns to `True` with `DBAPasswordSecretResolved`.
-- **The check cannot tell** (the server is not running, the Instance Manager
-  cannot be reached, another check is running, or csql neither accepted nor
-  refused the login): the Condition is left as it is, and the Operator asks
+- **The check cannot tell** (the server is not running, an HA member is not
+  the active master, the Instance Manager cannot be reached, another check is
+  running, or csql neither accepted nor refused the login): the Condition is left as it is, and the Operator asks
   again later. It is never reported as a changed password.
 
 A change is therefore reported within about 5 minutes, plus the time the
@@ -211,7 +220,12 @@ CUBRID 11.4.7.1995 server, in Docker, outside the Operator (2026-11-12 UTC,
 #830): csql printed `Enter Password :`, the right value was accepted and a
 wrong one refused with `Incorrect or missing password.`. Before it prompts,
 csql tries the empty password and prints that same refusal, so only what csql
-prints after the prompt decides the answer. The Instance Manager's own check
-is tested with a stand-in for csql, not yet through the Operator on a real
-cluster. If csql does not prompt, the check answers that it cannot tell, and
+prints after the prompt decides the answer. The same login in client mode,
+`csql -u dba <db>@localhost`, logs in on every member of an HA cluster,
+slaves included, in the Kind HA scenario with a DBA password on CUBRID
+11.4.7.1995. The Instance Manager's own check is tested with a stand-in for
+csql. A Kind e2e step changes the Secret of an HA cluster after it became
+Ready and expects `DBAPasswordRotationUnsupported`, then `True` once the
+password is put back; it restarts the Operator instead of waiting out the
+5-minute poll. It is not yet run on the VM lab. If csql does not prompt, the check answers that it cannot tell, and
 no change is reported.
