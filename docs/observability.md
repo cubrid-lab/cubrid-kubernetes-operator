@@ -149,6 +149,14 @@ this records the `PrimaryUnresolved` transition with the reason
 `RolesNotObserved`, next to the Warning Event of the failure itself. A
 cluster without a role prober is not changed.
 
+`ReplicationHealthy` and `HAReady` say that the slaves apply the master's
+log, not that they hold the same rows. CUBRID HA does not replicate the rows of
+a table without a primary key, and the slaves report nothing for them: no
+failure and no delay (POC-62,
+[#855](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/855)).
+Every table of an HA cluster needs a primary key; see
+[Compatibility](compatibility.md).
+
 `HAReady` follows `ReplicationHealthy` once the primary is resolved
 ([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)):
 it is `False` with the replication's reason while a slave does not apply the

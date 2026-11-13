@@ -15,6 +15,7 @@ narrow for the MVP and are widened only after they are validated in CI.
 | CSI target | Lab driver TBD (#80) | The Kind e2e runs on Kind's default StorageClass (local-path provisioner, not a CSI driver). No CSI driver has been exercised; a development default is not a validated CSI support claim. The lab inventory measured on 2026-10-15 also records k3s `local-path`, which is node-local and not a CSI driver ([dated inventory](testing/lab-inventory.md)). |
 | HA topology | 1 master + 2 slaves (`promotableMembers: 3`) | Standalone `1/0` is also a design target (ADR-0001); live evidence is tracked in ROADMAP.md. |
 | Non-promotable replica | Not supported | `topology.readReplicas` reserved, must be `0` (ADR-0001). |
+| Tables in an HA cluster | Every table needs a primary key | CUBRID HA replicates the rows of a table only if it has a primary key. A table without one is created on every member, but its inserts, updates and deletes stay on the master. The slaves report no failure and no delay, and every Condition stays `True`, so after a failover the new master lacks those rows (POC-62, #855). |
 
 ## Reference engine image identity
 

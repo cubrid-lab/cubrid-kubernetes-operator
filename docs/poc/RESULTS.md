@@ -6429,3 +6429,23 @@ One session as soon as a graceful restart returned, **no shim loaded**:
 - The exit code of csql cannot confirm `ALTER USER`; a login with the new password must, and a login without argv needs a terminal session whose output is not logged, or the password on the argv of a short-lived process inside the container.
 - On HA, setting the password once on the master is enough for the members, but the copylogdb `-171` reconnect failures must be understood, on the VM lab, before HA clusters get a password.
 - A restore keeps the source's password, so a cluster restored from a backup cannot be given a new password from its Secret unless the source's password is known; how #801 treats that is a design decision.
+
+## POC-62 — whether a CUBRID HA slave receives the rows of a table without a primary key, in Docker on 11.4.7.1995 (#855) — **observation: no; with no failover or fault, the inserts, update and delete on a table without a primary key stayed on the master, while the table itself and a table with a primary key replicated; the slave's applier reported no failure, no delay and did not count those rows**
+
+**Question (#855).** On the VM lab's `ha` cluster, a row committed on the master just before a planned master Pod deletion was missing on the new master and on the other slave. Two reproduction attempts with 15 markers lost none. Their marker tables had a primary key, and `ha`'s `im_move_marker (v varchar(32))` has none. Does a CUBRID HA slave receive the rows of a table without a primary key at all? This is the behavior of one engine build in Docker, not a general CUBRID guarantee.
+
+**Environment (2026-11-13 12:31Z to 12:35Z).** Docker 29.2.1 on a shared linux/amd64 host. The VM lab's Instance Manager image at Operator `e1316da`, `sha256:2c3013ba9df919499135dc5fa5d1d43ea2b2641dba1828e8d9baa49009e61a89`, CUBRID 11.4.7.1995. A master/slave pair adapted from POC-61's set-up, with `ha_copy_sync_mode=sync:sync`. No Kubernetes, no Operator, no failover, no restart.
+
+**Method.** The scripts and raw output are in `docs/poc/poc62/` (`README.md` there is the full record). Case A ran the statement used on `ha` verbatim: one csql call with `create table if not exists im_move_marker(v varchar(32))`, an insert and a commit. Case B ran the same with a primary key. Case C ran two more inserts, an update and a delete on the table without a primary key. Both members were read 20 s after each step and again 50 s after case B.
+
+**Results.**
+- **Without a primary key:** the master held `m-a1u` and `m-c1`. The slave had the table and no row.
+- **With a primary key:** the slave had `m-b1`. At 20 s it was still one log page behind and lacked even the table. By 50 s it had both.
+- **Applier counters:** the slave's applier for the master's log ended with `Insert count 1` (case B's row), `Update count 0`, `Delete count 0`, `Schema count 2`, `Fail count 0` and `Delayed log page count 0`. Nothing showed that rows had been left out.
+- This agrees with POC-48's side observation on 11.4.6 (table `u`, 12,000 rows, none applied, fail count 0).
+
+**What this does not show.** Tables with a unique key but no primary key; `REPLACE`, `MERGE` and `TRUNCATE`; other builds; the VM lab.
+
+**Consequences.**
+- **#855:** the missing row on `ha` is explained by its table having no primary key. It was not lost in the failover, and the slaves' `insert_counter 1` there does not count it.
+- **Users:** every table of an HA cluster needs a primary key, and nothing the Operator reports shows a table that has none. `docs/compatibility.md` and `docs/observability.md` now say so.

@@ -1,0 +1,97 @@
+### 2026-11-13T12:33:33.844Z slave applier before the cases
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 5
+Fail count                     : 0
+EOF LSA                        : 145 | 14600
+Append LSA                     : 145 | 14600
+Delayed log page count         : 0
+### 2026-11-13T12:33:33.931Z A: no primary key, one transaction as on the lab
+Execute OK. (2.723975 sec) Committed. (3.355971 sec) 
+1 row affected. (0.000000 sec) Committed. (1.775984 sec) 
+### 2026-11-13T12:33:42.317Z B: primary key, one transaction
+Execute OK. (2.371979 sec) Committed. (2.935974 sec) 
+1 row affected. (0.000000 sec) Committed. (1.527986 sec) 
+### 2026-11-13T12:34:09.267Z poc-nopk-master im_move_marker
+=== <Result of SELECT Command in Line 1> ===
+  v                   
+======================
+  'm-a1'              
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:09.348Z poc-nopk-master pk_marker
+=== <Result of SELECT Command in Line 1> ===
+  v                   
+======================
+  'm-b1'              
+1 row selected. (0.008000 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:09.420Z poc-nopk-slave im_move_marker
+=== <Result of SELECT Command in Line 1> ===
+There are no results.
+0 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:09.488Z poc-nopk-slave pk_marker
+In line 1, column 1,
+ERROR: Unknown class "dba.pk_marker".
+### 2026-11-13T12:34:09.557Z slave applier after A and B
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 6
+Fail count                     : 0
+EOF LSA                        : 147 | 5496
+Append LSA                     : 147 | 5496
+Delayed log page count         : 1
+### 2026-11-13T12:34:09.628Z C: existing table without a primary key: insert m-c1, update m-a1 to m-a1u, delete m-c1 later
+1 row affected. (2.143981 sec) Committed. (0.000000 sec) 
+1 row affected. (1.503987 sec) Committed. (0.000000 sec) 
+1 row affected. (1.467987 sec) Committed. (0.000000 sec) 
+1 row affected. (1.447987 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:36.574Z poc-nopk-master im_move_marker
+=== <Result of SELECT Command in Line 1> ===
+  v                   
+======================
+  'm-a1u'             
+  'm-c1'              
+2 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:36.865Z poc-nopk-slave im_move_marker
+=== <Result of SELECT Command in Line 1> ===
+There are no results.
+0 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+### 2026-11-13T12:34:36.972Z slave applier after C
+Insert count                   : 1
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 11
+Fail count                     : 0
+EOF LSA                        : 147 | 9120
+Append LSA                     : 147 | 9120
+Delayed log page count         : 0
+### 2026-11-13T12:34:37.069Z slave applier log (last lines)
+Time: 11/13/26 12:33:07.690 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 358) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Time: 11/13/26 12:33:07.735 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 2
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:07.935 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 3
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:08.135 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 4
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:08.395 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 5
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:08.595 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 6
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:08.795 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 7
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-nopk-master/appdb_lgat".... No such file or directory
+Time: 11/13/26 12:33:11.552 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 8
+log applier: log applier started. required LSA: 145|10248. last committed LSA: 145|10344. last committed repl LSA: 145|10248.
+Time: 11/13/26 12:33:13.758 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 9
+HA generic: change the state of HA server (appdb@poc-nopk-master) from 'idle' to 'to-be-active'. 
+Time: 11/13/26 12:33:15.245 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 10
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|11872. 
+Time: 11/13/26 12:33:21.352 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 11
+HA generic: change the state of HA server (appdb@poc-nopk-master) from 'to-be-active' to 'active'. 
+*** The previous error message is the last one. ***
+### 2026-11-13T12:34:37.560Z master server error log mentioning replication or primary key
+case-exit=0
