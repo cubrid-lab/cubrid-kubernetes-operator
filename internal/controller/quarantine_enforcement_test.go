@@ -30,11 +30,13 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -234,12 +236,12 @@ var _ = Describe("Write quarantine (#113)", func() {
 		pass(r)
 		Expect(replicas(rwKey)).To(Equal(int32(0)))
 
-		By("a restarted Operator, from the persisted status alone, before any role is observed")
+		By("a restarted Operator, from the persisted status, with the Broker tier running after it")
 		Expect(k8sClient.Get(ctx, rwKey, dep)).To(Succeed())
 		dep.Spec.Replicas = new(int32(2))
 		Expect(k8sClient.Update(ctx, dep)).To(Succeed())
 		restarted := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
-			Recorder: record.NewFakeRecorder(100), Clock: now}
+			Recorder: record.NewFakeRecorder(100), Prober: prober, Clock: now}
 		clock = clock.Add(3 * time.Second)
 		c = pass(restarted)
 		Expect(replicas(rwKey)).To(Equal(int32(0)))
@@ -263,6 +265,8 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
 		Expect(c.Status.LastWriteQuarantineRelease.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedAutomatically))
 		Expect(replicas(rwKey)).To(Equal(int32(0)), "the release is written before the Brokers start")
+		Expect(condition(c, conditionReady).Status).To(Equal(metav1.ConditionFalse),
+			"Ready is not True while the read-write Brokers are still held at zero")
 		Expect(events()).To(ContainSubstring("Normal " + reasonWriteQuarantineReleased))
 
 		By("the pass after the release")
@@ -301,5 +305,149 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: brokerDeploymentName(name, brokerModeRW),
 			Namespace: key.Namespace}, dep)).To(Succeed())
 		Expect(*dep.Spec.Replicas).To(Equal(int32(0)))
+	})
+
+	// quarantineFixture creates an HA cluster, runs it with the first member
+	// as the only master until every member is verified and the read-write
+	// Brokers are asked for, and returns what the specs below need.
+	type quarantineFixture struct {
+		key, rw types.NamespacedName
+		answers *reachableReports
+		clock   *time.Time
+		prober  *HTTPRoleProber
+	}
+	newFixture := func(name string) quarantineFixture {
+		GinkgoHelper()
+		key := types.NamespacedName{Name: name, Namespace: metav1.NamespaceDefault}
+		Expect(k8sClient.Create(ctx, haCluster(name))).To(Succeed())
+		DeferCleanup(func() {
+			c := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+		})
+		f := quarantineFixture{key: key, answers: &reachableReports{}, clock: new(time.Now().Truncate(time.Second)),
+			rw: types.NamespacedName{Name: brokerDeploymentName(name, brokerModeRW), Namespace: key.Namespace}}
+		f.answers.set(roleReports(name, [3]string{wqMaster, wqSlave, wqSlave}))
+		f.prober = &HTTPRoleProber{Client: &http.Client{Transport: f.answers}, Tokens: staticToken("tok"),
+			Now: func() time.Time { return *f.clock }}
+		return f
+	}
+	reconcilerFor := func(f quarantineFixture, c client.Client) *CubridClusterReconciler {
+		return &CubridClusterReconciler{Client: c, APIReader: k8sClient, Scheme: k8sClient.Scheme(),
+			Recorder: record.NewFakeRecorder(100), Prober: f.prober, Clock: func() time.Time { return *f.clock }}
+	}
+	reconcileOnce := func(r *CubridClusterReconciler, f quarantineFixture) {
+		GinkgoHelper()
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+		Expect(err).NotTo(HaveOccurred())
+	}
+	stored := func(f quarantineFixture) *databasev1alpha1.CubridCluster {
+		GinkgoHelper()
+		c := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, c)).To(Succeed())
+		return c
+	}
+	rwReplicas := func(f quarantineFixture) int32 {
+		GinkgoHelper()
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, f.rw, dep)).To(Succeed())
+		return *dep.Spec.Replicas
+	}
+	runVerified := func(r *CubridClusterReconciler, f quarantineFixture) {
+		GinkgoHelper()
+		reconcileOnce(r, f)
+		*f.clock = f.clock.Add(quarantineVerifyGap + time.Second)
+		reconcileOnce(r, f)
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+	}
+
+	It("keeps the read-write Brokers at zero when the cache is behind the stored quarantine", func() {
+		f := newFixture("wq-stale-cache")
+		r := reconcilerFor(f, k8sClient)
+		runVerified(r, f)
+		behind := stored(f)
+
+		By("the first member cut off beside the second one as master")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+
+		By("a pass of another Operator process whose cache still holds the status before the quarantine, with no master answering")
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		stale := interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && key == f.key {
+					behind.DeepCopyInto(cluster)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		f.answers.set(map[string]string{})
+		*f.clock = f.clock.Add(3 * time.Second)
+		_, _ = reconcilerFor(f, stale).Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+		Expect(rwReplicas(f)).To(Equal(int32(0)), "the stored quarantine holds the read-write Brokers")
+	})
+
+	It("keeps a quarantine whose first status write failed", func() {
+		f := newFixture("wq-lost-write")
+		conflict := false
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		faulty := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource && conflict {
+					return apierrors.NewConflict(databasev1alpha1.GroupVersion.WithResource("cubridclusters").GroupResource(),
+						f.key.Name, errors.New("the object has been modified"))
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, faulty)
+		runVerified(r, f)
+
+		By("a quarantine whose status write is rejected as a conflict")
+		conflict = true
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+
+		By("the next pass, with no master answering")
+		conflict = false
+		f.answers.set(map[string]string{})
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil(), "the kept quarantine is written")
+	})
+
+	It("escalates and revises a quarantine on another active master", func() {
+		f := newFixture("wq-escalate")
+		recorder := record.NewFakeRecorder(100)
+		r := reconcilerFor(f, k8sClient)
+		r.Recorder = recorder
+		runVerified(r, f)
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		before := stored(f).Status.WriteQuarantine
+		Expect(before).NotTo(BeNil())
+
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqMaster}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		q := stored(f).Status.WriteQuarantine
+		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMasterChanged))
+		Expect(q.GenerationID).To(Equal(before.GenerationID))
+		Expect(q.Revision).To(Equal(before.Revision + 1))
+		Expect(q.ReleaseToken).NotTo(Equal(before.ReleaseToken))
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+		Expect(drain(recorder)).To(ContainElement(ContainSubstring("Warning WriteQuarantinedMasterChanged")))
 	})
 })

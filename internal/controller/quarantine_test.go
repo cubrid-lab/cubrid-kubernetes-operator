@@ -68,6 +68,9 @@ type quarantineScenario struct {
 	verifications []databasev1alpha1.MemberVerification
 	quarantine    *databasev1alpha1.WriteQuarantine
 	nonces        int
+	// unstable and identitiesUnknown are passed to the next pass only.
+	unstable          map[string]bool
+	identitiesUnknown bool
 }
 
 func newQuarantineScenario(t *testing.T, lastResolved string) *quarantineScenario {
@@ -82,8 +85,9 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 	s.t.Helper()
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: "cluster-uid", Members: quarantineMembers, Observations: obs,
-		Identities: s.identities, LastResolvedPrimary: s.lastResolved,
-		Verifications: s.verifications, Quarantine: s.quarantine.DeepCopy(),
+		Identities: s.identities, Unstable: s.unstable, IdentitiesUnknown: s.identitiesUnknown,
+		LastResolvedPrimary: s.lastResolved,
+		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(),
 		Nonce: func() (string, error) {
 			s.nonces++
 			return fmt.Sprintf("nonce-%d", s.nonces), nil
@@ -93,6 +97,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		s.t.Fatalf("decideWriteQuarantine: %v", err)
 	}
 	s.verifications, s.quarantine = d.Verifications, d.Quarantine
+	s.unstable, s.identitiesUnknown = nil, false
 	return d
 }
 
@@ -102,6 +107,7 @@ func (s *quarantineScenario) verifiedAll(members ...string) {
 	for _, m := range members {
 		s.verifications = append(s.verifications, databasev1alpha1.MemberVerification{
 			Name: m, PodUID: s.identities[m].PodUID, NonMasterSince: metav1.NewTime(testNow.Add(-time.Hour)),
+			LastNonMasterAt: &metav1.Time{Time: testNow.Add(-5 * time.Second)},
 		})
 	}
 }
@@ -484,5 +490,123 @@ func TestQuarantineNonce(t *testing.T) {
 	}
 	if len(a) < 32 || a == b {
 		t.Fatalf("nonces %q and %q: want two different values of at least 128 bits", a, b)
+	}
+}
+
+// Two non-master answers further apart than the observation TTL, as across
+// a stop of the Operator, are not uninterrupted: the second starts over.
+func TestQuarantineVerificationGapStartsOver(t *testing.T) {
+	s := newQuarantineScenario(t, q1)
+	obs := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: noAnswerAt(now)}
+	}
+	s.pass(testNow, obs(testNow))
+	later := testNow.Add(roleObservationTTL + 5*time.Second)
+	d := s.pass(later, obs(later))
+	if !slices.Contains(d.Unverified, q0) || d.Quarantine == nil {
+		t.Fatalf("an answer %s after the one before verified %s: %+v", later.Sub(testNow), q0, d)
+	}
+	next := later.Add(quarantineVerifyGap + time.Second)
+	if d = s.pass(next, obs(next)); slices.Contains(d.Unverified, q0) {
+		t.Fatalf("two answers %s apart did not verify %s", quarantineVerifyGap+time.Second, q0)
+	}
+}
+
+// Two releasable passes further apart than the observation TTL do not
+// release: the release check starts over.
+func TestQuarantineReleaseCheckGapStartsOver(t *testing.T) {
+	s := startUnverified(t)
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, releasable(t1))
+	t2 := t1.Add(quarantineVerifyGap + time.Second)
+	if d := s.pass(t2, releasable(t2)); d.Quarantine.ReleaseCheckSince == nil {
+		t.Fatalf("release check did not start")
+	}
+	// Keep the members' verifications fresh, as passes in between would, so
+	// that only the release check sees the gap.
+	t3 := t2.Add(roleObservationTTL + 5*time.Second)
+	for i := range s.verifications {
+		s.verifications[i].LastNonMasterAt = &metav1.Time{Time: t3.Add(-time.Second)}
+	}
+	if d := s.pass(t3, releasable(t3)); d.Quarantine == nil || d.Released != nil {
+		t.Fatalf("two passes %s apart released the quarantine", t3.Sub(t2))
+	}
+}
+
+// A member whose Pod changed between the reads before and after the probes
+// verifies nothing in that pass.
+func TestQuarantineUnstableIdentityIsUnverified(t *testing.T) {
+	s := newQuarantineScenario(t, q1)
+	s.verifiedAll(q0, q2)
+	s.unstable = map[string]bool{q0: true}
+	d := s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if !slices.Contains(d.Unverified, q0) || d.Quarantine == nil {
+		t.Fatalf("decision = %+v, want %s unverified and quarantined", d, q0)
+	}
+}
+
+// Without the members' Pods the rule of two active masters still applies,
+// no unverified member starts a quarantine, the verifications are kept, and
+// nothing is released.
+func TestQuarantineIdentitiesUnknown(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q1, q2)
+	s.identitiesUnknown = true
+	d := s.pass(testNow, map[string]RoleObservation{q0: activeMasterAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine == nil || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMultipleMasters {
+		t.Fatalf("quarantine = %+v, want %s", d.Quarantine, databasev1alpha1.WriteQuarantinedMultipleMasters)
+	}
+
+	s = newQuarantineScenario(t, q1)
+	s.verifiedAll(q0, q2)
+	kept := slices.Clone(s.verifications)
+	s.identitiesUnknown = true
+	d = s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine != nil {
+		t.Fatalf("a pass without the Pods started %+v", d.Quarantine)
+	}
+	if len(d.Verifications) != len(kept) {
+		t.Fatalf("verifications %+v, want them kept as %+v", d.Verifications, kept)
+	}
+
+	s = startUnverified(t)
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, releasable(t1))
+	t2 := t1.Add(quarantineVerifyGap + time.Second)
+	s.pass(t2, releasable(t2))
+	t3 := t2.Add(quarantineReleaseInterval)
+	s.identitiesUnknown = true
+	if d = s.pass(t3, releasable(t3)); d.Quarantine == nil || d.Released != nil {
+		t.Fatalf("a pass without the Pods released the quarantine")
+	}
+}
+
+// A quarantine recorded for another cluster UID, as a status copied to a
+// recreated object, is kept and never released automatically.
+func TestQuarantineOtherClusterUIDIsNotReleased(t *testing.T) {
+	s := startUnverified(t)
+	s.quarantine.ClusterUID = "another-uid"
+	for i := 1; i <= 4; i++ {
+		now := testNow.Add(time.Duration(i) * 5 * time.Second)
+		if d := s.pass(now, releasable(now)); d.Quarantine == nil || d.Released != nil {
+			t.Fatalf("pass %d released a quarantine of another cluster UID", i)
+		}
+	}
+}
+
+// A restart of the recorded master's database container revises the
+// quarantine and starts the release check over.
+func TestQuarantineMasterRestartRevises(t *testing.T) {
+	s := startUnverified(t)
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, releasable(t1))
+	t2 := t1.Add(quarantineVerifyGap + time.Second)
+	s.pass(t2, releasable(t2))
+	s.identities[q1] = memberIdentity{PodUID: uid1, RestartCount: 1}
+	t3 := t2.Add(quarantineReleaseInterval)
+	d := s.pass(t3, releasable(t3))
+	if d.Quarantine == nil || d.Change != quarantineRevised || d.Quarantine.Revision != 2 ||
+		d.Quarantine.ReleaseCheckSince != nil {
+		t.Fatalf("decision = %+v, want a revised quarantine with no release check", d)
 	}
 }

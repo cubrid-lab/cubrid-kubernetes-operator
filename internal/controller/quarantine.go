@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -58,6 +60,14 @@ type quarantineInput struct {
 	Observations map[string]RoleObservation
 	// Identities are the members' Pods in this pass.
 	Identities map[string]memberIdentity
+	// Unstable are the members whose Pod differed between the reads before
+	// and after the probes: their answers verify nothing in this pass.
+	Unstable map[string]bool
+	// IdentitiesUnknown says that the members' Pods could not be read. Only
+	// the rule of two active masters is applied then; the verifications are
+	// kept as they were, no quarantine is released, and the caller keeps the
+	// read-write Brokers at zero for the pass.
+	IdentitiesUnknown bool
 	// LastResolvedPrimary is status.lastResolvedPrimary before this pass.
 	LastResolvedPrimary string
 	// Verifications and Quarantine are what the status held before this pass.
@@ -101,6 +111,11 @@ const (
 	// quarantineReleaseInterval is how far apart the two passes that release
 	// a WriteQuarantinedMemberUnverified quarantine must be.
 	quarantineReleaseInterval = 10 * time.Second
+	// quarantineAnswerGap is the longest time between two consecutive
+	// answers, or releasable passes, that still counts as uninterrupted: the
+	// role observation TTL. A longer gap, as while the Operator was stopped,
+	// starts a verification or a release check over.
+	quarantineAnswerGap = roleObservationTTL
 	// unverifiedResyncInterval is how soon an HA cluster is observed again
 	// while a member is unverified or a quarantine is in force, in place of
 	// haResyncInterval: it shortens the time until a second active master
@@ -202,11 +217,13 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	for i, m := range in.Members {
 		ordinal[m] = i
 	}
-	// The members the rules name in this pass.
+	// The members the rules name in this pass. Without the members' Pods
+	// only two active masters do.
 	var named []string
-	switch len(d.ActiveMasters) {
-	case 0:
-	case 1:
+	switch {
+	case len(d.ActiveMasters) == 0:
+	case len(d.ActiveMasters) == 1 && in.IdentitiesUnknown:
+	case len(d.ActiveMasters) == 1:
 		m := d.ActiveMasters[0]
 		for _, u := range d.Unverified {
 			if ordinal[u] < ordinal[m] || u == in.LastResolvedPrimary {
@@ -232,7 +249,12 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 		}
 		return d, err
 	}
-	if q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified {
+	switch {
+	case in.IdentitiesUnknown || (q.ClusterUID != "" && q.ClusterUID != in.ClusterUID):
+		// Without the members' Pods, or for a quarantine recorded for another
+		// cluster UID, nothing is released.
+		q.ReleaseCheckSince, q.ReleaseCheckLastTime = nil, nil
+	case q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified:
 		if d.Released = releaseCheck(in, q, d, verified); d.Released != nil {
 			d.Quarantine, d.Change = nil, quarantineReleased
 		}
@@ -249,22 +271,31 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 		previous[v.Name] = v
 	}
 	verified := map[string]bool{}
+	if in.IdentitiesUnknown {
+		// Nothing is verified or renewed without the members' Pods.
+		d.Verifications = slices.Clone(in.Verifications)
+	}
 	for _, m := range in.Members {
 		o := in.Observations[m]
 		if activeMaster(o, in.Now) {
 			d.ActiveMasters = append(d.ActiveMasters, m)
 			continue
 		}
-		if !nonMasterAnswer(o, in.Now) {
+		if in.IdentitiesUnknown || in.Unstable[m] || !nonMasterAnswer(o, in.Now) {
 			d.Unverified = append(d.Unverified, m)
 			continue
 		}
 		id := in.Identities[m]
 		v, ok := previous[m]
-		if !ok || v.PodUID != id.PodUID || v.RestartCount != id.RestartCount {
+		last := v.NonMasterSince.Time
+		if v.LastNonMasterAt != nil {
+			last = v.LastNonMasterAt.Time
+		}
+		if !ok || v.PodUID != id.PodUID || v.RestartCount != id.RestartCount || in.Now.Sub(last) > quarantineAnswerGap {
 			v = databasev1alpha1.MemberVerification{Name: m, PodUID: id.PodUID, RestartCount: id.RestartCount,
 				NonMasterSince: ceilSecond(in.Now)}
 		}
+		v.LastNonMasterAt = &metav1.Time{Time: in.Now}
 		d.Verifications = append(d.Verifications, v)
 		if in.Now.Sub(v.NonMasterSince.Time) >= quarantineVerifyGap {
 			verified[m] = true
@@ -303,6 +334,7 @@ func startQuarantine(in quarantineInput, masters, named []string) (*databasev1al
 		StartTime: metav1.NewTime(in.Now), ObservedMaster: master, Revision: 1, ReleaseToken: token}
 	if master != "" {
 		q.ObservedMasterPodUID = in.Identities[master].PodUID
+		q.ObservedMasterRestartCount = in.Identities[master].RestartCount
 	}
 	for _, m := range named {
 		q.Members = append(q.Members, quarantineMember(in, m))
@@ -335,7 +367,7 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 			revised = true
 			continue
 		}
-		if in.Identities[r.Name].PodUID != r.PodUID {
+		if !in.IdentitiesUnknown && in.Identities[r.Name].PodUID != r.PodUID {
 			r, revised = quarantineMember(in, r.Name), true
 		}
 		kept = append(kept, r)
@@ -344,8 +376,9 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	slices.SortFunc(q.Members, func(a, b databasev1alpha1.WriteQuarantineMember) int {
 		return ordinal[a.Name] - ordinal[b.Name]
 	})
-	if q.ObservedMaster != "" && in.Identities[q.ObservedMaster].PodUID != q.ObservedMasterPodUID {
-		q.ObservedMasterPodUID, revised = in.Identities[q.ObservedMaster].PodUID, true
+	if id := in.Identities[q.ObservedMaster]; q.ObservedMaster != "" && !in.IdentitiesUnknown &&
+		(id.PodUID != q.ObservedMasterPodUID || id.RestartCount != q.ObservedMasterRestartCount) {
+		q.ObservedMasterPodUID, q.ObservedMasterRestartCount, revised = id.PodUID, id.RestartCount, true
 	}
 	if !revised {
 		return false, nil
@@ -355,7 +388,7 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 		return false, err
 	}
 	q.Revision++
-	q.ReleaseToken, q.ReleaseCheckSince = token, nil
+	q.ReleaseToken, q.ReleaseCheckSince, q.ReleaseCheckLastTime = token, nil, nil
 	return true, nil
 }
 
@@ -370,14 +403,19 @@ func releaseCheck(in quarantineInput, q *databasev1alpha1.WriteQuarantine, d qua
 			releasable = false
 		}
 	}
+	if !releasable {
+		q.ReleaseCheckSince, q.ReleaseCheckLastTime = nil, nil
+		return nil
+	}
+	previous := q.ReleaseCheckLastTime
+	q.ReleaseCheckLastTime = &metav1.Time{Time: in.Now}
 	switch {
-	case !releasable:
-		q.ReleaseCheckSince = nil
-	case q.ReleaseCheckSince == nil || slices.ContainsFunc(d.Verifications, func(v databasev1alpha1.MemberVerification) bool {
-		return v.NonMasterSince.After(q.ReleaseCheckSince.Time)
-	}):
-		// The first releasable pass, or a member verified anew since the
-		// first one: start over.
+	case q.ReleaseCheckSince == nil || previous == nil || in.Now.Sub(previous.Time) > quarantineAnswerGap ||
+		slices.ContainsFunc(d.Verifications, func(v databasev1alpha1.MemberVerification) bool {
+			return v.NonMasterSince.After(q.ReleaseCheckSince.Time)
+		}):
+		// The first releasable pass, a gap since the last one, or a member
+		// verified anew since the first one: start over.
 		since := ceilSecond(in.Now)
 		q.ReleaseCheckSince = &since
 	case in.Now.Sub(q.ReleaseCheckSince.Time) >= quarantineReleaseInterval:
@@ -399,15 +437,140 @@ const (
 
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 
+// reasonReadWriteBrokersHeld is Ready's reason in a pass that keeps the
+// read-write Brokers at zero without a quarantine in its status: the pass
+// that released one, before the release is written, or a pass that could not
+// read the members' Pods.
+const reasonReadWriteBrokersHeld = "ReadWriteBrokersHeld"
+
+// reasonWriteQuarantineOtherCluster is the Warning Event of a stored
+// quarantine recorded for another cluster UID.
+const reasonWriteQuarantineOtherCluster = "WriteQuarantineClusterUIDMismatch"
+
 // writesHeld reports whether the read-write Brokers are kept at zero in this
-// pass: while a quarantine is in force, and on the pass that releases one,
-// whose release is written to the status before the Brokers are started again.
+// pass: while a quarantine is in force; while this reconciler holds one it
+// decided and has not seen released (quarantineHolds), whatever the status
+// read says; on the pass that releases one, whose release is written to the
+// status before the Brokers are started again; and in a pass that could not
+// read the members' Pods.
 func (r *CubridClusterReconciler) writesHeld(cluster *databasev1alpha1.CubridCluster) bool {
-	if cluster.Status.WriteQuarantine != nil {
+	if cluster.Status.WriteQuarantine != nil || r.heldQuarantine(cluster) != nil {
 		return true
 	}
 	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
-	return ok && report.(*reconcileReport).before.WriteQuarantine != nil
+	return ok && (report.(*reconcileReport).before.WriteQuarantine != nil || report.(*reconcileReport).holdWrites)
+}
+
+// quarantineHold is what a reconciler keeps in memory about one cluster's
+// write quarantine (quarantineHolds).
+type quarantineHold struct {
+	cluster types.NamespacedName
+	// quarantine is the last quarantine this reconciler decided or read,
+	// nil once its release was written.
+	quarantine *databasev1alpha1.WriteQuarantine
+	// released is the generation whose release was written: a stale read of
+	// it is not held again.
+	released string
+	// verifications are the member verifications of the last decision, with
+	// the times of the answers to the nanosecond, which the status holds back
+	// for up to observationWriteInterval.
+	verifications []databasev1alpha1.MemberVerification
+	// reportedUID is the generation whose other cluster UID was reported.
+	reportedUID string
+}
+
+// quarantineState is the cluster's entry in quarantineHolds.
+func (r *CubridClusterReconciler) quarantineState(cluster *databasev1alpha1.CubridCluster) *quarantineHold {
+	h, _ := r.quarantineHolds.LoadOrStore(cluster.UID, &quarantineHold{cluster: client.ObjectKeyFromObject(cluster)})
+	return h.(*quarantineHold)
+}
+
+// heldQuarantine is the quarantine this reconciler holds for cluster in
+// memory, nil for none. It can only keep the read-write path closed: a
+// quarantine missing from it never opens the path while the status, or the
+// API server, holds one.
+func (r *CubridClusterReconciler) heldQuarantine(cluster *databasev1alpha1.CubridCluster) *databasev1alpha1.WriteQuarantine {
+	h, ok := r.quarantineHolds.Load(cluster.UID)
+	if !ok {
+		return nil
+	}
+	return h.(*quarantineHold).quarantine
+}
+
+// holdQuarantine keeps q in memory, unless its release was written.
+func (r *CubridClusterReconciler) holdQuarantine(cluster *databasev1alpha1.CubridCluster, q *databasev1alpha1.WriteQuarantine) {
+	h := r.quarantineState(cluster)
+	if q.GenerationID != h.released {
+		h.quarantine = q.DeepCopy()
+	}
+}
+
+// forgetQuarantines drops what is kept in memory for the deleted cluster key.
+func (r *CubridClusterReconciler) forgetQuarantines(key types.NamespacedName) {
+	r.quarantineHolds.Range(func(uid, h any) bool {
+		if h.(*quarantineHold).cluster == key {
+			r.quarantineHolds.Delete(uid)
+		}
+		return true
+	})
+}
+
+// restoreWriteQuarantine runs first in every pass. A quarantine the status
+// read holds is kept in memory. A quarantine held in memory that the status
+// read does not hold, because its status write failed or the cache is
+// behind, is put back into the status, so that the pass enforces it and
+// writes it again. A quarantine recorded for another cluster UID is reported
+// once and enforced.
+func (r *CubridClusterReconciler) restoreWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster) {
+	q := cluster.Status.WriteQuarantine
+	switch held := r.heldQuarantine(cluster); {
+	case q != nil:
+		r.holdQuarantine(cluster, q)
+	case held != nil:
+		cluster.Status.WriteQuarantine = held.DeepCopy()
+		q = cluster.Status.WriteQuarantine
+		logf.FromContext(ctx).Info("Kept a write quarantine the stored status does not hold",
+			"reason", string(q.Reason), "generationID", q.GenerationID, "revision", q.Revision)
+		r.statusEvent(cluster, corev1.EventTypeWarning, string(q.Reason),
+			"kept the read-write Brokers stopped for a quarantine whose status was not written or not read back yet: "+
+				quarantineDescription(q, nil))
+	default:
+		return
+	}
+	if h := r.quarantineState(cluster); q.ClusterUID != "" && q.ClusterUID != string(cluster.UID) &&
+		h.reportedUID != q.GenerationID {
+		h.reportedUID = q.GenerationID
+		r.event(cluster, corev1.EventTypeWarning, reasonWriteQuarantineOtherCluster, fmt.Sprintf(
+			"the stored write quarantine %s was recorded for the cluster UID %s, not %s; it is enforced and is not "+
+				"released automatically", q.GenerationID, q.ClusterUID, cluster.UID))
+	}
+}
+
+// storedQuarantineHolds reads the cluster from the API server, past the
+// cache, before the read-write Brokers are asked for: a stored quarantine, a
+// cluster of another UID or a failed read keeps them at zero.
+func (r *CubridClusterReconciler) storedQuarantineHolds(ctx context.Context, cluster *databasev1alpha1.CubridCluster) bool {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	stored := &databasev1alpha1.CubridCluster{}
+	err := reader.Get(ctx, client.ObjectKeyFromObject(cluster), stored)
+	switch {
+	case err != nil:
+		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero: the stored cluster could not be read",
+			"reason", err.Error())
+		return true
+	case stored.UID != cluster.UID:
+		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero: the stored cluster has another UID",
+			"storedUID", string(stored.UID))
+		return true
+	case stored.Status.WriteQuarantine != nil:
+		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero for the stored write quarantine",
+			"generationID", stored.Status.WriteQuarantine.GenerationID)
+		return true
+	}
+	return false
 }
 
 // enforceWriteQuarantine keeps the read-write Broker Deployment of a cluster
@@ -476,14 +639,18 @@ func (r *CubridClusterReconciler) enforceWriteQuarantine(ctx context.Context, cl
 	return nil
 }
 
-// memberIdentities reads the Pod of each member. A member without a Pod has
-// the empty identity.
+// memberIdentities reads the Pod of each member from the API server, past
+// the cache. A member without a Pod has the empty identity.
 func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string) (map[string]memberIdentity, error) {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
 	ids := make(map[string]memberIdentity, len(members))
 	for _, m := range members {
 		var pod corev1.Pod
-		err := r.Get(ctx, client.ObjectKey{Name: m, Namespace: cluster.Namespace}, &pod)
+		err := reader.Get(ctx, client.ObjectKey{Name: m, Namespace: cluster.Namespace}, &pod)
 		if apierrors.IsNotFound(err) {
 			ids[m] = memberIdentity{}
 			continue
@@ -503,27 +670,51 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 }
 
 // reconcileWriteQuarantine decides the read-write quarantine from this pass's
-// observations (decideWriteQuarantine), puts the outcome in the status,
-// reports a start, a revision and a release with an Event, and enforces a
-// quarantine in force. lastResolved is status.lastResolvedPrimary before this
-// pass. A failure leaves the quarantine in the status as it was, so that the
-// read-write Brokers stay at zero, and is returned for a retry.
+// observations (decideWriteQuarantine), puts the outcome in the status and in
+// memory, reports a start, a revision and a release with an Event, and
+// enforces a quarantine in force. lastResolved is status.lastResolvedPrimary
+// before this pass; before are the members' Pods read before the probes, or
+// the error of that read. A member whose Pod differs in the read after the
+// probes verifies nothing in this pass. When either read failed, only the
+// rule of two active masters is applied and the read-write Brokers are kept
+// at zero for the pass. A failure leaves the quarantine in the status as it
+// was, so that the read-write Brokers stay at zero, and is returned for a
+// retry.
 func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	members []string, obs map[string]RoleObservation, now time.Time, lastResolved string) stepResult {
+	members []string, obs map[string]RoleObservation, now time.Time, lastResolved string,
+	before map[string]memberIdentity, beforeErr error) stepResult {
+	steps := stepResult{}
 	ids, err := r.memberIdentities(ctx, cluster, members)
-	if err != nil {
-		return stepResult{err: fmt.Errorf("decide the write quarantine: %w", err)}
+	unknown := errors.Join(beforeErr, err)
+	unstable := map[string]bool{}
+	for _, m := range members {
+		if unknown == nil && before[m] != ids[m] {
+			unstable[m] = true
+		}
 	}
+	if unknown != nil {
+		logf.FromContext(ctx).Error(unknown, "Kept the read-write Brokers at zero: the members' Pods could not be read")
+		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+			report.(*reconcileReport).holdWrites = true
+		}
+		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
+	}
+	state := r.quarantineState(cluster)
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
-		LastResolvedPrimary: lastResolved, Verifications: cluster.Status.MemberVerifications,
-		Quarantine: cluster.Status.WriteQuarantine, Nonce: newQuarantineNonce,
+		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
+		Verifications: withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
+		Quarantine:    cluster.Status.WriteQuarantine, Nonce: newQuarantineNonce,
 	})
 	if err != nil {
-		return stepResult{err: fmt.Errorf("decide the write quarantine: %w", err)}
+		return stepResult{err: errors.Join(steps.err, fmt.Errorf("decide the write quarantine: %w", err))}
 	}
+	state.verifications = d.Verifications
 	cluster.Status.MemberVerifications = d.Verifications
 	cluster.Status.WriteQuarantine = d.Quarantine
+	if d.Quarantine != nil {
+		r.holdQuarantine(cluster, d.Quarantine)
+	}
 	log := logf.FromContext(ctx)
 	switch d.Change {
 	case quarantineStarted, quarantineRevised:
@@ -536,6 +727,10 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	case quarantineReleased:
 		rel := d.Released
 		cluster.Status.LastWriteQuarantineRelease = rel
+		// The memory lets the path open only once the release is written.
+		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+			report.(*reconcileReport).releasedQuarantine = rel.GenerationID
+		}
 		log.Info("Released the write quarantine", "event", "write_quarantine_released", "reason", string(rel.Reason),
 			"generationID", rel.GenerationID, "method", string(rel.Method), "observedMaster", rel.ObservedMaster)
 		r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
@@ -543,18 +738,49 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 				"member answered as no active master in two observations %s apart; the read-write Brokers start again",
 			rel.Reason, rel.StartTime.UTC().Format(time.RFC3339), rel.ObservedMaster, quarantineReleaseInterval))
 	}
-	steps := stepResult{}
 	switch {
 	case d.Released != nil:
 		// The next pass starts the read-write Brokers again.
 		steps.retry = time.Second
-	case d.Quarantine != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""):
+	case d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""):
 		steps.retry = unverifiedResyncInterval
 	}
 	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
-		steps.err = err
+		steps.err = errors.Join(steps.err, err)
+	}
+	if q := cluster.Status.WriteQuarantine; q != nil {
+		r.holdQuarantine(cluster, q)
 	}
 	return steps
+}
+
+// releaseWritten lets the read-write path open after the status that
+// records the release of generation was written.
+func (r *CubridClusterReconciler) releaseWritten(cluster *databasev1alpha1.CubridCluster, generation string) {
+	h := r.quarantineState(cluster)
+	h.released = generation
+	if h.quarantine != nil && h.quarantine.GenerationID == generation {
+		h.quarantine = nil
+	}
+}
+
+// withAnswerTimes is stored with the time of each member's latest
+// non-master answer taken from kept, this reconciler's last decision, where
+// kept records the same answers: the status holds that time back for up to
+// observationWriteInterval. stored is not changed.
+func withAnswerTimes(stored, kept []databasev1alpha1.MemberVerification) []databasev1alpha1.MemberVerification {
+	out := make([]databasev1alpha1.MemberVerification, len(stored))
+	for i, v := range stored {
+		out[i] = *v.DeepCopy()
+		for _, k := range kept {
+			if k.Name == v.Name && k.PodUID == v.PodUID && k.RestartCount == v.RestartCount &&
+				k.NonMasterSince.Equal(&v.NonMasterSince) && k.LastNonMasterAt != nil &&
+				(v.LastNonMasterAt == nil || k.LastNonMasterAt.After(v.LastNonMasterAt.Time)) {
+				out[i].LastNonMasterAt = k.LastNonMasterAt.DeepCopy()
+			}
+		}
+	}
+	return out
 }
 
 // quarantineMemberText names the members and what was observed of them.

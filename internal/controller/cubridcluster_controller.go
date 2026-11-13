@@ -183,6 +183,9 @@ type CubridClusterReconciler struct {
 	// unresolvedSince holds, per cluster, since when PrimaryResolved has not
 	// been True (unresolvedStart).
 	unresolvedSince sync.Map
+	// quarantineHolds holds, per cluster UID, what this reconciler keeps in
+	// memory about the cluster's write quarantine (quarantineHold).
+	quarantineHolds sync.Map
 	// dbaPasswordCheckedAt holds, per cluster UID, when its member was last
 	// asked whether the DBA password Secret's value is the database's
 	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
@@ -252,6 +255,12 @@ type reconcileReport struct {
 	// brokerRefused says that the Broker tier met an object the cluster does
 	// not control.
 	brokerRefused bool
+	// holdWrites keeps the read-write Brokers at zero for this pass alone.
+	holdWrites bool
+	// releasedQuarantine is the generation of the write quarantine this
+	// reconcile released; once its status is written, memory no longer holds
+	// it.
+	releasedQuarantine string
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -319,6 +328,9 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 	if err == nil {
 		// The metrics say what the stored status says.
 		publishClusterMetrics(cluster, readyReplicas)
+		if ok && report.(*reconcileReport).releasedQuarantine != "" {
+			r.releaseWritten(cluster, report.(*reconcileReport).releasedQuarantine)
+		}
 		// So do the applier readings the next one is compared with.
 		if ok && report.(*reconcileReport).positions != nil {
 			r.applierPositions().commit(cluster.UID, client.ObjectKeyFromObject(cluster), report.(*reconcileReport).positions)
@@ -381,6 +393,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.placementReported.Delete(req.NamespacedName)
 		r.unresolvedSince.Delete(req.NamespacedName)
 		if apierrors.IsNotFound(err) {
+			r.forgetQuarantines(req.NamespacedName)
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
 		}
@@ -400,7 +413,9 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// A write quarantine in the status is enforced before anything else, from
 	// the status alone, so that no later step or failure of this pass, and no
 	// restart of the Operator, lets the read-write Brokers run (ADR-0005,
-	// section 8).
+	// section 8). One this reconciler holds in memory and the status read
+	// does not, as after a failed status write, is put back first.
+	r.restoreWriteQuarantine(ctx, &cluster)
 	if err := r.enforceWriteQuarantine(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, reasonWriteQuarantineEnforcementFailed, err)
 	}
@@ -1233,12 +1248,15 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	// The first database is created once, on one member (ADR-0010).
 	r.reconcileHABootstrap(ctx, cluster)
 	lastResolved := cluster.Status.LastResolvedPrimary
+	members := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
+	// The members' Pods are read before and after the probes, so that an
+	// answer is counted only for the Pod it came from.
+	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
 	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
 	// The write quarantine is decided from the same observation, before the
 	// Broker tier, which keeps the read-write Brokers at zero while one is in
 	// force (ADR-0005, section 8).
-	quarantine := r.reconcileWriteQuarantine(ctx, cluster,
-		memberNames(cluster, cluster.Spec.Topology.PromotableMembers), obs, observedAt, lastResolved)
+	quarantine := r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the
@@ -1414,6 +1432,13 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, quarantineConditionMessage(q)))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, string(q.Reason),
 			"the read-write Brokers are kept stopped until the quarantine is released, see RoutingReady")
+	case r.writesHeld(cluster):
+		// The pass that released a quarantine, before the release is
+		// written, or a pass that could not read the members' Pods.
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonReadWriteBrokersHeld,
+			fmt.Sprintf("%d/%d instances ready, but the read-write Brokers are held at zero in this pass", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reasonReadWriteBrokersHeld,
+			"the read-write Brokers start once no write quarantine holds them")
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))

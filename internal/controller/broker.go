@@ -97,8 +97,10 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 	for _, mode := range []string{brokerModeRW, brokerModeRO} {
 		// A write quarantine keeps the read-write Brokers at zero
 		// (ADR-0005, section 8).
+		// Before they are asked for, the stored cluster is read past the
+		// cache, which may be behind a quarantine just written.
 		replicas := int32(brokerReplicas)
-		if mode == brokerModeRW && r.writesHeld(cluster) {
+		if mode == brokerModeRW && (r.writesHeld(cluster) || r.storedQuarantineHolds(ctx, cluster)) {
 			replicas = 0
 		}
 		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode), replicas)

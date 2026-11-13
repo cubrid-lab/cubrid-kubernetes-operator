@@ -503,6 +503,15 @@ func holdObservationTimes(stored, status *databasev1alpha1.CubridClusterStatus, 
 	if held.LastResolvedPrimary == stored.LastResolvedPrimary {
 		held.LastResolvedPrimaryTime = heldTime(stored.LastResolvedPrimaryTime, held.LastResolvedPrimaryTime, now)
 	}
+	for i := range held.MemberVerifications {
+		v := &held.MemberVerifications[i]
+		for _, s := range stored.MemberVerifications {
+			if s.Name == v.Name && s.PodUID == v.PodUID && s.RestartCount == v.RestartCount &&
+				s.NonMasterSince.Equal(&v.NonMasterSince) {
+				v.LastNonMasterAt = heldTime(s.LastNonMasterAt, v.LastNonMasterAt, now)
+			}
+		}
+	}
 	before := make(map[string]*databasev1alpha1.InstanceStatus, len(stored.Instances))
 	for i := range stored.Instances {
 		before[stored.Instances[i].Name] = &stored.Instances[i]

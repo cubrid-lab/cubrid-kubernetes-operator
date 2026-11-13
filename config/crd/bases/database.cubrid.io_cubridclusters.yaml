@@ -1235,6 +1235,14 @@ spec:
                     fresh, authenticated non-master answers from the same Pod and container
                     start since a given time.
                   properties:
+                    lastNonMasterAt:
+                      description: |-
+                        lastNonMasterAt is when the latest of these answers was received. Two
+                        answers further apart than the role observation TTL (15 seconds) are
+                        not uninterrupted: the entry starts over. A newer value of this time
+                        alone is written at most every 30 seconds, as for lastObservedTime.
+                      format: date-time
+                      type: string
                     name:
                       description: name is the member.
                       type: string
@@ -1351,12 +1359,25 @@ spec:
                     description: observedMasterPodUID is the UID of observedMaster's
                       Pod.
                     type: string
+                  observedMasterRestartCount:
+                    description: |-
+                      observedMasterRestartCount is the restart count of observedMaster's
+                      database container.
+                    format: int32
+                    type: integer
                   reason:
                     description: reason is why the quarantine is in force.
                     enum:
                     - WriteQuarantinedMultipleMasters
                     - WriteQuarantinedMemberUnverified
                     - WriteQuarantinedMasterChanged
+                    type: string
+                  releaseCheckLastTime:
+                    description: |-
+                      releaseCheckLastTime is the time of the latest of those observations.
+                      Two of them further apart than the role observation TTL (15 seconds)
+                      start the release check over.
+                    format: date-time
                     type: string
                   releaseCheckSince:
                     description: |-

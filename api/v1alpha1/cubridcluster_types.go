@@ -822,6 +822,12 @@ type MemberVerification struct {
 	// nonMasterSince is when the first of the uninterrupted non-master
 	// answers was received, rounded up to the second.
 	NonMasterSince metav1.Time `json:"nonMasterSince"`
+	// lastNonMasterAt is when the latest of these answers was received. Two
+	// answers further apart than the role observation TTL (15 seconds) are
+	// not uninterrupted: the entry starts over. A newer value of this time
+	// alone is written at most every 30 seconds, as for lastObservedTime.
+	// +optional
+	LastNonMasterAt *metav1.Time `json:"lastNonMasterAt,omitempty"`
 }
 
 // WriteQuarantineReason is why the read-write path is quarantined.
@@ -878,6 +884,10 @@ type WriteQuarantine struct {
 	// observedMasterPodUID is the UID of observedMaster's Pod.
 	// +optional
 	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
+	// observedMasterRestartCount is the restart count of observedMaster's
+	// database container.
+	// +optional
+	ObservedMasterRestartCount int32 `json:"observedMasterRestartCount,omitempty"`
 	// members are the members the quarantine is about: the unverified
 	// members, or the active masters.
 	// +listType=map
@@ -900,6 +910,11 @@ type WriteQuarantine struct {
 	// made; unset while the last observation does not allow it.
 	// +optional
 	ReleaseCheckSince *metav1.Time `json:"releaseCheckSince,omitempty"`
+	// releaseCheckLastTime is the time of the latest of those observations.
+	// Two of them further apart than the role observation TTL (15 seconds)
+	// start the release check over.
+	// +optional
+	ReleaseCheckLastTime *metav1.Time `json:"releaseCheckLastTime,omitempty"`
 }
 
 // WriteQuarantineReleaseMethod says how a quarantine was released.
