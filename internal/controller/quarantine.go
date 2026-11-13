@@ -975,6 +975,10 @@ type quarantineHold struct {
 	verifications []databasev1alpha1.MemberVerification
 	// reportedUID is the generation whose other cluster UID was reported.
 	reportedUID string
+	// reportedRelease is the release annotation, with what was made of it,
+	// last reported with an Event: an inert or refused annotation is
+	// reported once.
+	reportedRelease string
 }
 
 // quarantineState is the cluster's entry in quarantineHolds.
@@ -1225,6 +1229,8 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		return stepResult{err: errors.Join(steps.err, fmt.Errorf("decide the write quarantine: %w", err))}
 	}
 	state.verifications = d.Verifications
+	var releaseRetry time.Duration
+	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, unknown != nil, now)
 	cluster.Status.MemberVerifications = d.Verifications
 	cluster.Status.MemberTerminations = d.Terminations
 	cluster.Status.WriteQuarantine = d.Quarantine
@@ -1249,6 +1255,14 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 		log.Info("Released the write quarantine", "event", "write_quarantine_released", "reason", string(rel.Reason),
 			"generationID", rel.GenerationID, "method", string(rel.Method), "observedMaster", rel.ObservedMaster)
+		if rel.Method == databasev1alpha1.WriteQuarantineReleasedManually {
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonWriteQuarantineReleasedManually, fmt.Sprintf(
+				"released the %s quarantine (generation %s, revision %d) on the annotation %s with the token %s, "+
+					"accepting the members %s; %s was the only active master; %s; the read-write Brokers start again",
+				rel.Reason, rel.GenerationID, rel.Revision, releaseWriteQuarantineAnnotation, tokenPrefix(rel.ReleaseToken),
+				quarantineMemberText(rel.Members), rel.ObservedMaster, rel.Warning))
+			break
+		}
 		r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
 			"released the %s quarantine started at %s automatically: %s was the only active master and every other "+
 				"member answered as no active master in two observations %s apart; the read-write Brokers start again",
@@ -1258,6 +1272,8 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	case d.Released != nil:
 		// The next pass starts the read-write Brokers again.
 		steps.retry = time.Second
+	case releaseRetry > 0:
+		steps.retry = releaseRetry
 	case d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""):
 		steps.retry = unverifiedResyncInterval
 	}
@@ -1336,7 +1352,11 @@ func quarantineConditionMessage(q *databasev1alpha1.WriteQuarantine) string {
 	if q.EnforcedTime != nil {
 		enforced = "no read-write Broker Pod or endpoint remains since " + q.EnforcedTime.UTC().Format(time.RFC3339)
 	}
-	return "the read-write path is quarantined: " + quarantineDescription(q, nil) + "; " + enforced
+	msg := "the read-write path is quarantined: " + quarantineDescription(q, nil) + "; " + enforced
+	if q.ReleaseRefusal != "" {
+		msg += "; the manual release was refused: " + q.ReleaseRefusal
+	}
+	return msg
 }
 
 // setRoutingQuarantined sets RoutingReady=False with the quarantine's reason

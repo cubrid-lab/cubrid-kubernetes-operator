@@ -441,11 +441,78 @@ releasable passes more than 30 seconds apart (`releaseCheckLastTime`). A
 restart of the recorded master revises the quarantine. `Ready` stays `False`
 with `ReadWriteBrokersHeld` on the pass that releases it. The release is written to
 `status.lastWriteQuarantineRelease` with the time and the method `Automatic`
-before the read-write Brokers are scaled back in the next pass. A
-`WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`
-quarantine is not released by this build: neither the manual release named
-in ADR-0005 nor a release on an out-of-service taint is implemented, so the
-read-write path stays closed until they are (#113).
+before the read-write Brokers are scaled back in the next pass. Any other
+quarantine, and a `WriteQuarantinedMemberUnverified` one that does not clear,
+ends only by the manual release below. A release on an out-of-service taint
+and the return-to-service procedure of ADR-0005 are not implemented (#113).
+
+#### Manual release
+
+A manual release is a risk acceptance, not a fence the Operator verifies
+(ADR-0005, section 8). Before it, the administrator obtains independent
+evidence that the recorded members (`status.writeQuarantine.members`) were
+actually fenced, reviews possible divergent data, and accepts that writes
+acknowledged by a member that was not fenced may be lost. They then set the
+quarantine's current `status.writeQuarantine.releaseToken` as an annotation:
+
+```sh
+TOKEN=$(kubectl get cubridcluster <name> -o jsonpath='{.status.writeQuarantine.releaseToken}')
+kubectl annotate cubridcluster <name> database.cubrid.io/release-write-quarantine="$TOKEN" --overwrite
+```
+
+The Operator acts on it in the next observation of the roles:
+
+- It reads the cluster from the API server, past its cache, and compares the
+  annotation with the **stored** quarantine's token. A token of an earlier
+  revision, of another quarantine, or a quarantine recorded for another
+  cluster UID is ignored, with one Warning Event
+  `WriteQuarantineReleaseIgnored` per value. When the observation itself
+  revises the members (which replaces the token), the annotation set before
+  is ignored too: the new token has to be read and set after the revised
+  members were reviewed. When the stored cluster cannot be read, or holds a
+  later revision than the one the observation decided from, nothing is
+  accepted and the pass is retried after a second.
+- It refuses the release unless exactly one member is a fresh active master
+  in that observation and the members' Pods were read. No active master, or
+  two or more, is refused: a manual release does not restore a writable
+  primary, and this build has no zero-master override. The refusal is in
+  `status.writeQuarantine.releaseRefusal` and in the `Ready` and
+  `RoutingReady` messages, with one Warning Event
+  `WriteQuarantineReleaseRefused` per value and reason. The annotation is
+  left in place, and is accepted on a later observation that sees exactly
+  one active master while the token is still current.
+- On acceptance it writes, in one status write,
+  `status.lastWriteQuarantineRelease` with the method `Manual`, the consumed
+  `releaseToken`, the accepted `members` with their Pod UIDs, the `revision`,
+  the one active master (`observedMaster`), the UTC `releaseTime` and a
+  `warning` that acknowledged writes may be lost, and clears
+  `status.writeQuarantine`. The read-write Brokers stay at zero in that pass
+  (`Ready` is `False` with `ReadWriteBrokersHeld`) and are scaled back in the
+  next one, as after an automatic release. A Warning Event
+  `WriteQuarantineReleasedManually` names the first 8 characters of the
+  token, the members, the master and the warning.
+- After that status write, it removes the annotation with a patch that
+  applies only while the annotation still names the consumed token. If the
+  removal fails, an annotation naming the token that
+  `status.lastWriteQuarantineRelease.releaseToken` records is ignored and
+  removed again in a later pass; it never releases another quarantine.
+
+A manual release does not stop the rules: if, in the next observation, a
+member still outranks the only active master, or is the last resolved
+primary, and is unverified, a new quarantine starts with a new generation and
+token. A manual release therefore keeps the path open only when every member
+that stays unverified ranks below the active master and is not the last
+resolved primary.
+
+The Operator cannot tell who set the annotation. The actor's identity comes
+from the Kubernetes API audit log. Any principal that may `update` or `patch`
+a `CubridCluster` can set it, so restrict that permission to administrators.
+The Operator itself needs `patch` on `cubridclusters` to remove the
+annotation, which it already held.
+
+Editing `status.writeQuarantine` by hand is not a release: the Operator keeps
+the quarantine it decided in its memory and writes it back to the status.
+The annotation is the supported way to release a quarantine.
 
 The guarantee rests on the status: an object restored without its status,
 or an Operator build that does not know the field, does not keep it.
@@ -542,6 +609,9 @@ underscores.
 | A write quarantine starts, or its reason, members or their Pods change | the quarantine's reason, naming the members, their observed roles and the active masters | Warning | `write_quarantine_started`, `write_quarantine_revised` |
 | A write quarantine is verified as enforced: no read-write Broker Pod or `-rw` endpoint remains | `WriteQuarantineEnforced` | Warning | none |
 | A write quarantine is released | `WriteQuarantineReleased` | Normal | `write_quarantine_released` |
+| A write quarantine is released on the administrator's annotation | `WriteQuarantineReleasedManually` | Warning | `write_quarantine_released` |
+| The release annotation does not name the stored quarantine's current token, or the members were revised in the same observation; once per value | `WriteQuarantineReleaseIgnored` | Warning | none |
+| The release annotation names the current token, but the observation does not see exactly one active master or could not read the members' Pods; once per value and reason | `WriteQuarantineReleaseRefused` | Warning | none |
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled`, `ApplyFailures` or `LogCopyStalled` | Warning | `replication_stalled`, `apply_failures`, `log_copy_stalled` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
 | A slave's `notReceivingSince` is set, or cleared | none | | `member_log_copy_stalled` (warn, with `copyDelayedPages` and `source`), `member_log_copy_resumed` |

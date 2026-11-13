@@ -1190,6 +1190,7 @@ spec:
                     description: method is how it was released.
                     enum:
                     - Automatic
+                    - Manual
                     type: string
                   observedMaster:
                     description: observedMaster is the active master at the release.
@@ -1205,6 +1206,11 @@ spec:
                     description: releaseTime is when it was released.
                     format: date-time
                     type: string
+                  releaseToken:
+                    description: |-
+                      releaseToken is the one-time token a manual release consumed. An
+                      annotation that still names it is ignored and removed.
+                    type: string
                   revision:
                     description: revision is the released quarantine's last revision.
                     format: int64
@@ -1212,6 +1218,11 @@ spec:
                   startTime:
                     description: startTime is when the released quarantine started.
                     format: date-time
+                    type: string
+                  warning:
+                    description: |-
+                      warning is what a manual release accepted: acknowledged writes on a
+                      member that was not fenced may be lost.
                     type: string
                 required:
                 - generationID
@@ -1496,6 +1507,12 @@ spec:
                       release a WriteQuarantinedMemberUnverified quarantine automatically was
                       made; unset while the last observation does not allow it.
                     format: date-time
+                    type: string
+                  releaseRefusal:
+                    description: |-
+                      releaseRefusal says why the release annotation that names the current
+                      releaseToken was not accepted in the last observation, such as no
+                      single active master; unset while no such annotation is set.
                     type: string
                   releaseToken:
                     description: |-

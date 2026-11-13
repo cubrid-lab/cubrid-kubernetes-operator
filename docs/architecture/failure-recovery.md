@@ -158,8 +158,9 @@ and direct database clients.
   primary Pod termination scenario, writes through `demo-rw` kept being
   acknowledged meanwhile. On two active masters, or one active master beside
   an unverified member that outranks it or was the last resolved primary,
-  the Operator now scales the read-write Brokers to zero (envtest only; manual
-  release not implemented,
+  the Operator now scales the read-write Brokers to zero until an automatic
+  release or an administrator's manual release on a one-time token (envtest
+  only; no release on an out-of-service taint,
   [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113)).
   What it closes and what it does not is in
   [docs/observability.md](../observability.md#the-write-quarantine).
