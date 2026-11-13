@@ -343,8 +343,12 @@ bootstrap at the first such refusal: the database is `Failed`,
 used, no other peer is sent a restore, and nothing is deleted. An Instance
 Manager of an earlier build sends no code, and the restore is retried within
 the attempt limit as before. Taking such members over, after a check that
-they form one HA group, is not implemented; which member's data is kept is a
-decision ADR-0005 leaves to a person.
+they form one HA group, is not implemented, and for v0.1 the Operator never
+does it (#798). Which member's data is kept is a decision ADR-0005 leaves to a
+person. The manual procedure in
+[Recovering data from the retained volumes of a recreated HA
+cluster](../operations/retained-volume-recovery.md) exports the chosen
+member's volume and loads it into a cluster under another name.
 
 The marker stays until the restore is recorded `Completed`, not only until
 `restoredb` has succeeded (#267). Once `restoredb` has succeeded, the restore

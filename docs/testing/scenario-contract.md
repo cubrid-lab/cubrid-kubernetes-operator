@@ -2773,12 +2773,20 @@ it needs more.
   for scaling): keep the PVCs with `Retain`; remove them with `Delete`; never
   remove a PVC because the cluster was scaled down; in both cases remove the
   Pods, Services and Broker Deployments it created.
-- **Expected, `retain`:** the PVCs still exist and a new cluster created with
-  the same name over them serves the earlier rows.
+- **Expected, `retain`:** the PVCs still exist. A new standalone cluster
+  created with the same name over them serves the earlier rows. A new HA
+  cluster created with the same name over them does not use them (#798, a
+  maintainer decision of 2026-11-13 for v0.1). Its bootstrap stops with
+  `BootstrapReady=False` and `Ready=False`, reason `MemberHoldsDatabase`. Every
+  member's data is left as it was, and the manual procedure in
+  [Recovering data from the retained volumes of a recreated HA
+  cluster](../operations/retained-volume-recovery.md) recovers it into a
+  cluster under another name.
 - **Expected, `delete`:** no PVC of the cluster is left.
 - **Must never happen:** a PVC removed under `Retain`; a PVC removed when the
   cluster is only scaled or updated; the database created again over retained
-  data.
+  data; for an HA cluster, a member's retained data overwritten or a recreated
+  cluster reported `Ready` over it.
 - **Data check:** `retain`: all data rules after the cluster is recreated.
 - **Limits:** `delete_limit`.
 
@@ -2824,9 +2832,19 @@ each in a namespace of its own that enforces Pod Security `restricted`:
   read, both log verdicts and any cleanup problem), `timeline.jsonl`, and the
   logs and snapshots under `S13/<variant>/`.
 
-Not covered on Kind: an HA cluster created again over its retained PVCs, whose
-bootstrap fails over the retained data (#798); a PVC kept when a cluster is
-scaled or updated; the PV reclaim policy of a real StorageClass; the VM lab.
+Not covered on Kind: an HA cluster created again over its retained PVCs; a PVC
+kept when a cluster is scaled or updated; the PV reclaim policy of a real
+StorageClass; the VM lab.
+
+The HA case was run once by hand on the VM lab, 2026-11-13 16:19–16:26 UTC
+(#798), with Operator `e1316da` and CUBRID 11.4.7.1995. A three-member cluster
+holding 200 rows was deleted with `Retain` and recreated with the same name.
+Within 76 s the recreated cluster reported `BootstrapReady=False` and
+`Ready=False` with reason `MemberHoldsDatabase`, and the database phase
+`Failed`. Every member still held the same rows, and the claims kept their
+UIDs and volumes. The manual recovery procedure then put the 200 rows on every
+member of a new cluster. This was a scripted manual run, not a harness
+scenario with a verdict.
 
 ### S14: authentication and Secrets
 
