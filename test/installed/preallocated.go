@@ -41,7 +41,7 @@ const (
 	dataClaimName = "data"
 	// smokeLogPVCName is the member's PVC for CUBRID's log files, which the
 	// StatefulSet creates beside the data PVC when it was created with the
-	// log claim template (#252). A StatefulSet created now has none: the logs
+	// log claim template (#252). A StatefulSet the Operator creates from #856 on has none: the logs
 	// are in a directory of the data volume (#856). It never holds the
 	// database.
 	smokeLogPVCName     = "log-smoke-0"

@@ -34,7 +34,7 @@ import (
 // A member's StatefulSet keeps the volume it was created with, because
 // volumeClaimTemplates cannot change and a new Pod template would restart its
 // members (#812). That gives three layouts:
-//   - a StatefulSet created now mounts the subdirectory engineLogSubPath of the
+//   - a StatefulSet this Operator creates mounts the subdirectory engineLogSubPath of the
 //     data volume at $CUBRID/log, so each member has one claim. With a second
 //     claim, the scheduler could bind one claim to a node and fail on the
 //     other, which left a member unschedulable for good (#856);
@@ -50,7 +50,10 @@ const (
 	engineLogVolume = "log"
 	// engineLogSubPath is the directory of the data volume that holds
 	// $CUBRID/log. Nothing else on the data volume uses this name: its root
-	// holds databases, operations, backup-staging and restore-staging.
+	// holds databases, operations, backup-staging and restore-staging. The
+	// name must never change: an existing StatefulSet is recognized by this
+	// exact mount, and a member mounting another name would lose its earlier
+	// logs on its next restart.
 	engineLogSubPath = "cubrid-log"
 	// dataVolume names the data claim template and its mount.
 	dataVolume = "data"
@@ -58,7 +61,7 @@ const (
 
 // engineLogMount is where the cubrid container of a member mounts its log
 // files, judged from the StatefulSet as it is: the subdirectory of the data
-// volume on a StatefulSet created now or already mounting it, the log claim
+// volume on a StatefulSet this Operator creates or one already mounting it, the log claim
 // on one created with it, and nothing on one created before either. The
 // existing Pod template decides, so a reconcile never changes its mounts.
 func engineLogMount(sts *appsv1.StatefulSet) (corev1.VolumeMount, bool) {

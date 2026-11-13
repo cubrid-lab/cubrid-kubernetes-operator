@@ -560,7 +560,9 @@ member's data volume (PVC `data-<cluster>-<ordinal>`), mounted with a
 the container and the deletion of the Pod, and are deleted or retained with
 the data PVC. They share the data volume's space: size `spec.storage.data`
 for the bounded logs below, about 160 MiB on an HA member, as well as the
-database. Each member has this one claim. A second claim per member, as
+database. An HA member used about 1.7 GB of a 2Gi volume before it kept any
+log archive (POC-45), so the space left on a 2Gi volume is close to the
+logs' bound; size it with room for both. Each member has this one claim. A second claim per member, as
 first tried (#849), let the scheduler bind one claim to a node while the
 other failed, and the member then stayed unschedulable (#856).
 `$CUBRID/var`, which holds the log applier's lock file, stays in the
