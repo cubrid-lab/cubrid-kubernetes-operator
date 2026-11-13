@@ -766,6 +766,176 @@ type CubridClusterStatus struct {
 	// cluster have never been observed.
 	// +optional
 	LastObservedTime *metav1.Time `json:"lastObservedTime,omitempty"`
+
+	// lastResolvedPrimary is the member that currentPrimary named in the last
+	// observation that reported PrimaryResolved=True. Unlike currentPrimary it
+	// is never cleared. The Operator reads it only to decide whether to
+	// quarantine the read-write path (ADR-0005, section 8), never to name a
+	// primary or to route.
+	// +optional
+	LastResolvedPrimary string `json:"lastResolvedPrimary,omitempty"`
+
+	// lastResolvedPrimaryTime is the time of the last observation that
+	// resolved lastResolvedPrimary. A newer value of this time alone is
+	// written at most every 30 seconds, as for lastObservedTime.
+	// +optional
+	LastResolvedPrimaryTime *metav1.Time `json:"lastResolvedPrimaryTime,omitempty"`
+
+	// memberVerifications records, for each promotable member that answered
+	// in the last observation with a fresh, authenticated answer that is not
+	// an active master, since when it has answered so without a break and
+	// from which Pod. A member with no entry, or whose entry is younger than
+	// a few seconds, is unverified for the read-write quarantine (ADR-0005,
+	// section 8). Any answer that does not count, a different Pod UID or a
+	// restart of the database container removes or renews the entry.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	MemberVerifications []MemberVerification `json:"memberVerifications,omitempty"`
+
+	// writeQuarantine is set while the Operator keeps the read-write Brokers
+	// stopped because a second active master or an unverified member was
+	// observed (ADR-0005, section 8). It is unset when no quarantine is in
+	// force. Only a release ends it.
+	// +optional
+	WriteQuarantine *WriteQuarantine `json:"writeQuarantine,omitempty"`
+
+	// lastWriteQuarantineRelease records the last quarantine that was
+	// released, and how.
+	// +optional
+	LastWriteQuarantineRelease *WriteQuarantineRelease `json:"lastWriteQuarantineRelease,omitempty"`
+}
+
+// MemberVerification is the evidence that one member is not an active master:
+// fresh, authenticated non-master answers from the same Pod and container
+// start since a given time.
+type MemberVerification struct {
+	// name is the member.
+	Name string `json:"name"`
+	// podUID is the UID of the member's Pod when the first of these answers
+	// was received; empty when no Pod of that name existed.
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+	// restartCount is the restart count of the database container then.
+	// +optional
+	RestartCount int32 `json:"restartCount,omitempty"`
+	// nonMasterSince is when the first of the uninterrupted non-master
+	// answers was received, rounded up to the second.
+	NonMasterSince metav1.Time `json:"nonMasterSince"`
+}
+
+// WriteQuarantineReason is why the read-write path is quarantined.
+// +kubebuilder:validation:Enum=WriteQuarantinedMultipleMasters;WriteQuarantinedMemberUnverified;WriteQuarantinedMasterChanged
+type WriteQuarantineReason string
+
+const (
+	// WriteQuarantinedMultipleMasters: two or more members were active
+	// masters in one observation. Only a manual release ends it.
+	WriteQuarantinedMultipleMasters WriteQuarantineReason = "WriteQuarantinedMultipleMasters"
+	// WriteQuarantinedMemberUnverified: exactly one active master was
+	// observed, and a member that outranks it or was the last resolved
+	// primary was not verified to be no active master. It is released
+	// automatically once every other member is verified again.
+	WriteQuarantinedMemberUnverified WriteQuarantineReason = "WriteQuarantinedMemberUnverified"
+	// WriteQuarantinedMasterChanged: during a WriteQuarantinedMemberUnverified
+	// quarantine another active master was observed, or the recorded master
+	// stopped claiming to be one. Only a manual release ends it.
+	WriteQuarantinedMasterChanged WriteQuarantineReason = "WriteQuarantinedMasterChanged"
+)
+
+// WriteQuarantineMember is one member a quarantine is about, with the Pod it
+// ran in when it was recorded.
+type WriteQuarantineMember struct {
+	// name is the member.
+	Name string `json:"name"`
+	// podUID is the UID of the member's Pod when it was recorded; empty when
+	// no Pod of that name existed.
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+	// observedRole is what the member's answer showed when it was recorded,
+	// such as "active master", "slave" or "no answer".
+	// +optional
+	ObservedRole string `json:"observedRole,omitempty"`
+}
+
+// WriteQuarantine is a quarantine of the read-write path in force.
+type WriteQuarantine struct {
+	// generationID is a random value of 128 bits, new for each quarantine and
+	// kept while its reason or members change.
+	GenerationID string `json:"generationID"`
+	// clusterUID is the UID of the CubridCluster the quarantine was started
+	// for.
+	// +optional
+	ClusterUID string `json:"clusterUID,omitempty"`
+	// reason is why the quarantine is in force.
+	Reason WriteQuarantineReason `json:"reason"`
+	// startTime is when the quarantine started.
+	StartTime metav1.Time `json:"startTime"`
+	// observedMaster is the one active master the quarantine was started
+	// beside; empty for WriteQuarantinedMultipleMasters.
+	// +optional
+	ObservedMaster string `json:"observedMaster,omitempty"`
+	// observedMasterPodUID is the UID of observedMaster's Pod.
+	// +optional
+	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
+	// members are the members the quarantine is about: the unverified
+	// members, or the active masters.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Members []WriteQuarantineMember `json:"members,omitempty"`
+	// revision counts the changes of reason, members and their Pods; it is
+	// 1 when the quarantine starts.
+	Revision int64 `json:"revision"`
+	// releaseToken is a random value of 128 bits, new whenever revision
+	// changes. A manual release must name it.
+	ReleaseToken string `json:"releaseToken"`
+	// enforcedTime is when the Operator verified that no read-write Broker
+	// Pod exists and that the read-write Service has no endpoints. It is
+	// unset while that is not verified, as when it was seen again.
+	// +optional
+	EnforcedTime *metav1.Time `json:"enforcedTime,omitempty"`
+	// releaseCheckSince is when the first of the observations that may
+	// release a WriteQuarantinedMemberUnverified quarantine automatically was
+	// made; unset while the last observation does not allow it.
+	// +optional
+	ReleaseCheckSince *metav1.Time `json:"releaseCheckSince,omitempty"`
+}
+
+// WriteQuarantineReleaseMethod says how a quarantine was released.
+// +kubebuilder:validation:Enum=Automatic
+type WriteQuarantineReleaseMethod string
+
+const (
+	// WriteQuarantineReleasedAutomatically: two observations at least ten
+	// seconds apart saw the recorded master as the only active master and
+	// every other member verified.
+	WriteQuarantineReleasedAutomatically WriteQuarantineReleaseMethod = "Automatic"
+)
+
+// WriteQuarantineRelease records a quarantine that was released.
+type WriteQuarantineRelease struct {
+	// generationID is the released quarantine's.
+	GenerationID string `json:"generationID"`
+	// reason is the released quarantine's reason.
+	Reason WriteQuarantineReason `json:"reason"`
+	// startTime is when the released quarantine started.
+	StartTime metav1.Time `json:"startTime"`
+	// releaseTime is when it was released.
+	ReleaseTime metav1.Time `json:"releaseTime"`
+	// method is how it was released.
+	Method WriteQuarantineReleaseMethod `json:"method"`
+	// revision is the released quarantine's last revision.
+	// +optional
+	Revision int64 `json:"revision,omitempty"`
+	// observedMaster is the active master at the release.
+	// +optional
+	ObservedMaster string `json:"observedMaster,omitempty"`
+	// members are the released quarantine's members.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Members []WriteQuarantineMember `json:"members,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).

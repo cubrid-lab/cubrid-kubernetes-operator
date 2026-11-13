@@ -69,6 +69,15 @@ func memberNames(cluster *databasev1alpha1.CubridCluster, count int32) []string 
 // PrimaryResolved / HAReady conditions. It returns the resolution so callers
 // (e.g. the broker tier's RoutingReady) can reuse it.
 func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) PrimaryResolution {
+	res, _, _ := r.observeHAStatus(ctx, cluster, count)
+	return res
+}
+
+// observeHAStatus is reconcileHAStatus, and returns the observations and the
+// time of the pass as well. A pass that resolves the primary records it as
+// status.lastResolvedPrimary, which is never cleared.
+func (r *CubridClusterReconciler) observeHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	count int32) (PrimaryResolution, map[string]RoleObservation, time.Time) {
 	members := memberNames(cluster, count)
 
 	obs := make(map[string]RoleObservation, len(members))
@@ -89,6 +98,10 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	now := r.now()
 	res := resolvePrimary(members, obs, now)
 	cluster.Status.CurrentPrimary = res.CurrentPrimary
+	if res.Status == metav1.ConditionTrue && res.CurrentPrimary != "" {
+		resolvedAt := metav1.NewTime(now)
+		cluster.Status.LastResolvedPrimary, cluster.Status.LastResolvedPrimaryTime = res.CurrentPrimary, &resolvedAt
+	}
 	previous := cluster.Status.Instances
 	// The applier readings kept from the last pass are compared with this
 	// one, and this pass's are kept only once the status they fed is written
@@ -114,7 +127,7 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 		haStatus, haReason, haMessage = metav1.ConditionFalse, reason, msg+"; roles: "+haMessage
 	}
 	setCondition(cluster, conditionHAReady, haStatus, haReason, haMessage)
-	return res
+	return res, obs, now
 }
 
 // reasonReplicasNotObserved is HAReady Unknown on a resolved primary while a
@@ -278,6 +291,8 @@ func (r *CubridClusterReconciler) markRolesNotObserved(cluster *databasev1alpha1
 		conditionReplicationHealthy} {
 		setCondition(cluster, condition, metav1.ConditionUnknown, reasonRolesNotObserved, msg)
 	}
+	// A quarantine in force is known without the roles.
+	setRoutingQuarantined(cluster)
 }
 
 func primaryResolvedMessage(res PrimaryResolution) string {
@@ -485,6 +500,9 @@ func holdObservationTimes(stored, status *databasev1alpha1.CubridClusterStatus, 
 	}
 	held := status.DeepCopy()
 	held.LastObservedTime = heldTime(stored.LastObservedTime, held.LastObservedTime, now)
+	if held.LastResolvedPrimary == stored.LastResolvedPrimary {
+		held.LastResolvedPrimaryTime = heldTime(stored.LastResolvedPrimaryTime, held.LastResolvedPrimaryTime, now)
+	}
 	before := make(map[string]*databasev1alpha1.InstanceStatus, len(stored.Instances))
 	for i := range stored.Instances {
 		before[stored.Instances[i].Name] = &stored.Instances[i]

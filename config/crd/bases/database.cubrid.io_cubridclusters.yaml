@@ -1136,6 +1136,132 @@ spec:
                   cluster have never been observed.
                 format: date-time
                 type: string
+              lastResolvedPrimary:
+                description: |-
+                  lastResolvedPrimary is the member that currentPrimary named in the last
+                  observation that reported PrimaryResolved=True. Unlike currentPrimary it
+                  is never cleared. The Operator reads it only to decide whether to
+                  quarantine the read-write path (ADR-0005, section 8), never to name a
+                  primary or to route.
+                type: string
+              lastResolvedPrimaryTime:
+                description: |-
+                  lastResolvedPrimaryTime is the time of the last observation that
+                  resolved lastResolvedPrimary. A newer value of this time alone is
+                  written at most every 30 seconds, as for lastObservedTime.
+                format: date-time
+                type: string
+              lastWriteQuarantineRelease:
+                description: |-
+                  lastWriteQuarantineRelease records the last quarantine that was
+                  released, and how.
+                properties:
+                  generationID:
+                    description: generationID is the released quarantine's.
+                    type: string
+                  members:
+                    description: members are the released quarantine's members.
+                    items:
+                      description: |-
+                        WriteQuarantineMember is one member a quarantine is about, with the Pod it
+                        ran in when it was recorded.
+                      properties:
+                        name:
+                          description: name is the member.
+                          type: string
+                        observedRole:
+                          description: |-
+                            observedRole is what the member's answer showed when it was recorded,
+                            such as "active master", "slave" or "no answer".
+                          type: string
+                        podUID:
+                          description: |-
+                            podUID is the UID of the member's Pod when it was recorded; empty when
+                            no Pod of that name existed.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  method:
+                    description: method is how it was released.
+                    enum:
+                    - Automatic
+                    type: string
+                  observedMaster:
+                    description: observedMaster is the active master at the release.
+                    type: string
+                  reason:
+                    description: reason is the released quarantine's reason.
+                    enum:
+                    - WriteQuarantinedMultipleMasters
+                    - WriteQuarantinedMemberUnverified
+                    - WriteQuarantinedMasterChanged
+                    type: string
+                  releaseTime:
+                    description: releaseTime is when it was released.
+                    format: date-time
+                    type: string
+                  revision:
+                    description: revision is the released quarantine's last revision.
+                    format: int64
+                    type: integer
+                  startTime:
+                    description: startTime is when the released quarantine started.
+                    format: date-time
+                    type: string
+                required:
+                - generationID
+                - method
+                - reason
+                - releaseTime
+                - startTime
+                type: object
+              memberVerifications:
+                description: |-
+                  memberVerifications records, for each promotable member that answered
+                  in the last observation with a fresh, authenticated answer that is not
+                  an active master, since when it has answered so without a break and
+                  from which Pod. A member with no entry, or whose entry is younger than
+                  a few seconds, is unverified for the read-write quarantine (ADR-0005,
+                  section 8). Any answer that does not count, a different Pod UID or a
+                  restart of the database container removes or renews the entry.
+                items:
+                  description: |-
+                    MemberVerification is the evidence that one member is not an active master:
+                    fresh, authenticated non-master answers from the same Pod and container
+                    start since a given time.
+                  properties:
+                    name:
+                      description: name is the member.
+                      type: string
+                    nonMasterSince:
+                      description: |-
+                        nonMasterSince is when the first of the uninterrupted non-master
+                        answers was received, rounded up to the second.
+                      format: date-time
+                      type: string
+                    podUID:
+                      description: |-
+                        podUID is the UID of the member's Pod when the first of these answers
+                        was received; empty when no Pod of that name existed.
+                      type: string
+                    restartCount:
+                      description: restartCount is the restart count of the database
+                        container then.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  - nonMasterSince
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               observedEngineVersion:
                 description: |-
                   observedEngineVersion is the CUBRID engine version observed across the
@@ -1162,6 +1288,104 @@ spec:
                       engineVersion is the engine version the update targets (must equal the
                       observed baseline; a change is an upgrade, not an update).
                     type: string
+                type: object
+              writeQuarantine:
+                description: |-
+                  writeQuarantine is set while the Operator keeps the read-write Brokers
+                  stopped because a second active master or an unverified member was
+                  observed (ADR-0005, section 8). It is unset when no quarantine is in
+                  force. Only a release ends it.
+                properties:
+                  clusterUID:
+                    description: |-
+                      clusterUID is the UID of the CubridCluster the quarantine was started
+                      for.
+                    type: string
+                  enforcedTime:
+                    description: |-
+                      enforcedTime is when the Operator verified that no read-write Broker
+                      Pod exists and that the read-write Service has no endpoints. It is
+                      unset while that is not verified, as when it was seen again.
+                    format: date-time
+                    type: string
+                  generationID:
+                    description: |-
+                      generationID is a random value of 128 bits, new for each quarantine and
+                      kept while its reason or members change.
+                    type: string
+                  members:
+                    description: |-
+                      members are the members the quarantine is about: the unverified
+                      members, or the active masters.
+                    items:
+                      description: |-
+                        WriteQuarantineMember is one member a quarantine is about, with the Pod it
+                        ran in when it was recorded.
+                      properties:
+                        name:
+                          description: name is the member.
+                          type: string
+                        observedRole:
+                          description: |-
+                            observedRole is what the member's answer showed when it was recorded,
+                            such as "active master", "slave" or "no answer".
+                          type: string
+                        podUID:
+                          description: |-
+                            podUID is the UID of the member's Pod when it was recorded; empty when
+                            no Pod of that name existed.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  observedMaster:
+                    description: |-
+                      observedMaster is the one active master the quarantine was started
+                      beside; empty for WriteQuarantinedMultipleMasters.
+                    type: string
+                  observedMasterPodUID:
+                    description: observedMasterPodUID is the UID of observedMaster's
+                      Pod.
+                    type: string
+                  reason:
+                    description: reason is why the quarantine is in force.
+                    enum:
+                    - WriteQuarantinedMultipleMasters
+                    - WriteQuarantinedMemberUnverified
+                    - WriteQuarantinedMasterChanged
+                    type: string
+                  releaseCheckSince:
+                    description: |-
+                      releaseCheckSince is when the first of the observations that may
+                      release a WriteQuarantinedMemberUnverified quarantine automatically was
+                      made; unset while the last observation does not allow it.
+                    format: date-time
+                    type: string
+                  releaseToken:
+                    description: |-
+                      releaseToken is a random value of 128 bits, new whenever revision
+                      changes. A manual release must name it.
+                    type: string
+                  revision:
+                    description: |-
+                      revision counts the changes of reason, members and their Pods; it is
+                      1 when the quarantine starts.
+                    format: int64
+                    type: integer
+                  startTime:
+                    description: startTime is when the quarantine started.
+                    format: date-time
+                    type: string
+                required:
+                - generationID
+                - reason
+                - releaseToken
+                - revision
+                - startTime
                 type: object
             type: object
         required:

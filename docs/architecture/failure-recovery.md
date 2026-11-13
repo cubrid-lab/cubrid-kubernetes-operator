@@ -152,14 +152,17 @@ the Operator never decides which CUBRID member to promote. #113/#115 must
 measure the managed new-connection path separately from existing sessions
 and direct database clients.
 
-- **Write quarantine is reported, not enforced.** When the primary cannot be
-  resolved, the Operator sets `RoutingReady=False`, but the read-write
-  Brokers keep running and `demo-rw` keeps its endpoints. In the Kind run of
-  the primary Pod termination scenario, writes through `demo-rw` kept being
-  acknowledged while `RoutingReady` was not `True`. Enforcement is
-  [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113);
-  the limits of what `RoutingReady=False` does are in
-  [docs/observability.md](../observability.md#what-routingreadyfalse-does-not-do).
+- **Write quarantine stops only the managed read-write Brokers, in part.**
+  When the primary is only unresolved, the Operator sets `RoutingReady=False`
+  and the read-write Brokers keep running; in an earlier Kind run of the
+  primary Pod termination scenario, writes through `demo-rw` kept being
+  acknowledged meanwhile. On two active masters, or one active master beside
+  an unverified member that outranks it or was the last resolved primary,
+  the Operator now scales the read-write Brokers to zero (envtest only; manual
+  release not implemented,
+  [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113)).
+  What it closes and what it does not is in
+  [docs/observability.md](../observability.md#the-write-quarantine).
 - **No fencing.** The Operator does not call `/v1/shutdown`, and nothing sets
   the `FencingRequired` Condition (ADR-0005 section 2; ROADMAP.md row
   "Hardening").

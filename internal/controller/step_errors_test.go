@@ -250,7 +250,10 @@ var _ = Describe("Errors of the Broker tier and rolling update writes (#799)", f
 		}
 		res, err := r.Reconcile(ctx, request(cluster))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(reconcile.Result{RequeueAfter: haResyncInterval}))
+		// The slaves answered once, which does not verify them for the write
+		// quarantine, so the roles are observed again sooner (ADR-0005,
+		// section 8).
+		Expect(res).To(Equal(reconcile.Result{RequeueAfter: unverifiedResyncInterval}))
 		Expect(condition(cluster, conditionBrokerReady).Reason).To(Equal("BrokersNotAvailable"))
 		Expect(condition(cluster, conditionRoutingReady).Reason).To(Equal("NoBrokerAvailable"))
 

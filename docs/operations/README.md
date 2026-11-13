@@ -21,7 +21,7 @@ evidence of a real VM failure or a safe manual split-brain recovery.
 |---|---|---|
 | Standalone/HA startup and SQL through Brokers | Kind S00–S02, HA bootstrap, some installed lab runs ([inventory](../../ROADMAP.md#implementation-and-validation-inventory)) | Pin the exact candidate and environment; independently reproduce installation from this guide (#125/#127) |
 | Native CUBRID master failover and Broker reconnection | Kind S03/S06; native-HA Docker POCs | VM fault and application SQL histories on the candidate (#115/#126) |
-| Managed write quarantine | `RoutingReady=False` reports uncertainty; **RW Service endpoints are not withheld today** | Policy decision, implementation #113, new/existing connection evidence #115 |
+| Managed write quarantine | The Operator scales the read-write Brokers to zero on a second active master or an unverified higher-ranked member or former primary, and releases the latter automatically ([observability](../observability.md#the-write-quarantine)); envtest only. Manual release and the out-of-service taint are not implemented, so a two-master quarantine stays closed | Manual release (#113); Kind and VM-lab runs; new/existing connection evidence #115 |
 | Backup and restore into a **new** cluster | S11/S12 installed-lab evidence, with documented unsuccessful/blocked variants | Repeat exact candidate-specific source, artifact, failure and data checks (#121/#126/#127) |
 | Retained-volume rejoin and PVC-loss rebuild | Design in ADR-0006 and partial lab observations | Preserve data, complete S09/S10 and independent recovery procedure (#116–#118) |
 | Voluntary node drain | PDB and Broker placement objects implemented; envtest checks | Real-node drain with SQL/replication evidence (#614); ADR-0012 policy approval (#613) |

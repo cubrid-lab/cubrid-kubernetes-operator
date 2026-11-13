@@ -204,10 +204,14 @@ var _ = Describe("Ready while the primary stays unresolved (#716)", func() {
 			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
 		})
-		resolved := [3]string{slave, master, slave}
+		// The first member is the master before the cut: a master that the
+		// first member outranks while that member is not yet verified would
+		// quarantine the read-write path (ADR-0005, section 8), which is not
+		// what this test is about.
+		resolved := [3]string{master, slave, slave}
 		answers := heartbeatAnswers{
-			name + "-0": heartbeatReport(0, resolved, "registered_and_standby"),
-			name + "-1": heartbeatReport(1, resolved, "registered_and_active"),
+			name + "-0": heartbeatReport(0, resolved, "registered_and_active"),
+			name + "-1": heartbeatReport(1, resolved, "registered_and_standby"),
 			name + "-2": heartbeatReport(2, resolved, "registered_and_standby"),
 		}
 		// Whole seconds: the API server stores a time to the second.

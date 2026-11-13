@@ -397,6 +397,14 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.refuseClusterName(ctx, &cluster, err)
 	}
 
+	// A write quarantine in the status is enforced before anything else, from
+	// the status alone, so that no later step or failure of this pass, and no
+	// restart of the Operator, lets the read-write Brokers run (ADR-0005,
+	// section 8).
+	if err := r.enforceWriteQuarantine(ctx, &cluster); err != nil {
+		return r.failed(ctx, &cluster, reasonWriteQuarantineEnforcementFailed, err)
+	}
+
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
@@ -1224,7 +1232,13 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	sts *appsv1.StatefulSet) (bool, stepResult) {
 	// The first database is created once, on one member (ADR-0010).
 	r.reconcileHABootstrap(ctx, cluster)
-	res := r.reconcileHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	lastResolved := cluster.Status.LastResolvedPrimary
+	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	// The write quarantine is decided from the same observation, before the
+	// Broker tier, which keeps the read-write Brokers at zero while one is in
+	// force (ADR-0005, section 8).
+	quarantine := r.reconcileWriteQuarantine(ctx, cluster,
+		memberNames(cluster, cluster.Spec.Topology.PromotableMembers), obs, observedAt, lastResolved)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the
@@ -1232,6 +1246,10 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	available, ok, steps := r.brokerTier(ctx, cluster, sts, &res)
 	if ok {
 		r.setBrokerConditions(cluster, res, available)
+	}
+	steps.err = errors.Join(quarantine.err, steps.err)
+	if quarantine.retry > 0 && (steps.retry == 0 || quarantine.retry < steps.retry) {
+		steps.retry = quarantine.retry
 	}
 	// Rolling update (ADR-0009): only when the engine-version guard permits
 	// (no blocked upgrade / unverifiable version), roll outdated slaves one at
@@ -1372,10 +1390,11 @@ const primaryUnresolvedGrace = 60 * time.Second
 // has not recorded a member as seeded keeps Ready False too: with
 // InstancesNotReady while a member's server does not run yet, and with
 // MemberNotSeeded once every instance is ready, as while the last member
-// catches up after its seed restore. The order is: two masters observed on
-// ready instances, a failed HA bootstrap, then on ready instances a member not
-// seeded, a primary unresolved past the grace period, or else ClusterReady,
-// and otherwise InstancesNotReady.
+// catches up after its seed restore. The order is: a write quarantine in
+// force, which makes Ready False with its reason at once (ADR-0005, section
+// 8), two masters observed on ready instances, a failed HA bootstrap, then on
+// ready instances a member not seeded, a primary unresolved past the grace
+// period, or else ClusterReady, and otherwise InstancesNotReady.
 func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
 	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	instancesReady := ready >= desired && desired > 0
@@ -1387,6 +1406,14 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 	// yet seeded (MemberNotSeeded).
 	_, unseededMessage, unseeded := haBootstrapUnadmitted(cluster)
 	switch {
+	case cluster.Status.WriteQuarantine != nil:
+		// A quarantine of the read-write path makes Ready False at once,
+		// without the grace of PrimaryUnresolved (ADR-0005, section 8).
+		q := cluster.Status.WriteQuarantine
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, string(q.Reason),
+			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, quarantineConditionMessage(q)))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, string(q.Reason),
+			"the read-write Brokers are kept stopped until the quarantine is released, see RoutingReady")
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))

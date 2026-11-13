@@ -724,11 +724,12 @@ removed, and no later variant of the same system is started.
 
 These are different things and are never reported as one another:
 
-1. **Removing endpoints from the managed write path (planned, not yet
-   implemented).** If the #113 policy is implemented, the Operator would
-   withhold the managed read-write Service endpoint so *new* connections
-   through `-rw` fail or are refused. **Today the Operator does not do this:**
-   it sets `RoutingReady=False` while Brokers and Service endpoints remain.
+1. **Removing endpoints from the managed write path (implemented in part,
+   envtest only).** On a write quarantine of ADR-0005 section 8 the Operator
+   scales the read-write Brokers to zero, which removes the `-rw` endpoints so
+   *new* connections through `-rw` fail. On an unresolved primary without
+   a quarantine it only sets `RoutingReady=False` while Brokers and Service
+   endpoints remain (docs/observability.md, "The write quarantine").
    A scenario must test actual SQL through `-rw`, never infer enforcement
    from a Condition. A missing/stale observation alone does not prove native
    CUBRID has entered a two-master state; #113/#115 must establish the

@@ -1068,14 +1068,18 @@ var _ = Describe("Ready of an HA cluster (#339)", func() {
 		prober.masters[key.Name+"-1"] = true
 		ready := reconcileReady()
 		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-		Expect(ready.Reason).To(Equal("MultiplePrimariesObserved"))
+		// Two active masters also quarantine the read-write path, whose
+		// reason Ready carries first (ADR-0005, section 8).
+		Expect(ready.Reason).To(Equal(string(databasev1alpha1.WriteQuarantinedMultipleMasters)))
 		Expect(clusterReady()).To(Equal(float64(0)))
 		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
 
-		By("one master again")
+		By("one master again: the quarantine of two masters has no automatic release")
 		delete(prober.masters, key.Name+"-1")
-		Expect(reconcileReady().Status).To(Equal(metav1.ConditionTrue))
-		Expect(clusterReady()).To(Equal(float64(1)))
+		ready = reconcileReady()
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal(string(databasev1alpha1.WriteQuarantinedMultipleMasters)))
+		Expect(clusterReady()).To(Equal(float64(0)))
 	})
 })
 

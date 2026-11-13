@@ -8,12 +8,11 @@ decided by the maintainers in PR #793 (2026-11-12 and 2026-11-13 UTC):
 the out-of-service taint counts as an external fence while it is present,
 and a fenced member's return to service is a manual maintenance step with a
 durable write barrier. Accepting the policy is not evidence that it works:
-the Operator does not enforce it yet (#113), and its SQL behavior on real
-faults is unmeasured (#115). Until both are done, no release claims managed
-write isolation.
-
-The Operator still reports `RoutingReady=False` without enforcing a
-write-path quarantine on `-rw` (#113/#115).
+the Operator enforces only part of it (#113: detection, enforcement and the
+automatic release; not the manual release, the out-of-service taint or the
+return to service; see [ROADMAP.md](../../ROADMAP.md)), and its SQL behavior
+on real faults is unmeasured (#115). Until both are done, no release claims
+managed write isolation.
 
 ## Context
 
@@ -162,8 +161,9 @@ never by weakening `PrimaryResolved`.
 **Policy scenarios, not an implementation/validation report.** Any row that
 says “quarantine”, “drop RW readiness”, “manual intervention” or
 `FencingRequired` describes the intended behavior or an operator action still
-to be qualified. Currently `RoutingReady=False` is reported but does **not**
-remove managed RW endpoints, close existing sessions, or fence the database.
+to be qualified. `RoutingReady=False` alone does **not** remove managed RW
+endpoints, close existing sessions, or fence the database; only a write
+quarantine of section 8 stops the RW Brokers.
 Unknown observations are not proof that CUBRID has elected an unsafe master;
 a policy choice must balance safe native failover against write exposure.
 Use #113/#115 for implementation and SQL evidence, and #702/#703 for native
