@@ -1156,11 +1156,25 @@ spec:
                   lastWriteQuarantineRelease records the last quarantine that was
                   released, and how.
                 properties:
+                  exemptMembers:
+                    description: |-
+                      exemptMembers are the members a manual release accepted that do not,
+                      by themselves, start a new quarantine as unverified members while
+                      observedMaster, in the same Pod, is the only active master and their
+                      Pod UID and restart count are those in members. A member leaves the
+                      list once it is verified or its Pod UID or restart count changes. Two
+                      active masters always start a quarantine.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
                   generationID:
                     description: generationID is the released quarantine's.
                     type: string
                   members:
-                    description: members are the released quarantine's members.
+                    description: |-
+                      members are the released quarantine's members; for a manual release,
+                      with their Pod UID and restart count at the release.
                     items:
                       description: |-
                         WriteQuarantineMember is one member a quarantine is about, with the Pod it
@@ -1179,6 +1193,12 @@ spec:
                             podUID is the UID of the member's Pod when it was recorded; empty when
                             no Pod of that name existed.
                           type: string
+                        restartCount:
+                          description: |-
+                            restartCount is the restart count of the member's database container
+                            when it was recorded.
+                          format: int32
+                          type: integer
                       required:
                       - name
                       type: object
@@ -1194,6 +1214,11 @@ spec:
                     type: string
                   observedMaster:
                     description: observedMaster is the active master at the release.
+                    type: string
+                  observedMasterPodUID:
+                    description: |-
+                      observedMasterPodUID is the UID of observedMaster's Pod at a manual
+                      release.
                     type: string
                   reason:
                     description: reason is the released quarantine's reason.
@@ -1443,6 +1468,12 @@ spec:
                             podUID is the UID of the member's Pod when it was recorded; empty when
                             no Pod of that name existed.
                           type: string
+                        restartCount:
+                          description: |-
+                            restartCount is the restart count of the member's database container
+                            when it was recorded.
+                          format: int32
+                          type: integer
                       required:
                       - name
                       type: object

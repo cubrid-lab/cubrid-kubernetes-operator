@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -160,7 +161,8 @@ func TestDecideManualRelease(t *testing.T) {
 func TestDecideManualReleaseRecord(t *testing.T) {
 	q := releaseQuarantine()
 	verdict, _, rel := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
-		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q1)})
+		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q1),
+		Identities: map[string]memberIdentity{q0: {PodUID: uid0}, q1: {PodUID: uid1}}})
 	if verdict != manualReleaseAccepted {
 		t.Fatalf("verdict = %q", verdict)
 	}
@@ -174,5 +176,143 @@ func TestDecideManualReleaseRecord(t *testing.T) {
 	}
 	if !strings.Contains(rel.Warning, "acknowledged writes") {
 		t.Errorf("warning = %q", rel.Warning)
+	}
+}
+
+// exemptScenario is a cluster after a manual release that accepted q0 as
+// unverified beside q1, the only active master, with q2 verified as a slave:
+// q0 outranks q1 and was the last resolved primary.
+func exemptScenario(t *testing.T) *quarantineScenario {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	s.lastRelease = &databasev1alpha1.WriteQuarantineRelease{GenerationID: releaseGeneration,
+		Reason: databasev1alpha1.WriteQuarantinedMemberUnverified, Method: databasev1alpha1.WriteQuarantineReleasedManually,
+		ObservedMaster: q1, ObservedMasterPodUID: uid1, ReleaseToken: releaseToken2,
+		Members:       []databasev1alpha1.WriteQuarantineMember{{Name: q0, PodUID: uid0}},
+		ExemptMembers: []string{q0}}
+	return s
+}
+
+// cutOff is q0 unreachable beside q1 as the only active master, q2 a slave.
+func cutOff(now time.Time) map[string]RoleObservation {
+	return map[string]RoleObservation{q0: noAnswerAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}
+}
+
+// A member a manual release accepted as unverified does not by itself start
+// a new quarantine while its Pod and container start and the active master
+// are those of the release (ADR-0005, section 8: the actor accepted that
+// risk for the recorded members; a token never authorizes future members).
+func TestManualReleaseExemptsAcceptedMembers(t *testing.T) {
+	s := exemptScenario(t)
+	for i := range 3 {
+		now := testNow.Add(time.Duration(i) * unverifiedResyncInterval)
+		if d := s.pass(now, cutOff(now)); d.Quarantine != nil {
+			t.Fatalf("pass %d quarantined the accepted member again: %+v", i, d.Quarantine)
+		}
+	}
+	if s.lastRelease == nil || !slices.Equal(s.lastRelease.ExemptMembers, []string{q0}) {
+		t.Errorf("last release = %+v, want q0 still exempt", s.lastRelease)
+	}
+}
+
+// The exemption ends, and rule 2 applies again, on a change of the accepted
+// member's Pod or container start, of the active master, or for a member the
+// release did not accept. Two active masters always quarantine.
+func TestManualReleaseExemptionEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		change  func(s *quarantineScenario)
+		obs     func(now time.Time) map[string]RoleObservation
+		reason  databasev1alpha1.WriteQuarantineReason
+		members []string
+	}{
+		{name: "the accepted member in another Pod",
+			change: func(s *quarantineScenario) { s.identities[q0] = memberIdentity{PodUID: uid0New} },
+			obs:    cutOff, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0}},
+		{name: "the accepted member's container restarted",
+			change: func(s *quarantineScenario) { s.identities[q0] = memberIdentity{PodUID: uid0, RestartCount: 1} },
+			obs:    cutOff, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0}},
+		{name: "the active master in another Pod",
+			change: func(s *quarantineScenario) { s.identities[q1] = memberIdentity{PodUID: "uid-1-new"} },
+			obs:    cutOff, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0}},
+		{name: "another member is the active master",
+			obs: func(now time.Time) map[string]RoleObservation {
+				return map[string]RoleObservation{q0: noAnswerAt(now), q1: slaveAt(now), q2: activeMasterAt(now)}
+			}, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0, q1}},
+		{name: "the accepted member claims an active master",
+			obs: func(now time.Time) map[string]RoleObservation {
+				return map[string]RoleObservation{q0: activeMasterAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}
+			}, reason: databasev1alpha1.WriteQuarantinedMultipleMasters, members: []string{q0, q1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := exemptScenario(t)
+			if d := s.pass(testNow, cutOff(testNow)); d.Quarantine != nil {
+				t.Fatalf("the first pass quarantined: %+v", d.Quarantine)
+			}
+			if tc.change != nil {
+				tc.change(s)
+			}
+			now := testNow.Add(unverifiedResyncInterval)
+			d := s.pass(now, tc.obs(now))
+			if d.Quarantine == nil || d.Quarantine.Reason != tc.reason ||
+				!slices.Equal(memberNamesOf(d.Quarantine.Members), tc.members) {
+				t.Fatalf("quarantine = %+v, want %s with %v", d.Quarantine, tc.reason, tc.members)
+			}
+		})
+	}
+}
+
+// A member the release did not accept that becomes unverified starts a
+// quarantine about it alone; the accepted member stays exempt.
+func TestManualReleaseNewUnverifiedMember(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q1)
+	s.lastRelease = &databasev1alpha1.WriteQuarantineRelease{GenerationID: releaseGeneration,
+		Method: databasev1alpha1.WriteQuarantineReleasedManually, ObservedMaster: q2, ObservedMasterPodUID: uid2,
+		Members: []databasev1alpha1.WriteQuarantineMember{{Name: q0, PodUID: uid0}}, ExemptMembers: []string{q0}}
+	if d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: slaveAt(testNow),
+		q2: activeMasterAt(testNow)}); d.Quarantine != nil {
+		t.Fatalf("the accepted member was quarantined: %+v", d.Quarantine)
+	}
+	now := testNow.Add(unverifiedResyncInterval)
+	d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)})
+	if d.Quarantine == nil || !slices.Equal(memberNamesOf(d.Quarantine.Members), []string{q1}) {
+		t.Fatalf("quarantine = %+v, want one about %s alone", d.Quarantine, q1)
+	}
+}
+
+// Once verified, an accepted member leaves the exemption: when it is
+// unverified again, rule 2 quarantines it.
+func TestManualReleaseExemptionEndsOnVerification(t *testing.T) {
+	s := exemptScenario(t)
+	now := testNow
+	for _, step := range []time.Duration{0, quarantineVerifyGap + time.Second} {
+		now = now.Add(step)
+		obs := cutOff(now)
+		obs[q0] = slaveAt(now)
+		if d := s.pass(now, obs); d.Quarantine != nil {
+			t.Fatalf("quarantine = %+v while %s answers as a slave", d.Quarantine, q0)
+		}
+	}
+	if len(s.lastRelease.ExemptMembers) != 0 {
+		t.Fatalf("exempt members = %v after %s was verified", s.lastRelease.ExemptMembers, q0)
+	}
+	now = now.Add(unverifiedResyncInterval)
+	if d := s.pass(now, cutOff(now)); d.Quarantine == nil {
+		t.Fatalf("no quarantine for %s unverified again after its verification", q0)
+	}
+}
+
+// An accepted manual release records the members it accepted with their Pod
+// and container start at the release, the master's Pod, and exempts every
+// accepted member but the active master.
+func TestDecideManualReleaseExemptRecord(t *testing.T) {
+	q := releaseQuarantine()
+	_, _, rel := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
+		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q0),
+		Identities: map[string]memberIdentity{q0: {PodUID: uid0, RestartCount: 2}, q1: {PodUID: uid1, RestartCount: 3}}})
+	if rel == nil || rel.ObservedMasterPodUID != uid0 || !slices.Equal(rel.ExemptMembers, []string{q1}) ||
+		rel.Members[1].RestartCount != 3 || rel.Members[0].RestartCount != 2 {
+		t.Fatalf("release = %+v", rel)
 	}
 }

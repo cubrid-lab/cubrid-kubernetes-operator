@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -213,7 +214,7 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
 	})
 
-	It("makes an annotation set before the member set expanded inert, and accepts the new token", func() {
+	It("makes an annotation set before the member set expanded inert, accepts the new token, and does not quarantine the accepted members again", func() {
 		f := newFixture("wq-manual-expanded")
 		r := reconcilerFor(f, k8sClient)
 		running(r, f)
@@ -254,11 +255,32 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		Expect(rel.Revision).To(Equal(revised.Revision))
 		Expect(memberNamesOf(rel.Members)).To(Equal([]string{f.key.Name + "-0", f.key.Name + "-2"}))
 
-		By("the next pass: the first member still outranks the master and is unverified, so a new quarantine starts")
+		Expect(rel.ExemptMembers).To(Equal([]string{f.key.Name + "-0", f.key.Name + "-2"}))
+
+		By("the next passes: the accepted first member, still unverified and outranking the master, starts no quarantine")
 		pass(r, f)
+		pass(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+
+		By("a restarted Operator with no memory, from the stored release")
+		restarted := reconcilerFor(f, k8sClient)
+		pass(restarted, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+
+		By("the accepted first member in another Pod: a new quarantine")
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-0", Namespace: f.key.Namespace},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: appName}}}}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		pass(restarted, f)
 		next := stored(f).Status.WriteQuarantine
 		Expect(next).NotTo(BeNil())
 		Expect(next.GenerationID).NotTo(Equal(revised.GenerationID))
+		Expect(memberNamesOf(next.Members)).To(Equal([]string{f.key.Name + "-0"}))
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty(),
+			"the third member left the exemption once verified, the first one when its Pod changed")
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 	})
 

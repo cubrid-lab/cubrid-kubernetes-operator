@@ -483,8 +483,9 @@ The Operator acts on it in the next observation of the roles:
   one active master while the token is still current.
 - On acceptance it writes, in one status write,
   `status.lastWriteQuarantineRelease` with the method `Manual`, the consumed
-  `releaseToken`, the accepted `members` with their Pod UIDs, the `revision`,
-  the one active master (`observedMaster`), the UTC `releaseTime` and a
+  `releaseToken`, the accepted `members` with their Pod UIDs and restart
+  counts, the `exemptMembers`, the `revision`, the one active master
+  (`observedMaster`, `observedMasterPodUID`), the UTC `releaseTime` and a
   `warning` that acknowledged writes may be lost, and clears
   `status.writeQuarantine`. The read-write Brokers stay at zero in that pass
   (`Ready` is `False` with `ReadWriteBrokersHeld`) and are scaled back in the
@@ -497,12 +498,26 @@ The Operator acts on it in the next observation of the roles:
   `status.lastWriteQuarantineRelease.releaseToken` records is ignored and
   removed again in a later pass; it never releases another quarantine.
 
-A manual release does not stop the rules: if, in the next observation, a
-member still outranks the only active master, or is the last resolved
-primary, and is unverified, a new quarantine starts with a new generation and
-token. A manual release therefore keeps the path open only when every member
-that stays unverified ranks below the active master and is not the last
-resolved primary.
+The release covers the members it accepted, and no others. It records them
+in `status.lastWriteQuarantineRelease.members` with the Pod UID and database
+container restart count seen at the release, the active master's Pod UID in
+`observedMasterPodUID`, and every accepted member but that master in
+`exemptMembers`. While the same member is the only active master in the same
+Pod, an exempt member that stays unverified, even one that outranks the
+master or was the last resolved primary, does not start a new quarantine by
+itself. The exemption is read from the stored status alone, so it also holds
+after a restart of the Operator. It ends, and the usual rules apply again:
+
+- for a member, once it is verified (non-master answers at least 2 seconds
+  apart), or when its Pod UID or restart count differs from the recorded one:
+  the member leaves `exemptMembers` for good;
+- for every exempt member, while another member is the active master or the
+  master runs in another Pod;
+- with the next release, which replaces `lastWriteQuarantineRelease`.
+
+A member the release did not accept that becomes unverified starts a
+quarantine as usual, about that member alone. Two or more active masters
+always start one, including when an exempt member claims to be master.
 
 The Operator cannot tell who set the annotation. The actor's identity comes
 from the Kubernetes API audit log. Any principal that may `update` or `patch`

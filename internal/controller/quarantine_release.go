@@ -78,6 +78,8 @@ type manualReleaseInput struct {
 	Decision quarantineDecision
 	// IdentitiesUnknown says that the members' Pods could not be read.
 	IdentitiesUnknown bool
+	// Identities are the members' Pods in this pass.
+	Identities map[string]memberIdentity
 }
 
 // decideManualRelease decides on the release annotation of the stored
@@ -135,11 +137,25 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 			"release does not open the read-write path without exactly one active master",
 			len(in.Decision.ActiveMasters), in.Decision.ActiveMasters), nil
 	}
+	// The accepted members are recorded with their Pod and container start
+	// at the release; all of them but the active master are exempt from
+	// rule 2 while these stay the same (releaseExemption).
+	master := in.Decision.ActiveMasters[0]
+	members := make([]databasev1alpha1.WriteQuarantineMember, 0, len(sq.Members))
+	var exempt []string
+	for _, m := range sq.Members {
+		id := in.Identities[m.Name]
+		m.PodUID, m.RestartCount = id.PodUID, id.RestartCount
+		members = append(members, m)
+		if m.Name != master {
+			exempt = append(exempt, m.Name)
+		}
+	}
 	return manualReleaseAccepted, "", &databasev1alpha1.WriteQuarantineRelease{GenerationID: sq.GenerationID,
 		Reason: sq.Reason, StartTime: sq.StartTime, ReleaseTime: metav1.NewTime(in.Now.UTC()),
 		Method: databasev1alpha1.WriteQuarantineReleasedManually, Revision: sq.Revision,
-		ObservedMaster: in.Decision.ActiveMasters[0], Members: sq.Members, ReleaseToken: token,
-		Warning: manualReleaseWarning}
+		ObservedMaster: master, ObservedMasterPodUID: in.Identities[master].PodUID, Members: members,
+		ExemptMembers: exempt, ReleaseToken: token, Warning: manualReleaseWarning}
 }
 
 // manualReleaseWarning is recorded with a manual release.
@@ -158,7 +174,7 @@ const manualReleaseWarning = "released on an administrator's annotation, not on 
 // inert or refused annotation is reported with a Warning Event once per value
 // and reason, and a refusal is recorded in the quarantine's releaseRefusal.
 func (r *CubridClusterReconciler) reconcileManualRelease(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	d quarantineDecision, identitiesUnknown bool, now time.Time) (quarantineDecision, time.Duration) {
+	d quarantineDecision, ids map[string]memberIdentity, identitiesUnknown bool, now time.Time) (quarantineDecision, time.Duration) {
 	if d.Quarantine != nil {
 		d.Quarantine.ReleaseRefusal = ""
 	}
@@ -175,7 +191,7 @@ func (r *CubridClusterReconciler) reconcileManualRelease(ctx context.Context, cl
 		stored = c
 	}
 	verdict, msg, rel := decideManualRelease(manualReleaseInput{Now: now, ClusterUID: string(cluster.UID),
-		Stored: stored, Decision: d, IdentitiesUnknown: identitiesUnknown})
+		Stored: stored, Decision: d, IdentitiesUnknown: identitiesUnknown, Identities: ids})
 	value := ""
 	if stored != nil {
 		value = stored.Annotations[releaseWriteQuarantineAnnotation]

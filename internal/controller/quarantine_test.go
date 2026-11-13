@@ -68,6 +68,7 @@ type quarantineScenario struct {
 	identities    map[string]memberIdentity
 	verifications []databasev1alpha1.MemberVerification
 	quarantine    *databasev1alpha1.WriteQuarantine
+	lastRelease   *databasev1alpha1.WriteQuarantineRelease
 	nonces        int
 	terminations  []databasev1alpha1.MemberTermination
 	// unstable and identitiesUnknown are passed to the next pass only.
@@ -90,6 +91,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		Identities: s.identities, Unstable: s.unstable, IdentitiesUnknown: s.identitiesUnknown,
 		LastResolvedPrimary: s.lastResolved,
 		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
+		LastRelease: s.lastRelease.DeepCopy(),
 		Nonce: func() (string, error) {
 			s.nonces++
 			return fmt.Sprintf("nonce-%d", s.nonces), nil
@@ -99,6 +101,10 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		s.t.Fatalf("decideWriteQuarantine: %v", err)
 	}
 	s.verifications, s.quarantine, s.terminations = d.Verifications, d.Quarantine, d.Terminations
+	s.lastRelease = d.LastRelease
+	if d.Released != nil {
+		s.lastRelease = d.Released
+	}
 	s.unstable, s.identitiesUnknown = nil, false
 	return d
 }

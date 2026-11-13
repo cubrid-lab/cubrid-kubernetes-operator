@@ -922,6 +922,10 @@ type WriteQuarantineMember struct {
 	// no Pod of that name existed.
 	// +optional
 	PodUID string `json:"podUID,omitempty"`
+	// restartCount is the restart count of the member's database container
+	// when it was recorded.
+	// +optional
+	RestartCount int32 `json:"restartCount,omitempty"`
 	// observedRole is what the member's answer showed when it was recorded,
 	// such as "active master", "slave" or "no answer".
 	// +optional
@@ -1038,11 +1042,25 @@ type WriteQuarantineRelease struct {
 	// observedMaster is the active master at the release.
 	// +optional
 	ObservedMaster string `json:"observedMaster,omitempty"`
-	// members are the released quarantine's members.
+	// observedMasterPodUID is the UID of observedMaster's Pod at a manual
+	// release.
+	// +optional
+	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
+	// members are the released quarantine's members; for a manual release,
+	// with their Pod UID and restart count at the release.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
 	Members []WriteQuarantineMember `json:"members,omitempty"`
+	// exemptMembers are the members a manual release accepted that do not,
+	// by themselves, start a new quarantine as unverified members while
+	// observedMaster, in the same Pod, is the only active master and their
+	// Pod UID and restart count are those in members. A member leaves the
+	// list once it is verified or its Pod UID or restart count changes. Two
+	// active masters always start a quarantine.
+	// +listType=set
+	// +optional
+	ExemptMembers []string `json:"exemptMembers,omitempty"`
 	// releaseToken is the one-time token a manual release consumed. An
 	// annotation that still names it is ignored and removed.
 	// +optional
