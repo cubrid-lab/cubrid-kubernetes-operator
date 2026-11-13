@@ -37,6 +37,15 @@ mkdir -p "${conf_dir}" "${CUBRID_DATABASES}"
 cp "${broker_conf}" "${conf_dir}/cubrid_broker.conf"
 # Which hosts hold the database: the Broker finds the master among them.
 cp "${databases_txt}" "${CUBRID_DATABASES}/databases.txt"
+# Each CAS error log, and cubrid_utility.log, rotates at the error_log_size of
+# this cubrid.conf to one .bak (docs/poc/RESULTS.md, POC-35). With the
+# SQL_LOG_MAX_SIZE of the Broker configuration it keeps the logs within the
+# size limit of the emptyDir mounted at $CUBRID/log (#252). The conf
+# directory is in the container's own layer: a value an earlier start left
+# is replaced, not added to.
+touch "${conf_dir}/cubrid.conf"
+sed -i -E '/^[[:space:]]*error_log_size[[:space:]]*=/d' "${conf_dir}/cubrid.conf"
+echo "error_log_size=4194304" >> "${conf_dir}/cubrid.conf"
 log "configuration installed (${BROKER_ACCESS_MODE})"
 
 # The handler is installed before the Broker is started. A termination that

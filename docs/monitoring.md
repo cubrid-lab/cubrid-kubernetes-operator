@@ -98,5 +98,6 @@ them up without a change in the Operator. Keys such as `component`,
 `namespace`, `cluster`, `member`, `event`, `reason` and `operationID` are
 described in [Logs](observability.md#logs); parse the line as JSON and index
 those keys. The database and Broker entrypoints write plain text, and
-CUBRID's own log files stay inside the container (issue
-[#252](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/252)).
+CUBRID's own log files are files under `$CUBRID/log`, on a PVC of each member
+or an `emptyDir` of each Broker Pod, not on stdout; see
+[CUBRID's own log files](observability.md#cubrids-own-log-files).

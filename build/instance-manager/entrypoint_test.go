@@ -1528,3 +1528,110 @@ func TestEntrypoint_FailedVolumeWaitStartsNothing(t *testing.T) {
 	}
 	wantCalls(t, f.recorded(), callWaitVolume)
 }
+
+// readCubridConf returns the cubrid.conf the script left in CUBRID's conf
+// directory.
+func (f *fixture) readCubridConf() string {
+	f.t.Helper()
+	data, err := os.ReadFile(filepath.Join(f.root, "cubrid", "conf", "cubrid.conf"))
+	if err != nil {
+		f.t.Fatalf("cubrid.conf: %v", err)
+	}
+	return string(data)
+}
+
+// The server writes its error and access logs under one fixed name each, and
+// every CUBRID process of the member rotates its log at error_log_size to one
+// .bak copy (docs/poc/RESULTS.md, POC-35). The script sets both at every
+// start, once each, over whatever the image or an earlier start left, so
+// that the logs on the member's log volume stay bounded (#252).
+func TestEntrypoint_BoundsCUBRIDsLogFiles(t *testing.T) {
+	for _, components := range []string{componentsServer, componentsHA} {
+		t.Run(components, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.env["CUBRID_COMPONENTS"] = components
+			if components == componentsHA {
+				f.configureHA()
+				f.registerDatabase()
+			}
+			confDir := filepath.Join(f.root, "cubrid", "conf")
+			if err := os.MkdirAll(confDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			image := "[service]\nservice=server,broker,manager\n[common]\nmax_clients=100\n" +
+				"error_log_size=536870912\nerror_log = elsewhere.err\n"
+			if err := os.WriteFile(filepath.Join(confDir, "cubrid.conf"), []byte(image), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if code, out := f.run(); code != 0 {
+					t.Fatalf("exit %d:\n%s", code, out)
+				}
+			}
+			conf := f.readCubridConf()
+			errorLog := "error_log=" + filepath.Join(f.root, "cubrid", "log", "server", dbName+".err")
+			for _, want := range []string{"\nerror_log_size=10485760\n", "\n" + errorLog + "\n", "max_clients=100\n"} {
+				if !strings.Contains(conf, want) {
+					t.Errorf("cubrid.conf lacks %q:\n%s", strings.TrimSpace(want), conf)
+				}
+			}
+			for _, key := range []string{"error_log_size", "error_log"} {
+				n := 0
+				for line := range strings.SplitSeq(conf, "\n") {
+					if k, _, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == key {
+						n++
+					}
+				}
+				if n != 1 {
+					t.Errorf("cubrid.conf sets %s %d times, want once:\n%s", key, n, conf)
+				}
+			}
+		})
+	}
+}
+
+// Every start of the server leaves one event log named after its start
+// minute, and CUBRID never removed one (docs/poc/RESULTS.md, POC-35). Before
+// it starts anything, the script removes all but the newest 20, and leaves
+// every other file of the log directory alone (#252).
+func TestEntrypoint_KeepsTheNewestEventLogsOnly(t *testing.T) {
+	f := newFixture(t, managerStub)
+	server := filepath.Join(f.root, "cubrid", "log", "server")
+	if err := os.MkdirAll(server, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for day := 1; day <= 25; day++ {
+		events = append(events, filepath.Join(server, fmt.Sprintf("%s_202610%02d_0910.event", dbName, day)))
+	}
+	others := []string{
+		filepath.Join(server, dbName+".err"),
+		filepath.Join(server, dbName+".access"),
+		filepath.Join(server, dbName+"_20261001_0910.err"),
+		filepath.Join(server, "otherdb_20261001_0910.event"),
+		filepath.Join(f.root, "cubrid", "log", "host_master.err"),
+	}
+	for _, p := range append(append([]string{}, events...), others...) {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest := filepath.Join(server, dbName+"_latest.event")
+	if err := os.Symlink(events[len(events)-1], latest); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := f.run(); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for i, p := range events {
+		_, err := os.Stat(p)
+		if kept := i >= len(events)-20; kept != (err == nil) {
+			t.Errorf("%s: kept = %v, want %v (err=%v)", filepath.Base(p), err == nil, kept, err)
+		}
+	}
+	for _, p := range append(others, latest) {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(p), err)
+		}
+	}
+}

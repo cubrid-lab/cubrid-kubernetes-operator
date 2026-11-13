@@ -527,9 +527,68 @@ Every line says which component wrote it.
 | CUBRID Broker | CUBRID's own files | each Broker Pod | files |
 
 Our components write to stdout: on Kubernetes that is the file the node keeps
-and rotates, and what `kubectl logs` shows. CUBRID keeps its own files; where
-they are kept and how they are bounded is issue
-[#252](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/252).
+and rotates, and what `kubectl logs` shows. CUBRID keeps its own files, under
+`$CUBRID/log` (`/home/cubrid/CUBRID/log`); `kubectl logs` does not show them.
+
+### CUBRID's own log files
+
+Which process writes which file is listed in `docs/poc/RESULTS.md`, POC-35.
+The files are read in the Pod, for example:
+
+```sh
+kubectl -n <namespace> exec <cluster>-0 -c cubrid -- sh -c 'cd "$CUBRID/log" && ls -lR'
+kubectl -n <namespace> exec <cluster>-0 -c cubrid -- sh -c 'tail -n 100 "$CUBRID/log/server/<db>.err"'
+kubectl -n <namespace> exec <cluster>-0 -c cubrid -- sh -c 'tail -n 100 "$CUBRID"/log/*applylogdb*.err'
+kubectl -n <namespace> exec <broker-pod> -c broker -- sh -c 'ls -lR "$CUBRID/log/broker"'
+```
+
+**Database Pods.** `$CUBRID/log` is a volume of its own on each member, the
+PVC `log-<cluster>-<ordinal>`: 1Gi, of the data volume's StorageClass, from the
+StatefulSet's second volume claim template `log`. The files survive a
+restart of the container and the deletion of the Pod. The PVC is deleted or
+retained with the data PVC when the cluster is deleted
+(`spec.storage.retentionPolicy`), and, like the data PVC, retained on a
+scale-down. It never holds the database: nothing the Operator decides reads
+it, and a log PVC that is missing, new or left by an earlier cluster says
+nothing about a member's data. `$CUBRID/var`, which holds the log applier's
+lock file, stays in the container (POC-21).
+
+A StatefulSet's volume claim templates cannot be changed. A cluster whose
+StatefulSet was created by an Operator without this volume keeps its CUBRID
+log files in the container, as before: they are lost when the container is
+replaced. Its StatefulSet is left as it is; only a cluster created again gets
+the log volume.
+
+The entrypoint bounds what CUBRID keeps there, before it starts anything
+(`build/instance-manager/entrypoint.sh`):
+
+- `error_log` in `cubrid.conf` gives the server's error and access logs one
+  name each, `server/<db>.err` and `server/<db>.access`, which are appended to
+  across restarts; without it each server start minute gets a new pair, and
+  CUBRID removed none of them in POC-35.
+- `error_log_size` is 10 MiB: the server's, `cub_master`'s, each log copier's
+  and applier's files and `cubrid_utility.log` are moved to one `.bak` when
+  they pass it, so each name holds about 20 MiB, and a member with two peers
+  about 160 MiB.
+- Each server start still writes an empty `server/<db>_<date>_<time>.event`
+  file; the entrypoint keeps the newest 20.
+
+POC-35 showed no bound for the `pl/` logs and each utility's own `.err` file;
+they stayed under 15 KB each there. Bounds observed: a file rotated within
+about 350 bytes past `error_log_size`, with values from 8,000 to 100,000 bytes;
+that 10 MiB rotates the same way is an extrapolation. A full log volume did not
+stop a standalone server from committing (POC-35, on `tmpfs`); with a full log
+volume on another file system, and on an HA member, this was not tried.
+
+**Broker Pods.** A Broker Pod has no persistent volume: `$CUBRID/log` is an
+`emptyDir`, which survives a restart of the container and is lost with the
+Pod. Its size limit is 256Mi, or 32 MiB plus 25 MiB for each CAS process when
+`--broker-max-appl-servers` asks for more than that holds; the kubelet evicts
+a Pod whose `emptyDir` passes its limit. Each CAS process's SQL and
+slow-query logs rotate at `SQL_LOG_MAX_SIZE` (4096 KB) and its error log at
+the Broker's `error_log_size` (4 MiB), each to one `.bak`. `ACCESS_LOG` stays
+`OFF`: its rotated copies were never removed in POC-35. The Broker's SQL logs
+hold statements and their bound values.
 
 ### Fields
 

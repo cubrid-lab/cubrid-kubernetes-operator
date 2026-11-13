@@ -781,7 +781,11 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		if sts.CreationTimestamp.IsZero() {
 			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 			sts.Spec.ServiceName = instancesServiceName(cluster.Name)
-			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{r.dataPVCTemplate(cluster)}
+			// The data claim stays the first template; the log claim is only
+			// on StatefulSets created with it (#252).
+			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
+				r.dataPVCTemplate(cluster), engineLogPVCTemplate(cluster),
+			}
 			// Parallel: no member waits for a lower ordinal to be Ready, so a
 			// full restart never starts member 0 alone and no ordinal is
 			// favoured (ADR-0001, "Pod management policy").
@@ -791,9 +795,11 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
 		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
+		spec := r.podSpec(cluster, r.imageToRun(cluster, sts))
+		mountEngineLogs(sts, &spec)
 		return setPodTemplate(sts, &sts.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec:       r.podSpec(cluster, r.imageToRun(cluster, sts)),
+			Spec:       spec,
 		})
 	})
 	if err != nil {

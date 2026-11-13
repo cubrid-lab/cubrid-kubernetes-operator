@@ -289,6 +289,27 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Preferred"))
 		})
 
+		// A log PVC holds CUBRID's log files, never the database: one left by
+		// an earlier cluster of the same name is no sign that its members
+		// hold data (#252).
+		It("does not take a log PVC left before the StatefulSet for member state", func() {
+			c := haCluster("place-old-log")
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "log-" + c.Name + "-0", Namespace: c.Namespace},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+			DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pvc))).To(Succeed()) })
+			sts := reconcileSts(c)
+			expectRequired(sts)
+			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Required"))
+		})
+
 		It("does not take the data PVC of another cluster whose name starts the same for its own", func() {
 			c := haCluster("place-prefix")
 			other := haCluster("place-prefix-1")

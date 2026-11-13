@@ -126,7 +126,9 @@ func TestPreallocatedRunNeverWritesNamespace(t *testing.T) {
 	rec := readRecord(t, f.cfg.EvidenceDir)
 	if rec.NamespaceMode != PreallocatedNamespace || rec.CleanupScope != ownedWorkloadsScope ||
 		rec.FixtureReusable == nil || *rec.FixtureReusable || rec.ResetRequired == nil || !*rec.ResetRequired ||
-		len(rec.RetainedPVCs) != 1 || rec.RetainedPVCs[0].UID != "claim-uid" {
+		// The data PVC and the log PVC are both retained (#252).
+		len(rec.RetainedPVCs) != 2 || rec.RetainedPVCs[0].UID != "claim-uid" ||
+		rec.RetainedPVCs[1].UID != "log-claim-uid" {
 		t.Fatalf("fixture reset was overstated: %+v", rec)
 	}
 	for _, obj := range []client.Object{&corev1.Namespace{}, &corev1.PersistentVolumeClaim{}} {

@@ -3103,6 +3103,28 @@ were removed afterwards; `docker ps -a`, `docker volume ls` and `docker network
 ls` listed no `poc252` resource, and the containers that were there before
 were unchanged.
 
+**Follow-up, 2026-11-13 UTC (#252, one Docker run).** The pinned
+`cubrid/cubrid:11.4@sha256:a8c8792f…` (CUBRID 11.4.7) ran the repository's
+`build/instance-manager/entrypoint.sh` of this change and an Instance Manager
+built from it, as UID 1000, as a standalone server (`CUBRID_COMPONENTS=SERVER`)
+with one Docker volume at `$CUBRID/log` and one at `/var/lib/cubrid`. The
+entrypoint wrote `error_log=/home/cubrid/CUBRID/log/server/appdb.err` and
+`error_log_size=10485760` into `cubrid.conf`. The first start (01:00) ran
+`createdb` (its own `appdb_createdb.err` stayed in `$CUBRID/log`) and the
+server wrote `server/appdb.err`, `server/appdb.access`, one 0-byte
+`server/appdb_20261113_0100.event` and `appdb_latest.*` links. The container
+was then removed and a new one started on the same volumes (01:05): the
+server appended to the same `server/appdb.err` (255 to 689 bytes, both starts
+in it), added `server/appdb_20261113_0105.event`, and every file of the first
+start was still there. `cub_master` named its file after the container's host
+name (`<hostname>_master.err`), so each new container added one; a
+StatefulSet Pod keeps its host name. Not observed here: rotation at
+10 MiB, an HA member, a Broker with its `error_log_size`, and anything on
+Kubernetes. A `docker restart` in this run kept the container's `/tmp`, where
+the stop record of `instance-manager shutdown` stays, so the restarted
+entrypoint started nothing; on Kubernetes a restarted container is a new one.
+The containers and both volumes were removed afterwards.
+
 ---
 
 ## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master or its backlog; the cause is not known**

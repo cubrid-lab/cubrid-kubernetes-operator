@@ -260,8 +260,10 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(*sts.Spec.Replicas).To(Equal(int32(3)))
 			Expect(sts.Spec.ServiceName).To(Equal(resourceName + "-instances"))
 			Expect(sts.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
-			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			// The data claim, then the claim for CUBRID's log files (#252).
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(2))
 			Expect(sts.Spec.VolumeClaimTemplates[0].Name).To(Equal("data"))
+			Expect(sts.Spec.VolumeClaimTemplates[1].Name).To(Equal("log"))
 
 			By("wiring the PVC retention policy (default Retain; scale-down always retains, #17)")
 			Expect(sts.Spec.PersistentVolumeClaimRetentionPolicy).NotTo(BeNil())

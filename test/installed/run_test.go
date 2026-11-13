@@ -226,8 +226,10 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 					return err
 				}
 				if f.cfg.NamespaceMode == PreallocatedNamespace {
-					sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{{
-						ObjectMeta: metav1.ObjectMeta{Name: dataClaimName}}}
+					// The data claim, then the claim for CUBRID's log files (#252).
+					sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
+						{ObjectMeta: metav1.ObjectMeta{Name: dataClaimName}},
+						{ObjectMeta: metav1.ObjectMeta{Name: logClaimName}}}
 					if err := c.Update(ctx, sts); err != nil {
 						return err
 					}
@@ -236,7 +238,12 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &f.cfg.StorageClass, VolumeName: "pv-smoke",
 							Resources: corev1.VolumeResourceRequirements{
 								Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")}}}}
-					if err := c.Create(ctx, claim); err != nil {
+					logClaim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: smokeLogPVCName,
+						Namespace: f.cfg.Namespace, UID: "log-claim-uid"},
+						Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &f.cfg.StorageClass, VolumeName: "pv-smoke-log",
+							Resources: corev1.VolumeResourceRequirements{
+								Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(logClaimSize)}}}}
+					if err := createAll(ctx, c, claim, logClaim); err != nil {
 						return err
 					}
 				}
@@ -246,7 +253,9 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},
 						Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
 							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}},
+							{Name: logClaimName, VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokeLogPVCName}}}},
 							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage,
 								Resources: value.Spec.Resources}}},
 						Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
@@ -335,14 +344,16 @@ func brokerTier(namespace string, cluster types.UID) []client.Object {
 }
 
 // brokerPod carries the volumes a Broker Pod has on a real cluster: the
-// Operator's Broker ConfigMap and the service-account token volume that
-// admission injects.
+// Operator's Broker ConfigMap, the emptyDir for the Broker's log files
+// (#252) and the service-account token volume that admission injects.
 func brokerPod(namespace, name string, rs *appsv1.ReplicaSet) *corev1.Pod {
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name),
 		OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", rs.Name, rs.UID)}},
 		Spec: corev1.PodSpec{Volumes: []corev1.Volume{
 			{Name: "broker-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: clusterName + "-broker-config"}}}},
+			{Name: logClaimName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+				SizeLimit: new(resource.MustParse("256Mi"))}}},
 			{Name: "kube-api-access", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
 					{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token"}},

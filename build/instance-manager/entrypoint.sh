@@ -274,6 +274,47 @@ start_cubrid() {
 # 1 ("The server was not configured for HA.", docs/poc/RESULTS.md POC-12).
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
 
+# CUBRID's own log files are under $CUBRID/log, which the operator mounts from
+# the member's log PVC on a StatefulSet created with one (#252). Their size is
+# bounded here, before anything is started (docs/poc/RESULTS.md, POC-35):
+#   - error_log gives the server's error and access logs one fixed name each,
+#     instead of a new pair per start minute that CUBRID never removed;
+#   - error_log_size rotates the server's, cub_master's, the copiers', the
+#     appliers' and cubrid_utility.log's files to one .bak each, so each name
+#     holds about 2 x 10 MiB, about 160 MiB on a member with two peers;
+#   - each server start still leaves one event log named after its start
+#     minute, and only the newest event_logs_kept are left.
+# The conf directory is in the container's own layer, so this is redone at
+# every start; a value already there is replaced, not added to.
+cubrid_log_dir="${CUBRID:-/home/cubrid/CUBRID}/log"
+error_log_size=10485760
+event_logs_kept=20
+
+set_cubrid_conf() {
+  local conf="${CUBRID:-/home/cubrid/CUBRID}/conf/cubrid.conf"
+  mkdir -p "${conf%/*}" && touch "${conf}" \
+    && sed -i -E "/^[[:space:]]*$1[[:space:]]*=/d" "${conf}" \
+    && echo "$1=$2" >> "${conf}"
+}
+
+prune_event_logs() {
+  local LC_ALL=C
+  local events=( "${cubrid_log_dir}/server/${CUBRID_DB}"_[0-9]*_[0-9]*.event )
+  [ -e "${events[0]}" ] || return 0
+  local excess=$(( ${#events[@]} - event_logs_kept ))
+  [ "${excess}" -gt 0 ] || return 0
+  if rm -f -- "${events[@]:0:${excess}}"; then
+    log "removed the ${excess} oldest event logs of '${CUBRID_DB}' in ${cubrid_log_dir}/server; the newest ${event_logs_kept} are kept"
+  else
+    log "could not remove the oldest event logs of '${CUBRID_DB}' in ${cubrid_log_dir}/server; starting all the same"
+  fi
+}
+
+set_cubrid_conf error_log "${cubrid_log_dir}/server/${CUBRID_DB}.err" \
+  && set_cubrid_conf error_log_size "${error_log_size}" \
+  || die "could not set the log file settings in CUBRID's cubrid.conf: nothing is started"
+prune_event_logs
+
 # The member lock comes before anything that creates, starts or recovers a
 # database here, and before the manager, which starts restored and
 # bootstrapped databases, is launched.

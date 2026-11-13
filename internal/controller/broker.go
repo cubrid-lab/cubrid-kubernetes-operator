@@ -297,6 +297,7 @@ func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.Cubrid
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "broker-config", MountPath: brokerConfMountPath, ReadOnly: true},
+				{Name: engineLogVolume, MountPath: engineLogMountPath},
 			},
 			SecurityContext: &corev1.SecurityContext{
 				RunAsNonRoot:             &runAsNonRoot,
@@ -311,6 +312,13 @@ func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.Cubrid
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: brokerConfigMapName(cluster.Name)},
 				},
+			},
+		}, {
+			// The Broker's logs survive a restart of its container, not the
+			// deletion of its Pod (#252).
+			Name: engineLogVolume,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: new(brokerLogSizeLimit(r.brokerMaxApplServers()))},
 			},
 		}},
 	}
