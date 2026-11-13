@@ -441,7 +441,7 @@ const (
 	reasonWriteQuarantineEnforcementFailed = "WriteQuarantineEnforcementFailed"
 )
 
-// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list
 
 // reasonReadWriteBrokersHeld is Ready's reason in a pass that keeps the
 // read-write Brokers at zero without a quarantine in its status: the pass
