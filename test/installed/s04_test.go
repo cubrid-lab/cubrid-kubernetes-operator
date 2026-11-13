@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -790,5 +791,38 @@ func TestRunS04IsBlockedWhenTheTolerationEndsBeforeAPromotion(t *testing.T) {
 	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "toleration") ||
 		s04.CleanupSucceeded == nil || !*s04.CleanupSucceeded {
 		t.Fatalf("S04 = %+v, want blocked on the toleration, with the VM powered on again", s04)
+	}
+}
+
+// A failed S04 keeps the members' and the Brokers' logs before the namespace
+// goes, as a failed LAB01 does: the first lab run that reached S04's data
+// check found acknowledged rows missing on the member that returned, and its
+// logs went with the namespace (#110).
+func TestRunS04FailureKeepsTheLogs(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 200 * time.Millisecond
+	manager := labelledPod(testFailureManager, cfg.OperatorNamespace,
+		testManagerLabels(), managerContainer)
+	f, lab := newS04Fixture(t, cfg, manager)
+	lab.promote = false
+	read := false
+	f.runner.podLogs = func(_ context.Context, namespace, pod string, _ *corev1.PodLogOptions) (io.ReadCloser, error) {
+		if len(f.deletes) != 0 {
+			t.Errorf("log of %s/%s read after the namespace was deleted", namespace, pod)
+		}
+		read = true
+		return io.NopCloser(strings.NewReader("2026-11-13T07:30:00.000000000Z a line\n")), nil
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Fail {
+		t.Fatalf("S04 = %+v, want a failure", s04)
+	}
+	if !read {
+		t.Fatal("no log was read for the failed S04")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.EvidenceDir, haScenarioID, "logs", "index.json")); err != nil {
+		t.Fatal(err)
 	}
 }

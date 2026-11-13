@@ -4562,7 +4562,10 @@ removes the namespace with them. They are in `LAB01/logs/`, in the format of
 [`logs/`](scenario-contract.md#logs), and `LAB01/logs/index.json` is in the
 scenario's evidence. LAB01 injects no fault, so `cubrid heartbeat status` runs
 here. The reading takes at most 90 seconds and never changes LAB01's result. A
-run that passed LAB01 keeps no bundle, also when a later scenario fails.
+run that passed LAB01 keeps no bundle when a later scenario fails, except S04
+power-off: its logs are read after S04's verdict, so they change nothing it
+measures, and they are what explains a member that returned without rows the
+others hold (#110). They are in `LAB01/logs/` too.
 
 ## Cleanup
 
