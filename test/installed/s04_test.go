@@ -87,6 +87,12 @@ type s04Lab struct {
 	f        *haFixture
 	stopped  map[string]bool
 	commands []string
+	// cordonedAtStop is whether the node was unschedulable when the stop
+	// command ran.
+	cordonedAtStop bool
+	// notReadyAgo, when set, dates the node's NotReady that long before the
+	// VM was powered off, as a lab whose status reads lag the outage.
+	notReadyAgo time.Duration
 	// promote is whether CUBRID promotes a slave; keepResolved keeps
 	// PrimaryResolved True while the VM is off; deletePod deletes the
 	// powered-off member's Pod; failStart fails the start command;
@@ -191,6 +197,9 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 		}
 		return "running\n", nil
 	case testVMStop:
+		if n := (&corev1.Node{}); l.f.runner.Client.Get(ctx, client.ObjectKey{Name: node}, n) == nil {
+			l.cordonedAtStop = n.Spec.Unschedulable
+		}
 		l.f.mu.Lock()
 		late := l.lateStop > 0
 		l.lateStopIssued = late
@@ -233,7 +242,11 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 	if !on {
 		status = corev1.ConditionUnknown
 	}
-	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}
+	since := metav1.Now()
+	if !on && l.notReadyAgo > 0 {
+		since = metav1.NewTime(time.Now().Add(-l.notReadyAgo))
+	}
+	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status, LastTransitionTime: since}}
 	if err := c.Status().Update(ctx, n); err != nil {
 		f.t.Error(err)
 	}
@@ -479,12 +492,18 @@ func masterNodeUnschedulable(t *testing.T, f *haFixture) bool {
 // off it, and makes the node schedulable again at its end (#110).
 func TestRunS04MovesABrokerOffTheMastersNode(t *testing.T) {
 	cfg := testS04Config(t)
-	f, _ := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	f, lab := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
 	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
 		t.Fatalf("RunHA() = %v", err)
 	}
 	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
 		t.Fatalf("S04 = %+v, want a pass after the Broker was moved", s04)
+	}
+	// Once the Brokers run elsewhere the cordon has done its work. A member
+	// Pod that Kubernetes deletes from the node while it is down must be
+	// able to come back on it: its volume is bound to that node.
+	if lab.cordonedAtStop {
+		t.Fatal("the master's node was still cordoned when its VM was powered off")
 	}
 	rec := readS04Record(t, cfg.EvidenceDir)
 	if !slices.Equal(rec.BrokersMoved, []string{testMovedBroker}) || rec.CordonedNode != testMasterNode ||
@@ -729,5 +748,47 @@ func TestClientIsNotPlacedWithoutS04(t *testing.T) {
 	h.rec.Members = []imageIdentity{{Pod: testHAPrimary, Node: testMasterNode}}
 	if affinity := h.clientPod().Spec.Affinity; affinity != nil {
 		t.Fatalf("a workload client without S04 is placed: %+v", affinity)
+	}
+}
+
+// Kubernetes deletes the member's Pod the taint toleration after the node
+// became NotReady, however late the lab's status read confirmed the VM off.
+// The run powers the VM on in time for that, before -vm-down-for is up (#110).
+func TestRunS04PowersTheVMOnInTimeForTheToleration(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMDownFor = 30 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	// A condition's time has whole seconds: the deadline is 2 to 3 seconds
+	// after the power-off, well before -vm-down-for is up.
+	lab.notReadyAgo = defaultTaintToleration - vmBootBudget - 3*time.Second
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass with the VM powered on early", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.NodeNotReadyAt == nil || rec.PowerOnBy == nil || !rec.VMDownCutShort {
+		t.Fatalf("record = NotReady %v, power on by %v, cut short %v; want the toleration's deadline used",
+			rec.NodeNotReadyAt, rec.PowerOnBy, rec.VMDownCutShort)
+	}
+	if rec.PoweredOnAt == nil || rec.PoweredOnAt.Sub(*rec.PowerOnBy) > 5*time.Second {
+		t.Fatalf("the VM was powered on at %v, after its deadline %v", rec.PoweredOnAt, rec.PowerOnBy)
+	}
+}
+
+func TestRunS04IsBlockedWhenTheTolerationEndsBeforeAPromotion(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMDownFor = 30 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.notReadyAgo = defaultTaintToleration - vmBootBudget - 300*time.Millisecond
+	lab.promote = false
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "toleration") ||
+		s04.CleanupSucceeded == nil || !*s04.CleanupSucceeded {
+		t.Fatalf("S04 = %+v, want blocked on the toleration, with the VM powered on again", s04)
 	}
 }

@@ -106,8 +106,17 @@ type s04Record struct {
 	// cordoned for that, and Uncordoned is set once it made it schedulable
 	// again; a node cordoned before the run is left as it was.
 	BrokersMoved []string `json:"brokersMoved,omitempty"`
-	CordonedNode string   `json:"cordonedNode,omitempty"`
-	Uncordoned   bool     `json:"uncordoned,omitempty"`
+	// NodeNotReadyAt is when the node became NotReady, from its Ready
+	// condition, and PowerOnBy when the VM must be powered on for its boot to
+	// end within the member Pod's taint toleration, counted from then.
+	// VMDownCutShort is set when the VM was powered on before VMDownFor was
+	// up for that, and PowerOnDue when the deadline came before the outcome.
+	NodeNotReadyAt *time.Time `json:"nodeNotReadyAt,omitempty"`
+	PowerOnBy      *time.Time `json:"powerOnBy,omitempty"`
+	VMDownCutShort bool       `json:"vmDownCutShort,omitempty"`
+	PowerOnDue     bool       `json:"powerOnDue,omitempty"`
+	CordonedNode   string     `json:"cordonedNode,omitempty"`
+	Uncordoned     bool       `json:"uncordoned,omitempty"`
 	// ClockOffsets is each node's clock minus the run's, read through a Pod
 	// on it before the fault, in seconds.
 	ClockOffsets map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
@@ -425,8 +434,9 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		if len(result.NeverEvents) > 0 {
 			return end(evidence.Fail, "%s; %s", strings.Join(result.NeverEvents, "; "), outcome.Reason)
 		}
-		if rec.VMReturnedEarly {
-			// The lab, not the product, ended the outage.
+		if rec.labEndedOutage() {
+			// The lab, not the product, ended the outage, or left too
+			// little of the toleration to observe it.
 			return end(evidence.Blocked, "%s", outcome.Reason)
 		}
 		result.Result, result.Reason = outcome.Result, outcome.Reason
@@ -626,9 +636,9 @@ func (h *haRun) prepareS04(ctx context.Context, rec *s04Record) error {
 // would not be the master's. With four Brokers on three workers one usually
 // is there, and the cluster has no field to place them (#110). The node is
 // cordoned, so their replacements run elsewhere, unless it was cordoned
-// before the run; runS04 makes it schedulable again at its end. It returns
-// once every Broker runs off the node and the Brokers and the cluster are
-// ready again.
+// before the run. It returns once every Broker runs off the node and the
+// Brokers and the cluster are ready again, after it made the node
+// schedulable again; on an error, runS04 does that at its end.
 func (h *haRun) moveBrokers(ctx context.Context, rec *s04Record) error {
 	onNode := func() ([]corev1.Pod, error) {
 		brokers := &corev1.PodList{}
@@ -688,14 +698,24 @@ func (h *haRun) moveBrokers(ctx context.Context, rec *s04Record) error {
 	if err != nil && unmet != "" {
 		return fmt.Errorf("%w within %s: %s", err, brokerMoveLimit, unmet)
 	}
-	return err
+	if err != nil || rec.CordonedNode == "" {
+		return err
+	}
+	// The cordon only steered the replacements. A member Pod that
+	// Kubernetes deletes from the node while it is down must be able to come
+	// back on it, where its volume is.
+	if err := h.uncordon(ctx, rec.CordonedNode); err != nil {
+		return fmt.Errorf("make node %s schedulable again: %w", rec.CordonedNode, err)
+	}
+	rec.Uncordoned = true
+	return nil
 }
 
-// endCordon makes the node moveBrokers cordoned schedulable again, whatever
-// S04 came to and also when the run's context has ended. A failure to do so
-// is reported in the result.
+// endCordon makes the node moveBrokers cordoned schedulable again when
+// moveBrokers did not, whatever S04 came to and also when the run's context
+// has ended. A failure to do so is reported in the result.
 func (h *haRun) endCordon(ctx context.Context, rec *s04Record, result *evidence.Scenario) {
-	if rec.CordonedNode == "" {
+	if rec.CordonedNode == "" || rec.Uncordoned {
 		return
 	}
 	err := h.uncordon(context.WithoutCancel(ctx), rec.CordonedNode)
@@ -790,17 +810,69 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 		return false, fmt.Errorf("node %s was Ready again before the run powered its VM on: the VM came back on "+
 			"its own", rec.Node)
 	}
+	due := h.powerOnDue(ctx, rec, now)
 	survivors := slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == rec.Master })
 	masters, slaves, unmet := h.survivorRoles(ctx, survivors)
 	if unmet != "" || len(masters) != 1 || len(slaves) != len(survivors)-1 {
-		return false, nil
+		return false, h.powerOnNow(rec, due)
 	}
 	if rec.PromotedAt == nil {
 		rec.NewMaster, rec.PromotedAt = masters[0], &now
 	} else if masters[0] != rec.NewMaster {
 		return false, fmt.Errorf("the master moved from %s to %s while the VM was off", rec.NewMaster, masters[0])
 	}
-	return rec.PrimaryResolvedCheckedAfterGrace && now.Sub(*rec.PoweredOffAt) >= h.cfg.VMDownFor, nil
+	if !rec.PrimaryResolvedCheckedAfterGrace {
+		return false, h.powerOnNow(rec, due)
+	}
+	if now.Sub(*rec.PoweredOffAt) >= h.cfg.VMDownFor {
+		return true, nil
+	}
+	rec.VMDownCutShort = due
+	return due, nil
+}
+
+// labEndedOutage reports whether the lab, not the product, ended the outage
+// or left too little of the toleration to observe it.
+func (rec *s04Record) labEndedOutage() bool { return rec.VMReturnedEarly || rec.PowerOnDue }
+
+// powerOnDue reports whether the VM must be powered on now: Kubernetes
+// deletes the member's Pod its taint toleration after the node became
+// NotReady, and the VM's boot takes up to vmBootBudget. It counts from the
+// node's NotReady, which a lab's status read can confirm minutes later, and
+// from the confirmation when the node's condition has no time.
+func (h *haRun) powerOnDue(ctx context.Context, rec *s04Record, now time.Time) bool {
+	if rec.NodeNotReadyAt == nil {
+		since := *rec.PoweredOffAt
+		node := &corev1.Node{}
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err == nil {
+			for _, c := range node.Status.Conditions {
+				if c.Type == corev1.NodeReady && c.Status != corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+					since = c.LastTransitionTime.UTC()
+				}
+			}
+		}
+		rec.NodeNotReadyAt = &since
+	}
+	toleration, err := time.ParseDuration(rec.TaintToleration)
+	if err != nil {
+		toleration = defaultTaintToleration
+	}
+	by := rec.NodeNotReadyAt.Add(toleration - vmBootBudget)
+	rec.PowerOnBy = &by
+	return !now.Before(by)
+}
+
+// powerOnNow ends the wait for the outcome when the VM must be powered on
+// before it was observed: the lab's commands left too little of the
+// toleration, and S04 is blocked.
+func (h *haRun) powerOnNow(rec *s04Record, due bool) error {
+	if !due {
+		return nil
+	}
+	rec.PowerOnDue = true
+	return fmt.Errorf("the VM must be powered on by %s, the member Pod's taint toleration after node %s "+
+		"became NotReady at %s less %s to boot, before the outcome was observed",
+		rec.PowerOnBy.Format(time.RFC3339), rec.Node, rec.NodeNotReadyAt.Format(time.RFC3339), vmBootBudget)
 }
 
 // watchUnobserved reads, while the member on the VM cannot be observed, the

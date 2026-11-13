@@ -402,11 +402,13 @@ What the commands print is kept only through the run's redactor.
    `CubridCluster` has no field to place them. So the run cordons the node,
    unless it was cordoned already, deletes the Broker Pods on it, and waits up
    to five minutes until none runs there and the Brokers and the cluster are
-   ready again. Otherwise S04 is blocked. The run makes a node it cordoned
-   schedulable again when S04 ends, whatever its result, and records the moved
-   Pods and the node in `S04/power-off/record.json`. A failure to make the
-   node schedulable again fails a passing S04 and is added to the reason of
-   any other result.
+   ready again. Otherwise S04 is blocked. The run then makes the node
+   schedulable again before the fault: a member Pod that Kubernetes deletes
+   from the node while it is down must be able to come back on it, where its
+   volume is. It records the moved Pods and the node in
+   `S04/power-off/record.json`. When that step fails, the run makes the node
+   schedulable when S04 ends, whatever its result; a failure to do so fails
+   a passing S04 and is added to the reason of any other result.
 3. As in S06, the run reads each node's clock and is blocked on an offset
    over a second, then starts two clients writing through `<cluster>-rw`.
 4. Right before the fault, the starting conditions must be `True`, the master
@@ -432,6 +434,17 @@ What the commands print is kept only through the run's redactor.
    least twice those 30 seconds) has passed since it was confirmed off, all
    within `-failover-limit` plus `-vm-down-for`. A master that moves again
    while the VM is off fails S04.
+
+   Kubernetes deletes the member's Pod its toleration after the node became
+   `NotReady`, and a lab's status command can confirm the VM off minutes
+   after that (2026-11-13, #110: about three minutes). So the run also
+   powers the VM on by the node's `NotReady` time, read from its `Ready`
+   condition, plus the toleration less two minutes to boot. When that time
+   comes after the promotion and the `PrimaryResolved` reading, the VM is
+   powered on before `-vm-down-for` is up, and the record says so
+   (`vmDownCutShort`). When it comes before them, the VM is powered on and
+   S04 is blocked: the lab left too little of the toleration to observe the
+   outcome.
 7. The run powers the VM on: it reads the VM's state until the status command
    prints `running`, starting the VM whenever it prints `stopped`, and reads
    again after a failed command or a state in between, within
