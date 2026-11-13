@@ -405,10 +405,16 @@ func replicationStallStep(r *haRun) {
 		Eventually(restarts, 3*time.Minute, 2*time.Second).ShouldNot(Equal(before))
 		restartedAfter := time.Since(stopped)
 
+		// The kubelet may not serve the log of a container that ended a
+		// moment ago yet: kubectl then answers "unable to retrieve container
+		// logs" although the restart happened (#851). The read is retried for
+		// a bounded time, and a failure keeps the last answer.
 		By("reading why from the log of the container that ended")
-		previous, err := r.kubectl(context.Background(), "logs", victim, "--previous", "--tail=-1")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(previous).To(ContainSubstring(`"event":"process_gone"`))
+		Eventually(func(g Gomega) {
+			previous, err := r.kubectl(context.Background(), "logs", victim, "--previous", "--tail=-1")
+			g.Expect(err).NotTo(HaveOccurred(), "the log of the container that ended: %s", previous)
+			g.Expect(previous).To(ContainSubstring(`"event":"process_gone"`))
+		}, 30*time.Second, 2*time.Second).Should(Succeed())
 
 		By("waiting for the member to be a slave again that holds everything")
 		Eventually(func(g Gomega) {
