@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -318,6 +319,46 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 	})
 
+	It("keeps the end of an exemption in memory when the status write of that pass fails", func() {
+		f := newFixture("wq-manual-lost-end")
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		conflict := false
+		faulty := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource && conflict {
+					return apierrors.NewConflict(databasev1alpha1.GroupVersion.WithResource("cubridclusters").GroupResource(),
+						f.key.Name, errors.New("the object has been modified"))
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, faulty)
+		running(r, f)
+
+		By("the first member cut off beside the second one as master, released by the administrator")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(r, f)
+		annotate(f, stored(f).Status.WriteQuarantine.ReleaseToken)
+		pass(r, f)
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(Equal([]string{f.key.Name + "-0"}))
+
+		By("the first member is the only active master in a pass whose status write fails")
+		conflict = true
+		f.answers.set(roleReports(f.key.Name, [3]string{wqMaster, wqSlave, wqSlave}))
+		pass(r, f)
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(Equal([]string{f.key.Name + "-0"}),
+			"the end of the exemption was not persisted")
+
+		By("the first member cut off again beside the second one as master: rule 2 quarantines it")
+		conflict = false
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty())
+	})
+
 	It("ignores a consumed token whose annotation could not be removed, also after a restart", func() {
 		f := newFixture("wq-manual-consumed")
 		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
@@ -421,5 +462,14 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 		Expect(stored(f).Status.LastWriteQuarantineRelease).To(BeNil())
+
+		By("repeated waits back off, but never slow the observation of a quarantine below its 3-second cadence")
+		for range 5 {
+			*f.clock = f.clock.Add(unverifiedResyncInterval)
+			res, err := lagging.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(res.RequeueAfter).To(BeNumerically("<=", unverifiedResyncInterval))
+		}
 	})
 })

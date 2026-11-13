@@ -143,9 +143,10 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 	}
 	for _, m := range sq.Members {
 		if in.Identities[m.Name] != (memberIdentity{PodUID: m.PodUID, RestartCount: m.RestartCount}) {
-			return manualReleaseInert, fmt.Sprintf("%s runs in another Pod or container start than the one recorded "+
-				"in revision %d; the quarantine is revised with a new token, which must be reviewed and set",
-				m.Name, sq.Revision), nil
+			// Unreachable while reviseQuarantine replaces the token on such a
+			// change; kept as a safety net.
+			return manualReleaseInert, "the recorded members' identities changed since the token was issued; " +
+				"the annotation is ignored", nil
 		}
 	}
 	switch {

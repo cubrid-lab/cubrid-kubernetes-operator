@@ -472,7 +472,8 @@ The Operator acts on it in the next observation of the roles:
   members were reviewed. When the stored cluster cannot be read, or holds a
   later revision than the one the observation decided from, nothing is
   accepted and the pass is retried after a second, backing off to 30
-  seconds while that repeats.
+  seconds while that repeats, but no later than the 3-second observation of a
+  quarantine in force or of an unverified member.
 - It refuses the release unless exactly one member is a fresh active master
   in that observation and the members' Pods were read. No active master, or
   two or more, is refused: a manual release does not restore a writable
@@ -519,13 +520,21 @@ restart of the Operator. It ends for good, and the usual rules apply again:
   apart), when its Pod UID or restart count differs from the recorded one, or
   when it is no longer a member: it leaves `exemptMembers`;
 - for every member at once, when any member other than the release's master
-  (an exempt member included) is seen as an active master, or the release's
-  master is seen as an active master in another Pod or container start:
-  `exemptMembers` is cleared. An observation with no active master changes
-  nothing;
+  (an exempt member included) is seen as an active master, the release's
+  master is seen as an active master in another Pod or container start, or
+  the release's master gives a fresh, readable answer that does not claim an
+  active master (it gave up the role): `exemptMembers` is cleared. An
+  observation with no active master and no such answer, as when the master
+  cannot be reached, changes nothing;
 - with the next release, automatic or manual: it replaces
   `lastWriteQuarantineRelease`, so a second manual release replaces the
   first one's exemptions with its own.
+
+The persisted status is the only source that grants the exemption. An end is
+also kept in the Operator's memory, which can only end an exemption: if the
+status write of the pass that ended it fails, the next pass still treats it as
+ended and writes it again. An Operator restart before that write succeeds
+loses the end, and the exemption applies until the end is observed anew.
 
 Each end is logged (`write_quarantine_exemption_ended`) and reported once
 with a Normal Event `WriteQuarantineExemptionEnded` naming the members and

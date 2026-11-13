@@ -563,8 +563,14 @@ seconds apart, the same confirmation as for an unverified member.
   member is verified, its Pod UID or restart count changes, or it is seen as
   an active master. It ends for all members when any other member, or the
   release's master in another Pod or container start, is seen as an active
-  master. Rule 1 (two or more active masters) always applies. The exemption
-  is read from the persisted status, never from Operator memory.
+  master, or when the release's master gives a fresh, readable answer that
+  does not claim an active master; a pass without an answer from it changes
+  nothing. Rule 1 (two or more active masters) always applies. The
+  exemption is granted only from the persisted status; Operator memory can
+  only end it, so an end whose status write failed still holds. Limit: an
+  Operator restart between an end and the status write that persists it
+  loses that end, and the exemption applies again until the end is observed
+  anew.
 - **Expanded uncertainty:** if a new member becomes unverified, a known
   affected member is removed, or an affected member's identity changes,
   reject prior consent, persist the revised set and **rotate its

@@ -400,8 +400,8 @@ func TestDecideManualReleaseChangedIdentityInert(t *testing.T) {
 	verdict, msg, _ := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
 		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q1),
 		Identities: map[string]memberIdentity{q0: {PodUID: uid0, RestartCount: 1}, q1: {PodUID: uid1}}})
-	if verdict != manualReleaseInert || !strings.Contains(msg, q0) {
-		t.Fatalf("verdict %q (%s), want inert naming %s", verdict, msg, q0)
+	if verdict != manualReleaseInert || !strings.Contains(msg, "identities changed since the token was issued") {
+		t.Fatalf("verdict %q (%s), want inert on changed identities", verdict, msg)
 	}
 }
 
@@ -416,5 +416,45 @@ func TestReleaseWaitRetryBacksOff(t *testing.T) {
 	}
 	if got := releaseWaitRetry(100); got != 30*time.Second {
 		t.Errorf("releaseWaitRetry(100) = %s", got)
+	}
+}
+
+// The release's master answering, freshly and readably, without claiming an
+// active master gave up the role: the exemption ends for good, and a later
+// cut-off of the accepted member beside it as master again is quarantined.
+// A master that does not answer changes nothing
+// (TestManualReleaseExemptionKeptWithoutActiveMaster).
+func TestManualReleaseExemptionEndsWhenTheMasterGivesUp(t *testing.T) {
+	s := exemptScenario(t)
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: slaveAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine != nil || len(s.lastRelease.ExemptMembers) != 0 {
+		t.Fatalf("quarantine %+v, exempt members %v; want none and none", d.Quarantine, s.lastRelease.ExemptMembers)
+	}
+	now := testNow.Add(unverifiedResyncInterval)
+	if d := s.pass(now, cutOff(now)); d.Quarantine == nil {
+		t.Fatalf("no quarantine for %s cut off after the release's master gave up the role", q0)
+	}
+}
+
+// The back-off of a release annotation that cannot be applied never slows
+// the observation of a quarantine in force, or of an unverified member,
+// below its 3-second cadence.
+func TestQuarantineRetryKeepsTheCadence(t *testing.T) {
+	for _, tc := range []struct {
+		released bool
+		release  time.Duration
+		watchful bool
+		want     time.Duration
+	}{
+		{released: true, release: 30 * time.Second, watchful: true, want: time.Second},
+		{release: 30 * time.Second, watchful: true, want: unverifiedResyncInterval},
+		{release: time.Second, watchful: true, want: time.Second},
+		{release: 30 * time.Second, want: 30 * time.Second},
+		{watchful: true, want: unverifiedResyncInterval},
+		{},
+	} {
+		if got := quarantineRetry(tc.released, tc.release, tc.watchful); got != tc.want {
+			t.Errorf("quarantineRetry(%v, %s, %v) = %s, want %s", tc.released, tc.release, tc.watchful, got, tc.want)
+		}
 	}
 }
