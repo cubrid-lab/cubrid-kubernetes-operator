@@ -192,6 +192,11 @@ required by #125/#127.
   authoritative-source and destructive-target decision. Do not assume
   rejoin is safe because the member reports `slave`; S09/S10 and #116–#118
   define the required evidence. Never destroy the healthy source's volume.
+- **HA cluster recreated over retained volumes:** the bootstrap stops with
+  `MemberHoldsDatabase` and the Operator does not take the members over
+  (#798). [Recovering data from the retained volumes of a recreated HA
+  cluster](retained-volume-recovery.md) exports one volume and loads it into
+  a new cluster under another name; it was run once on the VM lab.
 - **Node drain:** the PDB limits voluntary Kubernetes Evictions only,
   not VM failure, `kubectl delete pod`, or native CUBRID elections.
   Check member placement, PDBs, and `HAReady` before a planned drain.
