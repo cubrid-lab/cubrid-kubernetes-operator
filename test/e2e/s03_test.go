@@ -576,6 +576,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		"get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
+	By("checking that the manager's metrics report the new master as the status does (#253)")
+	r.metricsFollowStatus("S03/"+variant+"/metrics.txt", afterFailover(master, newMaster))
 
 	By("checking that the members the fault did not touch kept their Pods and containers")
 	// A read that fails is retried; one that keeps failing counts as changed.
