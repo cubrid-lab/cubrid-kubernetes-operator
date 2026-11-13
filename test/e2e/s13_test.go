@@ -403,9 +403,18 @@ func s13Run(ctx context.Context, variant string) {
 			sqlcheck.RowCheck(s13Marker))
 		return err
 	}
+	// The log of a container that ended a moment ago may not be served yet
+	// (#851), so the read is retried for a bounded time.
 	startVerdict := func(recreated bool) (evidence.Result, string) {
-		log, complete, err := s13ContainerLog(ctx, ns, pod)
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "could not read the member's log")
+		var (
+			log      string
+			complete bool
+		)
+		EventuallyWithOffset(1, func() error {
+			var err error
+			log, complete, err = s13ContainerLog(ctx, ns, pod)
+			return err
+		}, 30*time.Second, 2*time.Second).Should(Succeed(), "could not read the member's log")
 		return s13StartVerdict(log, complete, s13Database, recreated)
 	}
 
