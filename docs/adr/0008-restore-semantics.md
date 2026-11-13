@@ -251,6 +251,22 @@ when every staged file matches the manifest does the restore go on, and
 `restoredb` reads those files. The manifest itself is not signed: this binds
 the restored bytes to the manifest, not the manifest to its author.
 
+What the restore reads from the bucket is bounded (#842), so a wrong or
+hostile store cannot fill the Instance Manager's memory or the staging volume
+before the checks above reject it. `manifest.json` is read through a reader
+that stops one byte past 16 MiB (`MaxManifestBytes`), and a longer manifest is
+refused before it is decoded; a backup manifest holds a few hundred bytes per
+object. A manifest is refused before any object is downloaded when it lists
+more than 10,000 objects (`MaxManifestObjects`; a real backup lists tens),
+an object with a negative size, sizes whose sum does not fit in a signed
+64-bit integer, or a checksum that is not a lowercase hex SHA-256. Each object
+is read and written up to one byte more than the size its entry declares: a
+longer body fails at that byte, the rest of it is not read, its incomplete
+staged file is removed and `restoredb` does not run. Artifact verification
+(`VerifyArtifact`) applies the same bounds. There is no fixed limit on the
+size of an object or of the whole backup beyond what the manifest declares;
+the staging volume must hold the declared total.
+
 Resuming an interrupted restore (#120, with the marker of #107): the restore's
 key carries the attempt number, so the operator finds a running restore again
 after its own restart. A restore that ends `Failed`, which includes one cut

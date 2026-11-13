@@ -448,7 +448,7 @@ func hasExistingDB(targetDir, database string) bool {
 // the staging directory, so neither a key nor a symbolic link inside the
 // directory can place a file outside it.
 func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string, exp ManifestExpectation, stagingDir string) (BackupManifest, error) {
-	data, err := readObject(ctx, store, bucket, path.Join(prefix, ManifestObjectName))
+	data, err := readObject(ctx, store, bucket, path.Join(prefix, ManifestObjectName), MaxManifestBytes)
 	if err != nil {
 		return BackupManifest{}, fmt.Errorf("read manifest: %w", err)
 	}
@@ -481,7 +481,10 @@ func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string
 }
 
 // stageObject downloads one object into the staging root and checks what was
-// written against the manifest entry.
+// written against the manifest entry. It writes at most one byte more than the
+// entry's size: a longer body fails as soon as that byte arrives, the rest of
+// it is not read, and the incomplete file is removed, so a store that returns
+// more than the manifest declares cannot fill the staging volume.
 func stageObject(ctx context.Context, store ObjectStore, bucket, prefix string, obj ManifestObject, root *os.Root) (err error) {
 	name := filepath.FromSlash(obj.Key)
 	if err := root.MkdirAll(filepath.Dir(name), 0o750); err != nil {
@@ -504,9 +507,12 @@ func stageObject(ctx context.Context, store ObjectStore, bucket, prefix string, 
 	}()
 
 	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(f, hash), r)
+	size, err := io.Copy(io.MultiWriter(f, hash), io.LimitReader(r, beyond(obj.SizeBytes)))
 	if err != nil {
 		return fmt.Errorf("write staged %s: %w", obj.Key, err)
+	}
+	if size > obj.SizeBytes {
+		return fmt.Errorf("object %s is larger than its manifest size %d", obj.Key, obj.SizeBytes)
 	}
 	if size != obj.SizeBytes {
 		return fmt.Errorf("object %s size %d does not match manifest %d", obj.Key, size, obj.SizeBytes)

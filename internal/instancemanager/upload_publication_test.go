@@ -167,7 +167,7 @@ func testConcurrentUploads(t *testing.T, objects ObjectStore, bucket string) {
 		if m.OperationID != "op-reused-after-store-loss" {
 			t.Fatalf("operation identity changed: %q", m.OperationID)
 		}
-		data, err := readObject(ctx, objects, bucket, path.Join(prefix, m.Objects[0].Key))
+		data, err := readObject(ctx, objects, bucket, path.Join(prefix, m.Objects[0].Key), m.Objects[0].SizeBytes)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -322,7 +322,7 @@ func testLostManifestResponse(t *testing.T, objects ObjectStore, bucket string) 
 	if lost.published == "" {
 		t.Fatal("failure did not occur after manifest storage")
 	}
-	original, err := readObject(context.Background(), objects, bucket, lost.published)
+	original, err := readObject(context.Background(), objects, bucket, lost.published, MaxManifestBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func testLostManifestResponse(t *testing.T, objects ObjectStore, bucket string) 
 	if _, err := UploadBackup(context.Background(), objects, spec); err != nil {
 		t.Fatal(err)
 	}
-	after, err := readObject(context.Background(), objects, bucket, lost.published)
+	after, err := readObject(context.Background(), objects, bucket, lost.published, MaxManifestBytes)
 	if err != nil || !bytes.Equal(original, after) {
 		t.Fatalf("ambiguous completion changed on retry: %v", err)
 	}
