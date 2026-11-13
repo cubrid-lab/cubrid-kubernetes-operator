@@ -24,7 +24,7 @@ evidence of a real VM failure or a safe manual split-brain recovery.
 | Managed write quarantine | `RoutingReady=False` reports uncertainty; **RW Service endpoints are not withheld today** | Policy decision, implementation #113, new/existing connection evidence #115 |
 | Backup and restore into a **new** cluster | S11/S12 installed-lab evidence, with documented unsuccessful/blocked variants | Repeat exact candidate-specific source, artifact, failure and data checks (#121/#126/#127) |
 | Retained-volume rejoin and PVC-loss rebuild | Design in ADR-0006 and partial lab observations | Preserve data, complete S09/S10 and independent recovery procedure (#116–#118) |
-| Voluntary node drain | PDB and Broker placement objects implemented; envtest checks | Real-node drain with SQL/replication evidence (#614); ADR-0012 policy approval (#613) |
+| Voluntary node drain | [Accepted policy](../architecture/voluntary-disruption.md); PDB and Broker placement objects implemented with envtest coverage | Real-node drain with SQL, replication and Broker-connection evidence on the selected candidate (#614) |
 
 The status above is a **navigation summary**, not certification. The
 [ROADMAP inventory](../../ROADMAP.md#implementation-and-validation-inventory)
@@ -141,9 +141,15 @@ to steer Services: Kubernetes selects Broker Pods; **CUBRID RW Brokers**
 use native HA information to locate a writable server.
 
 When `PrimaryResolved` is incomplete or conflicting, the Operator does
-not choose/promote/demote a member. Currently `RoutingReady=False`
-does **not** close the managed write endpoint. On suspect split brain:
-record role observations on each side and independent SQL evidence;
+not choose/promote/demote a member. A `RoutingReady=False` Condition alone
+does **not** prove that the managed write path is closed. Check the selected
+candidate's implementation against the
+[accepted quarantine policy](../adr/0005-failover-split-brain.md#8-write-path-quarantine-policy-113),
+then observe the actual RW Broker Pods, Service endpoints and new/existing
+SQL sessions. Report unavailable observations as unknown; a change to a
+Condition or desired replica count is not enforcement evidence.
+On suspect split brain, record role observations on each side and independent
+SQL evidence;
 preserve all PVCs/logs; isolate or rebuild nothing automatically.
 Escalate the decision to a CUBRID-qualified maintainer with an explicit
 data-preservation plan. A recovered native `slave` role does not itself
@@ -156,7 +162,18 @@ managed RW Broker; existing sessions may persist.
 delete PVCs, apply emergency `/v1/shutdown`, or treat a successful
 `kubectl rollout` as proof of data consistency.
 
-## 4. Backup and restore — non-destructive planning checklist
+## 4. Backup and restore — planning and failure handling
+
+Use [the backup and restore operation guide](backup-restore.md) to inspect
+recorded operation identities, distinguish automatic retries from terminal
+failures, and collect evidence before a manual recovery decision. Its
+commands are read-only; its procedures still require candidate-specific
+validation and independent reproduction.
+
+The historical restore qualification in #121 is complete. Verification of
+the selected candidate's source, artifact, failure and data results belongs
+to #88/#89/#126, followed by independent procedure reproduction in #127.
+Check whether historical evidence applies to that candidate before reusing it.
 
 - `CubridBackup` is **single-shot and per database**. The sample
   [backup resource](../../config/samples/database_v1alpha1_cubridbackup.yaml)
@@ -164,19 +181,20 @@ delete PVCs, apply emergency `/v1/shutdown`, or treat a successful
   **not self-contained**: configure a reachable, credentialed S3-compatible
   store in `CubridCluster.spec.objectStorage`, a real destination bucket
   and a namespaced Secret first. No credentials belong in Git.
-- Confirm a terminal `Completed` backup, manifest URI, target/role,
+- Confirm a terminal `status.phase: Completed` backup, manifest URI, target/role,
   object size and checksums against the scenario's raw evidence. A
-  `Completed` Condition alone cannot establish that a *restore* succeeds.
+  `Completed` phase alone cannot establish that a *restore* succeeds.
   Failed/aborted attempts must not become release evidence of a pass.
 - Restore is a **bootstrap mode of a NEW** `CubridCluster` using
   `spec.bootstrap.recovery.manifestUri`. There is no supported
   in-place restore or unrestricted existing-PVC overwrite in
   `v1alpha1`; do not restore over an active database.
-- Use the candidate-specific [S11/S12 acceptance contract](../testing/scenario-contract.md)
+- Use the candidate-specific [backup and restore acceptance contract](../testing/scenario-contract.md)
   and [installed HA runner](../testing/installed-ha.md) for exact
-  verification and known blocked variants. Track unfinished/unreadable
-  operations and staging cleanup per [observability](../observability.md).
-  Only a verified byte/row comparison establishes restored data identity.
+  verification and known blocked variants. Preserve failed or unreadable
+  operation records and partial staging evidence; do not remove them to
+  make a retry possible. Compare the verified artifact and restored rows,
+  then confirm that new acknowledged writes converge on the required members.
 
 No backup, restore or recovery has been executed as part of writing
 this guide. An actionable, independently reproduced runbook is still
@@ -199,6 +217,7 @@ required by #125/#127.
   a new cluster under another name; it was run once on the VM lab.
 - **Node drain:** the PDB limits voluntary Kubernetes Evictions only,
   not VM failure, `kubectl delete pod`, or native CUBRID elections.
+  Follow the [accepted maintenance policy and topology limits](voluntary-disruption.md).
   Check member placement, PDBs, and `HAReady` before a planned drain.
   The actual node-drain/SQL behavior **has not been validated** (#614).
 - **Uninstall/deletion:** distinguish deletion of controller resources
