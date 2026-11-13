@@ -2120,19 +2120,44 @@ it needs more.
   the Kubernetes node becomes `NotReady`.
 - **CUBRID is expected to** (Manual; POC-3 observed this for a killed
   container only, not for a VM): promote a slave.
+- **Fencing step** (ADR-0005 section 8, decided in PR #793): once the
+  hypervisor reports the VM powered off, the run records that proof and adds
+  the taint `node.kubernetes.io/out-of-service:NoExecute` to its Node.
+  Kubernetes then force-deletes the member's Pod, and the StatefulSet
+  recreates it with a new UID; with a node-local volume it stays `Pending`.
+- **Return step:** after the VM is back and its Node is `Ready`, the run
+  follows ADR-0005's return-to-service procedure. It sets
+  `database.cubrid.io/return-to-service` and waits for the barrier to be
+  `enforced`. Then it removes the taint, waits for the release, and removes
+  the annotation.
 - **The Operator must** (ADR-0005): not treat the node's `NotReady` state as
-  proof that the database is down; not delete or evict the Pod as a way of
-  fencing; keep `PrimaryResolved` not `True` while the old master cannot be
-  observed.
-- **Expected:** existing sessions to the surviving master keep working. What
-  new connections through the read-write endpoint experience while the old
-  master is unobservable is the open question Q2 below.
-- **Must never happen:** the Operator promoting a member; `PrimaryResolved=True`
-  while a member is unobserved; an `acknowledged` operation missing after the
-  VM returns and the cluster has converged.
+  proof that the database is down; not delete or evict the Pod itself; keep
+  `PrimaryResolved` not `True` while the old master cannot be observed; keep
+  the read-write path quarantined from the fault until the taint, and again
+  from the barrier until the returning member is verified.
+- **Expected:** existing sessions to the surviving master keep working.
+  Writes through the read-write endpoint are refused until the taint, and
+  acknowledged within `failover_limit` of it.
+- **Three intervals:**
+  - **fault to taint:** reported, without a limit. It depends on the person
+    or automation that fences.
+  - **taint to the first acknowledged write through `-rw`:** judged
+    against `failover_limit`.
+  - **return**, from setting the annotation to the release: reported,
+    without a limit until it has been measured.
+- **Must never happen:** the Operator promoting a member; the Operator
+  deleting or evicting a Pod (the force-deletion after the taint is
+  Kubernetes', and the evidence must show it came from the taint);
+  `PrimaryResolved=True` while a member is unobserved; the taint removed
+  before the barrier is `enforced`; an `acknowledged` operation missing after
+  the VM returns and the cluster has converged.
 - **Data check:** all data rules after the VM has been powered on again and
   the member has rejoined.
-- **Limits:** `failover_limit`, `vm_return_limit`, `stable_period`.
+- **Limits:** `failover_limit` (from the taint), `vm_return_limit`,
+  `stable_period`.
+- **Implementation:** the installed harness (`test/installed/`) does not yet
+  add or remove the taint, or run the return procedure. That follows the
+  quarantine itself (#113) and its VM-lab validation (#115).
 - **Source note:** no outside test was read for this scenario; the contract
   comes from ADR-0005 alone.
 

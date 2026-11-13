@@ -3,16 +3,17 @@
 ## Status
 
 Accepted (POC-gated) for the original responsibility split — tracked in #5.
-**Section 8 is a proposed amendment, not accepted or implemented.** On
-2026-11-12 the maintainer chose an out-of-service taint as an external
-fencing assertion for S04 (PR #793); the remaining freshness and manual
-release questions are open. No proposal on this branch authorizes an
-unsafe shortcut or a change to the scenario contract without review.
+**Section 8, the write-path quarantine policy, is accepted for v0.1** as
+decided by the maintainers in PR #793 (2026-11-12 and 2026-11-13 UTC):
+the out-of-service taint counts as an external fence while it is present,
+and a fenced member's return to service is a manual maintenance step with a
+durable write barrier. Accepting the policy is not evidence that it works:
+the Operator does not enforce it yet (#113), and its SQL behavior on real
+faults is unmeasured (#115). Until both are done, no release claims managed
+write isolation.
 
 The Operator still reports `RoutingReady=False` without enforcing a
-write-path quarantine on `-rw` (#113/#115). The existing responsibility
-split and conservative fencing posture remain accepted; the proposed
-quarantine requires additional code and real SQL/fault evidence.
+write-path quarantine on `-rw` (#113/#115).
 
 ## Context
 
@@ -321,8 +322,8 @@ The records are in `docs/poc/RESULTS.md`.
   not linearizable absence of a DB process; status may be delayed and a
   container may restart between observations. A taint that disappears
   before the member freshly answers as a non-master does not establish
-  safety. The final evidence/freshness predicate needs maintainer review
-  and controlled fault tests before implementation.
+  safety. #115 tests these predicates under controlled faults; a failure
+  there tightens them (Revisit When).
 - **Last resolved primary:** a new status field,
   `status.lastResolvedPrimary`, with the time it was set. #113 adds it. It
   is set to the member `currentPrimary` names on every pass that reports
@@ -377,7 +378,7 @@ seconds apart, the same confirmation as for an unverified member.
   isolate or call `/v1/shutdown` on any member, changes no CUBRID role, and
   chooses no winner.
 
-**Persistence and fail-closed reconciliation (proposed).**
+**Persistence and fail-closed reconciliation.**
 
 - Store a **quarantine generation ID**, a cryptographically random nonce of
   at least 128 bits scoped to the `CubridCluster` UID, alongside the
@@ -431,31 +432,45 @@ seconds apart, the same confirmation as for an unverified member.
   a disappearing taint, inconsistent Node mapping, stale/failed role
   answer, changed member, new uncertainty, conflicting active master or
   manual-only escalation resets or forbids automatic release.
-- **S04 taint-assisted release is not the same as primary resolution.**
-  This proposed transition permits RW Broker availability **while a
-  powered-off former primary cannot answer**. Keep `PrimaryResolved`,
-  `HAReady`, and `RoutingReady` faithful to actual observations;
-  an administrative taint must not fabricate DB health or a known
-  client route. Report the actual reason that quarantine was lifted and
-  verify post-fence acknowledged SQL writes separately from Conditions.
-  **Removing the taint while the RW tier is open is not a safe
-  failover/rejoin protocol.** A returning old database process may start
-  accepting writes **before the next Operator reconcile**; re-quarantine
-  after that observation cannot undo an acknowledged write. A safe
-  return requires a separate, durable **pre-untaint / pre-restart
-  maintenance transition** that verifies the managed RW path is already
-  closed (and stays closed across concurrent normal reconciliation and
-  Operator restarts) **before** an old primary can run without the
-  external fence. Then remove the taint and bring the member up, verify
-  fresh non-master role and replica data/catch-up (or stop for manual
-  divergent-data reconciliation), and only then release the maintained
-  RW block. An ad hoc `kubectl scale` of Broker Pods is not a durable
-  barrier because regular Broker reconciliation may scale them back up.
-  If a durable transition is not implementable in v0.1, require a
-  strictly coordinated manual **external** write fence with evidence
-  of continued enforcement, and do not advertise automatic safe S04
-  return. The intermediate readiness/metrics and return-to-service
-  semantics require explicit maintainer approval and SQL fault tests.
+- **Taint-assisted release is not primary resolution.** Release through
+  option (b) opens the read-write Brokers while a powered-off former primary
+  cannot answer. `PrimaryResolved`, `HAReady` and `RoutingReady` keep
+  reporting what was actually observed; the taint does not make them `True`.
+  The status records that the quarantine was released on a fence assertion,
+  and acknowledged SQL after the fence is checked separately from the
+  Conditions (#115).
+- **Return to service: a manual maintenance step (v0.1).** Removing the
+  taint lets the old member's database start again, possibly before the next
+  pass; re-quarantining after that cannot undo a write it acknowledged. So
+  the read-write path is closed *before* the taint is removed, by a barrier
+  the Operator keeps across its own restarts:
+
+  | Step | Who | What | Moves on when |
+  |---|---|---|---|
+  | 1. Request | administrator | sets the annotation `database.cubrid.io/return-to-service` to the returning member's name | the Operator accepts it |
+  | 2. Enforcing | Operator | starts a quarantine with reason `WriteQuarantinedMemberReturning`, recording the member and the active master M; scales the read-write Brokers to zero as for any quarantine | no read-write Broker Pod exists and the `-rw` EndpointSlices are empty |
+  | 3. Enforced | Operator | records `enforced` with the UTC time in status and a Warning event | the administrator sees `enforced` |
+  | 4. Untaint | administrator | removes the out-of-service taint, only after step 3; the member's Pod starts and rejoins | the Operator observes the member |
+  | 5. Verified | Operator | needs two fresh, identity-matched answers from the returning member, at least 10 s apart, that do not claim an active master, with M still the only active master and no other unverified member | both answers seen |
+  | 6. Released | Operator | releases the quarantine, records the time and the member, scales the read-write Brokers back | the administrator removes the annotation |
+
+  - **The barrier holds by itself.** Steps 2 to 5 are an ordinary
+    persisted quarantine: it is enforced before Broker reconciliation on
+    every pass, including the first after an Operator restart, and nothing
+    but step 5 or a manual release ends it.
+  - **Escalation:** if the returning member claims an active master, or
+    another active master appears, the quarantine becomes manual-only with
+    reason `WriteQuarantinedMasterChanged`. Divergent data is then a
+    person's decision (section 6).
+  - **One use:** an annotation whose return was released is ignored until
+    its value changes, so a left-over annotation does not close the path
+    again or authorize a later return.
+  - **Taint removed without the barrier:** the member becomes unverified
+    and rule 2 quarantines again on the next pass. The writes the returning
+    database may acknowledge before that pass are not protected. The
+    procedure forbids this order, and the Operator cannot prevent it.
+  - **Later:** an automatic handshake can replace steps 1 to 3 once S04
+    measures the rejoin on the VM lab.
 - **Manual: risk acceptance, not a verified fence.** Any API actor allowed
   to update `CubridCluster` could set
   `database.cubrid.io/release-write-quarantine`; restrict that RBAC
@@ -477,19 +492,16 @@ seconds apart, the same confirmation as for an unverified member.
   current set revision never authorizes future members.
 - **No active master:** do **not** infer that manual release restores a
   writable primary. POC-60 shows RW Brokers may still serve stale reads
-  from a standby. The conservative proposal is to keep RW closed unless
+  from a standby. The path stays closed unless
   one active master is verified; an exceptional zero-master override is
   a **separate, unresolved maintainer decision**, with distinct audit and
   degraded-read behavior if explicitly authorized.
-- **Out-of-service taint:** this assertion alone does not pick a primary
-  or authorize write traffic. **Its removal must be coordinated *before*
-  it happens**, under the durable return-to-service quarantine above;
-  waiting for the next reconciliation after removal is insufficient to
-  protect writes already acknowledged in the gap. With a node-local PVC,
-  a force-deleted Pod may stay Pending until the taint is removed.
-  Neither the existing implementation nor this proposed section contains
-  the required maintenance barrier yet: **the safe return procedure
-  remains a release-blocking design decision**, not an implemented claim.
+- **Out-of-service taint:** the assertion alone picks no primary and
+  authorizes no writes; it only lets option (b) treat its member as fenced.
+  It is removed only through the return-to-service procedure above. With a
+  node-local PVC, the Pod Kubernetes force-deleted stays Pending until the
+  taint is removed (a check on kind v1.37, PR #793; not yet on the lab's
+  k3s).
 
 No automatic winner choice, member deletion, filesystem overwrite or
 database emergency fencing is part of this managed write-path policy.
@@ -529,28 +541,16 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
     stays within the 30 s `failover_limit` is not known: the Instance
     Manager's answers during a rejoin have not been sampled pass by pass.
     #113 measures S03 before any claim.
-  - **Master VM power-off (S04):** as decided by the maintainer in
-    PR #793, an authorized actor confirms that the targeted worker VM is
-    actually stopped, then adds
-    `node.kubernetes.io/out-of-service:NoExecute`. They remove the taint
-    only once the VM returns and its Node is verified Ready. This is not a
-    self-proving fence: the out-of-band proof and actor must be recorded.
-    Kubernetes can force-delete the original Pod and recreate it with a
-    different UID; distinguish this from Operator deletion. Node-local
-    storage may keep the replacement Pending until the taint is removed.
-    **Node Ready is not CUBRID rejoin safety:** before that removal (or
-    before an old database process can restart), the managed RW route
-    must already be durably quarantined or an equivalently enforced
-    external write fence must be proven, followed by safe non-master
-    rejoin/catch-up validation. The proposed fence-assisted recovery
-    covers the powered-off interval only; it does **not** yet establish
-    a safe return to normal service.
-    **Report two separate intervals**: VM fault -> observed SQL recovery
-    (possibly unbounded until external action), and taint added -> SQL
-    recovery (maintainer's proposed 30 s post-fence target). This requires
-    an explicit amendment of the S04 scenario contract; changing the
-    measurement origin must not hide the pre-fence outage. The one Kind
-    experiment does not establish this result on k3s/VMs.
+  - **Master VM power-off (S04):** an authorized actor confirms that the
+    worker VM is actually stopped, records that proof, then adds
+    `node.kubernetes.io/out-of-service:NoExecute`. Kubernetes then
+    force-deletes the member's Pod and the StatefulSet recreates it with a
+    new UID; that deletion is Kubernetes', not the Operator's. Writes through
+    `-rw` are refused from the fault until option (b) releases the
+    quarantine after the taint. S04 reports three intervals: fault to taint
+    (depends on the actor, no limit), taint to acknowledged SQL (judged
+    against `failover_limit`), and the return of the member (steps 1 to 6
+    above, reported without a limit until it is measured).
 - **No opt-out field in v1alpha1.**
 
 ## Consequences
@@ -575,10 +575,11 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
   unverified, plus at least 10 s and the time to recreate the read-write
   Brokers.
 - **Failover limits are at stake.** S03 remains subject to its accepted
-  `failover_limit` until a fault run proves it. The S04 proposal adds a
-  **post-fence** 30 s metric without hiding the total VM-fault-to-SQL
-  outage. The scenario contract must be explicitly updated and approved;
-  neither interval is yet validated on the VM lab.
+  `failover_limit` until a fault run proves it. S04 judges taint-to-SQL
+  against `failover_limit` and reports the fault-to-taint interval and the
+  return separately, so the whole outage stays visible
+  (`docs/testing/scenario-contract.md`). Neither interval is validated on
+  the VM lab yet.
 - **A double-master reading needs a person.** A quarantine after two
   active masters, or after the master changed during one, stays until an
   administrator releases it. A short double-master reading can therefore
@@ -658,7 +659,7 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
     - **Measured in #115:** that already-open sessions end, and the length
       of the detection window.
 
-### Quarantine edge-case acceptance tests (proposed, not executed)
+### Quarantine edge-case acceptance tests (accepted, not yet executed)
 
 | Fault or race | Required assertion |
 | --- | --- |
@@ -668,7 +669,9 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 | Non-master response then Pod UID change, token rejection or role promotion | Stale evidence never releases quarantine |
 | Fresh Node Lease, stale Pod status, live process | No invented fencing proof, quarantine stays |
 | Verified VM off, out-of-service taint, Pod force-delete and node-local PVC | With one stable active master and authorized taint present through both release passes, prove **automatic fence-assisted release**, no invented role/health, post-fence SQL success, and preserved PVC data |
-| Taint added too early or removed while old process could run | Fail the safety preflight; **prove a durable RW return-maintenance barrier was enforced before removing the taint**, not only a next-pass re-quarantine |
+| Taint added too early | The run's preflight fails; no release is claimed on that taint |
+| Return to service (steps 1 to 6) | The barrier is `enforced`, with no read-write Broker Pod and empty `-rw` EndpointSlices, before the taint is removed; it survives an Operator restart between steps 2 and 5; release needs two fresh non-master answers from the returning member; a master claim makes it manual-only; a released annotation does not close the path again |
+| Taint removed without the barrier | Rule 2 quarantines on the next pass; the unprotected interval is measured and reported, not claimed safe |
 | No active master (POC-60) | No false write readiness; emergency override remains a maintainer decision |
 | Two quarantines begin within one second, old annotation persists | Unique tokens; replay does not reopen RW |
 | Cluster deleted and recreated with same name but new UID | Old annotation/token cannot release another cluster |
@@ -678,16 +681,15 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 | Operator absent, direct member and unmanaged Broker access | State explicitly which paths are **not** protected |
 | Pod deletion (S03) and real VM shutdown (S04) | Record fault/detection/fence/SQL timestamps against the accepted contract, separately |
 
-**Open maintainer decisions before #113 implementation:** approve or
-reject **taint-assisted automatic release**, the **durable
-pre-untaint/pre-restart RW maintenance barrier and verified return
-procedure** (without relying on a later reconcile), its intermediate
-readiness/metrics semantics, identity and taint evidence freshness,
-no-active-master emergency release, the **quarantine generation plus
-one-time member-set approval-token** status/audit schema, and the S04
-fault-to-SQL versus taint-to-SQL scenario-contract amendment. None is
-approved by a docs-only passing workflow. #115 must retain the raw
-SQL/fault evidence and rejected attempts, not infer safety from Conditions.
+**Decided in PR #793 (v0.1):** taint-assisted automatic release (option
+(b)), the manual return-to-service procedure with its durable barrier, the
+random quarantine generation ID with a one-time approval token bound to the
+member set, and the S04 contract change to three separate intervals.
+**Still open, and not needed for v0.1:** an emergency release with no active
+master (the path stays closed), and an automatic return handshake. The exact
+status and annotation schema is #113's to propose in its PR. None of this is
+shown by a docs-only passing workflow: #115 must keep the raw SQL and fault
+evidence, including rejected attempts, and not infer safety from Conditions.
 
 ## Revisit When
 

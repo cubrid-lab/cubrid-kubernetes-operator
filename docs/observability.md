@@ -310,9 +310,9 @@ mechanism really closes:
   that are already open through a Broker. An old session and a new
   connection may both continue accepting writes while
   `RoutingReady=False`, including during a dangerous partition.
-  A proposed amendment to ADR-0005 (a new section 8, in PR #793) would
+  ADR-0005 section 8, accepted for v0.1 in PR #793, makes the Operator
   scale the managed RW Broker Deployment to zero during specific unsafe
-  states, but it is **not accepted or implemented yet**. Even if implemented, do not claim existing sessions
+  states, but it is **not implemented yet** (#113). Even once it is, do not claim existing sessions
   have ended until #115 confirms their actual SQL outcomes and EndpointSlice
   convergence under fault and termination conditions.
 - **Nothing while the Operator is away.** A stopped Operator, or one that
