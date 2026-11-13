@@ -588,6 +588,15 @@ func operatorLogArgs() []string {
 // row written through -rw is read on every member with the password; and the
 // password is in no status, Event, StatefulSet or Operator log line.
 //
+// The cluster is then backed up and the source deleted, and the backup is
+// restored into two new HA clusters at once (#847). The one whose Secret holds
+// the source's password restores its first member, seeds the other two from
+// it and becomes Ready, with the row and the same login behavior on every
+// member and through both Services. The one whose Secret holds another
+// password fails its restore on the first member, because the restored
+// database keeps its source's password (docs/poc/RESULTS.md, POC-61, Q4;
+// #819), and seeds no other member.
+//
 // Kind runs all members on one node and causes no network cut or power loss.
 // copylogdb's reconnects with a password set were checked on the VM lab
 // through a standby restart and a failover only (#801).
@@ -612,43 +621,45 @@ func dbaPasswordHAScenario() {
 				// marker is the row written through -rw and read on every
 				// member.
 				marker = "written-through-rw"
+				// backupName is the backup of the HA cluster that both recovery
+				// clusters restore. It goes to the seed bucket under a prefix of
+				// its own; the seed backups are kept below each cluster's UID.
+				backupName   = "dbaha-full"
+				backupPrefix = "dba-password-ha-backup"
+				// restoredName is restored from the backup with the source's
+				// password in its Secret, otherName with otherPassword.
+				restoredName  = "dbaha-restored"
+				otherName     = "dbaha-other"
+				otherSecret   = "dba-password-other"
+				otherPassword = "E2e-Other-Password-847"
+				// notRequested is the Instance Manager's reason for a restored
+				// database whose password is not the requested one
+				// (internal/instancemanager/dbapassword.go).
+				notRequested = "DBA password is not the requested one"
 			)
 			members := []string{clusterName + "-0", clusterName + "-1", clusterName + "-2"}
+			membersOf := func(cluster string) []string {
+				return []string{cluster + "-0", cluster + "-1", cluster + "-2"}
+			}
 			h := dbaPasswordHelpers{namespace: haNamespace, clientNamespace: clientNamespace,
 				database: database, marker: marker}
 			withPassword := `-p "$(cat ` + dbaPasswordFile + `)"`
-
-			BeforeAll(func() {
-				if runtime.GOARCH != "amd64" {
-					Skip("needs linux/amd64: the official CUBRID image has no " + runtime.GOARCH + " build. Not run.")
-				}
-				ensureInstanceManagerImage()
-
-				By("starting a mock object store for the seeding, in the client namespace")
-				_, err := utils.Run(exec.Command("kubectl", "create", "ns", clientNamespace))
-				Expect(err).NotTo(HaveOccurred())
-				h.apply(fmt.Sprintf(objectStoreManifest, clientNamespace, seedBucket))
-				_, err = utils.Run(exec.Command("kubectl", "-n", clientNamespace, "rollout", "status",
-					"deployment/s3mock", "--timeout=5m"))
-				Expect(err).NotTo(HaveOccurred(), "the mock object store did not start")
-				// The Broker client reads the password from here.
-				h.apply(dbaPasswordSecret(clientNamespace, secretName, password))
-
-				By("creating a namespace that enforces the restricted security policy")
-				_, err = utils.Run(exec.Command("kubectl", "create", "ns", haNamespace))
-				Expect(err).NotTo(HaveOccurred())
-				_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", haNamespace,
-					"pod-security.kubernetes.io/enforce=restricted"))
-				Expect(err).NotTo(HaveOccurred())
-				// The mock store checks no credentials.
-				_, err = h.kubectl("create", "secret", "generic", "object-storage",
-					"--from-literal=accessKey=e2e", "--from-literal=secretKey=e2e")
-				Expect(err).NotTo(HaveOccurred())
-
-				By("creating the three-member HA cluster first, so that it waits for its Secret")
+			manifestURI := ""
+			// clusterManifest is a three-member HA cluster with the password
+			// Secret secret, the mock object store for its seeding, the client
+			// namespace as the Brokers' clients and, when recoveryURI is set, a
+			// recovery from that backup.
+			clusterManifest := func(name, secret, recoveryURI string) string {
 				repository, tag, found := strings.Cut(instanceManagerImage, ":")
-				Expect(found).To(BeTrue(), "instanceManagerImage needs a tag")
-				h.apply(fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+				ExpectWithOffset(1, found).To(BeTrue(), "instanceManagerImage needs a tag")
+				recovery := ""
+				if recoveryURI != "" {
+					recovery = fmt.Sprintf(`  bootstrap:
+    recovery:
+      manifestUri: %s
+`, recoveryURI)
+				}
+				return fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
 kind: CubridCluster
 metadata:
   name: %s
@@ -685,22 +696,77 @@ spec:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: %s
-`, clusterName, haNamespace, repository, tag, database, clientNamespace, seedBucket, secretName, clientNamespace))
+%s`, name, haNamespace, repository, tag, database, clientNamespace, seedBucket, secret, clientNamespace, recovery)
+			}
+			// haHealthy reads whether the cluster is Ready with HAReady and
+			// ReplicationHealthy True. Ready alone is not a replication-health
+			// oracle: the other two must agree with the seeded data state.
+			haHealthy := func(g Gomega, name string) {
+				for _, condition := range []string{"Ready", "HAReady", "ReplicationHealthy"} {
+					out, err := h.clusterField(name, `{.status.conditions[?(@.type=="`+condition+`")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(out).To(Equal("True"), "%s of %s", condition, name)
+				}
+			}
+			// memberLogs adds to places, for each member of cluster, the kubectl
+			// arguments that print the whole log of all its containers: the DB
+			// container, which runs the Instance Manager, and the others.
+			memberLogs := func(places map[string][]string, cluster string) {
+				for _, member := range membersOf(cluster) {
+					places["the log of "+member] = []string{"-n", haNamespace, "logs", member, "--all-containers",
+						"--tail=-1"}
+				}
+			}
+
+			BeforeAll(func() {
+				if runtime.GOARCH != "amd64" {
+					Skip("needs linux/amd64: the official CUBRID image has no " + runtime.GOARCH + " build. Not run.")
+				}
+				ensureInstanceManagerImage()
+
+				By("starting a mock object store for the seeding, in the client namespace")
+				_, err := utils.Run(exec.Command("kubectl", "create", "ns", clientNamespace))
+				Expect(err).NotTo(HaveOccurred())
+				h.apply(fmt.Sprintf(objectStoreManifest, clientNamespace, seedBucket))
+				_, err = utils.Run(exec.Command("kubectl", "-n", clientNamespace, "rollout", "status",
+					"deployment/s3mock", "--timeout=5m"))
+				Expect(err).NotTo(HaveOccurred(), "the mock object store did not start")
+				// The Broker client reads the password from here.
+				h.apply(dbaPasswordSecret(clientNamespace, secretName, password))
+
+				By("creating a namespace that enforces the restricted security policy")
+				_, err = utils.Run(exec.Command("kubectl", "create", "ns", haNamespace))
+				Expect(err).NotTo(HaveOccurred())
+				_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", haNamespace,
+					"pod-security.kubernetes.io/enforce=restricted"))
+				Expect(err).NotTo(HaveOccurred())
+				// The mock store checks no credentials.
+				_, err = h.kubectl("create", "secret", "generic", "object-storage",
+					"--from-literal=accessKey=e2e", "--from-literal=secretKey=e2e")
+				Expect(err).NotTo(HaveOccurred())
+
+				By("creating the three-member HA cluster first, so that it waits for its Secret")
+				h.apply(clusterManifest(clusterName, secretName, ""))
 			})
 
 			AfterAll(func() {
 				if CurrentSpecReport().Failed() {
 					for _, args := range [][]string{
 						{"get", "cubridcluster", "-o", "yaml"},
+						{"get", "cubridbackup", "-o", "yaml"},
 						{"get", "pods", "-o", "wide"},
 						{"logs", members[0], "--tail=200"},
 						{"logs", members[1], "--tail=200"},
+						{"logs", restoredName + "-0", "--tail=200"},
+						{"logs", restoredName + "-1", "--tail=200"},
+						{"logs", otherName + "-0", "--tail=200"},
 						{"get", "events", "--sort-by=.lastTimestamp"},
 					} {
 						out, _ := h.kubectl(append(args, "--request-timeout=10s")...)
 						_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 					}
 				}
+				_, _ = h.kubectl("delete", "cubridbackup", "--all", "--ignore-not-found", "--timeout=5m")
 				_, _ = h.kubectl("delete", "cubridcluster", "--all", "--ignore-not-found", "--timeout=5m")
 				_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", haNamespace, clientNamespace,
 					"--ignore-not-found", "--timeout=5m"))
@@ -866,6 +932,177 @@ spec:
 						"--tail=-1"}
 				}
 				expectNoDBAPassword(password, places)
+				expectNoDBAPassword(changed, places)
+			})
+
+			// The steps below restore a backup of this cluster into two new HA
+			// clusters (#847). The step before put the database's password back
+			// into the Secret, and the database's own password was never
+			// changed, so the backup holds the Secret's password.
+			It("backs the HA database up to object storage", func() {
+				h.apply(fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+kind: CubridBackup
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterRef:
+    name: %s
+  database: %s
+  level: Full
+  destination:
+    type: ObjectStorage
+    objectStorage:
+      provider: S3Compatible
+      bucket: %s
+      prefix: %s
+`, backupName, haNamespace, clusterName, database, seedBucket, backupPrefix))
+				Eventually(func(g Gomega) {
+					phase, err := h.kubectl("get", "cubridbackup", backupName, "-o", "jsonpath={.status.phase}")
+					g.Expect(err).NotTo(HaveOccurred())
+					if phase == "Failed" {
+						conditions, _ := h.kubectl("get", "cubridbackup", backupName, "-o", "jsonpath={.status.conditions}")
+						StopTrying("the backup failed: " + conditions).Now()
+					}
+					g.Expect(phase).To(Equal("Completed"))
+				}, 10*time.Minute, 3*time.Second).Should(Succeed())
+				uri, err := h.kubectl("get", "cubridbackup", backupName, "-o", "jsonpath={.status.artifact.uri}")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(uri).To(HavePrefix("s3://"+seedBucket+"/"+backupPrefix+"/"), "the backup reports no artifact URI")
+				manifestURI = uri
+
+				By("checking that the backup and the members' logs hold no password, before the logs go")
+				places := map[string][]string{
+					"the backup": {"-n", haNamespace, "get", "cubridbackup", backupName, "-o", "json"},
+				}
+				memberLogs(places, clusterName)
+				expectNoDBAPassword(password, places)
+				expectNoDBAPassword(changed, places)
+
+				By("deleting the source cluster, so that the two recovery clusters have room on Kind")
+				_, err = h.kubectl("delete", "cubridcluster", clusterName, "--timeout=5m")
+				Expect(err).NotTo(HaveOccurred())
+
+				By("creating a recovery cluster with the source's password, and one with another password, at once")
+				h.apply(dbaPasswordSecret(haNamespace, otherSecret, otherPassword))
+				h.apply(clusterManifest(restoredName, secretName, manifestURI))
+				h.apply(clusterManifest(otherName, otherSecret, manifestURI))
+			})
+
+			// The restore runs on the first member only, and the other members
+			// are seeded only once it completed (internal/controller/bootstrap.go,
+			// reconcileRecovery). A restore that fails on the first member is
+			// started again there, up to three attempts, and never seeds the
+			// others, so this cluster copies no data beyond the first member.
+			It("fails the HA restore whose Secret holds another password on its first member, and seeds no other member",
+				func() {
+					Expect(manifestURI).NotTo(BeEmpty(), "no backup to restore")
+
+					By("waiting for the restore to fail because the database's password is not the requested one")
+					// A failed attempt is reported as RestoreFailedRetrying until the
+					// next attempt starts, about 10 seconds later, and as a Warning
+					// Event of that reason; after the last attempt as RestoreFailed.
+					// Either, with the Instance Manager's reason, shows the refusal.
+					Eventually(func(g Gomega) {
+						condition, err := h.clusterField(otherName,
+							`{.status.conditions[?(@.type=="BootstrapReady")].reason}{"|"}`+
+								`{.status.conditions[?(@.type=="BootstrapReady")].message}`)
+						g.Expect(err).NotTo(HaveOccurred())
+						reason, message, _ := strings.Cut(condition, "|")
+						if reason == "RestoreFailed" && !strings.Contains(message, notRequested) {
+							StopTrying("the restore failed for another reason: " + message).Now()
+						}
+						events, err := h.kubectl("get", "events", "--field-selector",
+							"involvedObject.name="+otherName+",reason=RestoreFailedRetrying",
+							"-o", "jsonpath={.items[*].message}")
+						g.Expect(err).NotTo(HaveOccurred())
+						failed := strings.HasPrefix(reason, "RestoreFailed") && strings.Contains(message, notRequested)
+						g.Expect(failed || strings.Contains(events, notRequested)).To(BeTrue(),
+							"BootstrapReady: %s; RestoreFailedRetrying Events: %s", condition, events)
+					}, 10*time.Minute, 3*time.Second).Should(Succeed())
+
+					By("checking that the recovery seeded no member and the cluster is not Ready")
+					phase, err := h.clusterField(otherName, "{.status.bootstrap.phase}")
+					Expect(err).NotTo(HaveOccurred())
+					Expect(phase).NotTo(BeElementOf("SeedingReplicas", "Complete"))
+					restored, err := h.clusterField(otherName, "{.status.databases[*].primaryCreated}")
+					Expect(err).NotTo(HaveOccurred())
+					Expect(restored).NotTo(ContainSubstring("true"), "the restore is recorded as complete on the first member")
+					seeded, err := h.clusterField(otherName, "{.status.databases[*].seededMembers}")
+					Expect(err).NotTo(HaveOccurred())
+					Expect(strings.TrimSpace(seeded)).To(BeEmpty(), "a member was seeded from a failed restore")
+					ready, err := h.clusterField(otherName, `{.status.conditions[?(@.type=="Ready")].status}`)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(ready).NotTo(Equal("True"), "a cluster whose restore failed is Ready")
+
+					By("checking that neither password is in the cluster, its StatefulSet, the Events, the Operator " +
+						"log or its members' logs")
+					places := map[string][]string{
+						"the cluster":      {"-n", haNamespace, "get", "cubridcluster", otherName, "-o", "json"},
+						"the StatefulSet":  {"-n", haNamespace, "get", "statefulset", otherName, "-o", "json"},
+						"the Events":       {"-n", haNamespace, "get", "events", "-o", "json"},
+						"the Operator log": operatorLogArgs(),
+					}
+					memberLogs(places, otherName)
+					expectNoDBAPassword(otherPassword, places)
+					expectNoDBAPassword(password, places)
+
+					By("deleting the cluster, whose restore is retried until it gives up")
+					_, err = h.kubectl("delete", "cubridcluster", otherName, "--timeout=5m")
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+			It("restores the backup into an HA cluster whose Secret holds the source's password, seeds every member "+
+				"and becomes Ready", func() {
+				Expect(manifestURI).NotTo(BeEmpty(), "no backup to restore")
+				Eventually(func(g Gomega) {
+					phase, err := h.clusterField(restoredName, "{.status.bootstrap.phase}")
+					g.Expect(err).NotTo(HaveOccurred())
+					if phase == "Failed" {
+						reason, _ := h.clusterField(restoredName,
+							`{.status.conditions[?(@.type=="BootstrapReady")].message}`)
+						StopTrying("the HA recovery failed: " + reason).Now()
+					}
+					g.Expect(phase).To(Equal("Complete"))
+					haHealthy(g, restoredName)
+				}, 15*time.Minute, 3*time.Second).Should(Succeed())
+			})
+
+			It("refuses the empty DBA password and accepts the Secret's on every restored member, which has the row",
+				func() {
+					for _, member := range membersOf(restoredName) {
+						By("logging in as dba with the empty password on " + member)
+						out, _ := h.csqlOn(member, "", "SELECT 1")
+						Expect(out).To(ContainSubstring(dbaPasswordRefused), "%s accepted the empty DBA password", member)
+
+						By("reading the row written before the backup with the password from the mounted file on " +
+							member)
+						out, err := h.csqlOn(member, withPassword, "SELECT marker FROM dba_marker WHERE id = 1")
+						Expect(err).NotTo(HaveOccurred(), "%s: %s", member, out)
+						Expect(out).NotTo(ContainSubstring(dbaPasswordRefused), member)
+						Expect(out).To(ContainSubstring(marker), "%s lacks the row written before the backup", member)
+					}
+				})
+
+			It("refuses the empty DBA password and accepts the Secret's through the restored cluster's read-write "+
+				"and read-only Service", func() {
+				By("logging in through each Service from another namespace and reading the row")
+				h.brokerLogins(restoredName, "broker-client-ha-restored", false)
+			})
+
+			It("writes neither password into the restored cluster, the backup, a StatefulSet, an Event, a Broker "+
+				"client, the Operator log or a member's log", func() {
+				places := map[string][]string{
+					"the restored cluster":     {"-n", haNamespace, "get", "cubridcluster", restoredName, "-o", "json"},
+					"the restored StatefulSet": {"-n", haNamespace, "get", "statefulset", restoredName, "-o", "json"},
+					"the backup":               {"-n", haNamespace, "get", "cubridbackup", backupName, "-o", "json"},
+					"the Events":               {"-n", haNamespace, "get", "events", "-o", "json"},
+					"the Broker clients":       {"-n", clientNamespace, "get", "pods", "-o", "json"},
+					"the Operator log":         operatorLogArgs(),
+				}
+				memberLogs(places, restoredName)
+				expectNoDBAPassword(password, places)
+				expectNoDBAPassword(otherPassword, places)
 				expectNoDBAPassword(changed, places)
 			})
 		})
