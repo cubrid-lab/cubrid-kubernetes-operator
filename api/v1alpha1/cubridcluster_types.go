@@ -1046,6 +1046,10 @@ type WriteQuarantineRelease struct {
 	// release.
 	// +optional
 	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
+	// observedMasterRestartCount is the restart count of observedMaster's
+	// database container at a manual release.
+	// +optional
+	ObservedMasterRestartCount int32 `json:"observedMasterRestartCount,omitempty"`
 	// members are the released quarantine's members; for a manual release,
 	// with their Pod UID and restart count at the release.
 	// +listType=map
@@ -1054,10 +1058,12 @@ type WriteQuarantineRelease struct {
 	Members []WriteQuarantineMember `json:"members,omitempty"`
 	// exemptMembers are the members a manual release accepted that do not,
 	// by themselves, start a new quarantine as unverified members while
-	// observedMaster, in the same Pod, is the only active master and their
-	// Pod UID and restart count are those in members. A member leaves the
-	// list once it is verified or its Pod UID or restart count changes. Two
-	// active masters always start a quarantine.
+	// observedMaster, in the same Pod and container start, is the only
+	// active master and their Pod UID and restart count are those in
+	// members. A member leaves the list for good once it is verified or its
+	// Pod UID or restart count changes; the list is cleared for good once
+	// another member, or observedMaster in another Pod or container start, is
+	// seen as an active master. Two active masters always start a quarantine.
 	// +listType=set
 	// +optional
 	ExemptMembers []string `json:"exemptMembers,omitempty"`

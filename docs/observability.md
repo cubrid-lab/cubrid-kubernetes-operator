@@ -471,7 +471,8 @@ The Operator acts on it in the next observation of the roles:
   is ignored too: the new token has to be read and set after the revised
   members were reviewed. When the stored cluster cannot be read, or holds a
   later revision than the one the observation decided from, nothing is
-  accepted and the pass is retried after a second.
+  accepted and the pass is retried after a second, backing off to 30
+  seconds while that repeats.
 - It refuses the release unless exactly one member is a fresh active master
   in that observation and the members' Pods were read. No active master, or
   two or more, is refused: a manual release does not restore a writable
@@ -500,22 +501,35 @@ The Operator acts on it in the next observation of the roles:
 
 The release covers the members it accepted, and no others. It records them
 in `status.lastWriteQuarantineRelease.members` with the Pod UID and database
-container restart count seen at the release, the active master's Pod UID in
-`observedMasterPodUID`, and every accepted member but that master in
-`exemptMembers`. While the same member is the only active master in the same
-Pod, an exempt member that stays unverified, even one that outranks the
-master or was the last resolved primary, does not start a new quarantine by
-itself. The exemption is read from the stored status alone, so it also holds
-after a restart of the Operator. It ends, and the usual rules apply again:
+container restart count the administrator reviewed, which the release
+requires to be unchanged: a member found in another Pod or container start
+revises the quarantine and replaces its token, and an annotation naming the
+old token is ignored. It also records the active master's Pod UID and restart
+count (`observedMasterPodUID`, `observedMasterRestartCount`), and every
+accepted member but that master in `exemptMembers`.
+
+While the release's master, in the same Pod and container start, is the only
+active master, an exempt member that stays unverified, even one that
+outranks the master or was the last resolved primary, does not start a new
+quarantine by itself. The exemption is read from the persisted status as
+last read, never from the Operator's memory, so it also holds after a
+restart of the Operator. It ends for good, and the usual rules apply again:
 
 - for a member, once it is verified (non-master answers at least 2 seconds
-  apart), or when its Pod UID or restart count differs from the recorded one:
-  the member leaves `exemptMembers` for good;
-- for every exempt member, while another member is the active master or the
-  master runs in another Pod;
-- with the next release, which replaces `lastWriteQuarantineRelease`.
+  apart), when its Pod UID or restart count differs from the recorded one, or
+  when it is no longer a member: it leaves `exemptMembers`;
+- for every member at once, when any member other than the release's master
+  (an exempt member included) is seen as an active master, or the release's
+  master is seen as an active master in another Pod or container start:
+  `exemptMembers` is cleared. An observation with no active master changes
+  nothing;
+- with the next release, automatic or manual: it replaces
+  `lastWriteQuarantineRelease`, so a second manual release replaces the
+  first one's exemptions with its own.
 
-A member the release did not accept that becomes unverified starts a
+Each end is logged (`write_quarantine_exemption_ended`) and reported once
+with a Normal Event `WriteQuarantineExemptionEnded` naming the members and
+why. A member the release did not accept that becomes unverified starts a
 quarantine as usual, about that member alone. Two or more active masters
 always start one, including when an exempt member claims to be master.
 
@@ -626,6 +640,7 @@ underscores.
 | A write quarantine is released | `WriteQuarantineReleased` | Normal | `write_quarantine_released` |
 | A write quarantine is released on the administrator's annotation | `WriteQuarantineReleasedManually` | Warning | `write_quarantine_released` |
 | The release annotation does not name the stored quarantine's current token, or the members were revised in the same observation; once per value | `WriteQuarantineReleaseIgnored` | Warning | none |
+| A manual release's exemption ends for a member, or for all of them | `WriteQuarantineExemptionEnded` | Normal | `write_quarantine_exemption_ended` |
 | The release annotation names the current token, but the observation does not see exactly one active master or could not read the members' Pods; once per value and reason | `WriteQuarantineReleaseRefused` | Warning | none |
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled`, `ApplyFailures` or `LogCopyStalled` | Warning | `replication_stalled`, `apply_failures`, `log_copy_stalled` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |

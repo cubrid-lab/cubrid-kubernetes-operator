@@ -384,6 +384,9 @@ type quarantineDecision struct {
 	// is not set: the members a manual release exempts, less those this pass
 	// verified or found in another Pod or container start.
 	LastRelease *databasev1alpha1.WriteQuarantineRelease
+	// ExemptionEnded describes each end of a manual release's exemption in
+	// this pass.
+	ExemptionEnded []string
 	// Change says what changed.
 	Change quarantineChange
 	// ActiveMasters are the active masters of this pass, and Unverified the
@@ -497,7 +500,8 @@ func ceilSecond(t time.Time) metav1.Time {
 // otherwise none starts, and a quarantine in force stays.
 //
 // While a quarantine is in force, a new member that the rules would name, or
-// a recorded member removed from the cluster or found in another Pod, revises
+// a recorded member removed from the cluster or found in another Pod or
+// container start, revises
 // it: its revision increments and its release token is replaced, its
 // generation stays. A WriteQuarantinedMemberUnverified quarantine becomes
 // WriteQuarantinedMasterChanged, which has no automatic release, when an
@@ -509,7 +513,7 @@ func ceilSecond(t time.Time) metav1.Time {
 func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	d, verified := verifyMembers(in)
 	var exempt map[string]bool
-	d.LastRelease, exempt = releaseExemption(in, d.ActiveMasters, verified)
+	d.LastRelease, exempt, d.ExemptionEnded = releaseExemption(in, d.ActiveMasters, verified)
 	ordinal := make(map[string]int, len(in.Members))
 	for i, m := range in.Members {
 		ordinal[m] = i
@@ -673,23 +677,58 @@ func quarantineMember(in quarantineInput, m string) databasev1alpha1.WriteQuaran
 
 // releaseExemption is the members the last manual release accepted that
 // rule 2 does not name in this pass, with the release record whose
-// exemptMembers drop the members this pass verified or found in another Pod
-// or container start, or that left the cluster. The exemption applies only
-// while the one active master is the release's, in the same Pod; two active
-// masters are never exempt, since rule 1 does not consult it. It comes from
-// the stored status alone. Without the members' Pods nothing changes.
+// exemptMembers lose for good the members this pass ends the exemption for,
+// and a description of each ending for the log and Events. It reads only the
+// persisted release record (in.LastRelease), never memory.
+//
+// A member leaves exemptMembers once it is verified, found in another Pod or
+// container start, or gone from the cluster. The whole list is cleared once
+// an active master other than the release's master, which includes an exempt
+// member, or the release's master in another Pod or container start, is
+// seen. A pass with no active master changes nothing. The exemption applies
+// only while the release's master, in the same Pod and container start, is
+// the only active master; rule 1 does not consult it. Without the members'
+// Pods only an active master other than the release's clears it.
 func releaseExemption(in quarantineInput, masters []string,
-	verified map[string]bool) (*databasev1alpha1.WriteQuarantineRelease, map[string]bool) {
+	verified map[string]bool) (*databasev1alpha1.WriteQuarantineRelease, map[string]bool, []string) {
 	rel := in.LastRelease.DeepCopy()
-	if rel == nil || rel.Method != databasev1alpha1.WriteQuarantineReleasedManually || len(rel.ExemptMembers) == 0 ||
-		in.IdentitiesUnknown {
-		return rel, nil
+	if rel == nil || rel.Method != databasev1alpha1.WriteQuarantineReleasedManually || len(rel.ExemptMembers) == 0 {
+		return rel, nil, nil
 	}
-	kept := rel.ExemptMembers[:0]
+	master := memberIdentity{PodUID: rel.ObservedMasterPodUID, RestartCount: rel.ObservedMasterRestartCount}
+	for _, m := range masters {
+		why := ""
+		switch {
+		case m != rel.ObservedMaster:
+			why = fmt.Sprintf("%s was seen as an active master, not the release's master %s", m, rel.ObservedMaster)
+		case !in.IdentitiesUnknown && in.Identities[m] != master:
+			why = fmt.Sprintf("the release's master %s was seen as an active master in another Pod or container "+
+				"start", m)
+		}
+		if why != "" {
+			ended := fmt.Sprintf("the exemption of %s ended: %s", strings.Join(rel.ExemptMembers, ", "), why)
+			rel.ExemptMembers = nil
+			return rel, nil, []string{ended}
+		}
+	}
+	if in.IdentitiesUnknown {
+		return rel, nil, nil
+	}
+	var ended []string
+	kept := make([]string, 0, len(rel.ExemptMembers))
 	for _, m := range rel.ExemptMembers {
 		i := slices.IndexFunc(rel.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == m })
-		if i < 0 || verified[m] || !slices.Contains(in.Members, m) ||
-			in.Identities[m] != (memberIdentity{PodUID: rel.Members[i].PodUID, RestartCount: rel.Members[i].RestartCount}) {
+		why := ""
+		switch {
+		case i < 0 || !slices.Contains(in.Members, m):
+			why = "it is no longer a member"
+		case verified[m]:
+			why = "it was verified as no active master"
+		case in.Identities[m] != (memberIdentity{PodUID: rel.Members[i].PodUID, RestartCount: rel.Members[i].RestartCount}):
+			why = "it runs in another Pod or container start than the one accepted"
+		}
+		if why != "" {
+			ended = append(ended, fmt.Sprintf("the exemption of %s ended: %s", m, why))
 			continue
 		}
 		kept = append(kept, m)
@@ -698,15 +737,14 @@ func releaseExemption(in quarantineInput, masters []string,
 	if len(kept) == 0 {
 		rel.ExemptMembers = nil
 	}
-	if len(masters) != 1 || masters[0] != rel.ObservedMaster ||
-		in.Identities[rel.ObservedMaster].PodUID != rel.ObservedMasterPodUID {
-		return rel, nil
+	if len(masters) != 1 {
+		return rel, nil, ended
 	}
 	exempt := make(map[string]bool, len(kept))
 	for _, m := range kept {
 		exempt[m] = true
 	}
-	return rel, exempt
+	return rel, exempt, ended
 }
 
 // startQuarantine is the quarantine rules 1 and 2 start, or nil under rule 3.
@@ -791,7 +829,8 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 			revised = true
 			continue
 		}
-		if !in.IdentitiesUnknown && in.Identities[r.Name].PodUID != r.PodUID {
+		if !in.IdentitiesUnknown && (in.Identities[r.Name].PodUID != r.PodUID ||
+			in.Identities[r.Name].RestartCount != r.RestartCount) {
 			r, revised = quarantineMember(in, r.Name), true
 		}
 		kept = append(kept, r)
@@ -1025,6 +1064,9 @@ type quarantineHold struct {
 	// last reported with an Event: an inert or refused annotation is
 	// reported once.
 	reportedRelease string
+	// releaseWaits counts the consecutive passes that could not apply the
+	// release annotation, for their back-off (releaseWaitRetry).
+	releaseWaits int
 }
 
 // quarantineState is the cluster's entry in quarantineHolds.
@@ -1283,6 +1325,11 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	cluster.Status.MemberTerminations = d.Terminations
 	if d.Released == nil {
 		cluster.Status.LastWriteQuarantineRelease = d.LastRelease
+		for _, msg := range d.ExemptionEnded {
+			logf.FromContext(ctx).Info("Ended the exemption of a manual write quarantine release",
+				"event", "write_quarantine_exemption_ended", "detail", msg)
+			r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineExemptionEnded, msg)
+		}
 	}
 	cluster.Status.WriteQuarantine = d.Quarantine
 	if d.Quarantine != nil {

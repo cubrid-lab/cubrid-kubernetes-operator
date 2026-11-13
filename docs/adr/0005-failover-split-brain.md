@@ -553,6 +553,18 @@ seconds apart, the same confirmation as for an unverified member.
   Record token, UTC time, accepted member identities and warning in status
   and a Warning Event. The actor identity comes from Kubernetes API audit
   logs, not from an invented controller field.
+
+  *Amended by #871, pending maintainer review:* the members an accepted
+  manual release names (their Pod UID and container restart count) do not,
+  by themselves, start a new rule-2 quarantine afterwards. The exemption
+  covers only the identities the **last** manual release accepted, and holds
+  only while that release's master, in the same Pod and with the same
+  restart count, is the only active master. It ends for a member when the
+  member is verified, its Pod UID or restart count changes, or it is seen as
+  an active master. It ends for all members when any other member, or the
+  release's master in another Pod or container start, is seen as an active
+  master. Rule 1 (two or more active masters) always applies. The exemption
+  is read from the persisted status, never from Operator memory.
 - **Expanded uncertainty:** if a new member becomes unverified, a known
   affected member is removed, or an affected member's identity changes,
   reject prior consent, persist the revised set and **rotate its

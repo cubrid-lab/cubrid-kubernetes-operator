@@ -141,6 +141,10 @@ func TestDecideManualRelease(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.in.Now, tc.in.ClusterUID = testNow, releaseClusterUID
+			if tc.in.Identities == nil {
+				// The members in the Pods the quarantine recorded.
+				tc.in.Identities = map[string]memberIdentity{q0: {PodUID: uid0}, q1: {PodUID: uid1}}
+			}
 			got, msg, rel := decideManualRelease(tc.in)
 			if got != tc.want {
 				t.Fatalf("verdict = %q (%s), want %q", got, msg, tc.want)
@@ -308,11 +312,109 @@ func TestManualReleaseExemptionEndsOnVerification(t *testing.T) {
 // accepted member but the active master.
 func TestDecideManualReleaseExemptRecord(t *testing.T) {
 	q := releaseQuarantine()
+	q.Members[0].RestartCount, q.Members[1].RestartCount = 2, 3
 	_, _, rel := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
 		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q0),
 		Identities: map[string]memberIdentity{q0: {PodUID: uid0, RestartCount: 2}, q1: {PodUID: uid1, RestartCount: 3}}})
-	if rel == nil || rel.ObservedMasterPodUID != uid0 || !slices.Equal(rel.ExemptMembers, []string{q1}) ||
+	if rel == nil || rel.ObservedMasterPodUID != uid0 || rel.ObservedMasterRestartCount != 2 ||
+		!slices.Equal(rel.ExemptMembers, []string{q1}) ||
 		rel.Members[1].RestartCount != 3 || rel.Members[0].RestartCount != 2 {
 		t.Fatalf("release = %+v", rel)
+	}
+}
+
+// An exempt member seen as an active master leaves the exemption for good,
+// and so does every other one: when it is later cut off while the release's
+// master is the only active master again, rule 2 quarantines it (review of
+// #871: q0 accepted unverified beside q1, q0 heals and becomes master, q0 is
+// cut off again and q1 takes over).
+func TestManualReleaseExemptionEndsWhenAnotherMasterIsSeen(t *testing.T) {
+	s := exemptScenario(t)
+	if d := s.pass(testNow, cutOff(testNow)); d.Quarantine != nil {
+		t.Fatalf("the first pass quarantined: %+v", d.Quarantine)
+	}
+	now := testNow.Add(unverifiedResyncInterval)
+	d := s.pass(now, map[string]RoleObservation{q0: activeMasterAt(now), q1: slaveAt(now), q2: slaveAt(now)})
+	if d.Quarantine != nil {
+		t.Fatalf("quarantine = %+v with %s as the only master", d.Quarantine, q0)
+	}
+	if len(s.lastRelease.ExemptMembers) != 0 {
+		t.Fatalf("exempt members = %v after %s was seen as the active master", s.lastRelease.ExemptMembers, q0)
+	}
+	now = now.Add(unverifiedResyncInterval)
+	d = s.pass(now, cutOff(now))
+	if d.Quarantine == nil || !slices.Equal(memberNamesOf(d.Quarantine.Members), []string{q0}) {
+		t.Fatalf("quarantine = %+v, want one about %s, cut off beside %s", d.Quarantine, q0, q1)
+	}
+}
+
+// A pass with no active master changes nothing about the exemption.
+func TestManualReleaseExemptionKeptWithoutActiveMaster(t *testing.T) {
+	s := exemptScenario(t)
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: noAnswerAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine != nil || !slices.Equal(s.lastRelease.ExemptMembers, []string{q0}) {
+		t.Fatalf("quarantine %+v, exempt members %v; want none and [%s]", d.Quarantine, s.lastRelease.ExemptMembers, q0)
+	}
+	now := testNow.Add(unverifiedResyncInterval)
+	if d := s.pass(now, cutOff(now)); d.Quarantine != nil {
+		t.Fatalf("quarantine = %+v after a pass without a master", d.Quarantine)
+	}
+}
+
+// A restart of the release's master's database container ends the
+// exemption for good.
+func TestManualReleaseExemptionEndsOnMasterRestart(t *testing.T) {
+	s := exemptScenario(t)
+	s.identities[q1] = memberIdentity{PodUID: uid1, RestartCount: 1}
+	if d := s.pass(testNow, cutOff(testNow)); d.Quarantine == nil {
+		t.Fatal("no quarantine after the release's master restarted")
+	}
+	if len(s.lastRelease.ExemptMembers) != 0 {
+		t.Fatalf("exempt members = %v after the master restarted", s.lastRelease.ExemptMembers)
+	}
+}
+
+// A recorded member's container restart revises the quarantine and replaces
+// its token, as a new Pod does: the administrator reviewed another start.
+func TestQuarantineRevisedOnMemberRestart(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	first := s.pass(testNow, cutOff(testNow)).Quarantine
+	if first == nil {
+		t.Fatal("no quarantine")
+	}
+	s.identities[q0] = memberIdentity{PodUID: uid0, RestartCount: 1}
+	now := testNow.Add(unverifiedResyncInterval)
+	d := s.pass(now, cutOff(now))
+	if d.Change != quarantineRevised || d.Quarantine.Revision != first.Revision+1 ||
+		d.Quarantine.ReleaseToken == first.ReleaseToken || d.Quarantine.Members[0].RestartCount != 1 {
+		t.Fatalf("decision = %+v, want a revision with a new token and restart count 1", d)
+	}
+}
+
+// A manual release names only the identities the administrator reviewed: a
+// member whose Pod or container start differs from the stored record makes
+// the annotation inert.
+func TestDecideManualReleaseChangedIdentityInert(t *testing.T) {
+	q := releaseQuarantine()
+	verdict, msg, _ := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
+		Stored: storedWith(releaseToken2, q), Decision: unchangedDecision(q, q1),
+		Identities: map[string]memberIdentity{q0: {PodUID: uid0, RestartCount: 1}, q1: {PodUID: uid1}}})
+	if verdict != manualReleaseInert || !strings.Contains(msg, q0) {
+		t.Fatalf("verdict %q (%s), want inert naming %s", verdict, msg, q0)
+	}
+}
+
+// Repeated passes that cannot apply the annotation back off to 30 seconds.
+func TestReleaseWaitRetryBacksOff(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		30 * time.Second, 30 * time.Second}
+	for i, w := range want {
+		if got := releaseWaitRetry(i); got != w {
+			t.Errorf("releaseWaitRetry(%d) = %s, want %s", i, got, w)
+		}
+	}
+	if got := releaseWaitRetry(100); got != 30*time.Second {
+		t.Errorf("releaseWaitRetry(100) = %s", got)
 	}
 }

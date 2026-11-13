@@ -274,13 +274,47 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: appName}}}}
 		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		drain(f.recorder)
 		pass(restarted, f)
+		Expect(drain(f.recorder)).To(ContainElement(SatisfyAll(
+			ContainSubstring("Normal "+reasonWriteQuarantineExemptionEnded), ContainSubstring(f.key.Name+"-0"))))
 		next := stored(f).Status.WriteQuarantine
 		Expect(next).NotTo(BeNil())
 		Expect(next.GenerationID).NotTo(Equal(revised.GenerationID))
 		Expect(memberNamesOf(next.Members)).To(Equal([]string{f.key.Name + "-0"}))
 		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty(),
 			"the third member left the exemption once verified, the first one when its Pod changed")
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+	})
+
+	It("ends the exemption for good once the accepted member is seen as the active master", func() {
+		f := newFixture("wq-manual-heal")
+		r := reconcilerFor(f, k8sClient)
+		running(r, f)
+
+		By("the first member cut off beside the second one as master, released by the administrator")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(r, f)
+		q := stored(f).Status.WriteQuarantine
+		Expect(q).NotTo(BeNil())
+		annotate(f, q.ReleaseToken)
+		pass(r, f)
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(Equal([]string{f.key.Name + "-0"}))
+		pass(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+
+		By("the first member heals and becomes the only active master")
+		f.answers.set(roleReports(f.key.Name, [3]string{wqMaster, wqSlave, wqSlave}))
+		pass(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty(), "the shrink is persisted")
+
+		By("the first member cut off again, the second one master: rule 2 quarantines it")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(reconcilerFor(f, k8sClient), f)
+		again := stored(f).Status.WriteQuarantine
+		Expect(again).NotTo(BeNil())
+		Expect(memberNamesOf(again.Members)).To(Equal([]string{f.key.Name + "-0"}))
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 	})
 

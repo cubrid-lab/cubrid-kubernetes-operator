@@ -42,7 +42,18 @@ const (
 	reasonWriteQuarantineReleasedManually = "WriteQuarantineReleasedManually"
 	reasonWriteQuarantineReleaseIgnored   = "WriteQuarantineReleaseIgnored"
 	reasonWriteQuarantineReleaseRefused   = "WriteQuarantineReleaseRefused"
+	reasonWriteQuarantineExemptionEnded   = "WriteQuarantineExemptionEnded"
 )
+
+// releaseWaitRetry is how soon a pass that could not apply the release
+// annotation is retried after waits consecutive such passes.
+func releaseWaitRetry(waits int) time.Duration {
+	const limit = 30 * time.Second
+	if waits >= 5 {
+		return limit
+	}
+	return min(time.Second<<waits, limit)
+}
 
 // manualReleaseVerdict is what decideManualRelease made of the annotation.
 type manualReleaseVerdict string
@@ -129,6 +140,15 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 		return manualReleaseWait, "", nil
 	case in.IdentitiesUnknown:
 		return manualReleaseRefused, "the members' Pods could not be read in this observation", nil
+	}
+	for _, m := range sq.Members {
+		if in.Identities[m.Name] != (memberIdentity{PodUID: m.PodUID, RestartCount: m.RestartCount}) {
+			return manualReleaseInert, fmt.Sprintf("%s runs in another Pod or container start than the one recorded "+
+				"in revision %d; the quarantine is revised with a new token, which must be reviewed and set",
+				m.Name, sq.Revision), nil
+		}
+	}
+	switch {
 	case len(in.Decision.ActiveMasters) == 0:
 		return manualReleaseRefused, "no member is an active master in this observation; a manual release does " +
 			"not open the read-write path without exactly one active master", nil
@@ -137,16 +157,13 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 			"release does not open the read-write path without exactly one active master",
 			len(in.Decision.ActiveMasters), in.Decision.ActiveMasters), nil
 	}
-	// The accepted members are recorded with their Pod and container start
-	// at the release; all of them but the active master are exempt from
-	// rule 2 while these stay the same (releaseExemption).
+	// The accepted members are recorded with the Pod and container start the
+	// administrator reviewed, which this pass found unchanged; all of them
+	// but the active master are exempt from rule 2 while these and the
+	// master's stay the same (releaseExemption).
 	master := in.Decision.ActiveMasters[0]
-	members := make([]databasev1alpha1.WriteQuarantineMember, 0, len(sq.Members))
 	var exempt []string
 	for _, m := range sq.Members {
-		id := in.Identities[m.Name]
-		m.PodUID, m.RestartCount = id.PodUID, id.RestartCount
-		members = append(members, m)
 		if m.Name != master {
 			exempt = append(exempt, m.Name)
 		}
@@ -154,7 +171,8 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 	return manualReleaseAccepted, "", &databasev1alpha1.WriteQuarantineRelease{GenerationID: sq.GenerationID,
 		Reason: sq.Reason, StartTime: sq.StartTime, ReleaseTime: metav1.NewTime(in.Now.UTC()),
 		Method: databasev1alpha1.WriteQuarantineReleasedManually, Revision: sq.Revision,
-		ObservedMaster: master, ObservedMasterPodUID: in.Identities[master].PodUID, Members: members,
+		ObservedMaster: master, ObservedMasterPodUID: in.Identities[master].PodUID,
+		ObservedMasterRestartCount: in.Identities[master].RestartCount, Members: sq.Members,
 		ExemptMembers: exempt, ReleaseToken: token, Warning: manualReleaseWarning}
 }
 
@@ -204,10 +222,16 @@ func (r *CubridClusterReconciler) reconcileManualRelease(ctx context.Context, cl
 				"the annotation %s with the value %s: %s", releaseWriteQuarantineAnnotation, tokenPrefix(value), msg))
 		}
 	}
+	if verdict != manualReleaseWait {
+		state.releaseWaits = 0
+	}
 	switch verdict {
 	case manualReleaseWait:
-		log.Info("Did not apply the release annotation: the stored cluster could not be read or is ahead of this observation")
-		return d, time.Second
+		retry := releaseWaitRetry(state.releaseWaits)
+		state.releaseWaits++
+		log.Info("Did not apply the release annotation: the stored cluster could not be read or is ahead of this observation",
+			"retryAfter", retry.String())
+		return d, retry
 	case manualReleaseConsumed:
 		r.removeReleaseAnnotation(ctx, cluster, value)
 	case manualReleaseInert:
