@@ -18,8 +18,11 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -41,6 +44,8 @@ const (
 	testVMStatus = "lab-vm status"
 	// testMasterNode is the node of testHAPrimary in the HA fixture.
 	testMasterNode = "node-2"
+	// testMovedBroker is a Broker Pod on the master's node.
+	testMovedBroker = "ha-broker-rw-1"
 	// testOtherNode runs a member that is not the master.
 	testOtherNode = "other-node"
 )
@@ -438,19 +443,97 @@ func assertNoPower(t *testing.T, lab *s04Lab) {
 	}
 }
 
-func TestRunS04RefusesABrokerOnTheMastersNode(t *testing.T) {
-	cfg := testS04Config(t)
-	f, lab := newS04Fixture(t, cfg, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ha-broker-rw-1",
+// brokerOnMastersNode is a Broker Pod that the scheduler put on the master's
+// node.
+func brokerOnMastersNode(cfg HAConfig) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: testMovedBroker, UID: testMovedBroker,
 		Namespace: cfg.Namespace, Labels: map[string]string{"app.kubernetes.io/component": brokerComponent}},
-		Spec: corev1.PodSpec{NodeName: testMasterNode}})
+		Spec: corev1.PodSpec{NodeName: testMasterNode}}
+}
+
+func readS04Record(t *testing.T, dir string) s04Record {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, s04RecordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec s04Record
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func masterNodeUnschedulable(t *testing.T, f *haFixture) bool {
+	t.Helper()
+	node := &corev1.Node{}
+	if err := f.runner.Client.Get(context.Background(), client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		t.Fatal(err)
+	}
+	return node.Spec.Unschedulable
+}
+
+// A Broker on the master's node would lose power with the master, and its
+// clients' failures would not be the master's. With four Brokers on three
+// workers one usually is there, so S04 cordons the node, moves those Brokers
+// off it, and makes the node schedulable again at its end (#110).
+func TestRunS04MovesABrokerOffTheMastersNode(t *testing.T) {
+	cfg := testS04Config(t)
+	f, _ := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass after the Broker was moved", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if !slices.Equal(rec.BrokersMoved, []string{testMovedBroker}) || rec.CordonedNode != testMasterNode ||
+		!rec.Uncordoned {
+		t.Fatalf("record = moved %v, cordoned %q, uncordoned %v; want ha-broker-rw-1 moved off %s, "+
+			"and the node schedulable again", rec.BrokersMoved, rec.CordonedNode, rec.Uncordoned, testMasterNode)
+	}
+	if masterNodeUnschedulable(t, f) {
+		t.Fatal("the master's node is left cordoned")
+	}
+}
+
+func TestRunS04MakesTheNodeSchedulableAgainWhenItFails(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 200 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	lab.promote = false
 	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 		t.Fatal("RunHA() passed")
 	}
-	s04 := s04Scenario(t, cfg.EvidenceDir)
-	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "Broker Pod ha-broker-rw-1") {
-		t.Fatalf("S04 = %+v, want blocked: a Broker shares the master's node", s04)
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Fail {
+		t.Fatalf("S04 = %+v, want a failure without a promotion", s04)
 	}
-	assertNoPower(t, lab)
+	if masterNodeUnschedulable(t, f) || !readS04Record(t, cfg.EvidenceDir).Uncordoned {
+		t.Fatal("the master's node is left cordoned after a failed S04")
+	}
+}
+
+func TestRunS04LeavesANodeCordonedBeforeItAsItWas(t *testing.T) {
+	cfg := testS04Config(t)
+	f, _ := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	node := &corev1.Node{}
+	if err := f.runner.Client.Get(t.Context(), client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Spec.Unschedulable = true
+	if err := f.runner.Client.Update(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if rec := readS04Record(t, cfg.EvidenceDir); rec.CordonedNode != "" || rec.Uncordoned {
+		t.Fatalf("record = cordoned %q, uncordoned %v; want neither for a node cordoned before the run",
+			rec.CordonedNode, rec.Uncordoned)
+	}
+	if !masterNodeUnschedulable(t, f) {
+		t.Fatal("the run made a node schedulable that was cordoned before it")
+	}
 }
 
 func TestRunS04RefusesAnOutagePastThePodsToleration(t *testing.T) {
