@@ -37,7 +37,7 @@ Use [template.md](./template.md) for new ADRs.
 | [0009](./0009-update-vs-upgrade.md) | Rolling update vs engine upgrade | Accepted (POC-gated) | #9 |
 | [0010](./0010-database-lifecycle.md) | Database lifecycle and `ha_db_list` | Accepted | #2 |
 | [0011](./0011-engine-version-contract.md) | Engine image, declared version and image approval | Accepted (POC-gated) | #321 |
-| [0012](./0012-voluntary-disruption.md) | Voluntary disruption budgets and Broker placement | Proposed | #613 |
+| [0012](./0012-voluntary-disruption.md) | Voluntary disruption budgets and Broker placement | Accepted | #613 |
 | [0013](./0013-operator-instance-manager-compatibility.md) | Compatibility between the Operator and existing Instance Managers | Accepted | #322 |
 
 ADRs 0001 to 0011 must be **Accepted** before HA controller implementation
