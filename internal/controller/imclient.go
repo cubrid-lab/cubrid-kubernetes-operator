@@ -162,10 +162,11 @@ const (
 )
 
 // tokenRefused reports whether an Instance Manager answer refuses the
-// operator's token (401) or the call made with it (403). It only names the
-// cause of a failed call: a 403 is not retried with the previous token and
-// counts as accepted in acceptedTokens.send and AcceptsToken, which look at
-// 401 alone. The Instance Manager does not answer 403 on any path.
+// operator's token (401) or the call made with it (403). AcceptsToken counts
+// both as a refusal of the token it asked with. Elsewhere it only names the
+// cause of a failed call: acceptedTokens.send retries with the previous token
+// on a 401 alone, so a 403 is not retried. The Instance Manager does not
+// answer 403 on any path.
 func tokenRefused(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }

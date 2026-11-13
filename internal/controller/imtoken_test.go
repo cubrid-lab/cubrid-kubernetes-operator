@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -268,4 +269,66 @@ type unreachable struct{}
 
 func (unreachable) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("connection refused")
+}
+
+// statusRecorder is an HTTP transport that answers every request with one
+// status and records the Authorization headers it was sent. Status is read on
+// each request, so a test can change the answer between reconciles.
+type statusRecorder struct {
+	status int
+	sent   []string
+}
+
+func (a *statusRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	a.sent = append(a.sent, req.Header.Get("Authorization"))
+	return &http.Response{StatusCode: a.status, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(`{"error":"answer"}`)), Request: req}, nil
+}
+
+// Only a 200 shows that the member accepted the token. A 401 or 403 is a
+// refusal. Any other answer, a server or proxy error or an unexpected success
+// code, shows neither, so it is an error: the previous token must then stay in
+// use rather than be dropped on an answer that proves nothing (#840). The
+// error names the status and the Pod, never the token, and the check asks
+// with the given token alone.
+func TestHTTPRoleProber_AcceptsTokenOnlyOn200(t *testing.T) {
+	const secret = "token-value-that-must-not-leak"
+	cases := []struct {
+		status   int
+		accepted bool
+		wantErr  bool
+	}{
+		{http.StatusOK, true, false},
+		{http.StatusUnauthorized, false, false},
+		{http.StatusForbidden, false, false},
+		{http.StatusNotFound, false, true},
+		{http.StatusInternalServerError, false, true},
+		{http.StatusBadGateway, false, true},
+		{http.StatusServiceUnavailable, false, true},
+		{http.StatusNoContent, false, true},
+	}
+	for _, c := range cases {
+		t.Run(http.StatusText(c.status), func(t *testing.T) {
+			transport := &statusRecorder{status: c.status}
+			prober := NewHTTPRoleProber(nil)
+			prober.Client = &http.Client{Transport: transport}
+
+			ok, err := prober.AcceptsToken(context.Background(), "db-1", "ns", secret)
+			if ok != c.accepted || (err != nil) != c.wantErr {
+				t.Fatalf("status %d: accepted=%v err=%v, want accepted=%v error=%v", c.status, ok, err, c.accepted, c.wantErr)
+			}
+			if err != nil {
+				msg := err.Error()
+				if strings.Contains(msg, secret) {
+					t.Errorf("the error carries the token: %q", msg)
+				}
+				if !strings.Contains(msg, "db-1") || !strings.Contains(msg, strconv.Itoa(c.status)) {
+					t.Errorf("the error does not name the Pod and the status %d: %q", c.status, msg)
+				}
+			}
+			if len(transport.sent) != 1 || transport.sent[0] != "Bearer "+secret {
+				t.Errorf("the member was sent %d requests, want one with the asked token alone", len(transport.sent))
+			}
+		})
+	}
 }
