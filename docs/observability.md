@@ -501,6 +501,17 @@ the backup goes on. When the record stays missing, the backup ends with
 |---|---|---|
 | `RecordedOperationLost` | The target named in the message held no record of the operation named there for 30 minutes, for example after its operation store was lost or replaced | A backup may still run on that member and may have uploaded under the backup's prefix: check the member's processes and the prefix before relying on or deleting what is there, then create a new CubridBackup. No artifact is recorded |
 
+A backup is `Completed` only when the operation its target answers
+`Completed` for is the recorded backup operation (`status.operationRef`, of
+kind `backup`) and reports an artifact with a manifest URI of the form
+`s3://<bucket>/<prefix>/manifest.json` that a recovery accepts, a manifest
+digest, and the backup's `spec.database`. The Operator does not read the
+manifest itself. Otherwise the backup ends at once (#841):
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `ArtifactUnverified` | The target named in the message answered `Completed`, but the operation is not the recorded backup operation, or its artifact lacks one of these fields or names another database; the message names which, and does not copy the value the member reported | No artifact is recorded and the backup is not started again. Check the member's operation (`GET /v1/operations/<id>`) and the backup's prefix, for example for an Instance Manager of another build, then create a new CubridBackup |
+
 An Event is a notice, not the record. The Operator sends at most 100 Events
 about one object in a row, and the allowance comes back at one Event in ten
 seconds; an Event beyond it is dropped, and nothing reports the drop. Kubernetes

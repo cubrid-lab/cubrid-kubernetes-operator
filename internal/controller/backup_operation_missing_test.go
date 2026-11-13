@@ -48,6 +48,9 @@ func (c *missingOperationClient) GetOperation(context.Context, string, string, s
 	if c.getErr != nil {
 		return instancemanager.Operation{}, c.getErr
 	}
+	if c.state == instancemanager.OpCompleted {
+		return verifiedArtifactOperation(), nil
+	}
 	return instancemanager.Operation{ID: opFake, Kind: instancemanager.OpBackup, State: c.state}, nil
 }
 

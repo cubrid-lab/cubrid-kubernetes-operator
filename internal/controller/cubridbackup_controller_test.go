@@ -71,11 +71,13 @@ func (f *fakeBackupClient) GetOperation(_ context.Context, _, _, _ string) (inst
 	if f.completed {
 		return instancemanager.Operation{
 			ID:    opFake,
+			Kind:  instancemanager.OpBackup,
 			State: instancemanager.OpCompleted,
 			Artifact: &instancemanager.OperationArtifact{
-				ManifestURI:   "s3://cubrid-backups/p/manifest.json",
-				Database:      demoDB,
-				CubridVersion: fullEngineVersion,
+				ManifestURI:    "s3://cubrid-backups/p/manifest.json",
+				ManifestDigest: strings.Repeat("a", 64),
+				Database:       demoDB,
+				CubridVersion:  fullEngineVersion,
 			},
 		}, nil
 	}
