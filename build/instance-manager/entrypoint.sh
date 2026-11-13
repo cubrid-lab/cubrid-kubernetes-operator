@@ -275,7 +275,8 @@ start_cubrid() {
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
 
 # CUBRID's own log files are under $CUBRID/log, which the operator mounts from
-# the member's log PVC on a StatefulSet created with one (#252). Their size is
+# a directory of the member's data volume, or from the log PVC of a StatefulSet
+# created with one (#252, #856). Their size is
 # bounded here, before anything is started (docs/poc/RESULTS.md, POC-35):
 #   - error_log gives the server's error and access logs one fixed name each,
 #     instead of a new pair per start minute that CUBRID never removed;

@@ -554,22 +554,33 @@ kubectl -n <namespace> exec <cluster>-0 -c cubrid -- sh -c 'tail -n 100 "$CUBRID
 kubectl -n <namespace> exec <broker-pod> -c broker -- sh -c 'ls -lR "$CUBRID/log/broker"'
 ```
 
-**Database Pods.** `$CUBRID/log` is a volume of its own on each member, the
-PVC `log-<cluster>-<ordinal>`: 1Gi, of the data volume's StorageClass, from the
-StatefulSet's second volume claim template `log`. The files survive a
-restart of the container and the deletion of the Pod. The PVC is deleted or
-retained with the data PVC when the cluster is deleted
-(`spec.storage.retentionPolicy`), and, like the data PVC, retained on a
-scale-down. It never holds the database: nothing the Operator decides reads
-it, and a log PVC that is missing, new or left by an earlier cluster says
-nothing about a member's data. `$CUBRID/var`, which holds the log applier's
-lock file, stays in the container (POC-21).
+**Database Pods.** `$CUBRID/log` is the directory `cubrid-log` of each
+member's data volume (PVC `data-<cluster>-<ordinal>`), mounted with a
+`subPath`, beside the `databases` directory. The files survive a restart of
+the container and the deletion of the Pod, and are deleted or retained with
+the data PVC. They share the data volume's space: size `spec.storage.data`
+for the bounded logs below, about 160 MiB on an HA member, as well as the
+database. Each member has this one claim. A second claim per member, as
+first tried (#849), let the scheduler bind one claim to a node while the
+other failed, and the member then stayed unschedulable (#856).
+`$CUBRID/var`, which holds the log applier's lock file, stays in the
+container (POC-21).
 
-A StatefulSet's volume claim templates cannot be changed. A cluster whose
-StatefulSet was created by an Operator without this volume keeps its CUBRID
-log files in the container, as before: they are lost when the container is
-replaced. Its StatefulSet is left as it is; only a cluster created again gets
-the log volume.
+A StatefulSet's volume claim templates cannot be changed, and a new Pod
+template would restart its members, so a cluster keeps the layout its
+StatefulSet was created with:
+
+- A StatefulSet created by an Operator between #849 and #856 has a second
+  volume claim template, `log`. Its members keep their logs on the PVC
+  `log-<cluster>-<ordinal>` (1Gi, of the data volume's StorageClass), which
+  is deleted or retained with the data PVC and, like it, retained on a
+  scale-down. That PVC never holds the database: nothing the Operator decides
+  reads it, and a log PVC that is missing, new or left by an earlier cluster
+  says nothing about a member's data.
+- A StatefulSet created by an Operator before #849 keeps its CUBRID log files
+  in the container, as before: they are lost when the container is replaced.
+
+Only a cluster created again gets the current layout.
 
 The entrypoint bounds what CUBRID keeps there, before it starts anything
 (`build/instance-manager/entrypoint.sh`):
@@ -590,7 +601,8 @@ they stayed under 15 KB each there. Bounds observed: a file rotated within
 about 350 bytes past `error_log_size`, with values from 8,000 to 100,000 bytes;
 that 10 MiB rotates the same way is an extrapolation. A full log volume did not
 stop a standalone server from committing (POC-35, on `tmpfs`); with a full log
-volume on another file system, and on an HA member, this was not tried.
+volume on another file system, and on an HA member, this was not tried. With
+the logs on the data volume, a full volume is also a full database volume.
 
 **Broker Pods.** A Broker Pod has no persistent volume: `$CUBRID/log` is an
 `emptyDir`, which survives a restart of the container and is lost with the

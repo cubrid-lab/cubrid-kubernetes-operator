@@ -1871,7 +1871,7 @@ it needs more.
   it.
 - **Log check:** every file under `$CUBRID/log` of the member before the Pod
   deletion, at least one of them the server's, is still there after it, since
-  the directory is the member's log PVC (#252). The list is recorded in
+  the directory is on the member's data volume (#252, #856). The list is recorded in
   `S00/record.json` (`engineLogFilesBeforePodDelete`).
 - **Conditions during the installation** (see
   [Conditions during the fault](#conditions-during-the-fault)): S00 has no

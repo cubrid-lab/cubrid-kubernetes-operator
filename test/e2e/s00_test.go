@@ -68,8 +68,8 @@ type s00Evidence struct {
 }
 
 // s00EngineLogFiles lists the files under $CUBRID/log of the member, relative
-// to it, without symbolic links. On a StatefulSet created with the log claim template, the directory
-// is the member's log PVC (#252).
+// to it, without symbolic links. The directory is on the member's data
+// volume (#252, #856).
 func s00EngineLogFiles(namespace, pod string) ([]string, error) {
 	out, err := utils.Run(exec.Command("kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
 		// The image has no find: the files are listed three levels deep with shell
@@ -460,7 +460,7 @@ spec:
 			logsAfter, err := s00EngineLogFiles(s00Namespace, pod)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(logsAfter).To(ContainElements(logsBefore),
-				"log files written before the Pod deletion are gone; $CUBRID/log is not on the member's log PVC")
+				"log files written before the Pod deletion are gone; $CUBRID/log is not on the member's data volume")
 			record.LogsKeptAcrossDelete = true
 			record.Result = string(evidence.Pass)
 		})

@@ -22,62 +22,75 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
 
 // CUBRID writes its own log files under $CUBRID/log, /home/cubrid/CUBRID/log
 // in the Instance Manager image: the server, cub_master, the log copiers and
 // appliers, the utilities and, in a Broker Pod, the Broker and its CAS
-// processes (docs/poc/RESULTS.md, POC-35). The directory is a volume of its
-// own, so that the files outlive the container (#252). $CUBRID/var, which
+// processes (docs/poc/RESULTS.md, POC-35). On a member the directory is on a
+// volume, so that the files outlive the container (#252). $CUBRID/var, which
 // holds the applier's lock file, stays in the container (POC-21).
+//
+// A member's StatefulSet keeps the volume it was created with, because
+// volumeClaimTemplates cannot change and a new Pod template would restart its
+// members (#812). That gives three layouts:
+//   - a StatefulSet created now mounts the subdirectory engineLogSubPath of the
+//     data volume at $CUBRID/log, so each member has one claim. With a second
+//     claim, the scheduler could bind one claim to a node and fail on the
+//     other, which left a member unschedulable for good (#856);
+//   - a StatefulSet created with the log claim template (#849) keeps mounting
+//     its log claim, log-<cluster>-<ordinal>;
+//   - a StatefulSet created before either mounts nothing there, and its
+//     members keep their logs in the container.
 const (
 	engineLogMountPath = "/home/cubrid/CUBRID/log"
-	// engineLogVolume names the StatefulSet's log claim template, so a
-	// member's log PVC is log-<cluster>-<ordinal>, and the Broker's emptyDir.
+	// engineLogVolume names the log claim template of a StatefulSet created
+	// with one, so its member's log PVC is log-<cluster>-<ordinal>, and the
+	// Broker's emptyDir.
 	engineLogVolume = "log"
+	// engineLogSubPath is the directory of the data volume that holds
+	// $CUBRID/log. Nothing else on the data volume uses this name: its root
+	// holds databases, operations, backup-staging and restore-staging.
+	engineLogSubPath = "cubrid-log"
+	// dataVolume names the data claim template and its mount.
+	dataVolume = "data"
 )
 
-// engineLogClaimSize is the size of each member's log PVC. The entrypoint
-// bounds what CUBRID keeps there to about 160 MiB on an HA member
-// (build/instance-manager/entrypoint.sh); the rest is headroom for the files
-// POC-35 showed no bound for, which stayed under 15 KB each.
-var engineLogClaimSize = resource.MustParse("1Gi")
-
-// engineLogPVCTemplate is the second volume claim template of a member: a
-// small volume of the data volume's StorageClass for $CUBRID/log. It is only
-// ever on a StatefulSet created with it; volumeClaimTemplates cannot be
-// changed on an existing one. The StatefulSet's PVC retention policy covers
-// it, so it is deleted or retained with the data PVC. It never holds the
-// database, and nothing takes it for evidence of one.
-func engineLogPVCTemplate(cluster *databasev1alpha1.CubridCluster) corev1.PersistentVolumeClaim {
-	return corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: engineLogVolume},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			StorageClassName: cluster.Spec.Storage.Data.StorageClassName,
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: engineLogClaimSize},
-			},
-		},
+// engineLogMount is where the cubrid container of a member mounts its log
+// files, judged from the StatefulSet as it is: the subdirectory of the data
+// volume on a StatefulSet created now or already mounting it, the log claim
+// on one created with it, and nothing on one created before either. The
+// existing Pod template decides, so a reconcile never changes its mounts.
+func engineLogMount(sts *appsv1.StatefulSet) (corev1.VolumeMount, bool) {
+	onData := corev1.VolumeMount{Name: dataVolume, MountPath: engineLogMountPath, SubPath: engineLogSubPath}
+	if sts.CreationTimestamp.IsZero() {
+		return onData, true
 	}
-}
-
-// mountEngineLogs mounts the log claim at $CUBRID/log when the StatefulSet has
-// one. A StatefulSet an earlier build created has none: its members keep their
-// logs in the container, and its Pod template stays as it was.
-func mountEngineLogs(sts *appsv1.StatefulSet, spec *corev1.PodSpec) {
-	if !slices.ContainsFunc(sts.Spec.VolumeClaimTemplates, func(t corev1.PersistentVolumeClaim) bool {
+	if slices.ContainsFunc(sts.Spec.VolumeClaimTemplates, func(t corev1.PersistentVolumeClaim) bool {
 		return t.Name == engineLogVolume
 	}) {
+		return corev1.VolumeMount{Name: engineLogVolume, MountPath: engineLogMountPath}, true
+	}
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == appName && slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+			return m.Name == onData.Name && m.MountPath == onData.MountPath && m.SubPath == onData.SubPath
+		}) {
+			return onData, true
+		}
+	}
+	return corev1.VolumeMount{}, false
+}
+
+// mountEngineLogs adds the mount engineLogMount chooses for sts to the cubrid
+// container of spec.
+func mountEngineLogs(sts *appsv1.StatefulSet, spec *corev1.PodSpec) {
+	mount, ok := engineLogMount(sts)
+	if !ok {
 		return
 	}
 	for i := range spec.Containers {
 		if spec.Containers[i].Name == appName {
-			spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts,
-				corev1.VolumeMount{Name: engineLogVolume, MountPath: engineLogMountPath})
+			spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts, mount)
 		}
 	}
 }

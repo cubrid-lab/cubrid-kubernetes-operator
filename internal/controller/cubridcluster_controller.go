@@ -781,11 +781,9 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		if sts.CreationTimestamp.IsZero() {
 			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 			sts.Spec.ServiceName = instancesServiceName(cluster.Name)
-			// The data claim stays the first template; the log claim is only
-			// on StatefulSets created with it (#252).
-			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
-				r.dataPVCTemplate(cluster), engineLogPVCTemplate(cluster),
-			}
+			// One claim per member; CUBRID's logs are on the data volume
+			// (enginelogs.go, #856).
+			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{r.dataPVCTemplate(cluster)}
 			// Parallel: no member waits for a lower ordinal to be Ready, so a
 			// full restart never starts member 0 alone and no ordinal is
 			// favoured (ADR-0001, "Pod management policy").
@@ -824,7 +822,7 @@ func pvcRetentionPolicy(cluster *databasev1alpha1.CubridCluster) *appsv1.Statefu
 
 func (r *CubridClusterReconciler) dataPVCTemplate(cluster *databasev1alpha1.CubridCluster) corev1.PersistentVolumeClaim {
 	return corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data"},
+		ObjectMeta: metav1.ObjectMeta{Name: dataVolume},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: cluster.Spec.Storage.Data.StorageClassName,
@@ -882,7 +880,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	gracePeriod := int64(120)
 	uid := cubridUID
 	fsGroupPolicy := corev1.FSGroupChangeOnRootMismatch
-	mounts := []corev1.VolumeMount{{Name: "data", MountPath: dataMountPath}}
+	mounts := []corev1.VolumeMount{{Name: dataVolume, MountPath: dataMountPath}}
 	var volumes []corev1.Volume
 	if cluster.Spec.HighAvailability.Enabled {
 		// The same cubrid_ha.conf for every member (ADR-0004).

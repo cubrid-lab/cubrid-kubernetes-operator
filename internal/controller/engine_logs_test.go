@@ -42,6 +42,9 @@ const cubridLogDir = "/home/cubrid/CUBRID/log"
 // dataClaim is the StatefulSet's data claim template.
 const dataClaim = "data"
 
+// logsTestImage is the image of the StatefulSets these tests build.
+const logsTestImage = "registry.example/cubrid-instance-manager:logs"
+
 // mountAt returns the mount of the container at path, if there is one.
 func mountAt(c corev1.Container, path string) (corev1.VolumeMount, bool) {
 	for _, m := range c.VolumeMounts {
@@ -102,14 +105,14 @@ func TestBrokerPodKeepsItsLogsInABoundedEmptyDir(t *testing.T) {
 	}
 }
 
-var _ = Describe("CUBRID's log files on a volume of each member (#252)", func() {
+var _ = Describe("CUBRID's log files on a volume of each member (#252, #856)", func() {
 	ctx := context.Background()
 	var r *CubridClusterReconciler
 
 	BeforeEach(func() {
 		r = &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(500),
-			DefaultImage: "registry.example/cubrid-instance-manager:logs",
+			DefaultImage: logsTestImage,
 		}
 	})
 	reconcileOnce := func(c *databasev1alpha1.CubridCluster) {
@@ -136,33 +139,87 @@ var _ = Describe("CUBRID's log files on a volume of each member (#252)", func() 
 		return names
 	}
 
-	It("gives a new StatefulSet a log claim template beside the data one, mounted at $CUBRID/log", func() {
+	It("gives a new StatefulSet only the data claim template and keeps $CUBRID/log in a subdirectory of the data volume", func() {
 		c := standaloneCluster("logs-new")
-		class := "log-test-class"
-		c.Spec.Storage.Data.StorageClassName = &class
 		create(c)
 		reconcileOnce(c)
 		sts := statefulSet(c)
 
-		Expect(templateNames(sts)).To(Equal([]string{dataClaim, "log"}),
-			"the data claim stays the first template; the log claim is a template of its own")
-		log := sts.Spec.VolumeClaimTemplates[1]
-		Expect(log.Spec.AccessModes).To(Equal([]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}))
-		Expect(log.Spec.Resources.Requests.Storage().Cmp(resource.MustParse("1Gi"))).To(Equal(0),
-			"the log claim is fixed at 1Gi, got %v", log.Spec.Resources.Requests.Storage())
-		Expect(log.Spec.StorageClassName).To(HaveValue(Equal(class)), "the log claim uses the data claim's StorageClass")
+		// A second claim per member can be bound to a node on its own while
+		// the data claim is not, which left a member of a new HA cluster
+		// unschedulable for good, so a member has a single claim (#856).
+		Expect(templateNames(sts)).To(Equal([]string{dataClaim}),
+			"a new member must have one claim, so its claims can never be bound to different nodes")
 
 		container := sts.Spec.Template.Spec.Containers[0]
 		mount, ok := mountAt(container, cubridLogDir)
-		Expect(ok).To(BeTrue(), "the database container mounts nothing at %s", cubridLogDir)
-		Expect(mount.Name).To(Equal("log"))
+		Expect(ok).To(BeTrue(), "the database container mounts nothing at %s, so the logs would be lost with the Pod", cubridLogDir)
+		Expect(mount.Name).To(Equal(dataClaim), "the logs are on the data volume")
+		Expect(mount.SubPath).To(Equal("cubrid-log"), "the logs are in a subdirectory of their own on the data volume")
 		data, _ := mountAt(container, dataMountPath)
 		Expect(data.Name).To(Equal(dataClaim))
-
-		By("deleting or keeping the log claim with the data claim: one retention policy covers every template")
-		Expect(sts.Spec.PersistentVolumeClaimRetentionPolicy).To(Equal(pvcRetentionPolicy(c)))
+		Expect(data.SubPath).To(BeEmpty())
 
 		By("leaving the StatefulSet as it is on the next reconcile")
+		generation := sts.Generation
+		reconcileOnce(c)
+		Expect(statefulSet(c).Generation).To(Equal(generation))
+	})
+
+	It("keeps the log claim template and its mount on a StatefulSet created with one", func() {
+		c := standaloneCluster("logs-claim")
+		class := "log-test-class"
+		c.Spec.Storage.Data.StorageClassName = &class
+		create(c)
+		// A StatefulSet an earlier build created with a log claim template
+		// (#849). Its templates cannot change, and changing its Pod template
+		// would restart every member, so it keeps mounting the log claim (#812).
+		logClaim := corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: engineLogVolume},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				StorageClassName: &class,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				},
+			},
+		}
+		old := &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c)},
+			Spec: appsv1.StatefulSetSpec{
+				Selector:             &metav1.LabelSelector{MatchLabels: labelsFor(c)},
+				ServiceName:          instancesServiceName(c.Name),
+				VolumeClaimTemplates: []corev1.PersistentVolumeClaim{r.dataPVCTemplate(c), logClaim},
+				PodManagementPolicy:  appsv1.ParallelPodManagement,
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labelsFor(c)},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: appName, Image: logsTestImage,
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: dataClaim, MountPath: dataMountPath},
+							{Name: engineLogVolume, MountPath: cubridLogDir},
+						},
+					}}},
+				},
+			},
+		}
+		Expect(controllerutil.SetControllerReference(c, old, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, old)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, old))).To(Succeed()) })
+
+		reconcileOnce(c)
+		sts := statefulSet(c)
+		Expect(templateNames(sts)).To(Equal([]string{dataClaim, engineLogVolume}))
+		container := sts.Spec.Template.Spec.Containers[0]
+		mount, ok := mountAt(container, cubridLogDir)
+		Expect(ok).To(BeTrue(), "a member with a log claim must keep writing its logs there")
+		Expect(mount.Name).To(Equal(engineLogVolume))
+		Expect(mount.SubPath).To(BeEmpty())
+		for _, m := range container.VolumeMounts {
+			Expect(m.SubPath).To(BeEmpty(), "a member with a log claim must not also mount a subdirectory of its data volume: %+v", m)
+		}
+
+		By("not updating the StatefulSet again on the next reconcile")
 		generation := sts.Generation
 		reconcileOnce(c)
 		Expect(statefulSet(c).Generation).To(Equal(generation))
@@ -171,8 +228,9 @@ var _ = Describe("CUBRID's log files on a volume of each member (#252)", func() 
 	It("leaves a StatefulSet created without the log claim template without one, and mounts nothing at $CUBRID/log", func() {
 		c := standaloneCluster("logs-old")
 		create(c)
-		// A StatefulSet an earlier build created: volumeClaimTemplates cannot
-		// be changed on it, so its members keep their logs in the container.
+		// A StatefulSet a build before #849 created, with no log claim
+		// template and nothing mounted at $CUBRID/log: its members keep their
+		// logs in the container, and adding a mount would restart them.
 		old := &appsv1.StatefulSet{
 			ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c)},
 			Spec: appsv1.StatefulSetSpec{
@@ -183,7 +241,7 @@ var _ = Describe("CUBRID's log files on a volume of each member (#252)", func() 
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labelsFor(c)},
 					Spec: corev1.PodSpec{Containers: []corev1.Container{{
-						Name: appName, Image: "registry.example/cubrid-instance-manager:logs",
+						Name: appName, Image: logsTestImage,
 					}}},
 				},
 			},
@@ -196,9 +254,9 @@ var _ = Describe("CUBRID's log files on a volume of each member (#252)", func() 
 		sts := statefulSet(c)
 		Expect(templateNames(sts)).To(Equal([]string{dataClaim}))
 		_, mounted := mountAt(sts.Spec.Template.Spec.Containers[0], cubridLogDir)
-		Expect(mounted).To(BeFalse(), "a Pod template must not mount a log volume its StatefulSet has no claim for")
+		Expect(mounted).To(BeFalse(), "a StatefulSet created before log volumes must not get one mounted, which would restart its members")
 		for _, v := range sts.Spec.Template.Spec.Volumes {
-			Expect(v.Name).NotTo(Equal("log"))
+			Expect(v.Name).NotTo(Equal(engineLogVolume))
 		}
 
 		By("not updating the StatefulSet again on the next reconcile")
