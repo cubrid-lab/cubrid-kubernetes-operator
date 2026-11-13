@@ -172,12 +172,13 @@ func TestReadyMasterClaims(t *testing.T) {
 // The HTTP API can return a status that did not pass through ParseHAStatus.
 // Existing authoritative masters must still keep Ready false even when the
 // response lacks the additional local evidence used for conflicting claims.
+// A master answer that names no member is not an authoritative master at all;
+// roleprober_identity_test.go covers it (#839).
 func TestReadyMasterClaimsWithoutLocalEvidence(t *testing.T) {
 	cases := []struct {
 		name   string
 		status instancemanager.HAStatus
 	}{
-		{"missing identity and nodes", instancemanager.HAStatus{Role: instancemanager.RoleMaster, ServerActive: true}},
 		{"missing local entry", instancemanager.HAStatus{Current: c1, Role: instancemanager.RoleMaster, ServerActive: true}},
 		{"duplicate local entries", instancemanager.HAStatus{Current: c1, Role: instancemanager.RoleMaster, ServerActive: true,
 			Nodes: []instancemanager.NodeState{node(c1, string(instancemanager.RoleMaster)), node(c1, string(instancemanager.RoleMaster))}}},

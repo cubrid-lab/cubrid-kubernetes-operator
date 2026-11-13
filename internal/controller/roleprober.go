@@ -45,8 +45,9 @@ type RoleObservation struct {
 	// older than roleObservationTTL, is not authoritative (ADR-0005).
 	ObservedAt time.Time
 	// Conflicting is set when the Instance Manager's answer contradicts itself
-	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus) or names a member
-	// other than the one that was asked; the role is then not trusted.
+	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus), names a member
+	// other than the one that was asked, or gives a master or slave role
+	// without naming any member; the role is then not trusted.
 	Conflicting bool
 	// ActiveMasterClaim preserves a locally consistent active-master report
 	// even when another master in the node list makes the role untrusted.
@@ -114,6 +115,10 @@ func NewHTTPRoleProber(tokens TokenSource) *HTTPRoleProber {
 	}
 }
 
+// reasonAnswerNamesNoMember is the reason of a master or slave answer that
+// does not name the member it came from.
+const reasonAnswerNamesNoMember = "the answer names no member"
+
 func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace string) RoleObservation {
 	// Per-member alias Service resolves the short pod name to its pod IP within
 	// the namespace (ADR-0004).
@@ -152,13 +157,24 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if st.Current != podName {
 		o.ActiveMasterClaim = false
 	}
-	// The answer is recorded under the name that was asked. An answer that
-	// carries a role but names another member came from somewhere else, a
-	// wrong DNS record or Service for example, and is not this member's role.
-	if st.Current != "" && st.Current != podName {
+	// The answer is recorded under the name that was asked. A master or slave
+	// role counts only when the answer names that member as current. An
+	// answer that names another member came from somewhere else, a wrong DNS
+	// record or Service for example. An answer that names no member cannot
+	// be told apart from one: an Instance Manager of another build, or an
+	// answer changed on the way, may leave the name out. Neither is this
+	// member's role. An answer without a role names nobody and is kept as an
+	// answer without a role.
+	haRole := st.Role == instancemanager.RoleMaster || st.Role == instancemanager.RoleSlave
+	switch {
+	case st.Current != "" && st.Current != podName:
 		o.Conflicting = true
 		o.MasterNotYetActive = false
 		o.Reason = "the answer names the member " + cleanMessage(st.Current)
+	case st.Current == "" && haRole:
+		o.Conflicting = true
+		o.MasterNotYetActive = false
+		o.Reason = reasonAnswerNamesNoMember
 	}
 	return o
 }
