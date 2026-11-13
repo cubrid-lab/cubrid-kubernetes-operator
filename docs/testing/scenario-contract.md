@@ -2846,6 +2846,19 @@ UIDs and volumes. The manual recovery procedure then put the 200 rows on every
 member of a new cluster. This was a scripted manual run, not a harness
 scenario with a verdict.
 
+Both variants were also run once by hand on the VM lab, 2026-11-13
+22:02–22:06 UTC (#615), on the `local-path` StorageClass, whose reclaim policy
+is `Delete`.
+- **`retain`, standalone:** the claim and its PV kept their UIDs, and the
+  recreated cluster read the row back without `createdb`.
+- **`delete`, HA:** no claim and no PV of the cluster was left.
+- **Cleanup guarded by UID:** it removed the kept claim, and its PV went with
+  it.
+- **Other namespaces:** no claim changed.
+
+[What deleting a cluster does to its data](../operations/data-retention.md)
+records the run and the difference between the two policies.
+
 ### S14: authentication and Secrets
 
 - **Level:** real database on Kind.

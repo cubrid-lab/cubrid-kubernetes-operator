@@ -206,6 +206,9 @@ required by #125/#127.
   reclaim policies and retained data first; `make uninstall` removes
   CRDs, not safely archives database contents. Do not execute it as
   a generic cleanup step on a cluster that holds data.
+  [What deleting a cluster does to its data](data-retention.md) separates
+  `spec.storage.retentionPolicy` from the StorageClass reclaim policy and
+  shows a cleanup that deletes only the recorded claims.
 
 ## 6. Evidence to add when a procedure becomes verified
 
