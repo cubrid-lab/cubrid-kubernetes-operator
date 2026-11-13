@@ -80,6 +80,10 @@ const (
 	reasonSeedSourceContradicted    = "SeedSourceContradicted"
 	reasonRecordedTargetUnverified  = "RecordedTargetUnverified"
 	reasonObjectStorageWaitExpired  = "ObjectStorageWaitExpired"
+	// reasonArtifactUnverified ends a backup whose target answered Completed
+	// for its operation without the artifact facts that make it restorable
+	// (completedArtifactProblem).
+	reasonArtifactUnverified = "ArtifactUnverified"
 
 	// objectStorageEnvPrefix starts the names of the manager's object-storage
 	// environment (objectStorageEnv).
@@ -556,19 +560,57 @@ func (r *CubridBackupReconciler) adoptBackup(ctx context.Context, backup *databa
 	return r.pollBackup(ctx, backup)
 }
 
+// completedArtifactProblem says why the completed operation op does not show
+// that backup is restorable; it is empty when it does. The operation must be
+// the recorded backup operation, and its artifact must name a manifest URI of
+// the form a recovery accepts (ADR-0008), the manifest's digest and the
+// backup's database. The Instance Manager sets all of these when it marks a
+// backup Completed, after the manifest is uploaded (ADR-0007); an operation
+// without them, such as one written by another build or a malformed answer,
+// is not taken as a restorable backup. The manifest itself is not read here:
+// the URI and the digest are what the member reports. The message names the
+// field, never its value, so that nothing the member returns is copied into
+// the status.
+func completedArtifactProblem(backup *databasev1alpha1.CubridBackup, op instancemanager.Operation) string {
+	switch {
+	case op.Kind != instancemanager.OpBackup:
+		return "the completed operation is not of kind backup"
+	case op.ID != backup.Status.OperationRef:
+		return "the completed operation is not the recorded operation " + backup.Status.OperationRef
+	case op.Artifact == nil:
+		return "the completed operation reports no artifact"
+	case op.Artifact.ManifestURI == "":
+		return "the completed operation's artifact has no manifest URI"
+	}
+	if _, _, err := parseManifestURI(op.Artifact.ManifestURI); err != nil {
+		return "the completed operation's artifact has a manifest URI that is not of the form " +
+			"s3://<bucket>/<prefix>/manifest.json accepted for a recovery"
+	}
+	switch {
+	case op.Artifact.ManifestDigest == "":
+		return "the completed operation's artifact has no manifest digest"
+	case op.Artifact.Database != backup.Spec.Database:
+		return "the completed operation's artifact names another database than spec.database " + backup.Spec.Database
+	}
+	return ""
+}
+
 func (r *CubridBackupReconciler) completed(ctx context.Context, backup *databasev1alpha1.CubridBackup, op instancemanager.Operation) (ctrl.Result, error) {
+	if problem := completedArtifactProblem(backup, op); problem != "" {
+		return r.ended(ctx, backup, reasonArtifactUnverified, fmt.Sprintf(
+			"%s answered Completed, but %s; no artifact is recorded and the backup is not started again, on %s or another member",
+			backup.Status.TargetInstance, problem, backup.Status.TargetInstance))
+	}
 	now := metav1.Now()
 	backup.Status.Phase = databasev1alpha1.BackupPhaseCompleted
 	backup.Status.CompletedAt = &now
-	if op.Artifact != nil {
-		backup.Status.Artifact = &databasev1alpha1.CubridBackupArtifact{
-			URI:            op.Artifact.ManifestURI,
-			ManifestDigest: op.Artifact.ManifestDigest,
-			SizeBytes:      op.Artifact.SizeBytes,
-			CubridVersion:  op.Artifact.CubridVersion,
-			Database:       op.Artifact.Database,
-			Level:          databasev1alpha1.CubridBackupFull,
-		}
+	backup.Status.Artifact = &databasev1alpha1.CubridBackupArtifact{
+		URI:            op.Artifact.ManifestURI,
+		ManifestDigest: op.Artifact.ManifestDigest,
+		SizeBytes:      op.Artifact.SizeBytes,
+		CubridVersion:  op.Artifact.CubridVersion,
+		Database:       op.Artifact.Database,
+		Level:          databasev1alpha1.CubridBackupFull,
 	}
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionTrue, "BackupCompleted", "backup completed")
 	return r.commit(ctx, backup, ctrl.Result{})

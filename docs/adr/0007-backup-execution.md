@@ -553,6 +553,10 @@ operation of it, and waits within the bound while that cannot be asked),
 `RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
 `RecordedOperationMissing`, `RecordedOperationLost`,
+`ArtifactUnverified` (the target answered `Completed`, but the operation is
+not the recorded backup operation, or its artifact lacks a manifest URI of
+the form a recovery accepts, the manifest digest or the backup's database:
+the backup ends `Failed` with no artifact and is not started again, #841),
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary. As
 implemented, `ChecksumMismatch`, `InsufficientStagingSpace` and

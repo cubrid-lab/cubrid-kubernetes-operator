@@ -145,7 +145,9 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		By("the operation completing")
 		f.fake.held = &instancemanager.Operation{
 			ID: opFake, Kind: instancemanager.OpBackup, State: instancemanager.OpCompleted,
-			Artifact: &instancemanager.OperationArtifact{ManifestURI: "s3://cubrid-backups/a/manifest.json", Database: demoDB},
+			Artifact: &instancemanager.OperationArtifact{
+				ManifestURI: "s3://cubrid-backups/a/manifest.json", ManifestDigest: strings.Repeat("a", 64), Database: demoDB,
+			},
 		}
 		reconcileOnce(ctx, f.r, f.backup)
 		got = stored(ctx, f.backup)
