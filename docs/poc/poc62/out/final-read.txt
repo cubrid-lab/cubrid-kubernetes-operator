@@ -1,0 +1,15 @@
+### 2026-11-13T12:35:17.820Z poc-nopk-master im_move_marker: 'm-a1u' 'm-c1' 
+### 2026-11-13T12:35:17.924Z poc-nopk-master pk_marker: 'm-b1' 
+### 2026-11-13T12:35:18.010Z poc-nopk-slave im_move_marker: 
+### 2026-11-13T12:35:18.100Z poc-nopk-slave pk_marker: 'm-b1' 
+Insert count                   : 1
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 19
+Fail count                     : 0
+Delayed log page count         : 0
+ HA-Node Info (current poc-nopk-master, state master)
+   Node poc-nopk-slave (priority 2, state slave)
+   Node poc-nopk-master (priority 1, state master)
+   Server appdb (pid 72, state registered_and_active)
