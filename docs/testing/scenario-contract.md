@@ -1029,6 +1029,32 @@ report of it, for the evidence limits above. Besides the Never rules:
 `blocked` result, so a disagreement or a rule that could not be judged fails
 it.
 
+The metrics are checked against the status at three points (#253): in S03,
+once the master did not change a second time, and in the replication-stall
+step, once `HAReady` follows the reported stall and again once
+`ReplicationHealthy` and `HAReady` are `True` after the repair. A Pod in the
+manager's namespace reads the metrics endpoint as the manager's
+ServiceAccount; it is created at the first check and kept for the suite. Each
+check reads the cluster, the endpoint, and the cluster again, and takes the
+scrape only when both reads return the same `resourceVersion`, since the
+manager sets the gauges from the status it wrote. Every gauge of
+`docs/observability.md`, section "Metrics", except
+`cubrid_cluster_instances_ready`, which is not in the status, must then
+mirror that status: a value where the table gives one, and no sample where it
+gives none, such as `cubrid_cluster_replication_healthy` while the Condition
+is `Unknown` or `cubrid_instance_replication_stalled` for a member without a
+reading. The status must also be the one the point is about: in S03
+`PrimaryResolved` `True`, the new master as `currentPrimary` and with its
+`master` role series 1, and a former master that is another member with that
+series 0; in the stall `ReplicationHealthy` and `HAReady` `False`, their
+gauges 0, and the stalled slave's `cubrid_instance_replication_stalled` 1;
+after the repair both Conditions `True`, their gauges 1, and that series 0.
+Each check waits at most one minute, reading every two seconds, and fails
+with the gauges that disagree, their values and the status field or Condition
+each should mirror. The samples it accepted are kept as `S03/<variant>/metrics.txt`,
+`replication-stall/metrics-stalled.txt` and
+`replication-stall/metrics-repaired.txt`.
+
 ### `summary.json`
 
 ```json

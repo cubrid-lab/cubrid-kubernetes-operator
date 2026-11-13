@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,7 +34,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
@@ -284,6 +287,18 @@ func replicationStallStep(r *haRun) {
 			g.Expect(reason).To(Equal("ReplicationStalled"))
 		}, time.Minute, 5*time.Second).Should(Succeed(), observed)
 
+		By("checking that the manager's metrics report the stall as the status does (#253)")
+		r.metricsFollowStatus("replication-stall/metrics-stalled.txt",
+			func(c *databasev1alpha1.CubridCluster, samples map[string]float64) error {
+				return errors.Join(
+					conditionIs(c, "ReplicationHealthy", metav1.ConditionFalse),
+					conditionIs(c, "HAReady", metav1.ConditionFalse),
+					sampleIs(samples, "cubrid_cluster_replication_healthy", 0),
+					sampleIs(samples, "cubrid_cluster_ha_ready", 0),
+					sampleIs(samples, memberSeries("cubrid_instance_replication_stalled", victim), 1),
+					sampleIs(samples, memberSeries("cubrid_instance_replication_observation_available", victim), 1))
+			})
+
 		By("checking that the slave is behind")
 		// rows reads a member's rows; a failure is cut short, because the
 		// whole output of csql would bury it in the log.
@@ -324,6 +339,16 @@ func replicationStallStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 5*time.Minute, 5*time.Second).Should(Succeed(), observed)
+		By("checking that the manager's metrics no longer report the stall, as the status does not (#253)")
+		r.metricsFollowStatus("replication-stall/metrics-repaired.txt",
+			func(c *databasev1alpha1.CubridCluster, samples map[string]float64) error {
+				return errors.Join(
+					conditionIs(c, "ReplicationHealthy", metav1.ConditionTrue),
+					conditionIs(c, "HAReady", metav1.ConditionTrue),
+					sampleIs(samples, "cubrid_cluster_replication_healthy", 1),
+					sampleIs(samples, "cubrid_cluster_ha_ready", 1),
+					sampleIs(samples, memberSeries("cubrid_instance_replication_stalled", victim), 0))
+			})
 		after := rows(victim)
 		record += fmt.Sprintf("rows on the member after its Pod was replaced: %d\n"+
 			"ReplicationHealthy: True\nHAReady: True\n", len(after))
