@@ -27,6 +27,5 @@ still run when they cannot have them.
 [docs/architecture/voluntary-disruption.md](../architecture/voluntary-disruption.md)
 has the result for each topology and degraded state, and what to do about a
 blocked drain. No drain has been run against these budgets yet (#614).
-The generated PDBs are implemented, while the policy decision remains
-**Proposed** in ADR-0012 pending maintainer acceptance (#613); do not treat
-a green envtest as a real-node drain or SQL safety qualification.
+The generated PDBs follow ADR-0012, accepted in #613. Do not treat a green
+envtest as a real-node drain or SQL safety qualification.
