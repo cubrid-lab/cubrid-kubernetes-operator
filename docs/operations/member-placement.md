@@ -59,7 +59,11 @@ spec:
   recreated member would stay `Pending` behind its volume. To move such a
   cluster to `Required`, set it explicitly. If the cluster then reports
   `SpreadBlockedByVolume`, its data has to move by a backup and a restore
-  into a new cluster; the Operator never moves or deletes a PVC (ADR-0006).
+  into a new cluster; the Operator never moves or deletes a data PVC
+  (ADR-0006). It deletes only the log claim of a new member that never
+  started and stayed unschedulable because that claim was bound to a node
+  without its data claim
+  ([docs/observability.md](../observability.md#cubrids-own-log-files), #856).
 - The `MemberPlacement` Condition reports where the members run, and an
   Event is recorded when it reports a problem, once until another one or the
   return to separate nodes is observed

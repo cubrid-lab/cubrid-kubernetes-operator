@@ -84,9 +84,11 @@ one. What every build does promise:
    meaning is a defect.
 2. **No migration of stored data runs automatically.** The Operator does not
    rewrite, move, convert or delete a database, a volume, a PVC or a backup
-   artifact to fit a newer build. ADR-0006 and ADR-0008 keep applying: a PVC
-   is never deleted by the Operator, and a restore never writes over an
-   existing database.
+   artifact to fit a newer build. ADR-0006 and ADR-0008 keep applying: a data
+   PVC is never deleted by the Operator, and a restore never writes over an
+   existing database. The one PVC the Operator deletes is the log claim of a
+   new member that never started, bound to a node without its data claim
+   ([observability](observability.md#cubrids-own-log-files), #856).
 3. **A refusal names what to do.** When a later build cannot take over a
    cluster, the reason says so and the documentation names the way out:
    usually a backup, a new cluster and a restore into it.

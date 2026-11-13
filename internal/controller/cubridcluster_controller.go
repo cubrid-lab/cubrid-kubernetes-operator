@@ -361,7 +361,7 @@ func (r *CubridClusterReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
@@ -449,9 +449,20 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.failed(ctx, &cluster, "DisruptionBudgetReconcileFailed", err)
 	}
 
+	// A new member whose log claim was bound to a node without its data
+	// claim gets both claims again (#856).
+	claimsRecheck, err := r.recoverSplitMemberClaims(ctx, &cluster, sts)
+	if err != nil {
+		return r.failed(ctx, &cluster, reasonMemberClaimRecoveryFailed, err)
+	}
+
 	r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 
-	return r.reconcileMembers(ctx, &cluster, sts)
+	res, err := r.reconcileMembers(ctx, &cluster, sts)
+	if err == nil && claimsRecheck > 0 && (res.RequeueAfter == 0 || claimsRecheck < res.RequeueAfter) {
+		res.RequeueAfter = claimsRecheck
+	}
+	return res, err
 }
 
 // reportDeferredRotation records that a requested token rotation waits for
