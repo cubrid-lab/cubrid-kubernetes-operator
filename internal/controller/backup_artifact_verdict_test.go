@@ -140,14 +140,21 @@ var _ = Describe("CubridBackup whose operation completes", func() {
 
 	// The secret in the malformed URI stands for anything the member could
 	// put there: the reason names the field, never its value.
+	const uriField = "manifest URI"
 	cases := []struct {
 		name, field string
 		change      func(op *instancemanager.Operation)
 	}{
 		{"no artifact", "artifact", func(op *instancemanager.Operation) { op.Artifact = nil }},
-		{"an empty manifest URI", "manifest URI", func(op *instancemanager.Operation) { op.Artifact.ManifestURI = "" }},
-		{"a malformed manifest URI", "manifest URI", func(op *instancemanager.Operation) {
+		{"an empty manifest URI", uriField, func(op *instancemanager.Operation) { op.Artifact.ManifestURI = "" }},
+		{"a malformed manifest URI", uriField, func(op *instancemanager.Operation) {
 			op.Artifact.ManifestURI = "https://user:secret@" + strings.Repeat("x", 2000) + "/manifest.json"
+		}},
+		{"a manifest URI without a prefix", uriField, func(op *instancemanager.Operation) {
+			op.Artifact.ManifestURI = "s3://" + waitBucket + "/manifest.json"
+		}},
+		{"a manifest URI naming another object", uriField, func(op *instancemanager.Operation) {
+			op.Artifact.ManifestURI = "s3://" + waitBucket + "/p/attempt-0/other.json"
 		}},
 		{"an empty manifest digest", "manifest digest", func(op *instancemanager.Operation) { op.Artifact.ManifestDigest = "" }},
 		{"another database", "database", func(op *instancemanager.Operation) { op.Artifact.Database = "otherdb" }},

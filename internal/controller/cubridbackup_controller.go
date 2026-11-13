@@ -598,8 +598,8 @@ func completedArtifactProblem(backup *databasev1alpha1.CubridBackup, op instance
 func (r *CubridBackupReconciler) completed(ctx context.Context, backup *databasev1alpha1.CubridBackup, op instancemanager.Operation) (ctrl.Result, error) {
 	if problem := completedArtifactProblem(backup, op); problem != "" {
 		return r.ended(ctx, backup, reasonArtifactUnverified, fmt.Sprintf(
-			"%s answered Completed, but %s; no artifact is recorded and the backup is not started again, on %s or another member",
-			backup.Status.TargetInstance, problem, backup.Status.TargetInstance))
+			"%s answered Completed, but %s; no artifact is recorded and the backup is not started again on any member",
+			backup.Status.TargetInstance, problem))
 	}
 	now := metav1.Now()
 	backup.Status.Phase = databasev1alpha1.BackupPhaseCompleted
