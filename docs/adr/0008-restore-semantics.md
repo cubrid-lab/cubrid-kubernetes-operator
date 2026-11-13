@@ -264,8 +264,11 @@ is read and written up to one byte more than the size its entry declares: a
 longer body fails at that byte, the rest of it is not read, its incomplete
 staged file is removed and `restoredb` does not run. Artifact verification
 (`VerifyArtifact`) applies the same bounds. There is no fixed limit on the
-size of an object or of the whole backup beyond what the manifest declares;
-the staging volume must hold the declared total.
+size of an object or of the whole backup beyond what the manifest declares.
+Before the first object is downloaded, the restore refuses a backup whose
+declared total exceeds the free space of the staging volume, counting the
+files an earlier attempt already staged under the same keys as free; the
+space is checked, not reserved.
 
 Resuming an interrupted restore (#120, with the marker of #107): the restore's
 key carries the attempt number, so the operator finds a running restore again

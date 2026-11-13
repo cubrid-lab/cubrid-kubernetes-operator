@@ -293,3 +293,60 @@ func TestRestore_RestoresAndVerifiesAMultiFileBackupWithinTheBounds(t *testing.T
 		}
 	}
 }
+
+// A backup whose objects need more bytes than the staging volume has free is
+// refused before any object is downloaded, so a restore that cannot fit does
+// not fill the volume first and fail at the end (#842).
+func TestRestore_RefusesABackupLargerThanTheFreeStagingSpace(t *testing.T) {
+	const bucket, prefix = boundsBucket, boundsPrefix
+	fake := newFakeStore()
+	putRawManifest(t, fake, []ManifestObject{{Key: boundedObjectKey, SizeBytes: 1 << 20, SHA256: checksumOf(" ")}})
+	stream := &endlessStream{limit: 1 << 20}
+	store := &streamingStore{fakeObjectStore: fake, streamKey: boundedObjectKey, stream: stream}
+	saved := stagingFreeBytes
+	stagingFreeBytes = func(string) (uint64, error) { return 1000, nil }
+	t.Cleanup(func() { stagingFreeBytes = saved })
+	req := baseRestoreRequest(t, bucket, prefix)
+	cli := &restoreCLI{}
+
+	_, err := Restore(context.Background(), cli, store, rootsFor(req), req)
+	if err == nil || !strings.Contains(err.Error(), "staging volume") {
+		t.Fatalf("restore error = %v, want a refusal for lack of staging space", err)
+	}
+	if store.gets != 1 || stream.read != 0 {
+		t.Errorf("read %d objects and %d object bytes, want only the manifest", store.gets, stream.read)
+	}
+	if len(cli.calls) != 0 {
+		t.Errorf("restoredb ran: %v", cli.calls)
+	}
+}
+
+// A file an earlier attempt already staged under one of the manifest's keys is
+// overwritten, so its size counts as free space and a retried restore on a
+// nearly full volume is not refused.
+func TestCheckStagingSpace_CountsAFileAlreadyStagedUnderTheSameKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "backup"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(boundedObjectKey)), make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	saved := stagingFreeBytes
+	stagingFreeBytes = func(string) (uint64, error) { return 100, nil }
+	t.Cleanup(func() { stagingFreeBytes = saved })
+	m := BackupManifest{Objects: []ManifestObject{{Key: boundedObjectKey, SizeBytes: 4096}}}
+
+	if err := checkStagingSpace(m, root, dir); err != nil {
+		t.Errorf("a restore that reuses its staged file was refused: %v", err)
+	}
+	m.Objects[0].SizeBytes = 4096 + 101
+	if err := checkStagingSpace(m, root, dir); err == nil {
+		t.Error("a restore needing one byte more than the free and reusable space was accepted")
+	}
+}
