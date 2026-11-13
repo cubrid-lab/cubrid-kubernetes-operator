@@ -112,10 +112,16 @@ const (
 	// a WriteQuarantinedMemberUnverified quarantine must be.
 	quarantineReleaseInterval = 10 * time.Second
 	// quarantineAnswerGap is the longest time between two consecutive
-	// answers, or releasable passes, that still counts as uninterrupted: the
-	// role observation TTL. A longer gap, as while the Operator was stopped,
-	// starts a verification or a release check over.
-	quarantineAnswerGap = roleObservationTTL
+	// answers, or releasable passes, that still counts as uninterrupted. It
+	// follows the cadence of a healthy cluster, not the observation TTL: the
+	// next pass starts haResyncInterval after the previous one ended, a pass
+	// that waits for an unreachable member lasts up to roleProbeTimeout, the
+	// answer of the next pass can come up to roleProbeTimeout after it
+	// starts, and the queue and the API server add some seconds (the margin).
+	// With 30 s, one slow member does not unverify a healthy slave and
+	// quarantine the path without a fault; a longer gap, as while the
+	// Operator was stopped, starts a verification or a release check over.
+	quarantineAnswerGap = haResyncInterval + 2*roleProbeTimeout + 10*time.Second
 	// unverifiedResyncInterval is how soon an HA cluster is observed again
 	// while a member is unverified or a quarantine is in force, in place of
 	// haResyncInterval: it shortens the time until a second active master
@@ -439,8 +445,7 @@ const (
 
 // reasonReadWriteBrokersHeld is Ready's reason in a pass that keeps the
 // read-write Brokers at zero without a quarantine in its status: the pass
-// that released one, before the release is written, or a pass that could not
-// read the members' Pods.
+// that released one, before the release is written.
 const reasonReadWriteBrokersHeld = "ReadWriteBrokersHeld"
 
 // reasonWriteQuarantineOtherCluster is the Warning Event of a stored
@@ -451,14 +456,21 @@ const reasonWriteQuarantineOtherCluster = "WriteQuarantineClusterUIDMismatch"
 // pass: while a quarantine is in force; while this reconciler holds one it
 // decided and has not seen released (quarantineHolds), whatever the status
 // read says; on the pass that releases one, whose release is written to the
-// status before the Brokers are started again; and in a pass that could not
-// read the members' Pods.
+// status before the Brokers are started again.
 func (r *CubridClusterReconciler) writesHeld(cluster *databasev1alpha1.CubridCluster) bool {
 	if cluster.Status.WriteQuarantine != nil || r.heldQuarantine(cluster) != nil {
 		return true
 	}
 	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
-	return ok && (report.(*reconcileReport).before.WriteQuarantine != nil || report.(*reconcileReport).holdWrites)
+	return ok && report.(*reconcileReport).before.WriteQuarantine != nil
+}
+
+// scaleUpHeld reports whether this pass keeps the read-write Brokers from
+// scaling up, without stopping running ones: it could not read the members'
+// Pods, so no quarantine could be decided, but none is known either.
+func (r *CubridClusterReconciler) scaleUpHeld(cluster *databasev1alpha1.CubridCluster) bool {
+	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
+	return ok && report.(*reconcileReport).noScaleUp
 }
 
 // quarantineHold is what a reconciler keeps in memory about one cluster's
@@ -546,10 +558,12 @@ func (r *CubridClusterReconciler) restoreWriteQuarantine(ctx context.Context, cl
 	}
 }
 
-// storedQuarantineHolds reads the cluster from the API server, past the
-// cache, before the read-write Brokers are asked for: a stored quarantine, a
-// cluster of another UID or a failed read keeps them at zero.
-func (r *CubridClusterReconciler) storedQuarantineHolds(ctx context.Context, cluster *databasev1alpha1.CubridCluster) bool {
+// storedQuarantine reads the cluster from the API server, past the cache,
+// before the read-write Brokers are asked for. A stored quarantine keeps them
+// at zero (zero). A failed read, or a stored cluster of another UID, shows no
+// quarantine either way: running Brokers are left running and stopped ones
+// are not started in this pass (noScaleUp).
+func (r *CubridClusterReconciler) storedQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (zero, noScaleUp bool) {
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
@@ -558,19 +572,19 @@ func (r *CubridClusterReconciler) storedQuarantineHolds(ctx context.Context, clu
 	err := reader.Get(ctx, client.ObjectKeyFromObject(cluster), stored)
 	switch {
 	case err != nil:
-		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero: the stored cluster could not be read",
+		logf.FromContext(ctx).Info("Did not scale the read-write Brokers up: the stored cluster could not be read",
 			"reason", err.Error())
-		return true
+		return false, true
 	case stored.UID != cluster.UID:
-		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero: the stored cluster has another UID",
+		logf.FromContext(ctx).Info("Did not scale the read-write Brokers up: the stored cluster has another UID",
 			"storedUID", string(stored.UID))
-		return true
+		return false, true
 	case stored.Status.WriteQuarantine != nil:
 		logf.FromContext(ctx).Info("Kept the read-write Brokers at zero for the stored write quarantine",
 			"generationID", stored.Status.WriteQuarantine.GenerationID)
-		return true
+		return true, false
 	}
-	return false
+	return false, false
 }
 
 // enforceWriteQuarantine keeps the read-write Broker Deployment of a cluster
@@ -676,8 +690,8 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 // before this pass; before are the members' Pods read before the probes, or
 // the error of that read. A member whose Pod differs in the read after the
 // probes verifies nothing in this pass. When either read failed, only the
-// rule of two active masters is applied and the read-write Brokers are kept
-// at zero for the pass. A failure leaves the quarantine in the status as it
+// rule of two active masters is applied and the read-write Brokers are not
+// scaled up in the pass; running ones keep running. A failure leaves the quarantine in the status as it
 // was, so that the read-write Brokers stay at zero, and is returned for a
 // retry.
 func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -693,9 +707,9 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 	}
 	if unknown != nil {
-		logf.FromContext(ctx).Error(unknown, "Kept the read-write Brokers at zero: the members' Pods could not be read")
+		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods could not be read")
 		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
-			report.(*reconcileReport).holdWrites = true
+			report.(*reconcileReport).noScaleUp = true
 		}
 		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
 	}

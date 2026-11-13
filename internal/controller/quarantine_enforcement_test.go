@@ -450,4 +450,38 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 		Expect(drain(recorder)).To(ContainElement(ContainSubstring("Warning WriteQuarantinedMasterChanged")))
 	})
+
+	It("does not scale running read-write Brokers down, nor up, when the API server cannot be read", func() {
+		f := newFixture("wq-read-error")
+		runVerified(reconcilerFor(f, k8sClient), f)
+
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		unreadable := interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				switch obj.(type) {
+				case *databasev1alpha1.CubridCluster, *corev1.Pod:
+					return apierrors.NewServiceUnavailable("the API server is not available")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, k8sClient)
+		r.APIReader = unreadable
+
+		By("running read-write Brokers and no quarantine")
+		*f.clock = f.clock.Add(3 * time.Second)
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)), "a read error does not stop serving Brokers")
+
+		By("read-write Brokers at zero")
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, f.rw, dep)).To(Succeed())
+		dep.Spec.Replicas = new(int32(0))
+		Expect(k8sClient.Update(ctx, dep)).To(Succeed())
+		*f.clock = f.clock.Add(3 * time.Second)
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+		Expect(rwReplicas(f)).To(Equal(int32(0)), "a read error does not start them")
+	})
 })

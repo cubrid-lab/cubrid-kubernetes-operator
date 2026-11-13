@@ -255,8 +255,9 @@ type reconcileReport struct {
 	// brokerRefused says that the Broker tier met an object the cluster does
 	// not control.
 	brokerRefused bool
-	// holdWrites keeps the read-write Brokers at zero for this pass alone.
-	holdWrites bool
+	// noScaleUp keeps the read-write Brokers from scaling up in this pass,
+	// without stopping running ones.
+	noScaleUp bool
 	// releasedQuarantine is the generation of the write quarantine this
 	// reconcile released; once its status is written, memory no longer holds
 	// it.
@@ -1434,7 +1435,7 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 			"the read-write Brokers are kept stopped until the quarantine is released, see RoutingReady")
 	case r.writesHeld(cluster):
 		// The pass that released a quarantine, before the release is
-		// written, or a pass that could not read the members' Pods.
+		// written.
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonReadWriteBrokersHeld,
 			fmt.Sprintf("%d/%d instances ready, but the read-write Brokers are held at zero in this pass", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reasonReadWriteBrokersHeld,

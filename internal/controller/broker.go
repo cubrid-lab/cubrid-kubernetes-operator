@@ -99,11 +99,21 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 		// (ADR-0005, section 8).
 		// Before they are asked for, the stored cluster is read past the
 		// cache, which may be behind a quarantine just written.
-		replicas := int32(brokerReplicas)
-		if mode == brokerModeRW && (r.writesHeld(cluster) || r.storedQuarantineHolds(ctx, cluster)) {
-			replicas = 0
+		// A known quarantine stops them; a read that shows none either way
+		// only keeps them from scaling up.
+		replicas, noScaleUp := int32(brokerReplicas), false
+		if mode == brokerModeRW {
+			zero, unknown := r.writesHeld(cluster), r.scaleUpHeld(cluster)
+			if !zero {
+				stored, unread := r.storedQuarantine(ctx, cluster)
+				zero, unknown = stored, unknown || unread
+			}
+			if zero {
+				replicas = 0
+			}
+			noScaleUp = unknown
 		}
-		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode), replicas)
+		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode), replicas, noScaleUp)
 		if err != nil {
 			return nil, err
 		}
@@ -225,9 +235,10 @@ func brokerPodLabels(cluster *databasev1alpha1.CubridCluster, mode string) map[s
 // nothing. They are replaced one at a time, a new Broker being available
 // before an old one is stopped, so the mode never has fewer Brokers than
 // asked for. replicas is brokerReplicas, or zero for the read-write Brokers
-// of a quarantined cluster.
+// of a quarantined cluster. noScaleUp keeps the replicas at most where they
+// are, zero for a new Deployment.
 func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	mode, image, configHash string, replicas int32) (*appsv1.Deployment, error) {
+	mode, image, configHash string, replicas int32, noScaleUp bool) (*appsv1.Deployment, error) {
 	labels := brokerPodLabels(cluster, mode)
 	noneUnavailable, oneMore := intstr.FromInt32(0), intstr.FromInt32(1)
 
@@ -239,7 +250,18 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 		if dep.CreationTimestamp.IsZero() {
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		}
-		dep.Spec.Replicas = &replicas
+		want := replicas
+		if noScaleUp {
+			current := int32(0)
+			if !dep.CreationTimestamp.IsZero() {
+				current = 1
+				if dep.Spec.Replicas != nil {
+					current = *dep.Spec.Replicas
+				}
+			}
+			want = min(want, current)
+		}
+		dep.Spec.Replicas = &want
 		dep.Spec.Strategy = appsv1.DeploymentStrategy{
 			Type: appsv1.RollingUpdateDeploymentStrategyType,
 			RollingUpdate: &appsv1.RollingUpdateDeployment{

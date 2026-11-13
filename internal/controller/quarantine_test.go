@@ -493,15 +493,25 @@ func TestQuarantineNonce(t *testing.T) {
 	}
 }
 
-// Two non-master answers further apart than the observation TTL, as across
-// a stop of the Operator, are not uninterrupted: the second starts over.
+// Passes of a healthy cluster can be 22 s apart: haResyncInterval after a
+// pass that waited 5 s for a member, and another 5 s probe in the next one.
+// Two non-master answers that far apart still verify a member; answers 40 s
+// apart, as across a stop of the Operator, are not uninterrupted and start
+// over.
 func TestQuarantineVerificationGapStartsOver(t *testing.T) {
-	s := newQuarantineScenario(t, q1)
 	obs := func(now time.Time) map[string]RoleObservation {
 		return map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: noAnswerAt(now)}
 	}
+	s := newQuarantineScenario(t, q1)
 	s.pass(testNow, obs(testNow))
-	later := testNow.Add(roleObservationTTL + 5*time.Second)
+	slow := testNow.Add(22 * time.Second)
+	if d := s.pass(slow, obs(slow)); slices.Contains(d.Unverified, q0) {
+		t.Fatalf("two answers 22 s apart did not verify %s: %+v", q0, d)
+	}
+
+	s = newQuarantineScenario(t, q1)
+	s.pass(testNow, obs(testNow))
+	later := testNow.Add(40 * time.Second)
 	d := s.pass(later, obs(later))
 	if !slices.Contains(d.Unverified, q0) || d.Quarantine == nil {
 		t.Fatalf("an answer %s after the one before verified %s: %+v", later.Sub(testNow), q0, d)
@@ -512,9 +522,20 @@ func TestQuarantineVerificationGapStartsOver(t *testing.T) {
 	}
 }
 
-// Two releasable passes further apart than the observation TTL do not
-// release: the release check starts over.
+// Two releasable passes 22 s apart release the quarantine; 40 s apart they
+// do not: the release check starts over.
 func TestQuarantineReleaseCheckGapStartsOver(t *testing.T) {
+	{
+		s := startUnverified(t)
+		t1 := testNow.Add(3 * time.Second)
+		s.pass(t1, releasable(t1))
+		t2 := t1.Add(quarantineVerifyGap + time.Second)
+		s.pass(t2, releasable(t2))
+		t3 := t2.Add(22 * time.Second)
+		if d := s.pass(t3, releasable(t3)); d.Released == nil {
+			t.Fatalf("two releasable passes 22 s apart did not release: %+v", d.Quarantine)
+		}
+	}
 	s := startUnverified(t)
 	t1 := testNow.Add(3 * time.Second)
 	s.pass(t1, releasable(t1))
@@ -524,7 +545,7 @@ func TestQuarantineReleaseCheckGapStartsOver(t *testing.T) {
 	}
 	// Keep the members' verifications fresh, as passes in between would, so
 	// that only the release check sees the gap.
-	t3 := t2.Add(roleObservationTTL + 5*time.Second)
+	t3 := t2.Add(40 * time.Second)
 	for i := range s.verifications {
 		s.verifications[i].LastNonMasterAt = &metav1.Time{Time: t3.Add(-time.Second)}
 	}

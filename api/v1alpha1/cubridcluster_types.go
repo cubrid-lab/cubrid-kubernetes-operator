@@ -823,8 +823,8 @@ type MemberVerification struct {
 	// answers was received, rounded up to the second.
 	NonMasterSince metav1.Time `json:"nonMasterSince"`
 	// lastNonMasterAt is when the latest of these answers was received. Two
-	// answers further apart than the role observation TTL (15 seconds) are
-	// not uninterrupted: the entry starts over. A newer value of this time
+	// answers further apart than 30 seconds, the longest spacing of two
+	// observations of a healthy cluster, are not uninterrupted: the entry starts over. A newer value of this time
 	// alone is written at most every 30 seconds, as for lastObservedTime.
 	// +optional
 	LastNonMasterAt *metav1.Time `json:"lastNonMasterAt,omitempty"`
@@ -911,8 +911,8 @@ type WriteQuarantine struct {
 	// +optional
 	ReleaseCheckSince *metav1.Time `json:"releaseCheckSince,omitempty"`
 	// releaseCheckLastTime is the time of the latest of those observations.
-	// Two of them further apart than the role observation TTL (15 seconds)
-	// start the release check over.
+	// Two of them further apart than 30 seconds start the release check
+	// over.
 	// +optional
 	ReleaseCheckLastTime *metav1.Time `json:"releaseCheckLastTime,omitempty"`
 }
