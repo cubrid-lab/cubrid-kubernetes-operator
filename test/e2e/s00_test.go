@@ -61,6 +61,24 @@ type s00Evidence struct {
 	ContainerRestarts   string   `json:"containerRestarts,omitempty"`
 	ProbeFailureEvents  []string `json:"probeFailureEvents"`
 	RowKeptAcrossDelete bool     `json:"rowKeptAcrossPodDelete"`
+	// EngineLogFiles are the files of $CUBRID/log before the Pod deletion,
+	// and LogsKeptAcrossDelete whether each was still there afterwards (#252).
+	EngineLogFiles       []string `json:"engineLogFilesBeforePodDelete,omitempty"`
+	LogsKeptAcrossDelete bool     `json:"engineLogsKeptAcrossPodDelete"`
+}
+
+// s00EngineLogFiles lists the files under $CUBRID/log of the member, relative
+// to it, without symbolic links. On a StatefulSet created with the log claim template, the directory
+// is the member's log PVC (#252).
+func s00EngineLogFiles(namespace, pod string) ([]string, error) {
+	out, err := utils.Run(exec.Command("kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
+		// The image has no find: the files are listed three levels deep with shell
+		// globs, which is as deep as POC-35 saw CUBRID write.
+		"sh", "-c", `cd "$CUBRID/log" && for f in ./* ./*/* ./*/*/*; do [ -f "$f" ] && [ ! -L "$f" ] && echo "$f"; done; true`))
+	if err != nil {
+		return nil, err
+	}
+	return utils.GetNonEmptyLines(out), nil
 }
 
 // s00Scenario registers S00: on a clean Kind cluster, a standalone
@@ -411,6 +429,13 @@ spec:
 				return err == nil && out == "True"
 			}
 
+			By("listing the log files CUBRID wrote before the deletion")
+			logsBefore, err := s00EngineLogFiles(s00Namespace, pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(logsBefore).To(ContainElement(HavePrefix("./server/")),
+				"CUBRID's server wrote no log file under $CUBRID/log: %q", logsBefore)
+			record.EngineLogFiles = logsBefore
+
 			By("deleting the Pod, confirming its replacement and reading the row again")
 			outcome := faults.Run(context.Background(), faults.Scenario{
 				Fault:  podDeletion{namespace: s00Namespace, pod: pod, uid: record.PodUID},
@@ -430,6 +455,13 @@ spec:
 			}
 			Expect(outcome.Result).To(Equal(evidence.Pass), "pod deletion: %s", outcome.Reason)
 			record.RowKeptAcrossDelete = true
+
+			By("checking that every log file written before the deletion is still there (#252)")
+			logsAfter, err := s00EngineLogFiles(s00Namespace, pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(logsAfter).To(ContainElements(logsBefore),
+				"log files written before the Pod deletion are gone; $CUBRID/log is not on the member's log PVC")
+			record.LogsKeptAcrossDelete = true
 			record.Result = string(evidence.Pass)
 		})
 	})

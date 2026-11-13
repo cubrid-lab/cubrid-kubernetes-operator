@@ -418,3 +418,30 @@ func TestBrokerEntrypoint_TerminationDuringTheStart(t *testing.T) {
 		t.Errorf("calls = %q, want the Broker stopped after its start", calls)
 	}
 }
+
+// Each CAS error log rotates at error_log_size, which the Broker reads from
+// its own cubrid.conf (docs/poc/RESULTS.md, POC-35). The script sets it at
+// every start, once, so that the Broker's logs fit the emptyDir they are
+// written to (#252).
+func TestBrokerEntrypoint_BoundsTheCASErrorLogs(t *testing.T) {
+	f := newBrokerFixture(t)
+	confDir := filepath.Join(f.root, "cubrid", "conf")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The image's own value, and one an earlier start of this container left.
+	image := "[common]\nmax_clients=100\nerror_log_size=536870912\n"
+	if err := os.WriteFile(filepath.Join(confDir, "cubrid.conf"), []byte(image), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, _ = f.command().CombinedOutput()
+	}
+	conf := f.read("cubrid", "conf", "cubrid.conf")
+	if n := strings.Count(conf, "error_log_size="); n != 1 || !strings.Contains(conf, "\nerror_log_size=4194304\n") {
+		t.Errorf("cubrid.conf must set error_log_size=4194304 once, got:\n%s", conf)
+	}
+	if !strings.Contains(conf, "max_clients=100\n") {
+		t.Errorf("cubrid.conf lost the image's other settings:\n%s", conf)
+	}
+}

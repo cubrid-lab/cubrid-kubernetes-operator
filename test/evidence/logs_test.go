@@ -816,6 +816,7 @@ func TestAllowedEngineLog(t *testing.T) {
 		"appdb@localhost_applylogdb_appdb_ha-1.err":     true,
 		"broker/error_log/rw_1.err":                     true,
 		"broker/cubrid_broker.log":                      true,
+		"server/appdb.err":                              true,
 		"server/appdb_latest.err":                       false,
 		"server/appdb_20261106_0910.access":             false,
 		"broker/sql_log/rw_1.sql.log":                   false,

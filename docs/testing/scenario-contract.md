@@ -1869,6 +1869,10 @@ it needs more.
   second time over existing data; a successful write through `<cluster>-ro`.
 - **Data check:** the rows written before the Pod deletion are present after
   it.
+- **Log check:** every file under `$CUBRID/log` of the member before the Pod
+  deletion, at least one of them the server's, is still there after it, since
+  the directory is the member's log PVC (#252). The list is recorded in
+  `S00/record.json` (`engineLogFilesBeforePodDelete`).
 - **Conditions during the installation** (see
   [Conditions during the fault](#conditions-during-the-fault)): S00 has no
   fault. The status is read every 2 seconds from the creation of the

@@ -37,8 +37,14 @@ import (
 )
 
 const (
-	smokePVCName        = "data-smoke-0"
-	dataClaimName       = "data"
+	smokePVCName  = "data-smoke-0"
+	dataClaimName = "data"
+	// smokeLogPVCName is the member's PVC for CUBRID's log files, which the
+	// StatefulSet creates beside the data PVC when it was created with the
+	// log claim template (#252). It never holds the database.
+	smokeLogPVCName     = "log-smoke-0"
+	logClaimName        = "log"
+	logClaimSize        = "1Gi"
 	ownerNonceKey       = "nonce"
 	preallocatedLane    = "lab-preallocated-component-smoke"
 	ownedWorkloadsScope = "smoke-cr-uid-and-owned-workloads"
@@ -424,10 +430,13 @@ func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 		claims := 0
 		for _, volume := range obj.Spec.Volumes {
 			if volume.PersistentVolumeClaim != nil {
-				if volume.PersistentVolumeClaim.ClaimName != smokePVCName {
+				switch volume.PersistentVolumeClaim.ClaimName {
+				case smokePVCName:
+					claims++
+				case smokeLogPVCName:
+				default:
 					return errors.New("database Pod has an unidentified PVC mount")
 				}
-				claims++
 			}
 		}
 		if claims != 1 {
@@ -462,6 +471,9 @@ func (g *namespaceGuard) cleanupManagerPod(obj *corev1.Pod) (bool, error) {
 func brokerVolume(volume corev1.Volume) bool {
 	source := volume.VolumeSource
 	switch {
+	case source.EmptyDir != nil:
+		// The Broker's log directory (#252): no storage that outlives the Pod.
+		return source == corev1.VolumeSource{EmptyDir: source.EmptyDir} && volume.Name == logClaimName
 	case source.ConfigMap != nil:
 		return source == corev1.VolumeSource{ConfigMap: source.ConfigMap} &&
 			source.ConfigMap.Name == clusterName+"-broker-config"
@@ -487,16 +499,20 @@ func (g *namespaceGuard) checkClaims(ctx context.Context, databaseSet *appsv1.St
 	if err := c.List(ctx, claims, ns); err != nil {
 		return err
 	}
+	dataClaims := 0
 	for i := range claims.Items {
 		obj := &claims.Items[i]
-		if g.cluster == nil || obj.Name != smokePVCName || g.seen["StatefulSet/"+clusterName] == "" ||
+		size := map[string]string{smokePVCName: "2Gi", smokeLogPVCName: logClaimSize}[obj.Name]
+		if g.cluster == nil || size == "" || g.seen["StatefulSet/"+clusterName] == "" ||
 			len(obj.OwnerReferences) != 0 || obj.Spec.StorageClassName == nil ||
 			*obj.Spec.StorageClassName != g.cfg.StorageClass ||
-			obj.Spec.Resources.Requests.Storage().String() != "2Gi" || !obj.DeletionTimestamp.IsZero() {
+			obj.Spec.Resources.Requests.Storage().String() != size || !obj.DeletionTimestamp.IsZero() {
 			return errors.New("foreign or ambiguous PVC; resources preserved")
 		}
-		if databaseSet != nil && (len(databaseSet.Spec.VolumeClaimTemplates) != 1 ||
-			databaseSet.Spec.VolumeClaimTemplates[0].Name != dataClaimName) {
+		if obj.Name == smokePVCName {
+			dataClaims++
+		}
+		if databaseSet != nil && !smokeClaimTemplates(databaseSet.Spec.VolumeClaimTemplates) {
 			return errors.New("smoke StatefulSet has an unexpected claim template")
 		}
 		if err := g.remember("PersistentVolumeClaim", obj); err != nil {
@@ -516,10 +532,23 @@ func (g *namespaceGuard) checkClaims(ctx context.Context, databaseSet *appsv1.St
 			g.rec.RetainedPVCs[previous] = observed
 		}
 	}
-	if g.requireStorage && len(claims.Items) != 1 {
+	// The log PVC is not required: a StatefulSet created before #252 has none.
+	if g.requireStorage && dataClaims != 1 {
 		return errors.New("the recorded retained smoke PVC is missing")
 	}
 	return nil
+}
+
+// smokeClaimTemplates reports whether templates are the smoke StatefulSet's:
+// the data claim, then, on a StatefulSet created with it, the log claim.
+func smokeClaimTemplates(templates []corev1.PersistentVolumeClaim) bool {
+	switch len(templates) {
+	case 1:
+		return templates[0].Name == dataClaimName
+	case 2:
+		return templates[0].Name == dataClaimName && templates[1].Name == logClaimName
+	}
+	return false
 }
 
 func (g *namespaceGuard) cleanup(ctx context.Context, poll time.Duration) error {

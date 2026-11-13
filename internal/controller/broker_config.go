@@ -158,6 +158,9 @@ func writeBrokerSection(b *strings.Builder, name string, port int, accessMode st
 	b.WriteString("LOG_DIR                 =log/broker/sql_log\n")
 	b.WriteString("ERROR_LOG_DIR           =log/broker/error_log\n")
 	b.WriteString("SQL_LOG                 =ON\n")
+	// Bounded so that the logs fit the Broker's emptyDir (brokerLogSizeLimit).
+	fmt.Fprintf(b, "SQL_LOG_MAX_SIZE        =%d\n", brokerSQLLogMaxSizeKB)
+	b.WriteString("ACCESS_LOG              =OFF\n")
 	fmt.Fprintf(b, "ACCESS_MODE             =%s\n\n", accessMode)
 }
 

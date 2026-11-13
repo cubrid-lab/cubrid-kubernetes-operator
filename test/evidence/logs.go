@@ -241,6 +241,8 @@ func TailEngineLog(rel string, limit int64) []string {
 // bound values, and only these files are known not to be configuration.
 var engineLogs = []*regexp.Regexp{
 	regexp.MustCompile(`^server/[\w.-]+_\d{8}_\d{4}\.err$`),
+	// The fixed name the entrypoint gives the server's error log (#252).
+	regexp.MustCompile(`^server/[\w-]+\.err$`),
 	regexp.MustCompile(`^[\w.-]+_master\.err$`),
 	regexp.MustCompile(`^[\w.-]+@[\w.-]+_copylogdb\.err$`),
 	regexp.MustCompile(`^[\w.-]+@localhost_applylogdb_[\w.-]+\.err$`),
@@ -251,7 +253,9 @@ var engineLogs = []*regexp.Regexp{
 // AllowedEngineLog reports whether a bundle may copy the file rel of
 // $CUBRID/log.
 func AllowedEngineLog(rel string) bool {
-	if strings.Contains(rel, "..") {
+	// <db>_latest.err is CUBRID's link to the server's newest error log,
+	// which is read under its own name.
+	if strings.Contains(rel, "..") || strings.HasSuffix(rel, "_latest.err") {
 		return false
 	}
 	return slices.ContainsFunc(engineLogs, func(p *regexp.Regexp) bool { return p.MatchString(rel) })
