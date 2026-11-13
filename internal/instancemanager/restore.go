@@ -486,6 +486,7 @@ func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string
 
 // stagingFreeBytes returns the bytes an unprivileged writer can still use on
 // the file system that holds dir. Tests replace it.
+// Tests that replace it must not run in parallel.
 var stagingFreeBytes = func(dir string) (uint64, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {

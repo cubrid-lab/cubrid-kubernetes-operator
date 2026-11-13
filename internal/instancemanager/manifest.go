@@ -178,16 +178,18 @@ func (m BackupManifest) validateObjectList() error {
 		return fmt.Errorf("manifest lists %d objects, more than the %d allowed", len(m.Objects), MaxManifestObjects)
 	}
 	var total int64
-	for _, obj := range m.Objects {
+	// An object is named by its position: its key is not checked yet, and the
+	// manifest bound alone does not keep it short enough to quote.
+	for i, obj := range m.Objects {
 		if obj.SizeBytes < 0 {
-			return fmt.Errorf("manifest object %q has negative size %d", obj.Key, obj.SizeBytes)
+			return fmt.Errorf("manifest object %d has negative size %d", i, obj.SizeBytes)
 		}
 		if total > math.MaxInt64-obj.SizeBytes {
 			return fmt.Errorf("manifest object sizes add up to more than %d bytes", int64(math.MaxInt64))
 		}
 		total += obj.SizeBytes
 		if !isSHA256Hex(obj.SHA256) {
-			return fmt.Errorf("manifest object %q has a checksum that is not a lowercase hex SHA-256", obj.Key)
+			return fmt.Errorf("manifest object %d has a checksum that is not a lowercase hex SHA-256", i)
 		}
 	}
 	return nil

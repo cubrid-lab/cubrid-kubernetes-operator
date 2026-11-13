@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -348,5 +349,28 @@ func TestCheckStagingSpace_CountsAFileAlreadyStagedUnderTheSameKey(t *testing.T)
 	m.Objects[0].SizeBytes = 4096 + 101
 	if err := checkStagingSpace(m, root, dir); err == nil {
 		t.Error("a restore needing one byte more than the free and reusable space was accepted")
+	}
+}
+
+// A staging volume whose free space cannot be read refuses the restore before
+// any object is downloaded, rather than staging blind.
+func TestRestore_RefusesWhenTheFreeStagingSpaceCannotBeRead(t *testing.T) {
+	const bucket, prefix = boundsBucket, boundsPrefix
+	fake := newFakeStore()
+	putRawManifest(t, fake, []ManifestObject{{Key: boundedObjectKey, SizeBytes: 1, SHA256: checksumOf(" ")}})
+	stream := &endlessStream{limit: 1}
+	store := &streamingStore{fakeObjectStore: fake, streamKey: boundedObjectKey, stream: stream}
+	saved := stagingFreeBytes
+	stagingFreeBytes = func(string) (uint64, error) { return 0, errors.New("statfs failed") }
+	t.Cleanup(func() { stagingFreeBytes = saved })
+	req := baseRestoreRequest(t, bucket, prefix)
+	cli := &restoreCLI{}
+
+	_, err := Restore(context.Background(), cli, store, rootsFor(req), req)
+	if err == nil || !strings.Contains(err.Error(), "free space") {
+		t.Fatalf("restore error = %v, want a refusal naming the free space", err)
+	}
+	if store.gets != 1 || stream.read != 0 || len(cli.calls) != 0 {
+		t.Errorf("gets=%d object bytes=%d restoredb calls=%v, want only the manifest read", store.gets, stream.read, cli.calls)
 	}
 }

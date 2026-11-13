@@ -268,7 +268,10 @@ size of an object or of the whole backup beyond what the manifest declares.
 Before the first object is downloaded, the restore refuses a backup whose
 declared total exceeds the free space of the staging volume, counting the
 files an earlier attempt already staged under the same keys as free; the
-space is checked, not reserved.
+space is checked, not reserved. The staging directory is on the data volume,
+where `restoredb` then writes the database itself, so this check is a lower
+bound: a restore that passes it can still run out of space in `restoredb`.
+A staging volume whose free space cannot be read refuses the restore.
 
 Resuming an interrupted restore (#120, with the marker of #107): the restore's
 key carries the attempt number, so the operator finds a running restore again
