@@ -475,10 +475,17 @@ partitioned node can let a second database process run.
   read from is recorded with it (`nodePodUID`, `nodePodCreated`). The
   deletion of that Pod, as when Kubernetes force-deletes it from the tainted
   node, keeps the mapping. When the Operator's Pod watch saw a Pod of the
-  member created after it (or at a time not known) deleted without a
-  confirmed termination, that Pod may have run on another node: the recorded
-  node is not used and the member is not fenced. The watch keeps such a
-  deletion for 10 minutes.
+  member created no earlier than it (or at a time not known) deleted without
+  a confirmed termination, that Pod may have run on another node: the
+  recorded node is cleared from `status.memberPods` and the member is not
+  fenced. Only a Pod of the member read scheduled on a node maps it again, so
+  neither the watch forgetting the deletion (after 10 minutes) nor an
+  Operator restart brings the old node back.
+- **Limit.** A later Pod of the member scheduled on another node and deleted
+  with `--force` entirely while the Operator was stopped, or while its Pod
+  watch was disconnected, is not seen: the member stays mapped to the node of
+  the Pod the Operator last read, and a taint on that node fences it although
+  the later Pod may still run elsewhere.
 - **Reading the taint.** In each pass, for every member that gave neither an
   active-master nor a trusted non-master answer, and every member with a fence
   record, the Operator reads that node's Node object from the API server, past

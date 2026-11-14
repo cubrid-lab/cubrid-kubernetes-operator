@@ -290,7 +290,7 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 			seen = last[m]
 		}
 		if seen != "" {
-			pods = append(pods, memberPodRecord(lastNode[m], m, seen, ids[m]))
+			pods = append(pods, memberPodRecord(lastNode[m], m, seen, ids[m], unconfirmed))
 		}
 	}
 	cluster.Status.MemberPods = pods
@@ -301,14 +301,24 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 // seen, uid, read in this pass as id; before is the entry before this pass.
 // The node, with the Pod it was read from, is kept while the member's Pod is
 // gone or not scheduled, so that a member whose Pod Kubernetes force-deleted
-// from a node tainted out of service stays mapped to that node.
-func memberPodRecord(before databasev1alpha1.MemberPod, m, uid string, id memberIdentity) databasev1alpha1.MemberPod {
+// from a node tainted out of service stays mapped to that node. A Pod of the
+// member the watch saw deleted unconfirmed (unconfirmed) that may have run on
+// another node (laterUnseen) clears the node for good: only a Pod read
+// scheduled maps the member again, so neither the watch forgetting the
+// deletion nor an Operator restart brings the old node back.
+func memberPodRecord(before databasev1alpha1.MemberPod, m, uid string, id memberIdentity,
+	unconfirmed map[string]podTermination) databasev1alpha1.MemberPod {
 	p := databasev1alpha1.MemberPod{Name: m, PodUID: uid, NodeName: before.NodeName, NodePodUID: before.NodePodUID,
 		NodePodCreated: before.NodePodCreated}
 	if id.NodeName != "" {
 		p.NodeName, p.NodePodUID, p.NodePodCreated = id.NodeName, id.PodUID, nil
 		if !id.Created.IsZero() {
 			p.NodePodCreated = &metav1.Time{Time: id.Created}
+		}
+	}
+	for deleted, t := range unconfirmed {
+		if p.NodeName != "" && laterUnseen(p, deleted, t) {
+			p.NodeName, p.NodePodUID, p.NodePodCreated = "", "", nil
 		}
 	}
 	return p

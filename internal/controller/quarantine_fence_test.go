@@ -382,3 +382,63 @@ func TestOutOfServiceFencesAcrossTheForceDeletedPod(t *testing.T) {
 		t.Fatalf("node %q, fences %+v after a later Pod was deleted unseen; want neither", nodes[q0], fences)
 	}
 }
+
+// A later Pod of the member that ran on another node and was force-deleted
+// before any pass read it (the watch saw it deleted unconfirmed) ends the
+// node mapping for good in status.memberPods: not only while the watch keeps
+// the deletion in memory (10 minutes), and also for an Operator restarted with
+// no memory of it. The mapping comes back only from a Pod read scheduled. A
+// later Pod created in the same second as the Pod the node came from counts.
+func TestOutOfServiceFencesUnseenLaterPodEndsTheMapping(t *testing.T) {
+	now := testNow
+	c := fake.NewClientBuilder().WithObjects(tainted()).Build()
+	newReconciler := func() *CubridClusterReconciler {
+		return &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return now }}
+	}
+	for name, p2Created := range map[string]time.Time{
+		"created later":           testNow.Add(-2 * time.Minute),
+		"created the same second": testNow.Add(-time.Hour),
+	} {
+		t.Run(name, func(t *testing.T) {
+			now = testNow
+			r := newReconciler()
+			cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns"}}
+			cluster.Status.MemberPods = []databasev1alpha1.MemberPod{{Name: q0, PodUID: uid0, NodeName: node0,
+				NodePodUID: uid0, NodePodCreated: &metav1.Time{Time: testNow.Add(-time.Hour)}}}
+			p2 := createdPod("p2", p2Created, testNow.Add(-time.Minute), 0,
+				corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+			r.notePodDeleted(p2, false)
+			pending := map[string]memberIdentity{q0: {PodUID: "p3", Created: testNow}}
+			fenced := func(r *CubridClusterReconciler) bool {
+				_, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0},
+					map[string]RoleObservation{q0: noAnswerAt(now)}, pending)
+				if err != nil {
+					t.Fatalf("outOfServiceFences: %v", err)
+				}
+				_, ok := fences[q0]
+				return ok
+			}
+			if fenced(r) {
+				t.Fatalf("fenced on %s although a later Pod was deleted unseen", node0)
+			}
+			cluster.Status.MemberTerminations = r.recordTerminations(context.Background(), cluster, []string{q0}, pending, pending)
+			if p := cluster.Status.MemberPods[0]; p.NodeName != "" || p.NodePodUID != "" || p.NodePodCreated != nil {
+				t.Fatalf("member Pod %+v, want the node mapping cleared", p)
+			}
+			now = testNow.Add(11 * time.Minute)
+			cluster.Status.MemberTerminations = r.recordTerminations(context.Background(), cluster, []string{q0}, pending, pending)
+			if fenced(r) {
+				t.Fatalf("fenced again 11 minutes later, once the deletion left the watch's memory")
+			}
+			if fenced(newReconciler()) {
+				t.Fatalf("fenced by a restarted Operator with no memory of the deletion")
+			}
+			// A Pod read scheduled maps the member again.
+			scheduled := map[string]memberIdentity{q0: {PodUID: "p3", Created: testNow, NodeName: node0}}
+			cluster.Status.MemberTerminations = r.recordTerminations(context.Background(), cluster, []string{q0}, scheduled, scheduled)
+			if p := cluster.Status.MemberPods[0]; p.NodeName != node0 || p.NodePodUID != "p3" {
+				t.Fatalf("member Pod %+v, want mapped to %s from p3", p, node0)
+			}
+		})
+	}
+}

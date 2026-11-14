@@ -62,23 +62,30 @@ func answerText(o RoleObservation, now time.Time) string {
 	return observedRoleText(o, now)
 }
 
-// unseenLaterPod reports whether the Pod watch saw a Pod of the member p
-// describes deleted without a confirmed termination that is not the Pod its
-// node was read from (p.NodePodUID) and was created after it, or at a time
-// not known: that Pod may have run on another node than p.NodeName. The
-// deletion of the Pod the node was read from, as when Kubernetes force-deletes
-// it from a node tainted out of service, and of an earlier Pod, do not count.
-func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.CubridCluster, p databasev1alpha1.MemberPod) bool {
-	key := client.ObjectKeyFromObject(cluster)
+// laterUnseen reports whether t, a Pod of a member deleted without a
+// confirmed termination, with the UID uid, is a Pod that may have run on
+// another node than the one p maps the member to: not the Pod the node was
+// read from (p.NodePodUID), and created no earlier than it, or at a time not
+// known. The deletion of the Pod the node was read from, as when Kubernetes
+// force-deletes it from a node tainted out of service, and of an earlier Pod,
+// do not count.
+func laterUnseen(p databasev1alpha1.MemberPod, uid string, t podTermination) bool {
 	from := p.NodePodUID
 	if from == "" {
 		from = p.PodUID
 	}
+	return t.member == p.Name && uid != from &&
+		(p.NodePodCreated == nil || t.created.IsZero() || !t.created.Before(p.NodePodCreated.Time))
+}
+
+// unseenLaterPod reports whether the Pod watch holds such a deletion
+// (laterUnseen) for the member p describes. recordTerminations then clears the
+// mapping in status, so it does not come back when the watch forgets it.
+func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.CubridCluster, p databasev1alpha1.MemberPod) bool {
+	key := client.ObjectKeyFromObject(cluster)
 	found := false
 	r.podUnconfirmed.Range(func(uid, v any) bool {
-		t := v.(podTermination)
-		if t.cluster == key && t.member == p.Name && string(uid.(types.UID)) != from &&
-			(p.NodePodCreated == nil || t.created.IsZero() || t.created.After(p.NodePodCreated.Time)) {
+		if t := v.(podTermination); t.cluster == key && laterUnseen(p, string(uid.(types.UID)), t) {
 			found = true
 			return false
 		}

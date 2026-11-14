@@ -502,6 +502,10 @@ seconds apart, the same confirmation as for an unverified member.
   a disappearing taint, inconsistent Node mapping, stale/failed role
   answer, changed member, new uncertainty, conflicting active master or
   manual-only escalation resets or forbids automatic release.
+  *Limit:* the Node mapping comes from the member's Pods the Operator saw; a
+  later Pod of the member scheduled on another Node and force-deleted
+  entirely while the Operator or its Pod watch was down is not seen, so the
+  taint of the earlier Node can still fence that member.
 - **Taint-assisted release is not primary resolution.** Release through
   option (b) opens the read-write Brokers while a powered-off former primary
   cannot answer. `PrimaryResolved`, `HAReady` and `RoutingReady` keep
