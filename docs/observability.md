@@ -355,7 +355,7 @@ Pod:
   are not scaled up in that pass; running ones keep running.
 - A member whose last Pod's termination the kubelet confirmed is not
   unverified while its next Pod starts (ADR-0005, section 8, as amended by
-  #870, pending maintainer review). Confirmed means that the Operator saw
+  #870, accepted by the maintainer on 2026-11-14 UTC). Confirmed means that the Operator saw
   that Pod being deleted with its database container reported `terminated`
   no earlier than the deletion was requested (5 s allowed for clock skew;
   `ContainerStatusUnknown` does not count), through a Pod watch or its own

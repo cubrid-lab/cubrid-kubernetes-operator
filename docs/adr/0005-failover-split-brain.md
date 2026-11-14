@@ -317,7 +317,7 @@ The records are in `docs/poc/RESULTS.md`.
      its Pod and enable a second database process. Record out-of-band
      VM-fence proof, actor and audit evidence in the test campaign.
   3. **Kubelet-confirmed termination of the old Pod** (amended by #870,
-     pending maintainer review; decided on #113 on 2026-11-14 UTC after the
+     accepted by the maintainer on 2026-11-14 UTC; decided on #113 after the
      Kind measurement of run 43524691052). A member whose last Pod's
      termination the kubelet confirmed does not count as unverified while
      its next Pod starts. Confirmed means that the Operator saw that Pod
