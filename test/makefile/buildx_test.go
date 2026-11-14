@@ -25,17 +25,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // containerStandIn records each call in $CALLS, fails "buildx build" with exit
 // status 42 when $FAIL_BUILD is set and "buildx create" with 44 when
-// $FAIL_CREATE is set.
+// $FAIL_CREATE is set. With $HANG_BUILD set, "buildx build" creates the file
+// named by that variable and then blocks, so a test can interrupt the run.
 const containerStandIn = `#!/bin/sh
 echo "$*" >> "$CALLS"
 if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$FAIL_BUILD" ]; then
   echo 'SIMULATED BUILD/PUSH FAILURE' >&2
   exit 42
+fi
+if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$HANG_BUILD" ]; then
+  : > "$HANG_BUILD"
+  exec sleep 30
 fi
 if [ "$1" = buildx ] && [ "$2" = create ] && [ -n "$FAIL_CREATE" ]; then
   echo 'SIMULATED BUILDER CREATION FAILURE: builder already exists' >&2
@@ -162,6 +169,88 @@ func TestDockerBuildx_FailedCreationLeavesExistingBuildersAlone(t *testing.T) {
 		}
 	}
 	assertNoDockerfileCross(t, dir)
+}
+
+// An interrupted run (SIGINT or SIGTERM to the whole process group, as a
+// terminal or a CI job sends it) fails the target and still removes the builder
+// this run created and its Dockerfile.cross copy, and no other builder.
+func TestDockerBuildx_InterruptionCleansUpOnlyThisRunsResources(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
+		t.Run(sig.String(), func(t *testing.T) {
+			_, here, _, _ := runtime.Caller(0)
+			repo := filepath.Join(filepath.Dir(here), "..", "..")
+			dir := t.TempDir()
+			dockerfile, err := os.ReadFile(filepath.Join(repo, "Dockerfile"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), dockerfile, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			scratch := t.TempDir()
+			tool := filepath.Join(scratch, "container-stand-in")
+			if err := os.WriteFile(tool, []byte(containerStandIn), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			log := filepath.Join(scratch, "calls")
+			started := filepath.Join(scratch, "build-started")
+			cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"), "docker-buildx",
+				"CONTAINER_TOOL="+tool, "IMG=registry.invalid/operator:test")
+			cmd.Env = append(childMakeEnv(), "CALLS="+log, "HANG_BUILD="+started)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			pgid := cmd.Process.Pid
+			t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(started); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the build never started")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := syscall.Kill(-pgid, sig); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Error("make docker-buildx succeeded after being interrupted")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("make docker-buildx did not stop after the interruption")
+			}
+
+			data, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := strings.Split(strings.TrimSpace(string(data)), "\n")
+			var created, removed []string
+			for _, c := range calls {
+				if name, ok := strings.CutPrefix(c, "buildx create --name "); ok {
+					created = append(created, name)
+				}
+				if name, ok := strings.CutPrefix(c, "buildx rm "); ok {
+					removed = append(removed, name)
+				}
+			}
+			if len(created) != 1 || len(removed) != 1 || created[0] != removed[0] {
+				t.Errorf("created %q, removed %q, want exactly this run's builder removed (calls %q)", created, removed, calls)
+			}
+			assertNoDockerfileCross(t, dir)
+		})
+	}
 }
 
 // childMakeEnv returns the environment without the caller's make flags
