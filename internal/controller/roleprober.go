@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -302,11 +303,19 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 		Capabilities: st.Capabilities,
 	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
-		if st.Role == instancemanager.RoleUnknown || st.Role == "" {
-			o.Reason = "the Instance Manager reported no role"
+		switch st.Role {
+		case instancemanager.RoleReplica:
+		case instancemanager.RoleUnknown, "":
+			o.Reason = reasonNoRoleReported
 			if why := cleanMessage(st.Reason); why != "" {
 				o.Reason += ": " + why
 			}
+		default:
+			// A role the contract does not define, in another case or with
+			// whitespace too, is an answer without a role: the status enum
+			// has no place for it and it is no evidence of any role (#867).
+			o.Role = databasev1alpha1.RoleUnknown
+			o.Reason = "the Instance Manager reported an unrecognized role " + quotedRole(string(st.Role))
 		}
 		return o
 	}
@@ -351,6 +360,23 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 		o.Reason = "a master whose server is not registered_and_active"
 	}
 	return o
+}
+
+// reasonNoRoleReported is the reason of an answer whose role is unknown or
+// empty, before the reason the Instance Manager gave.
+const reasonNoRoleReported = "the Instance Manager reported no role"
+
+// maxRoleText bounds how much of an unrecognized role a reason quotes.
+const maxRoleText = 64
+
+// quotedRole is r quoted on one line, with its control characters escaped and
+// cut to maxRoleText runes followed by "..." when longer.
+func quotedRole(r string) string {
+	runes := []rune(r)
+	if len(runes) <= maxRoleText {
+		return strconv.Quote(r)
+	}
+	return strconv.Quote(string(runes[:maxRoleText])) + "..."
 }
 
 // unfinishedFromStatus turns the Instance Manager's report of an unfinished

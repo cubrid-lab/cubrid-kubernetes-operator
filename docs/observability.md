@@ -849,6 +849,7 @@ The `reason` of `member_role_unobserved` is one of:
 | `status <code>`, for example `status 401` | The Instance Manager answered with an error status; 401 refuses the token |
 | `unreadable answer` | The answer was not a role answer |
 | `the Instance Manager reported no role`, followed by `: ` and the reason it gave when it gave one, for example `current node state 'unknown' is not an authoritative role` | The member does not report an authoritative role |
+| `the Instance Manager reported an unrecognized role "<role>"`, the value quoted on one line with its control characters escaped and, when longer than 64 characters, cut and followed by `...` | The answer carries a role other than exactly `master`, `slave`, `replica` or `unknown`, for example `"primary"`, `"MASTER"` or `" master "`. The member answered, but its role is `unknown` and counts for nothing: not for the primary, and not as a slave or replica answer or an active master for the write quarantine |
 | `the answer names the member <name>` | The answer came from another member |
 | `the answer names no member` | The answer reports master or slave without naming the member it came from, so it cannot be told apart from another member's answer and the role does not count |
 | `the role <role> contradicts the HA node list` | The answer contradicts itself |
