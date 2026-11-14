@@ -378,6 +378,16 @@ Pod:
   ends the exception, and so does a master role or an answer that
   contradicts itself. Once the next Pod has answered as a non-master, such
   a member counts as verified for the automatic release.
+- While the Operator sees the Pod of the master a
+  `WriteQuarantinedMemberUnverified` quarantine was started beside being
+  deleted gracefully, or its termination confirmed
+  (`writeQuarantine.observedMasterLeavingPodUID`), that master ceasing to
+  claim an active master does not escalate the quarantine. When exactly one
+  other member is then the only active master, the quarantine is rebased on
+  it (revision and release token change) and the former master becomes an
+  affected member; with no active master it stays. A second active master,
+  or the master ceasing to claim while its Pod is not seen being deleted,
+  still makes it `WriteQuarantinedMasterChanged`.
 - `status.lastResolvedPrimary` is the primary of the last pass that resolved
   one, with `lastResolvedPrimaryTime`; it is never cleared.
 

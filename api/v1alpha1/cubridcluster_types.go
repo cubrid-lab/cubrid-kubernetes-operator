@@ -952,6 +952,13 @@ type WriteQuarantine struct {
 	// database container.
 	// +optional
 	ObservedMasterRestartCount int32 `json:"observedMasterRestartCount,omitempty"`
+	// observedMasterLeavingPodUID is the UID of observedMaster's Pod when
+	// the Operator saw it being deleted gracefully, or its termination
+	// confirmed. While it is set, observedMaster ceasing to claim an active
+	// master does not make the quarantine WriteQuarantinedMasterChanged: one
+	// other active master becomes the observed master instead.
+	// +optional
+	ObservedMasterLeavingPodUID string `json:"observedMasterLeavingPodUID,omitempty"`
 	// members are the members the quarantine is about: the unverified
 	// members, or the active masters.
 	// +listType=map

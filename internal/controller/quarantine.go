@@ -50,6 +50,9 @@ type memberIdentity struct {
 	Terminated bool
 	// Created is the Pod's creationTimestamp; zero when unknown.
 	Created time.Time
+	// Deleting is set when the Pod has a deletionTimestamp: an object still
+	// present while it is deleted is being deleted gracefully.
+	Deleting bool
 	// TerminatedAt and DeletionRequested are terminatedAt and
 	// deletionRequested of the Pod.
 	TerminatedAt, DeletionRequested time.Time
@@ -687,7 +690,24 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	verified map[string]bool, ordinal map[string]int) (bool, error) {
 	revised := false
 	others := slices.DeleteFunc(slices.Clone(masters), func(m string) bool { return m == q.ObservedMaster })
-	if q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified && (len(others) > 0 || verified[q.ObservedMaster]) {
+	unverifiedQuarantine := q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified
+	leaving := unverifiedQuarantine && masterLeaving(in, q, masters)
+	switch {
+	case leaving && len(masters) == 1 && len(others) == 1:
+		// The recorded master's Pod is being deleted gracefully, or was
+		// confirmed terminated, and one other member is the only active
+		// master: CUBRID moved the role. The quarantine is rebased on the
+		// new master, and the former one is a member like any other.
+		former, next := q.ObservedMaster, masters[0]
+		id := in.Identities[next]
+		q.ObservedMaster, q.ObservedMasterPodUID, q.ObservedMasterRestartCount = next, id.PodUID, id.RestartCount
+		q.ObservedMasterLeavingPodUID = ""
+		q.Members = slices.DeleteFunc(q.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == next })
+		if !slices.ContainsFunc(q.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == former }) {
+			q.Members = append(q.Members, quarantineMember(in, former))
+		}
+		others, revised = nil, true
+	case unverifiedQuarantine && (len(others) > 0 || (verified[q.ObservedMaster] && !leaving)):
 		q.Reason, revised = databasev1alpha1.WriteQuarantinedMasterChanged, true
 	}
 	for _, m := range slices.Concat(named, others) {
@@ -727,6 +747,35 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	q.Revision++
 	q.ReleaseToken, q.ReleaseCheckSince, q.ReleaseCheckLastTime = token, nil, nil
 	return true, nil
+}
+
+// masterLeaving reports whether q's observed master is leaving: the Operator
+// saw its Pod being deleted gracefully (a Pod still present with a
+// deletionTimestamp) or its termination confirmed, and it has not claimed an
+// active master from another Pod since. It keeps that in
+// q.ObservedMasterLeavingPodUID. A Pod deleted with --force is not seen
+// being deleted, so its master's leaving is never assumed (ADR-0005, section
+// 8, as amended by #870).
+func masterLeaving(in quarantineInput, q *databasev1alpha1.WriteQuarantine, masters []string) bool {
+	m := q.ObservedMaster
+	if m == "" || in.IdentitiesUnknown {
+		return q.ObservedMasterLeavingPodUID != ""
+	}
+	id := in.Identities[m]
+	if slices.Contains(masters, m) && id.PodUID != q.ObservedMasterLeavingPodUID {
+		q.ObservedMasterLeavingPodUID = ""
+	}
+	if q.ObservedMasterLeavingPodUID == "" {
+		if id.Deleting && id.PodUID != "" {
+			q.ObservedMasterLeavingPodUID = id.PodUID
+		}
+		for _, t := range in.Terminations {
+			if t.Name == m {
+				q.ObservedMasterLeavingPodUID = t.PodUID
+			}
+		}
+	}
+	return q.ObservedMasterLeavingPodUID != ""
 }
 
 // releaseCheck advances the automatic release of the
@@ -1018,6 +1067,7 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 			return nil, fmt.Errorf("read Pod %s: %w", m, err)
 		}
 		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod), Created: pod.CreationTimestamp.Time,
+			Deleting:     pod.DeletionTimestamp != nil,
 			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod)}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {

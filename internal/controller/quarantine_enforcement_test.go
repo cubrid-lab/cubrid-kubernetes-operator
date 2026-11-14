@@ -599,4 +599,61 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 	})
+
+	It("rebases the quarantine on the new master when the recorded master's Pod is deleted gracefully (#870)", func() {
+		f := newFixture("wq-rolling")
+		r := reconcilerFor(f, k8sClient)
+		recorder := record.NewFakeRecorder(200)
+		r.Recorder = recorder
+		for i := range 3 {
+			memberPod(f, fmt.Sprintf("%s-%d", f.key.Name, i), i == 1)
+		}
+		// Every member verified as a slave first, so that the second member
+		// becoming master starts no quarantine.
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqSlave, wqSlave}))
+		runVerified(r, f)
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+
+		By("the first member stopping beside the master, the second member")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		before := stored(f).Status.WriteQuarantine
+		Expect(before).NotTo(BeNil())
+		Expect(before.ObservedMaster).To(Equal(f.key.Name + "-1"))
+
+		By("the master's Pod deleted gracefully and CUBRID moving the role to the third member")
+		old := &corev1.Pod{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: f.key.Name + "-1", Namespace: f.key.Namespace}, old)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, old)).To(Succeed())
+		f.answers.set(roleReports(f.key.Name, [3]string{"", "", wqMaster}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		q := stored(f).Status.WriteQuarantine
+		Expect(q).NotTo(BeNil())
+		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberUnverified))
+		Expect(q.ObservedMaster).To(Equal(f.key.Name + "-2"))
+		Expect(q.Revision).To(Equal(before.Revision + 1))
+		Expect(q.ReleaseToken).NotTo(Equal(before.ReleaseToken))
+
+		By("the former master's new Pod and the first member answering as slaves")
+		gone(old)
+		memberPod(f, f.key.Name+"-1", false)
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqSlave, wqMaster}))
+		for _, step := range []time.Duration{3 * time.Second, 3 * time.Second, quarantineReleaseInterval} {
+			*f.clock = f.clock.Add(step)
+			reconcileOnce(r, f)
+		}
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
+		Expect(c.Status.LastWriteQuarantineRelease.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberUnverified))
+		*f.clock = f.clock.Add(time.Second)
+		reconcileOnce(r, f)
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("WriteQuarantinedMasterChanged")))
+	})
 })

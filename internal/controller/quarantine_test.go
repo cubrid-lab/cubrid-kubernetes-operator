@@ -794,3 +794,79 @@ func TestQuarantineConfirmedTerminationTimeBound(t *testing.T) {
 		t.Fatalf("decision = %+v, want the record ended and a quarantine", d)
 	}
 }
+
+// noRoleAt is a member whose Instance Manager answers without a role, as
+// while its database stops.
+func noRoleAt(at time.Time) RoleObservation {
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: at}
+}
+
+// The recorded master's Pod is deleted gracefully, as in a rolling
+// replacement, and CUBRID moves the role to another member: the quarantine
+// is rebased on the new master, not made manual, and released once every
+// other member is verified (ADR-0005, section 8, as amended by #870; the
+// S14 token rotation of Kind run 43545322809).
+func TestQuarantineRebasedWhenTheMasterPodIsDeleted(t *testing.T) {
+	s := startUnverified(t) // q0 unverified beside q1
+	before := s.quarantine.DeepCopy()
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true}
+	t1 := testNow.Add(3 * time.Second)
+	d := s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: noRoleAt(t1), q2: activeMasterAt(t1)})
+	q := d.Quarantine
+	if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || q.ObservedMaster != q2 {
+		t.Fatalf("quarantine = %+v, want %s beside %s", q, databasev1alpha1.WriteQuarantinedMemberUnverified, q2)
+	}
+	if q.GenerationID != before.GenerationID || q.Revision != before.Revision+1 || q.ReleaseToken == before.ReleaseToken {
+		t.Errorf("generation %q→%q, revision %d→%d: want the same generation, the next revision and a new token",
+			before.GenerationID, q.GenerationID, before.Revision, q.Revision)
+	}
+	if got := memberNamesOf(q.Members); !slices.Equal(got, []string{q0, q1}) {
+		t.Errorf("members %v, want [%s %s]", got, q0, q1)
+	}
+
+	// The former master's new Pod and q0 answer as slaves; two releasable
+	// passes ten seconds apart release the quarantine.
+	s.identities[q1] = memberIdentity{PodUID: "uid-1-new", Created: t1}
+	t2 := t1.Add(5 * time.Second)
+	slaves := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: slaveAt(now), q1: slaveAt(now), q2: activeMasterAt(now)}
+	}
+	s.pass(t2, slaves(t2))
+	t3 := t2.Add(quarantineVerifyGap + time.Second)
+	if d = s.pass(t3, slaves(t3)); d.Quarantine == nil || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
+		t.Fatalf("the former master answering as a slave escalated: %+v", d.Quarantine)
+	}
+	t4 := t3.Add(quarantineReleaseInterval)
+	if d = s.pass(t4, slaves(t4)); d.Released == nil {
+		t.Fatalf("decision = %+v, want a release", d)
+	}
+}
+
+// With the recorded master's Pod deleted gracefully and no active master,
+// the quarantine stays as it is.
+func TestQuarantineStaysWhenTheMasterPodIsDeletedAndNoneIsActive(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true}
+	s.pass(testNow.Add(time.Second), map[string]RoleObservation{q0: noAnswerAt(testNow), q1: noRoleAt(testNow), q2: slaveAt(testNow)})
+	s.identities[q1] = memberIdentity{PodUID: "uid-1-new", Created: testNow}
+	for i := 1; i <= 3; i++ {
+		now := testNow.Add(time.Duration(i) * 3 * time.Second)
+		d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: slaveAt(now), q2: slaveAt(now)})
+		if d.Quarantine == nil || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
+			t.Fatalf("pass %d: quarantine = %+v, want it kept as %s", i, d.Quarantine, databasev1alpha1.WriteQuarantinedMemberUnverified)
+		}
+	}
+}
+
+// The recorded master's Pod not being deleted, the master answering as a
+// slave twice beside another active master still escalates.
+func TestQuarantineEscalatesWhenTheMasterIsNotLeaving(t *testing.T) {
+	s := startUnverified(t)
+	for i := 1; i <= 2; i++ {
+		now := testNow.Add(time.Duration(i) * 3 * time.Second)
+		s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: slaveAt(now), q2: activeMasterAt(now)})
+	}
+	if s.quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
+		t.Fatalf("reason %s, want %s", s.quarantine.Reason, databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+}

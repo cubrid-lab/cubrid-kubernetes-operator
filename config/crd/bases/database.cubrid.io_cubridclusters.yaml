@@ -1444,6 +1444,14 @@ spec:
                       observedMaster is the one active master the quarantine was started
                       beside; empty for WriteQuarantinedMultipleMasters.
                     type: string
+                  observedMasterLeavingPodUID:
+                    description: |-
+                      observedMasterLeavingPodUID is the UID of observedMaster's Pod when
+                      the Operator saw it being deleted gracefully, or its termination
+                      confirmed. While it is set, observedMaster ceasing to claim an active
+                      master does not make the quarantine WriteQuarantinedMasterChanged: one
+                      other active master becomes the observed master instead.
+                    type: string
                   observedMasterPodUID:
                     description: observedMasterPodUID is the UID of observedMaster's
                       Pod.
