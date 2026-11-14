@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -184,5 +185,21 @@ func TestRecordTerminationsDoNotTrustAFutureEndTime(t *testing.T) {
 	got := recordFor(r, "a", nil, memberIdentity{})
 	if len(got) != 1 || !got[0].ConfirmedAt.Time.Equal(observed) {
 		t.Fatalf("records = %+v, want one confirmed at the observation %s", got, observed)
+	}
+}
+
+// The Pod read for the write quarantine carries the deletion mark and its
+// grace period, which bounds how long a mark alone holds the quarantine.
+func TestMemberIdentitiesCarryTheDeletionGrace(t *testing.T) {
+	pod := terminatingPod("a", testNow, 120, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	pod.Finalizers = []string{"test.cubrid.io/hold"}
+	r := &CubridClusterReconciler{Client: fake.NewClientBuilder().WithObjects(pod).Build()}
+	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns"}}
+	ids, err := r.memberIdentities(context.Background(), cluster, []string{q0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := ids[q0]; !id.Deleting || id.DeletionGrace != 120*time.Second {
+		t.Fatalf("identity = %+v, want a deletion mark with a grace period of 120s", id)
 	}
 }

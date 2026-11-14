@@ -959,6 +959,17 @@ type WriteQuarantine struct {
 	// other active master becomes the observed master instead.
 	// +optional
 	ObservedMasterLeavingPodUID string `json:"observedMasterLeavingPodUID,omitempty"`
+	// observedMasterLeavingConfirmed is set once the kubelet confirmed the
+	// termination of that Pod. Only then is the quarantine rebased on
+	// another active master.
+	// +optional
+	ObservedMasterLeavingConfirmed bool `json:"observedMasterLeavingConfirmed,omitempty"`
+	// observedMasterHoldUntil is when a deletion of observedMaster's Pod
+	// that is not confirmed stops holding the quarantine back from
+	// WriteQuarantinedMasterChanged: the Operator's time when it first saw
+	// the deletion, plus the Pod's grace period and 90 seconds.
+	// +optional
+	ObservedMasterHoldUntil *metav1.Time `json:"observedMasterHoldUntil,omitempty"`
 	// members are the members the quarantine is about: the unverified
 	// members, or the active masters.
 	// +listType=map

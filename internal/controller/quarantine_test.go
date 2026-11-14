@@ -40,6 +40,7 @@ var quarantineMembers = []string{q0, q1, q2}
 const (
 	uid0    = "uid-0"
 	uid1    = "uid-1"
+	uid1New = "uid-1-new"
 	uid2    = "uid-2"
 	uid0New = "uid-0-new"
 )
@@ -809,7 +810,7 @@ func noRoleAt(at time.Time) RoleObservation {
 func TestQuarantineRebasedWhenTheMasterPodIsDeleted(t *testing.T) {
 	s := startUnverified(t) // q0 unverified beside q1
 	before := s.quarantine.DeepCopy()
-	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true}
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, Terminated: true, TerminatedAt: testNow}
 	t1 := testNow.Add(3 * time.Second)
 	d := s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: noRoleAt(t1), q2: activeMasterAt(t1)})
 	q := d.Quarantine
@@ -826,7 +827,7 @@ func TestQuarantineRebasedWhenTheMasterPodIsDeleted(t *testing.T) {
 
 	// The former master's new Pod and q0 answer as slaves; two releasable
 	// passes ten seconds apart release the quarantine.
-	s.identities[q1] = memberIdentity{PodUID: "uid-1-new", Created: t1}
+	s.identities[q1] = memberIdentity{PodUID: uid1New, Created: t1}
 	t2 := t1.Add(5 * time.Second)
 	slaves := func(now time.Time) map[string]RoleObservation {
 		return map[string]RoleObservation{q0: slaveAt(now), q1: slaveAt(now), q2: activeMasterAt(now)}
@@ -846,9 +847,9 @@ func TestQuarantineRebasedWhenTheMasterPodIsDeleted(t *testing.T) {
 // the quarantine stays as it is.
 func TestQuarantineStaysWhenTheMasterPodIsDeletedAndNoneIsActive(t *testing.T) {
 	s := startUnverified(t)
-	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true}
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, Terminated: true, TerminatedAt: testNow}
 	s.pass(testNow.Add(time.Second), map[string]RoleObservation{q0: noAnswerAt(testNow), q1: noRoleAt(testNow), q2: slaveAt(testNow)})
-	s.identities[q1] = memberIdentity{PodUID: "uid-1-new", Created: testNow}
+	s.identities[q1] = memberIdentity{PodUID: uid1New, Created: testNow}
 	for i := 1; i <= 3; i++ {
 		now := testNow.Add(time.Duration(i) * 3 * time.Second)
 		d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: slaveAt(now), q2: slaveAt(now)})
@@ -868,5 +869,85 @@ func TestQuarantineEscalatesWhenTheMasterIsNotLeaving(t *testing.T) {
 	}
 	if s.quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
 		t.Fatalf("reason %s, want %s", s.quarantine.Reason, databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+}
+
+// masterMarked is q1's Pod marked for deletion with a grace period of 30 s,
+// its termination not confirmed.
+var masterMarked = memberIdentity{PodUID: uid1, Deleting: true, DeletionGrace: 30 * time.Second}
+
+// The recorded master's Pod only marked for deletion, as one evicted from a
+// node cut off from the API server while its database runs, holds the
+// quarantine: neither rebased nor escalated, until the hold bound, then
+// escalated.
+func TestQuarantineHoldsWhileTheMasterPodIsOnlyMarked(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = masterMarked
+	obs := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)}
+	}
+	bound := masterMarked.DeletionGrace + quarantineStartBound
+	for now := testNow.Add(3 * time.Second); now.Before(testNow.Add(bound)); now = now.Add(10 * time.Second) {
+		d := s.pass(now, obs(now))
+		if d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || d.Quarantine.ObservedMaster != q1 {
+			t.Fatalf("%s after the mark: quarantine = %+v, want it held beside %s", now.Sub(testNow), d.Quarantine, q1)
+		}
+	}
+	late := testNow.Add(bound + 5*time.Second)
+	if d := s.pass(late, obs(late)); d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
+		t.Fatalf("after the hold: reason %s, want %s", d.Quarantine.Reason, databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+}
+
+// The probe of the review of 64eaa70: the master's Pod marked for deletion
+// on a node cut off, never confirmed ended; another member promoted; the
+// stuck Pod deleted with --force and replaced, the replacement answering as
+// a slave. The quarantine escalates and is never released automatically.
+func TestQuarantineNeverReleasedAfterAnUnconfirmedMasterDeletion(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = masterMarked
+	now := testNow.Add(3 * time.Second)
+	s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)})
+	s.identities[q1] = memberIdentity{}
+	now = now.Add(5 * time.Second)
+	d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)})
+	if d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
+		t.Fatalf("the master's Pod gone unconfirmed: reason %s, want %s", d.Quarantine.Reason,
+			databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+	s.identities[q1] = memberIdentity{PodUID: uid1New, Created: now}
+	for i := 1; i <= 50; i++ {
+		now = now.Add(10 * time.Second)
+		d = s.pass(now, map[string]RoleObservation{q0: slaveAt(now), q1: slaveAt(now), q2: activeMasterAt(now)})
+		if d.Released != nil || d.Quarantine == nil {
+			t.Fatalf("released %s after the fault", now.Sub(testNow))
+		}
+	}
+}
+
+// A termination recorded for an earlier Pod of the master's name does not
+// make the master leaving.
+func TestQuarantineMasterLeavingIsTiedToItsPod(t *testing.T) {
+	s := startUnverified(t)
+	s.terminations = []databasev1alpha1.MemberTermination{{Name: q1, PodUID: "uid-1-earlier",
+		ConfirmedAt: metav1.NewTime(testNow)}}
+	now := testNow.Add(3 * time.Second)
+	d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)})
+	if d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
+		t.Fatalf("reason %s, want %s", d.Quarantine.Reason, databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+}
+
+// A pass that could not read the members' Pods does not rebase.
+func TestQuarantineNoRebaseWithoutThePods(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, Terminated: true, TerminatedAt: testNow}
+	now := testNow.Add(3 * time.Second)
+	s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noRoleAt(now), q2: slaveAt(now)})
+	s.identitiesUnknown = true
+	now = now.Add(3 * time.Second)
+	d := s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: noAnswerAt(now), q2: activeMasterAt(now)})
+	if d.Quarantine.ObservedMaster != q1 || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
+		t.Fatalf("quarantine = %+v, want it kept beside %s", d.Quarantine, q1)
 	}
 }

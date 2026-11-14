@@ -378,16 +378,23 @@ Pod:
   ends the exception, and so does a master role or an answer that
   contradicts itself. Once the next Pod has answered as a non-master, such
   a member counts as verified for the automatic release.
-- While the Operator sees the Pod of the master a
-  `WriteQuarantinedMemberUnverified` quarantine was started beside being
-  deleted gracefully, or its termination confirmed
-  (`writeQuarantine.observedMasterLeavingPodUID`), that master ceasing to
-  claim an active master does not escalate the quarantine. When exactly one
-  other member is then the only active master, the quarantine is rebased on
-  it (revision and release token change) and the former master becomes an
-  affected member; with no active master it stays. A second active master,
-  or the master ceasing to claim while its Pod is not seen being deleted,
-  still makes it `WriteQuarantinedMasterChanged`.
+- Once the kubelet confirmed the termination of the Pod the quarantine
+  recorded for the master of a `WriteQuarantinedMemberUnverified`
+  quarantine (`writeQuarantine.observedMasterLeavingPodUID` and
+  `observedMasterLeavingConfirmed`), that master ceasing to claim an active
+  master does not escalate the quarantine. When exactly one other member is
+  then the only active master, the quarantine is rebased on it (revision and
+  release token change) and the former master becomes an affected member;
+  with no active master it stays. While the master's Pod is only marked for
+  deletion, which a Pod evicted from a node cut off from the API server also
+  is, the quarantine is held, neither rebased nor escalated, until
+  `observedMasterHoldUntil` (the Pod's grace period plus 90 seconds from
+  when the Operator first saw the mark); after that, or when the Pod is gone
+  without a confirmed termination, it becomes
+  `WriteQuarantinedMasterChanged`. A second active master, or the master
+  ceasing to claim while its Pod is not seen being deleted, still makes it
+  `WriteQuarantinedMasterChanged`. No rebase is made in a pass that could
+  not read the members' Pods.
 - `status.lastResolvedPrimary` is the primary of the last pass that resolved
   one, with `lastResolvedPrimaryTime`; it is never cleared.
 

@@ -1444,6 +1444,20 @@ spec:
                       observedMaster is the one active master the quarantine was started
                       beside; empty for WriteQuarantinedMultipleMasters.
                     type: string
+                  observedMasterHoldUntil:
+                    description: |-
+                      observedMasterHoldUntil is when a deletion of observedMaster's Pod
+                      that is not confirmed stops holding the quarantine back from
+                      WriteQuarantinedMasterChanged: the Operator's time when it first saw
+                      the deletion, plus the Pod's grace period and 90 seconds.
+                    format: date-time
+                    type: string
+                  observedMasterLeavingConfirmed:
+                    description: |-
+                      observedMasterLeavingConfirmed is set once the kubelet confirmed the
+                      termination of that Pod. Only then is the quarantine rebased on
+                      another active master.
+                    type: boolean
                   observedMasterLeavingPodUID:
                     description: |-
                       observedMasterLeavingPodUID is the UID of observedMaster's Pod when

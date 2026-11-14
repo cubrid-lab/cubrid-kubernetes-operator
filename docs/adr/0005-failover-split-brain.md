@@ -348,17 +348,24 @@ The records are in `docs/poc/RESULTS.md`.
      deleted with `--force` entirely while the Operator's Pod watch was
      disconnected, or while the Operator was restarting, is not seen; the
      same 90 seconds bound that window. The same applies to the master M
-     a `WriteQuarantinedMemberUnverified` quarantine was started beside:
-     while the Operator sees M's Pod being deleted gracefully (the object
-     still present with a `deletionTimestamp`) or M's termination
-     confirmed, M ceasing to claim an active master does not make the
-     quarantine `WriteQuarantinedMasterChanged`. When exactly one other
-     member is then the only active master, the quarantine is rebased on
-     it (its revision increments and the release token is replaced), and M
-     becomes an affected member whose next Pod is verified as above; with
-     no active master the quarantine stays as it is. A second active
-     master still escalates, and so does M ceasing to claim while its Pod
-     is not seen being deleted, as when it was deleted with `--force`. A
+     a `WriteQuarantinedMemberUnverified` quarantine was started beside,
+     for the Pod the quarantine recorded for M only. Once the kubelet
+     confirmed that Pod's termination as above, M ceasing to claim an
+     active master does not make the quarantine
+     `WriteQuarantinedMasterChanged`: when exactly one other member is the
+     only active master, the quarantine is rebased on it (its revision
+     increments and the release token is replaced), and M becomes an
+     affected member whose next Pod is verified as above; with no active
+     master it stays as it is. A `deletionTimestamp` alone does not show
+     the process ended (a Pod evicted from a node cut off from the API
+     server is marked so while its database runs): while M's Pod is only
+     marked, the quarantine is held, neither rebased nor escalated, for
+     the Pod's grace period plus 90 seconds from when the Operator first
+     saw the mark; after that, or when the Pod is gone without a confirmed
+     termination, it escalates. A second active master still escalates,
+     and so does M ceasing to claim while its Pod is not seen being
+     deleted, as when it was deleted with `--force`. No rebase is made in a
+     pass that could not read the members' Pods. A
      member answering without a role while its own Pod is deleted
      gracefully stays unverified; the quarantine it starts is released
      once its termination is confirmed and its next Pod has answered. This

@@ -625,10 +625,11 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(before).NotTo(BeNil())
 		Expect(before.ObservedMaster).To(Equal(f.key.Name + "-1"))
 
-		By("the master's Pod deleted gracefully and CUBRID moving the role to the third member")
+		By("the master's Pod deleted gracefully, its termination confirmed, and CUBRID moving the role to the third member")
 		old := &corev1.Pod{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: f.key.Name + "-1", Namespace: f.key.Namespace}, old)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, old)).To(Succeed())
+		terminated(old)
 		f.answers.set(roleReports(f.key.Name, [3]string{"", "", wqMaster}))
 		*f.clock = f.clock.Add(3 * time.Second)
 		reconcileOnce(r, f)

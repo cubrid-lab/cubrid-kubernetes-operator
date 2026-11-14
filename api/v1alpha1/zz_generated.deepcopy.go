@@ -903,6 +903,10 @@ func (in *UpdateStatus) DeepCopy() *UpdateStatus {
 func (in *WriteQuarantine) DeepCopyInto(out *WriteQuarantine) {
 	*out = *in
 	in.StartTime.DeepCopyInto(&out.StartTime)
+	if in.ObservedMasterHoldUntil != nil {
+		in, out := &in.ObservedMasterHoldUntil, &out.ObservedMasterHoldUntil
+		*out = (*in).DeepCopy()
+	}
 	if in.Members != nil {
 		in, out := &in.Members, &out.Members
 		*out = make([]WriteQuarantineMember, len(*in))
