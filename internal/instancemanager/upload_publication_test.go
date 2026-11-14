@@ -172,7 +172,7 @@ func testConcurrentUploads(t *testing.T, objects ObjectStore, bucket string) {
 			t.Fatal(err)
 		}
 		seen[string(data)] = true
-		staging := t.TempDir()
+		staging := filepath.Join(t.TempDir(), "staging")
 		if _, err := stageArtifact(ctx, objects, bucket, prefix, goodManifestExpectation(), staging); err != nil {
 			t.Fatal(err)
 		}

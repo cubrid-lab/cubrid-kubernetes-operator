@@ -1084,6 +1084,7 @@ process holds a file in it (ADR-0007, #469). `cub_server` writes the file of
 | `backup_staging_writer_closed` | info | `waitedMilliseconds` | The files were closed; the staging is removed and the operation ends `Failed` |
 | `backup_staging_writer_timeout` | warn | `holders`, `waitedSeconds` | A process still held a file after 30 s: the staging is kept, never uploaded or reused, and the operation's failure reason says so |
 | `backup_staging_held` | warn | `destination`, `entry`, `holders` | A backup request or the cleanup at start found such a kept entry still held: the destination is kept, and a request to it is answered `409` `StagingDestinationInUse` until the file is closed; a request after that removes the entry. A link is never followed and never counts as held |
+| `restore_staging_legacy` | warn | `path` | Before a restore, the manager found `backup/` directly in the request's restore staging directory: backup files an Instance Manager built before restore attempts had directories of their own (#866) staged there. No restore reads them and the manager never removes them; they hold space on the data volume until a person removes them ("Runbook: backup files an earlier Instance Manager left in restore staging") |
 
 A `backup_staging_writer_timeout` or a repeated `backup_staging_held` names
 the holder: find out why it still writes before anything is removed. The
@@ -1128,6 +1129,36 @@ bootstrap (`500`, `OperationRecordUnreadable`); the database keeps serving.
    - **Remove it**, when it cannot be repaired. Move the file out of the
      directory rather than delete it, so it can be inspected. Its idempotency
      key is then unknown to the manager, and a poll of its ID answers `404`.
+
+### Runbook: backup files an earlier Instance Manager left in restore staging
+
+An Instance Manager built before restore attempts had directories of their
+own (#866) downloaded every restore into
+`/var/lib/cubrid/restore-staging/<name>/backup`, where `<name>` is the
+cluster's UID for a recovery restore or `seed-<cluster UID>` for a seed
+restore, and could leave that directory behind after a failed or interrupted
+restore. It can hold nearly a whole backup on the member's data volume, so a
+later restore may be refused for lack of staging space. A current Instance
+Manager stages each attempt in `<name>/<operation ID>/`, never reads
+`<name>/backup`, and never removes it; it logs `restore_staging_legacy`
+with the path before each restore that finds one.
+
+1. Confirm that the member's Pod runs the Instance Manager image of the
+   upgraded Operator, that is, the Pod was replaced after the upgrade:
+   `kubectl get pod <pod> -o jsonpath='{.spec.containers[*].image}'`. Only
+   an Instance Manager of an earlier build reads `<name>/backup`, and only
+   while its restore runs.
+2. Confirm that no restore runs on the member: no `restoredb` or
+   `restoreslave` process in the database container. The image has no
+   `ps`; read the process list from `/proc`, for example
+   `kubectl exec <pod> -c <db container> -- bash -c 'for p in /proc/[0-9]*; do tr "\0" " " < $p/cmdline; echo; done' | grep -E 'restoredb|restoreslave'`,
+   which prints nothing when none runs. A restore of the current build
+   started meanwhile does not read `<name>/backup` either.
+3. Remove the directory:
+   `kubectl exec <pod> -c <db container> -- rm -rf /var/lib/cubrid/restore-staging/<name>/backup`.
+   Remove nothing else below the staging root by hand: a directory named
+   `op-…` belongs to a restore attempt, and the manager removes it once its
+   operation has ended.
 
 ### Runbook: a standalone member that starts only the Instance Manager
 

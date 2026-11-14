@@ -1092,3 +1092,32 @@ func TestRunS12GracefulStopSeedingFailsWhenTheSeedRestoreIsUnchangedAfterTheRetr
 	requireGSR(t, stop, err, evidence.Fail, "the seed restore operation "+testIMSeedOp+" the kill ended is the one "+
 		"recorded for "+testGSSPeer)
 }
+
+// An Instance Manager stages each restore attempt in a directory named after
+// its operation below the cluster's staging directory; one built before that
+// staged in the staging directory itself (#866). The scan finds restoredb's
+// end in either layout, and not that of a restore from another directory.
+func TestScanRestoreStopLogFindsRestoredbInEitherStagingLayout(t *testing.T) {
+	const attempt = "/op-0123456789abcdef0123456789abcdef"
+	for name, tc := range map[string]struct {
+		dir   string
+		found bool
+	}{
+		"in the staging directory":                    {testGSRStaging, true},
+		"in an attempt's directory":                   {testGSRStaging + attempt, true},
+		"of another cluster":                          {imRestoreStagingRoot + "/other-cluster" + attempt, false},
+		"in a directory not named after an operation": {testGSRStaging + "/other", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &s12GracefulStopRecord{At: GracefulStopAtRestoring, place: stopPlacements[GracefulStopAtRestoring],
+				Log: &s12StopLog{}}
+			rec.ClusterUID = testGSRUID
+			command := "cubrid restoredb -u -B " + tc.dir + "/backup " + databaseName
+			line := gsrLogLine(time.Now(), logRanCommand, logEventCommand, command, "", "", "", `"exitCode":0`)
+			scanRestoreStopLog([]byte(line+"\n"), rec)
+			if got := rec.Log.RestoredbLine != 0; got != tc.found {
+				t.Errorf("restoredb from %s found = %v, want %v", tc.dir, got, tc.found)
+			}
+		})
+	}
+}

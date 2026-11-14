@@ -177,7 +177,7 @@ func TestRestore_StopsReadingAnObjectThatIsLongerThanItsManifestSize(t *testing.
 	if !stream.closed {
 		t.Error("the object stream was not closed")
 	}
-	if _, statErr := os.Stat(filepath.Join(req.StagingDir, "backup", "vol")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(stagedAttemptDir(req), "backup", "vol")); !os.IsNotExist(statErr) {
 		t.Errorf("the incomplete staged file is still there (err=%v)", statErr)
 	}
 	if data, _ := os.ReadFile(other); string(data) != "kept" {
@@ -281,7 +281,7 @@ func TestRestore_RestoresAndVerifiesAMultiFileBackupWithinTheBounds(t *testing.T
 	staged := map[string]string{}
 	cli := &restoreCLI{onRun: func() {
 		for key := range files {
-			data, _ := os.ReadFile(filepath.Join(req.StagingDir, filepath.FromSlash(key)))
+			data, _ := os.ReadFile(filepath.Join(stagedAttemptDir(req), filepath.FromSlash(key)))
 			staged[key] = string(data)
 		}
 	}}

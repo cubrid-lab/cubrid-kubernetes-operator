@@ -46,7 +46,8 @@ type RestoreRequest struct {
 	// must the manifest's engine version (no restore across series,
 	// ADR-0009, ADR-0011).
 	ExpectedCubridVersion string `json:"expectedCubridVersion,omitempty"`
-	// StagingDir is where downloaded objects land before restoredb.
+	// StagingDir is where downloaded objects land before restoredb, each
+	// attempt in a directory of its own below it (restoreAttemptDir).
 	StagingDir string `json:"stagingDir"`
 	// TargetDir is the empty DB directory to restore into; a pre-existing DB
 	// there is a hard block (ADR-0008 wrong-target guard).
@@ -174,22 +175,36 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 			req.Database, filepath.Join(targetDir, databasesTxt), ErrTargetHoldsDatabase)
 	}
 
-	// The staging directory is removed after a successful restore, and after a
-	// failed one when this restore created it, so no downloaded artifact is left
-	// behind. It is always strictly below roots.Staging.
+	// This attempt stages into a directory of its own, created empty below
+	// the staging directory, so restoredb is given the objects this attempt
+	// verified and nothing else: a file that an earlier attempt, another
+	// seed source or a killed process left in the staging directory was not
+	// checked against this manifest and is not in it (#866). The attempt's
+	// directory is removed when the restore returns, and the staging
+	// directory too when this restore created it and nothing else is in it;
+	// nothing else in the staging directory is changed. Both are always
+	// strictly below roots.Staging.
+	attemptDir, err := restoreAttemptDir(stagingDir, roots.Owner)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if _, err := os.Lstat(attemptDir); !os.IsNotExist(err) {
+		return RestoreResult{}, fmt.Errorf("the staging directory %s of this restore attempt already exists (err=%v); it is not reused", attemptDir, err)
+	}
 	_, statErr := os.Stat(stagingDir)
 	created := os.IsNotExist(statErr)
 	defer func() {
-		if err == nil || created {
-			_ = os.RemoveAll(stagingDir)
+		_ = os.RemoveAll(attemptDir)
+		if created {
+			_ = os.Remove(stagingDir)
 		}
 	}()
 
-	// Every object is read once, into the staging directory, and checked
+	// Every object is read once, into the attempt's directory, and checked
 	// against the manifest as it is written: what restoredb reads below is
 	// what was verified, not a second copy (#195).
 	exp := restoreExpectation(req, roots.EngineVersion)
-	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, stagingDir)
+	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, attemptDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
 	}
@@ -207,7 +222,7 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	backupDir := filepath.Join(stagingDir, "backup")
+	backupDir := filepath.Join(attemptDir, "backup")
 	// A member seeded from a running master is restored with restoreslave,
 	// which also writes the replication catalog from the backup: the member
 	// then applies the master's log from the backup's position. With a plain
@@ -316,6 +331,22 @@ func confine(req RestoreRequest, roots RestoreRoots) (targetDir, stagingDir stri
 		return "", "", fmt.Errorf("stagingDir %q must be one directory directly below %q", req.StagingDir, roots.Staging)
 	}
 	return roots.Target, filepath.Join(roots.Staging, name), nil
+}
+
+// restoreAttemptDir is the directory one restore attempt stages its
+// artifact in, directly below the staging directory: named after the
+// operation the restore runs for, owner, or "attempt" when it runs for none.
+// The manager removes the directory of an operation that has ended
+// (reclaimRestoreAttempts).
+func restoreAttemptDir(stagingDir, owner string) (string, error) {
+	name := owner
+	if name == "" {
+		name = "attempt"
+	}
+	if !stagingNamePattern.MatchString(name) {
+		return "", fmt.Errorf("the restore's operation ID %q cannot name a staging directory", owner)
+	}
+	return filepath.Join(stagingDir, name), nil
 }
 
 // within reports whether target is dir or lies below it.
@@ -443,7 +474,8 @@ func hasExistingDB(targetDir, database string) bool {
 
 // stageArtifact reads the artifact's manifest, checks it, and downloads each
 // object it lists into stagingDir exactly once, verifying size and SHA-256 of
-// the bytes as they are written. It returns only when every staged file
+// the bytes as they are written. stagingDir must not exist: it is created
+// once the manifest is accepted, so it holds only what this call staged. It returns only when every staged file
 // matches the manifest; a file that does not is removed.
 //
 // The manifest comes from the bucket and is not trusted for paths: a key must
@@ -467,7 +499,12 @@ func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string
 		return BackupManifest{}, err
 	}
 
-	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
+	// The directory is created here, empty, and never reused: nothing in it
+	// was not staged and verified by this call.
+	if err := os.MkdirAll(filepath.Dir(stagingDir), 0o750); err != nil {
+		return BackupManifest{}, fmt.Errorf("create the staging directory: %w", err)
+	}
+	if err := os.Mkdir(stagingDir, 0o750); err != nil {
 		return BackupManifest{}, fmt.Errorf("create the staging directory: %w", err)
 	}
 	root, err := os.OpenRoot(stagingDir)
@@ -499,8 +536,9 @@ var stagingFreeBytes = func(dir string) (uint64, error) {
 
 // checkStagingSpace refuses a restore whose manifest declares more bytes than
 // the staging volume can still hold, before any object is downloaded. A file
-// already staged under one of the manifest's keys, left by an earlier attempt,
-// is overwritten, so its size counts as free. The check does not reserve the
+// already staged in root under one of the manifest's keys is overwritten, so
+// its size counts as free; a restore stages into a new directory (#866), so
+// for it there is none. The check does not reserve the
 // space: it only refuses a restore that cannot fit when it starts.
 func checkStagingSpace(manifest BackupManifest, root *os.Root, stagingDir string) error {
 	free, err := stagingFreeBytes(stagingDir)

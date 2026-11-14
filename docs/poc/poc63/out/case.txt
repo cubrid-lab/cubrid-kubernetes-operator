@@ -1,0 +1,92 @@
+== empty target 2026-11-14T19:46:51Z
+appdb
+appdb_bkvinf
+appdb_dwb
+appdb_lgar_t
+appdb_lgat
+appdb_lgat__lock
+appdb_lginf
+appdb_vinf
+lob
+unregistered
+== leftovers 2026-11-14T19:46:51Z
+/var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001 1048576 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+7bec6e4b1ef2219060e7cdc66357c8afe035c2ddb0ab66105d8cf803d9d05c0b  /var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001
+/var/lib/cubrid/restore-staging/uid-1/unrelated.txt 22 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+5f14cc98e457fe286b1e1290fd448c41278ff87469723a6aab13783a69f9ad36  /var/lib/cubrid/restore-staging/uid-1/unrelated.txt
+== A: restoredb killed while it writes the data volume 2026-11-14T19:46:52Z
+staged and verified: appdb_bk0v000
+registered
+running: 16392 cubrid restoredb                                                                                              
+16394 cubrid restoredb -u -B /var/lib/cubrid/restore-staging/uid-1/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/backup appdb 
+total 262152
+-rw------- 1 cubrid cubrid 268435456 Nov 14 19:46 appdb
+-rw------- 1 cubrid cubrid       258 Nov 14 19:46 appdb_vinf
+drwxrwxr-x 2 cubrid cubrid      4096 Nov 14 19:46 lob
+killed at 19:46:53.861115814
+/tmp/kill-restore.sh: line 20: 16392 Killed                  cubrid restoredb -u -B "$1" appdb > /tmp/restoreA.out 2>&1
+restoredb processes after the kill: [16394 cubrid restoredb -u -B /var/lib/cubrid/restore-staging/uid-1/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/backup appdb ]
+total 262156
+-rw------- 1 cubrid cubrid 268435456 Nov 14 19:46 appdb
+-rw------- 1 cubrid cubrid       258 Nov 14 19:46 appdb_vinf
+drwxrwxr-x 2 cubrid cubrid      4096 Nov 14 19:46 lob
+restoredb output:
+-- a server start on what A left (the Instance Manager never starts it: restore failed)
+This may take a long time depending on the amount of recovery works to do.
+Unable to restart/initialize the database server. Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb/appdb_lgat".
+++ cubrid server start: fail
+-- the failed restore takes the registration and the directory back
+unregistered
+-- A's attempt directory stays, as a killed Instance Manager leaves it
+total 27668
+-rw------- 1 cubrid cubrid       65 Nov 14 19:46 appdb_bk0_keys
+-rw------- 1 cubrid cubrid 28324864 Nov 14 19:46 appdb_bk0v000
+== B: completed restore beside the leftovers 2026-11-14T19:46:57Z
+staged and verified: appdb_bk0v000
+registered
+
+CUBRID 11.4.7
+
+restoredb exit 0
+count(*)	sum( cast(id as bigint))
+125000	7812562500
+
+3f2418cb9afed051574c922c5590949f  -
+-- after B: B's directory is removed by the restore, A's by the reclaim of ended attempts
+/var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001 1048576 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+7bec6e4b1ef2219060e7cdc66357c8afe035c2ddb0ab66105d8cf803d9d05c0b  /var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001
+/var/lib/cubrid/restore-staging/uid-1/unrelated.txt 22 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+5f14cc98e457fe286b1e1290fd448c41278ff87469723a6aab13783a69f9ad36  /var/lib/cubrid/restore-staging/uid-1/unrelated.txt
+== C: before the fix, an unlisted leftover volume in the -B directory 2026-11-14T19:47:21Z
+unregistered
+total 28688
+-rw------- 1 cubrid cubrid 28324864 Nov 14 19:47 appdb_bk0v000
+-rw-rw-r-- 1 cubrid cubrid  1048576 Nov 14 19:46 appdb_bk0v001
+registered
+
+CUBRID 11.4.7
+
+restoredb exit 0
+count(*)	sum( cast(id as bigint))
+125000	7812562500
+
+3f2418cb9afed051574c922c5590949f  -
+total 376200
+-rw------- 1 cubrid cubrid 268435456 Nov 14 19:47 appdb
+-rw-rw-r-- 1 cubrid cubrid        65 Nov 14 19:47 appdb_bkvinf
+-rw------- 1 cubrid cubrid        65 Nov 14 19:47 appdb_keys
+-rw------- 1 cubrid cubrid  67108864 Nov 14 19:47 appdb_lgar_t
+-rw------- 1 cubrid cubrid  67108864 Nov 14 19:47 appdb_lgat
+-rw------- 1 cubrid cubrid       205 Nov 14 19:47 appdb_lginf
+-rw------- 1 cubrid cubrid       258 Nov 14 19:47 appdb_vinf
+drwxrwxr-x 2 cubrid cubrid      4096 Nov 14 19:47 lob
+/var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0_keys 65 bytes, modified 2026-11-14 19:47:21.905363186 +0000
+393e83ab22d419ff02e5111b05d044b7de545f8c8a2c81767f3434a9d0cebe62  /var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0_keys
+/var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v000 28324864 bytes, modified 2026-11-14 19:47:21.769364513 +0000
+59af5f6e81ef5f14b2e0dbffe6bb41978854ddcd850592eff62dbf3768f564ef  /var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v000
+/var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001 1048576 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+7bec6e4b1ef2219060e7cdc66357c8afe035c2ddb0ab66105d8cf803d9d05c0b  /var/lib/cubrid/restore-staging/uid-1/backup/appdb_bk0v001
+/var/lib/cubrid/restore-staging/uid-1/unrelated.txt 22 bytes, modified 2026-11-14 19:46:52.013654846 +0000
+5f14cc98e457fe286b1e1290fd448c41278ff87469723a6aab13783a69f9ad36  /var/lib/cubrid/restore-staging/uid-1/unrelated.txt
+end 2026-11-14T19:47:47Z
+exit 0

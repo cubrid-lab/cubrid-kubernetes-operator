@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -975,7 +976,10 @@ func judgeRestoreStop(watch *stopWatch, memberLog []byte, rec *s12GracefulStopRe
 // (isStopLine).
 func scanRestoreStopLog(data []byte, rec *s12GracefulStopRecord) {
 	l := rec.Log
-	backupDir := " -B " + rec.stagingPath() + "/backup "
+	// An Instance Manager stages each restore attempt below the staging
+	// directory, in a directory named after its operation (#866); one built
+	// before that staged in the staging directory itself.
+	backupDir := regexp.MustCompile(` -B ` + regexp.QuoteMeta(rec.stagingPath()) + `/(op-[0-9a-f]{32}/)?backup `)
 	at := func(v string) *time.Time {
 		t, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
@@ -991,7 +995,7 @@ func scanRestoreStopLog(data []byte, rec *s12GracefulStopRecord) {
 		}
 		n := i + 1
 		l.Lines++
-		ours := strings.HasPrefix(line.Command, rec.place.command) && strings.Contains(line.Command, backupDir)
+		ours := strings.HasPrefix(line.Command, rec.place.command) && backupDir.MatchString(line.Command)
 		own := l.OperationID != "" && line.OperationID == l.OperationID
 		if l.StopLine == 0 && isStopLine(line, ours, own) {
 			l.StopLine, l.StopLoggedAt = n, at(line.Time)

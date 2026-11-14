@@ -73,10 +73,16 @@ func rootsFor(req RestoreRequest) RestoreRoots {
 	return RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir), EngineVersion: reportedEngineVersion}
 }
 
+// stagedAttemptDir is the directory a restore of req that runs for no
+// operation stages its artifact in (restoreAttemptDir).
+func stagedAttemptDir(req RestoreRequest) string {
+	return filepath.Join(req.StagingDir, "attempt")
+}
+
 func TestRestore_HappyPath(t *testing.T) {
 	store, bucket, prefix := stageUploadedArtifact(t)
 	req := baseRestoreRequest(t, bucket, prefix)
-	cli := &restoreCLI{checkPath: filepath.Join(req.StagingDir, "backup", stagedFileName)}
+	cli := &restoreCLI{checkPath: filepath.Join(stagedAttemptDir(req), "backup", stagedFileName)}
 
 	res, err := Restore(context.Background(), cli, store, rootsFor(req), req)
 	if err != nil {
@@ -85,7 +91,7 @@ func TestRestore_HappyPath(t *testing.T) {
 	if res.Database != dbName || res.CubridVersion != testCubridVersion {
 		t.Errorf("result = %+v", res)
 	}
-	want := "cubrid restoredb -u -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
+	want := "cubrid restoredb -u -B " + filepath.Join(stagedAttemptDir(req), "backup") + " " + dbName
 	if len(cli.calls) != 1 || cli.calls[0] != want {
 		t.Errorf("calls = %v, want [%s]", cli.calls, want)
 	}

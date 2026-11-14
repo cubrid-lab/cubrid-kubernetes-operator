@@ -290,3 +290,84 @@ func (s *Server) stagingRel(dir string) (string, error) {
 	}
 	return rel, nil
 }
+
+// reclaimRestoreAttempts removes, before the restore of operation current,
+// the directories that earlier restore attempts left in the request's
+// staging directory, which a killed process does not remove itself
+// (restoreAttemptDir). Only an entry named after another operation is
+// removed, and only when the store records that operation as ended or does
+// not know it and no process holds a file in it; an operation whose record
+// cannot be read, or a directory that is held, is kept. Nothing else in the
+// staging directory is touched, and links are removed, never followed.
+func (s *Server) reclaimRestoreAttempts(req RestoreRequest, current string) {
+	// A request that confine refuses is refused by Restore as well.
+	_, stagingDir, err := confine(req, s.restoreRoots)
+	if err != nil {
+		return
+	}
+	root, err := os.OpenRoot(s.restoreRoots.Staging)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(stagingDir)
+	dir, err := root.Open(name)
+	if err != nil {
+		return
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		s.log().Warn("Could not read the restore staging directory; earlier attempts are kept", "stagingDir", stagingDir, "err", err)
+		return
+	}
+	proc := s.procRoot
+	if proc == "" {
+		proc = defaultProcRoot
+	}
+	// A process names the files it holds by their resolved path, so the
+	// holders are looked for below the staging directory with its links
+	// resolved, as stagingScanPath does for backup staging.
+	resolved := stagingDir
+	if r, err := filepath.EvalSymlinks(stagingDir); err == nil {
+		resolved = r
+	}
+	for _, e := range entries {
+		id := e.Name()
+		if id == "backup" && e.IsDir() {
+			// An Instance Manager built before attempts had directories of
+			// their own (#866) staged here; nothing reads these files now.
+			s.log().Warn("Kept backup files an earlier Instance Manager staged directly in the restore staging directory; "+
+				"no restore reads them, and a person may remove them (runbook in docs/observability.md)",
+				"event", "restore_staging_legacy", "path", filepath.Join(stagingDir, id))
+			continue
+		}
+		if id == current || !isValidOperationID(id) {
+			continue
+		}
+		op, err := s.store.Get(id)
+		switch {
+		case errors.Is(err, ErrOperationNotFound):
+		case err != nil:
+			s.log().Warn("Could not read the operation record of an earlier restore attempt; its staging is kept",
+				"stagingDir", stagingDir, "operationID", id, "err", err)
+			continue
+		case !op.State.IsTerminal():
+			continue
+		}
+		path := filepath.Join(stagingDir, id)
+		if e.Type()&os.ModeSymlink == 0 {
+			held, err := stagingHolders(proc, procCommReader(proc), filepath.Join(resolved, id))
+			if err != nil || len(held) > 0 {
+				s.log().Warn("Kept the staging of an earlier restore attempt that a process holds open",
+					"stagingDir", stagingDir, "operationID", id, "holders", describeHolders(held, err))
+				continue
+			}
+		}
+		if err := root.RemoveAll(filepath.Join(name, id)); err != nil {
+			s.log().Warn("Could not remove the staging of an earlier restore attempt", "path", path, "err", err)
+			continue
+		}
+		s.log().Info("Removed the staging of an earlier restore attempt", "path", path, "operationID", id)
+	}
+}
