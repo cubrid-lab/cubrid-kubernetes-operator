@@ -1265,7 +1265,16 @@ spec:
                         answer. From then on any other answer, or none, ends the record.
                       type: boolean
                     confirmedAt:
-                      description: confirmedAt is when the Operator recorded it.
+                      description: |-
+                        confirmedAt is when the kubelet reported the database container
+                        terminated (its finishedAt).
+                      format: date-time
+                      type: string
+                    deletionRequestedAt:
+                      description: |-
+                        deletionRequestedAt is when the confirmed Pod's deletion was
+                        requested: its deletionTimestamp less its grace period. Only a Pod
+                        created no earlier can be the next Pod.
                       format: date-time
                       type: string
                     name:
@@ -1276,6 +1285,13 @@ spec:
                         nextPodUID is the UID of the member's first Pod after podUID the
                         Operator saw. The record covers only these two Pods: any other Pod of
                         the member, or the next Pod gone, ends it.
+                      type: string
+                    podCreated:
+                      description: |-
+                        podCreated is the confirmed Pod's creationTimestamp. A Pod of the
+                        member deleted without a confirmation and created after it ends the
+                        record; one created before it does not.
+                      format: date-time
                       type: string
                     podUID:
                       description: |-

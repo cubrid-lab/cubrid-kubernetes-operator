@@ -637,8 +637,23 @@ func TestQuarantineMasterRestartRevises(t *testing.T) {
 // q0's Pod uid0, and gives q0 the Pod next.
 func (s *quarantineScenario) confirmTermination(next string) {
 	s.terminations = append(s.terminations, databasev1alpha1.MemberTermination{
-		Name: q0, PodUID: uid0, ConfirmedAt: metav1.NewTime(testNow)})
-	s.identities[q0] = memberIdentity{PodUID: next}
+		Name: q0, PodUID: uid0, ConfirmedAt: metav1.NewTime(testNow),
+		PodCreated:          &metav1.Time{Time: testNow.Add(-time.Hour)},
+		DeletionRequestedAt: &metav1.Time{Time: testNow.Add(-10 * time.Second)}})
+	s.identities[q0] = memberIdentity{PodUID: next, Created: testNow}
+}
+
+// A next Pod created before the confirmed Pod's deletion was requested is
+// not the Pod that replaced it: the member is unverified.
+func TestQuarantineConfirmedTerminationNextPodCreatedEarlier(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	s.confirmTermination(uid0New)
+	s.identities[q0] = memberIdentity{PodUID: uid0New, Created: testNow.Add(-time.Minute)}
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine == nil || slices.Contains(d.Confirmed, q0) {
+		t.Fatalf("decision = %+v, want %s unverified and quarantined", d, q0)
+	}
 }
 
 // A former master whose old Pod's termination the kubelet confirmed is not
@@ -653,7 +668,7 @@ func TestQuarantineConfirmedTerminationIsNotUnverified(t *testing.T) {
 		t.Fatalf("decision = %+v, want no quarantine and %s confirmed", d, q0)
 	}
 	// Its new Pod is created and does not answer yet.
-	s.identities[q0] = memberIdentity{PodUID: uid0New}
+	s.identities[q0] = memberIdentity{PodUID: uid0New, Created: testNow}
 	t1 := testNow.Add(5 * time.Second)
 	if d = s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)}); d.Quarantine != nil {
 		t.Fatalf("a starting new Pod quarantined: %+v", d.Quarantine)
@@ -724,7 +739,7 @@ func TestQuarantineReleasedOnAConfirmedTermination(t *testing.T) {
 		}
 	}
 	t1 := testNow.Add(45 * time.Second)
-	s.identities[q0] = memberIdentity{PodUID: uid0New}
+	s.identities[q0] = memberIdentity{PodUID: uid0New, Created: testNow}
 	s.pass(t1, map[string]RoleObservation{q0: slaveAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
 	t2 := t1.Add(quarantineVerifyGap + time.Second)
 	s.pass(t2, map[string]RoleObservation{q0: slaveAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)})
@@ -747,7 +762,7 @@ func TestQuarantineConfirmedTerminationCoversOneNextPod(t *testing.T) {
 			if d.Quarantine != nil || len(d.Terminations) != 1 || d.Terminations[0].NextPodUID != uid0New {
 				t.Fatalf("decision = %+v, want no quarantine and the record bound to %s", d, uid0New)
 			}
-			s.identities[q0] = memberIdentity{PodUID: then}
+			s.identities[q0] = memberIdentity{PodUID: then, Created: testNow}
 			t1 := testNow.Add(5 * time.Second)
 			d = s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
 			if d.Quarantine == nil || slices.Contains(d.Confirmed, q0) {

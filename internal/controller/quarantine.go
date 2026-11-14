@@ -48,6 +48,11 @@ type memberIdentity struct {
 	// Terminated is set when the Pod is being deleted and the kubelet
 	// reported its database container terminated (podTerminated).
 	Terminated bool
+	// Created is the Pod's creationTimestamp; zero when unknown.
+	Created time.Time
+	// TerminatedAt and DeletionRequested are terminatedAt and
+	// deletionRequested of the Pod.
+	TerminatedAt, DeletionRequested time.Time
 }
 
 // terminationSkew is how much earlier than the deletion request the kubelet
@@ -66,33 +71,49 @@ const terminationSkew = 5 * time.Second
 // cannot be reached is then unverified as any member.
 const quarantineStartBound = 90 * time.Second
 
-// podTerminated reports whether the kubelet confirmed the termination of
-// pod's database process for its deletion: the Pod is being deleted and the
-// kubelet reported its database container terminated no earlier than the
-// deletion was requested (deletionTimestamp less the grace period, with
-// terminationSkew). A terminated state left from a crash before the
-// deletion, one without an end time, and ContainerStatusUnknown, which the
-// kubelet reports when it could not read the container, do not count. A Pod
-// deleted with --force is removed before the kubelet reports anything, so it
-// never is.
-func podTerminated(pod *corev1.Pod) bool {
+// deletionRequested is when pod's deletion was requested: its
+// deletionTimestamp less its grace period; zero while it is not deleted.
+func deletionRequested(pod *corev1.Pod) time.Time {
 	if pod.DeletionTimestamp == nil {
-		return false
+		return time.Time{}
 	}
 	requested := pod.DeletionTimestamp.Time
 	if grace := pod.DeletionGracePeriodSeconds; grace != nil {
 		requested = requested.Add(-time.Duration(*grace) * time.Second)
+	}
+	return requested
+}
+
+// terminatedAt is when the kubelet reported pod's database process ended for
+// its deletion, zero when it did not: the Pod is being deleted and the
+// kubelet reported its database container terminated no earlier than the
+// deletion was requested (deletionRequested, with terminationSkew). A
+// terminated state left from a crash before the deletion, one without an end
+// time, and ContainerStatusUnknown, which the kubelet reports when it could
+// not read the container, do not count. A Pod deleted with --force is
+// removed before the kubelet reports anything, so it never is.
+func terminatedAt(pod *corev1.Pod) time.Time {
+	requested := deletionRequested(pod)
+	if requested.IsZero() {
+		return time.Time{}
 	}
 	for _, c := range pod.Status.ContainerStatuses {
 		if c.Name != appName {
 			continue
 		}
 		t := c.State.Terminated
-		return t != nil && t.Reason != "ContainerStatusUnknown" && !t.FinishedAt.IsZero() &&
-			!t.FinishedAt.Time.Before(requested.Add(-terminationSkew))
+		if t != nil && t.Reason != "ContainerStatusUnknown" && !t.FinishedAt.IsZero() &&
+			!t.FinishedAt.Time.Before(requested.Add(-terminationSkew)) {
+			return t.FinishedAt.Time
+		}
+		return time.Time{}
 	}
-	return false
+	return time.Time{}
 }
+
+// podTerminated reports whether the kubelet confirmed the termination of
+// pod's database process for its deletion (terminatedAt).
+func podTerminated(pod *corev1.Pod) bool { return !terminatedAt(pod).IsZero() }
 
 // podTermination is a database Pod the Pod watch saw: one the kubelet
 // reported terminated while it was deleted (notePodTermination), or one
@@ -100,7 +121,18 @@ func podTerminated(pod *corev1.Pod) bool {
 type podTermination struct {
 	cluster types.NamespacedName
 	member  string
-	at      time.Time
+	// at is when the watch saw it.
+	at time.Time
+	// created is the Pod's creationTimestamp, zero when unknown; finished
+	// and requested are terminatedAt and deletionRequested of a confirmed
+	// one.
+	created, finished, requested time.Time
+}
+
+// podFacts are the times of pod that recordTerminations compares.
+func podFacts(cluster types.NamespacedName, pod *corev1.Pod, at time.Time) podTermination {
+	return podTermination{cluster: cluster, member: pod.Name, at: at, created: pod.CreationTimestamp.Time,
+		finished: terminatedAt(pod), requested: deletionRequested(pod)}
 }
 
 // databasePod is the cluster of pod, a database Pod of a CubridCluster, and
@@ -128,7 +160,7 @@ func (r *CubridClusterReconciler) notePodDeleted(pod *corev1.Pod, stateUnknown b
 	if !stateUnknown && r.notePodTermination(pod) {
 		return true
 	}
-	r.podUnconfirmed.Store(pod.UID, podTermination{cluster: cluster, member: pod.Name, at: r.now()})
+	r.podUnconfirmed.Store(pod.UID, podFacts(cluster, pod, r.now()))
 	return true
 }
 
@@ -146,7 +178,7 @@ func (r *CubridClusterReconciler) notePodTermination(pod *corev1.Pod) bool {
 	if !ok || !podTerminated(pod) {
 		return false
 	}
-	r.podTerminations.Store(pod.UID, podTermination{cluster: cluster, member: pod.Name, at: r.now()})
+	r.podTerminations.Store(pod.UID, podFacts(cluster, pod, r.now()))
 	return true
 }
 
@@ -155,59 +187,85 @@ func (r *CubridClusterReconciler) notePodTermination(pod *corev1.Pod) bool {
 // and ids) or by the watch. It updates status.memberPods with the Pods read
 // in this pass. Only a termination of the Pod the member was last seen in
 // is recorded: a Pod deleted in between without being seen could have been
-// force-deleted. A Pod of the member the watch saw deleted unconfirmed ends a
-// record of another of its Pods.
+// force-deleted. A Pod of the member the watch saw deleted unconfirmed and
+// created after the confirmed one, or created at a time not known, keeps
+// that termination from being recorded and ends its record: it may be the
+// next Pod, deleted with --force before a pass read it. One created before
+// the confirmed Pod, as in an earlier fault, ends nothing. A termination
+// older than quarantineStartBound is not recorded, so the bound holds from
+// the kubelet's report.
 func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string, before, ids map[string]memberIdentity) []databasev1alpha1.MemberTermination {
 	key := client.ObjectKeyFromObject(cluster)
-	kept := func(store *sync.Map) map[string]string {
-		uids := map[string]string{}
+	kept := func(store *sync.Map) map[string]podTermination {
+		pods := map[string]podTermination{}
 		store.Range(func(uid, v any) bool {
 			t := v.(podTermination)
 			switch {
 			case r.now().Sub(t.at) > podTerminationMemory:
 				store.Delete(uid)
 			case t.cluster == key:
-				uids[string(uid.(types.UID))] = t.member
+				pods[string(uid.(types.UID))] = t
 			}
 			return true
 		})
-		return uids
+		return pods
 	}
-	watched, unconfirmed := kept(&r.podTerminations), kept(&r.podUnconfirmed)
+	confirmed, unconfirmed := kept(&r.podTerminations), kept(&r.podUnconfirmed)
+	for _, read := range []map[string]memberIdentity{before, ids} {
+		for m, id := range read {
+			if id.Terminated {
+				confirmed[id.PodUID] = podTermination{cluster: key, member: m, created: id.Created,
+					finished: id.TerminatedAt, requested: id.DeletionRequested}
+			}
+		}
+	}
+	// laterUnconfirmed is a Pod of member deleted unconfirmed that is not
+	// uid and not known to be created before created.
+	laterUnconfirmed := func(member, uid string, created time.Time) string {
+		for u, t := range unconfirmed {
+			if t.member == member && u != uid && (created.IsZero() || t.created.IsZero() || !t.created.Before(created)) {
+				return u
+			}
+		}
+		return ""
+	}
+	out := slices.DeleteFunc(slices.Clone(cluster.Status.MemberTerminations), func(t databasev1alpha1.MemberTermination) bool {
+		var created time.Time
+		if t.PodCreated != nil {
+			created = t.PodCreated.Time
+		}
+		if deleted := laterUnconfirmed(t.Name, t.PodUID, created); deleted != "" {
+			logf.FromContext(ctx).Info("Ended the confirmed termination of a member's Pod: a later Pod of it was deleted unconfirmed",
+				"member", t.Name, "podUID", t.PodUID, "deletedPodUID", deleted)
+			return true
+		}
+		return false
+	})
 	last := map[string]string{}
 	for _, p := range cluster.Status.MemberPods {
 		last[p.Name] = p.PodUID
 	}
-	out := slices.DeleteFunc(slices.Clone(cluster.Status.MemberTerminations), func(t databasev1alpha1.MemberTermination) bool {
-		for uid, member := range unconfirmed {
-			if member == t.Name && uid != t.PodUID {
-				logf.FromContext(ctx).Info("Ended the confirmed termination of a member's Pod: another of its Pods was deleted unconfirmed",
-					"member", t.Name, "podUID", t.PodUID, "deletedPodUID", uid)
-				return true
-			}
-		}
-		return false
-	})
 	var pods []databasev1alpha1.MemberPod
 	for _, m := range members {
-		uid := ""
-		switch now, was := ids[m], before[m]; {
-		case last[m] == "":
-		case last[m] == now.PodUID && (now.Terminated || (was.PodUID == now.PodUID && was.Terminated) ||
-			watched[now.PodUID] != ""):
-			uid = now.PodUID
-		case last[m] != now.PodUID && (watched[last[m]] != "" || (was.PodUID == last[m] && was.Terminated)):
-			uid = last[m]
-		}
-		if unconfirmed[uid] != "" {
+		uid := lastPodConfirmed(m, last[m], confirmed)
+		c := confirmed[uid]
+		if uid != "" && (c.finished.IsZero() || r.now().Sub(c.finished) > quarantineStartBound ||
+			laterUnconfirmed(m, uid, c.created) != "" || unconfirmed[uid].member != "") {
 			uid = ""
 		}
 		if uid != "" && !slices.ContainsFunc(out, func(t databasev1alpha1.MemberTermination) bool {
 			return t.Name == m && t.PodUID == uid
 		}) {
+			record := databasev1alpha1.MemberTermination{Name: m, PodUID: uid, ConfirmedAt: metav1.NewTime(c.finished)}
+			if !c.created.IsZero() {
+				record.PodCreated = &metav1.Time{Time: c.created}
+			}
+			if !c.requested.IsZero() {
+				record.DeletionRequestedAt = &metav1.Time{Time: c.requested}
+			}
 			out = slices.DeleteFunc(out, func(t databasev1alpha1.MemberTermination) bool { return t.Name == m })
-			out = append(out, databasev1alpha1.MemberTermination{Name: m, PodUID: uid, ConfirmedAt: metav1.NewTime(r.now())})
+			out = append(out, record)
 			logf.FromContext(ctx).Info("Recorded the confirmed termination of a member's Pod", "member", m, "podUID", uid)
 		}
 		seen := ids[m].PodUID
@@ -220,6 +278,16 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 	}
 	cluster.Status.MemberPods = pods
 	return out
+}
+
+// lastPodConfirmed is the UID of member's last Pod seen before this pass,
+// last, when its termination was confirmed; empty otherwise. The Pod read in
+// this pass is that Pod or a later one.
+func lastPodConfirmed(member, last string, confirmed map[string]podTermination) string {
+	if last == "" || confirmed[last].member != member {
+		return ""
+	}
+	return last
 }
 
 // quarantineInput is what one pass knows for the decision on the read-write
@@ -522,6 +590,11 @@ func confirmedDown(t *databasev1alpha1.MemberTermination, id memberIdentity, o R
 		// Between the Pods; once the next Pod was seen, it is gone.
 		return t.NextPodUID == ""
 	case t.NextPodUID == "":
+		// Only a Pod created no earlier than the confirmed Pod's deletion
+		// was requested can be the Pod that replaced it.
+		if t.DeletionRequestedAt == nil || id.Created.IsZero() || id.Created.Before(t.DeletionRequestedAt.Time) {
+			return false
+		}
 		t.NextPodUID = id.PodUID
 	case id.PodUID != t.NextPodUID:
 		// A third Pod: the next one may have been deleted unseen.
@@ -928,7 +1001,8 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 		if err != nil {
 			return nil, fmt.Errorf("read Pod %s: %w", m, err)
 		}
-		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod)}
+		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod), Created: pod.CreationTimestamp.Time,
+			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod)}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {
 				id.RestartCount = c.RestartCount

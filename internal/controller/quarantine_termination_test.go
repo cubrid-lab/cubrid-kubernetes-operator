@@ -29,11 +29,17 @@ import (
 )
 
 // terminatingPod is a database Pod of cluster qc deleted at deletedAt with a
-// grace period of grace, whose container is in state.
+// grace period of grace, whose container is in state, created an hour
+// before the deletion.
 func terminatingPod(uid string, deletedAt time.Time, grace int64, state corev1.ContainerState) *corev1.Pod {
+	return createdPod(uid, deletedAt.Add(-time.Hour), deletedAt, grace, state)
+}
+
+// createdPod is terminatingPod created at created.
+func createdPod(uid string, created, deletedAt time.Time, grace int64, state corev1.ContainerState) *corev1.Pod {
 	deletion := metav1.NewTime(deletedAt.Add(time.Duration(grace) * time.Second))
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: q0, Namespace: "ns", UID: types.UID(uid),
+		ObjectMeta: metav1.ObjectMeta{Name: q0, Namespace: "ns", UID: types.UID(uid), CreationTimestamp: metav1.NewTime(created),
 			DeletionTimestamp: &deletion, DeletionGracePeriodSeconds: &grace,
 			Labels: labelsFor(&databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc"}})},
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: appName, State: state}}},
@@ -82,10 +88,10 @@ func recordFor(r *CubridClusterReconciler, last string, records []databasev1alph
 // Operator never saw.
 func TestRecordTerminationsOnlyForTheLastPodSeen(t *testing.T) {
 	r := &CubridClusterReconciler{Clock: func() time.Time { return testNow }}
-	if got := recordFor(r, "a", nil, memberIdentity{PodUID: "b", Terminated: true}); len(got) != 0 {
+	if got := recordFor(r, "a", nil, memberIdentity{PodUID: "b", Terminated: true, TerminatedAt: testNow}); len(got) != 0 {
 		t.Fatalf("recorded %+v for a Pod after one the Operator saw last", got)
 	}
-	if got := recordFor(r, "b", nil, memberIdentity{PodUID: "b", Terminated: true}); len(got) != 1 || got[0].PodUID != "b" {
+	if got := recordFor(r, "b", nil, memberIdentity{PodUID: "b", Terminated: true, TerminatedAt: testNow}); len(got) != 1 || got[0].PodUID != "b" {
 		t.Fatalf("records = %+v, want b", got)
 	}
 }
@@ -99,5 +105,64 @@ func TestRecordTerminationsEndOnAnUnconfirmedDeletion(t *testing.T) {
 	r.notePodDeleted(next, false)
 	if got := recordFor(r, "a", record, memberIdentity{PodUID: "c"}); len(got) != 0 {
 		t.Fatalf("records = %+v, want none after %s was deleted unconfirmed", got, next.UID)
+	}
+}
+
+// finishedAt is a container the kubelet reported terminated at at.
+func finishedAt(at time.Time) corev1.ContainerState {
+	return corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{FinishedAt: metav1.NewTime(at), Reason: "Completed"}}
+}
+
+// A Pod of the member deleted without a confirmation and created after the
+// confirmed one, as a replacement force-deleted before any pass read it,
+// keeps the confirmed Pod from being recorded, and ends its record.
+func TestRecordTerminationsBlockedByALaterUnconfirmedPod(t *testing.T) {
+	r := &CubridClusterReconciler{Clock: func() time.Time { return testNow.Add(20 * time.Second) }}
+	confirmed := createdPod("a", testNow.Add(-time.Hour), testNow, 30, finishedAt(testNow.Add(2*time.Second)))
+	if !r.notePodTermination(confirmed) {
+		t.Fatalf("the confirmed Pod was not kept")
+	}
+	forced := createdPod("b", testNow.Add(5*time.Second), testNow.Add(8*time.Second), 0,
+		corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	r.notePodDeleted(forced, false)
+	if got := recordFor(r, "a", nil, memberIdentity{PodUID: "c", Created: testNow.Add(10 * time.Second)}); len(got) != 0 {
+		t.Fatalf("records = %+v, want none", got)
+	}
+	record := []databasev1alpha1.MemberTermination{{Name: q0, PodUID: "a", ConfirmedAt: metav1.NewTime(testNow),
+		PodCreated: &metav1.Time{Time: testNow.Add(-time.Hour)}}}
+	if got := recordFor(r, "a", record, memberIdentity{PodUID: "c", Created: testNow.Add(10 * time.Second)}); len(got) != 0 {
+		t.Fatalf("records = %+v, want the record ended and not recorded again", got)
+	}
+}
+
+// A Pod deleted without a confirmation and created before the confirmed one,
+// as one force-deleted in an earlier fault, ends nothing.
+func TestRecordTerminationsIgnoreAnOlderUnconfirmedPod(t *testing.T) {
+	r := &CubridClusterReconciler{Clock: func() time.Time { return testNow.Add(20 * time.Second) }}
+	older := createdPod("x", testNow.Add(-2*time.Hour), testNow.Add(-time.Hour-time.Minute), 0,
+		corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	r.notePodDeleted(older, false)
+	record := []databasev1alpha1.MemberTermination{{Name: q0, PodUID: "a", ConfirmedAt: metav1.NewTime(testNow),
+		PodCreated: &metav1.Time{Time: testNow.Add(-time.Hour)}}}
+	if got := recordFor(r, "a", record, memberIdentity{PodUID: "c", Created: testNow.Add(10 * time.Second)}); len(got) != 1 {
+		t.Fatalf("records = %+v, want the record of a kept", got)
+	}
+}
+
+// The record's time is the kubelet's report of the container's end, not the
+// pass that recorded it, and a termination older than quarantineStartBound
+// is not recorded again.
+func TestRecordTerminationsAtTheKubeletReport(t *testing.T) {
+	ended := testNow.Add(2 * time.Second)
+	r := &CubridClusterReconciler{Clock: func() time.Time { return testNow.Add(20 * time.Second) }}
+	r.notePodTermination(createdPod("a", testNow.Add(-time.Hour), testNow, 30, finishedAt(ended)))
+	got := recordFor(r, "a", nil, memberIdentity{})
+	if len(got) != 1 || !got[0].ConfirmedAt.Time.Equal(ended) || got[0].PodCreated == nil || got[0].DeletionRequestedAt == nil {
+		t.Fatalf("records = %+v, want one confirmed at %s with the Pod's creation and deletion request", got, ended)
+	}
+	late := &CubridClusterReconciler{Clock: func() time.Time { return ended.Add(quarantineStartBound + time.Second) }}
+	late.notePodTermination(createdPod("a", testNow.Add(-time.Hour), testNow, 30, finishedAt(ended)))
+	if got := recordFor(late, "a", nil, memberIdentity{}); len(got) != 0 {
+		t.Fatalf("records = %+v, want an expired termination not recorded", got)
 	}
 }

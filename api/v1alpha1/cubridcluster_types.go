@@ -868,8 +868,19 @@ type MemberTermination struct {
 	// podUID is the UID of the Pod that was seen being deleted with its
 	// database container terminated.
 	PodUID string `json:"podUID"`
-	// confirmedAt is when the Operator recorded it.
+	// confirmedAt is when the kubelet reported the database container
+	// terminated (its finishedAt).
 	ConfirmedAt metav1.Time `json:"confirmedAt"`
+	// podCreated is the confirmed Pod's creationTimestamp. A Pod of the
+	// member deleted without a confirmation and created after it ends the
+	// record; one created before it does not.
+	// +optional
+	PodCreated *metav1.Time `json:"podCreated,omitempty"`
+	// deletionRequestedAt is when the confirmed Pod's deletion was
+	// requested: its deletionTimestamp less its grace period. Only a Pod
+	// created no earlier can be the next Pod.
+	// +optional
+	DeletionRequestedAt *metav1.Time `json:"deletionRequestedAt,omitempty"`
 	// nextPodUID is the UID of the member's first Pod after podUID the
 	// Operator saw. The record covers only these two Pods: any other Pod of
 	// the member, or the next Pod gone, ends it.

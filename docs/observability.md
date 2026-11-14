@@ -362,10 +362,14 @@ Pod:
   reads, before the Pod was gone. It records the member's last Pod UID in
   `status.memberPods` and the confirmed Pod in `status.memberTerminations`,
   and records a termination only for the last Pod it saw of that member.
-  The record covers that Pod and the first next Pod the Operator sees
-  (`nextPodUID`); another Pod of the member, the next Pod gone, a Pod of the
-  member deleted without a confirmation, or 90 seconds after the
-  confirmation end it. A Pod deleted with `--force`, a termination the
+  The record (`confirmedAt` is the kubelet's report of the container's end)
+  covers that Pod and the first next Pod the Operator sees, created no
+  earlier than the confirmed Pod's deletion was requested (`nextPodUID`);
+  another Pod of the member, the next Pod gone, a Pod of the member created
+  after the confirmed one and deleted without a confirmation, or 90 seconds
+  after `confirmedAt` end it, and an ended or expired record is not
+  recorded again for the same Pod. The 90 seconds come from the Kind rejoin
+  baselines and are not measured with this behavior yet. A Pod deleted with `--force`, a termination the
   Operator did not see (for example while it was stopped) and a lost VM
   leave the member unverified. The next Pod's first non-master answer
   starts its ordinary verification; from then on any other answer, or none,
