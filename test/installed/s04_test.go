@@ -18,8 +18,13 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -40,6 +45,10 @@ const (
 	testVMStatus = "lab-vm status"
 	// testMasterNode is the node of testHAPrimary in the HA fixture.
 	testMasterNode = "node-2"
+	// testMovedBroker is a Broker Pod on the master's node.
+	testMovedBroker = "ha-broker-rw-1"
+	// testOtherNode runs a member that is not the master.
+	testOtherNode = "other-node"
 )
 
 // shortGrace shortens primaryResolvedGrace for one test.
@@ -79,6 +88,12 @@ type s04Lab struct {
 	f        *haFixture
 	stopped  map[string]bool
 	commands []string
+	// cordonedAtStop is whether the node was unschedulable when the stop
+	// command ran.
+	cordonedAtStop bool
+	// notReadyAgo, when set, dates the node's NotReady that long before the
+	// VM was powered off, as a lab whose status reads lag the outage.
+	notReadyAgo time.Duration
 	// promote is whether CUBRID promotes a slave; keepResolved keeps
 	// PrimaryResolved True while the VM is off; deletePod deletes the
 	// powered-off member's Pod; failStart fails the start command;
@@ -183,6 +198,9 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 		}
 		return "running\n", nil
 	case testVMStop:
+		if n := (&corev1.Node{}); l.f.runner.Client.Get(ctx, client.ObjectKey{Name: node}, n) == nil {
+			l.cordonedAtStop = n.Spec.Unschedulable
+		}
 		l.f.mu.Lock()
 		late := l.lateStop > 0
 		l.lateStopIssued = late
@@ -225,7 +243,11 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 	if !on {
 		status = corev1.ConditionUnknown
 	}
-	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}
+	since := metav1.Now()
+	if !on && l.notReadyAgo > 0 {
+		since = metav1.NewTime(time.Now().Add(-l.notReadyAgo))
+	}
+	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status, LastTransitionTime: since}}
 	if err := c.Status().Update(ctx, n); err != nil {
 		f.t.Error(err)
 	}
@@ -435,19 +457,103 @@ func assertNoPower(t *testing.T, lab *s04Lab) {
 	}
 }
 
-func TestRunS04RefusesABrokerOnTheMastersNode(t *testing.T) {
-	cfg := testS04Config(t)
-	f, lab := newS04Fixture(t, cfg, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ha-broker-rw-1",
+// brokerOnMastersNode is a Broker Pod that the scheduler put on the master's
+// node.
+func brokerOnMastersNode(cfg HAConfig) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: testMovedBroker, UID: testMovedBroker,
 		Namespace: cfg.Namespace, Labels: map[string]string{"app.kubernetes.io/component": brokerComponent}},
-		Spec: corev1.PodSpec{NodeName: testMasterNode}})
+		Spec: corev1.PodSpec{NodeName: testMasterNode}}
+}
+
+func readS04Record(t *testing.T, dir string) s04Record {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, s04RecordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec s04Record
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func masterNodeUnschedulable(t *testing.T, f *haFixture) bool {
+	t.Helper()
+	node := &corev1.Node{}
+	if err := f.runner.Client.Get(context.Background(), client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		t.Fatal(err)
+	}
+	return node.Spec.Unschedulable
+}
+
+// A Broker on the master's node would lose power with the master, and its
+// clients' failures would not be the master's. With four Brokers on three
+// workers one usually is there, so S04 cordons the node, moves those Brokers
+// off it, and makes the node schedulable again at its end (#110).
+func TestRunS04MovesABrokerOffTheMastersNode(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass after the Broker was moved", s04)
+	}
+	// Once the Brokers run elsewhere the cordon has done its work. A member
+	// Pod that Kubernetes deletes from the node while it is down must be
+	// able to come back on it: its volume is bound to that node.
+	if lab.cordonedAtStop {
+		t.Fatal("the master's node was still cordoned when its VM was powered off")
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if !slices.Equal(rec.BrokersMoved, []string{testMovedBroker}) || rec.CordonedNode != testMasterNode ||
+		!rec.Uncordoned {
+		t.Fatalf("record = moved %v, cordoned %q, uncordoned %v; want ha-broker-rw-1 moved off %s, "+
+			"and the node schedulable again", rec.BrokersMoved, rec.CordonedNode, rec.Uncordoned, testMasterNode)
+	}
+	if masterNodeUnschedulable(t, f) {
+		t.Fatal("the master's node is left cordoned")
+	}
+}
+
+func TestRunS04MakesTheNodeSchedulableAgainWhenItFails(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 200 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	lab.promote = false
 	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 		t.Fatal("RunHA() passed")
 	}
-	s04 := s04Scenario(t, cfg.EvidenceDir)
-	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "Broker Pod ha-broker-rw-1") {
-		t.Fatalf("S04 = %+v, want blocked: a Broker shares the master's node", s04)
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Fail {
+		t.Fatalf("S04 = %+v, want a failure without a promotion", s04)
 	}
-	assertNoPower(t, lab)
+	if masterNodeUnschedulable(t, f) || !readS04Record(t, cfg.EvidenceDir).Uncordoned {
+		t.Fatal("the master's node is left cordoned after a failed S04")
+	}
+}
+
+func TestRunS04LeavesANodeCordonedBeforeItAsItWas(t *testing.T) {
+	cfg := testS04Config(t)
+	f, _ := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+	node := &corev1.Node{}
+	if err := f.runner.Client.Get(t.Context(), client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Spec.Unschedulable = true
+	if err := f.runner.Client.Update(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if rec := readS04Record(t, cfg.EvidenceDir); rec.CordonedNode != "" || rec.Uncordoned {
+		t.Fatalf("record = cordoned %q, uncordoned %v; want neither for a node cordoned before the run",
+			rec.CordonedNode, rec.Uncordoned)
+	}
+	if !masterNodeUnschedulable(t, f) {
+		t.Fatal("the run made a node schedulable that was cordoned before it")
+	}
 }
 
 func TestRunS04RefusesAnOutagePastThePodsToleration(t *testing.T) {
@@ -614,5 +720,109 @@ func TestAnsweredSinceNeedsAKnownRoleObservedAfterThePowerOn(t *testing.T) {
 				t.Fatalf("answeredSince() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The VM of the master's node loses power in S04, and the run refuses a
+// workload client on that node, so the client is kept off it (#110).
+func TestS04ClientStaysOffTheMastersNode(t *testing.T) {
+	h := &haRun{cfg: testS04Config(t)}
+	h.rec.StartingState = &startingState{Master: testHAPrimary}
+	h.rec.Members = []imageIdentity{{Pod: testHAPrimary, Node: testMasterNode}, {Pod: "ha-0", Node: testOtherNode}}
+	affinity := h.clientPod().Spec.Affinity
+	if affinity == nil || affinity.NodeAffinity == nil ||
+		affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		t.Fatalf("the S04 workload client has no required node affinity: %+v", affinity)
+	}
+	terms := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	want := corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpNotIn,
+		Values: []string{testMasterNode}}
+	if len(terms) != 1 || len(terms[0].MatchFields) != 1 || len(terms[0].MatchExpressions) != 0 ||
+		!reflect.DeepEqual(terms[0].MatchFields[0], want) {
+		t.Fatalf("the S04 workload client is not kept off the master's node %s: %+v", testMasterNode, terms)
+	}
+}
+
+func TestClientIsNotPlacedWithoutS04(t *testing.T) {
+	h := &haRun{cfg: testHAConfig(t)}
+	h.rec.StartingState = &startingState{Master: testHAPrimary}
+	h.rec.Members = []imageIdentity{{Pod: testHAPrimary, Node: testMasterNode}}
+	if affinity := h.clientPod().Spec.Affinity; affinity != nil {
+		t.Fatalf("a workload client without S04 is placed: %+v", affinity)
+	}
+}
+
+// Kubernetes deletes the member's Pod the taint toleration after the node
+// became NotReady, however late the lab's status read confirmed the VM off.
+// The run powers the VM on in time for that, before -vm-down-for is up (#110).
+func TestRunS04PowersTheVMOnInTimeForTheToleration(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMDownFor = 30 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	// A condition's time has whole seconds: the deadline is 2 to 3 seconds
+	// after the power-off, well before -vm-down-for is up.
+	lab.notReadyAgo = defaultTaintToleration - vmBootBudget - 3*time.Second
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass with the VM powered on early", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.NodeNotReadyAt == nil || rec.PowerOnBy == nil || !rec.VMDownCutShort {
+		t.Fatalf("record = NotReady %v, power on by %v, cut short %v; want the toleration's deadline used",
+			rec.NodeNotReadyAt, rec.PowerOnBy, rec.VMDownCutShort)
+	}
+	if rec.PoweredOnAt == nil || rec.PoweredOnAt.Sub(*rec.PowerOnBy) > 5*time.Second {
+		t.Fatalf("the VM was powered on at %v, after its deadline %v", rec.PoweredOnAt, rec.PowerOnBy)
+	}
+}
+
+func TestRunS04IsBlockedWhenTheTolerationEndsBeforeAPromotion(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMDownFor = 30 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.notReadyAgo = defaultTaintToleration - vmBootBudget - 300*time.Millisecond
+	lab.promote = false
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "toleration") ||
+		s04.CleanupSucceeded == nil || !*s04.CleanupSucceeded {
+		t.Fatalf("S04 = %+v, want blocked on the toleration, with the VM powered on again", s04)
+	}
+}
+
+// A failed S04 keeps the members' and the Brokers' logs before the namespace
+// goes, as a failed LAB01 does: the first lab run that reached S04's data
+// check found acknowledged rows missing on the member that returned, and its
+// logs went with the namespace (#110).
+func TestRunS04FailureKeepsTheLogs(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 200 * time.Millisecond
+	manager := labelledPod(testFailureManager, cfg.OperatorNamespace,
+		testManagerLabels(), managerContainer)
+	f, lab := newS04Fixture(t, cfg, manager)
+	lab.promote = false
+	read := false
+	f.runner.podLogs = func(_ context.Context, namespace, pod string, _ *corev1.PodLogOptions) (io.ReadCloser, error) {
+		if len(f.deletes) != 0 {
+			t.Errorf("log of %s/%s read after the namespace was deleted", namespace, pod)
+		}
+		read = true
+		return io.NopCloser(strings.NewReader("2026-11-13T07:30:00.000000000Z a line\n")), nil
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Fail {
+		t.Fatalf("S04 = %+v, want a failure", s04)
+	}
+	if !read {
+		t.Fatal("no log was read for the failed S04")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.EvidenceDir, haScenarioID, "logs", "index.json")); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -72,6 +72,9 @@ const (
 	controlPlaneLabel = "node-role.kubernetes.io/control-plane"
 	// brokerComponent is the component label of the Broker Pods.
 	brokerComponent = "broker"
+	// brokerMoveLimit bounds how long the Brokers moved off the master's
+	// node take to be available again elsewhere.
+	brokerMoveLimit = 5 * time.Minute
 )
 
 // vmSettle is how long the cleanup must read a VM running before it trusts
@@ -98,6 +101,22 @@ type s04Record struct {
 	Node          string          `json:"node"`
 	MembersBefore []imageIdentity `json:"membersBefore"`
 	MembersAfter  []imageIdentity `json:"membersAfter"`
+	// BrokersMoved are the Broker Pods deleted off the master's node before
+	// the fault, so that they ran elsewhere. CordonedNode is the node the run
+	// cordoned for that, and Uncordoned is set once it made it schedulable
+	// again; a node cordoned before the run is left as it was.
+	BrokersMoved []string `json:"brokersMoved,omitempty"`
+	// NodeNotReadyAt is when the node became NotReady, from its Ready
+	// condition, and PowerOnBy when the VM must be powered on for its boot to
+	// end within the member Pod's taint toleration, counted from then.
+	// VMDownCutShort is set when the VM was powered on before VMDownFor was
+	// up for that, and PowerOnDue when the deadline came before the outcome.
+	NodeNotReadyAt *time.Time `json:"nodeNotReadyAt,omitempty"`
+	PowerOnBy      *time.Time `json:"powerOnBy,omitempty"`
+	VMDownCutShort bool       `json:"vmDownCutShort,omitempty"`
+	PowerOnDue     bool       `json:"powerOnDue,omitempty"`
+	CordonedNode   string     `json:"cordonedNode,omitempty"`
+	Uncordoned     bool       `json:"uncordoned,omitempty"`
 	// ClockOffsets is each node's clock minus the run's, read through a Pod
 	// on it before the fault, in seconds.
 	ClockOffsets map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
@@ -327,6 +346,7 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		MembersAfter: []imageIdentity{}}
 	clientsStarted := false
 	defer func() {
+		h.endCordon(ctx, &rec, &result)
 		if clientsStarted && !rec.ClientsStopped {
 			err := h.stopBackgroundClients(ctx, s04Clients)
 			rec.ClientsStopped = err == nil
@@ -348,7 +368,7 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		}
 		return result
 	}
-	if err := h.s04Placement(ctx, &rec); err != nil {
+	if err := h.prepareS04(ctx, &rec); err != nil {
 		return end(evidence.Blocked, "%v", err)
 	}
 	offsets, err := h.clockOffsets(ctx)
@@ -414,8 +434,9 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		if len(result.NeverEvents) > 0 {
 			return end(evidence.Fail, "%s; %s", strings.Join(result.NeverEvents, "; "), outcome.Reason)
 		}
-		if rec.VMReturnedEarly {
-			// The lab, not the product, ended the outage.
+		if rec.labEndedOutage() {
+			// The lab, not the product, ended the outage, or left too
+			// little of the toleration to observe it.
 			return end(evidence.Blocked, "%s", outcome.Reason)
 		}
 		result.Result, result.Reason = outcome.Result, outcome.Reason
@@ -598,6 +619,136 @@ func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 	return nil
 }
 
+// prepareS04 checks where the master and what shares its node run, and moves
+// the Brokers off that node.
+func (h *haRun) prepareS04(ctx context.Context, rec *s04Record) error {
+	if err := h.s04Placement(ctx, rec); err != nil {
+		return err
+	}
+	if err := h.moveBrokers(ctx, rec); err != nil {
+		return fmt.Errorf("move the Brokers off the master's node: %w", err)
+	}
+	return nil
+}
+
+// moveBrokers moves the Broker Pods off the master's node before the fault:
+// a Broker there would lose power with the master, and its clients' failures
+// would not be the master's. With four Brokers on three workers one usually
+// is there, and the cluster has no field to place them (#110). The node is
+// cordoned, so their replacements run elsewhere, unless it was cordoned
+// before the run. It returns once every Broker runs off the node and the
+// Brokers and the cluster are ready again, after it made the node
+// schedulable again; on an error, runS04 does that at its end.
+func (h *haRun) moveBrokers(ctx context.Context, rec *s04Record) error {
+	onNode := func() ([]corev1.Pod, error) {
+		brokers := &corev1.PodList{}
+		if err := h.Client.List(ctx, brokers, client.InNamespace(h.cfg.Namespace),
+			client.MatchingLabels{"app.kubernetes.io/component": brokerComponent}); err != nil {
+			return nil, fmt.Errorf("list the Broker Pods: %w", err)
+		}
+		return slices.DeleteFunc(brokers.Items, func(p corev1.Pod) bool { return p.Spec.NodeName != rec.Node }), nil
+	}
+	pods, err := onNode()
+	if err != nil || len(pods) == 0 {
+		return err
+	}
+	node := &corev1.Node{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err != nil {
+		return fmt.Errorf("read node %s: %w", rec.Node, err)
+	}
+	if !node.Spec.Unschedulable {
+		patch := client.MergeFrom(node.DeepCopy())
+		node.Spec.Unschedulable = true
+		if err := h.Client.Patch(ctx, node, patch); err != nil {
+			return fmt.Errorf("cordon node %s: %w", rec.Node, err)
+		}
+		rec.CordonedNode = rec.Node
+	}
+	for i := range pods {
+		pod := &pods[i]
+		if err := h.Client.Delete(ctx, pod, client.Preconditions{UID: &pod.UID}); err != nil &&
+			!apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete the Broker Pod %s: %w", pod.Name, err)
+		}
+		rec.BrokersMoved = append(rec.BrokersMoved, pod.Name)
+	}
+	moved, cancel := context.WithTimeout(ctx, brokerMoveLimit)
+	defer cancel()
+	unmet := ""
+	err = pollUntil(moved, h.cfg.Poll, func() (bool, error) {
+		left, err := onNode()
+		if err != nil {
+			return false, err
+		}
+		if len(left) > 0 {
+			unmet = fmt.Sprintf("the Broker Pod %s still runs on node %s", left[0].Name, rec.Node)
+			return false, nil
+		}
+		cluster := &databasev1alpha1.CubridCluster{}
+		if err := h.Client.Get(moved, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName},
+			cluster); err != nil {
+			return false, err
+		}
+		if unmet, err = h.brokersAvailable(moved, cluster); unmet != "" || err != nil {
+			return false, err
+		}
+		unmet, err = clusterReady(cluster)
+		return unmet == "" && err == nil, err
+	})
+	if err != nil && unmet != "" {
+		return fmt.Errorf("%w within %s: %s", err, brokerMoveLimit, unmet)
+	}
+	if err != nil || rec.CordonedNode == "" {
+		return err
+	}
+	// The cordon only steered the replacements. A member Pod that
+	// Kubernetes deletes from the node while it is down must be able to come
+	// back on it, where its volume is.
+	if err := h.uncordon(ctx, rec.CordonedNode); err != nil {
+		return fmt.Errorf("make node %s schedulable again: %w", rec.CordonedNode, err)
+	}
+	rec.Uncordoned = true
+	return nil
+}
+
+// endCordon makes the node moveBrokers cordoned schedulable again when
+// moveBrokers did not, whatever S04 came to and also when the run's context
+// has ended. A failure to do so is reported in the result.
+func (h *haRun) endCordon(ctx context.Context, rec *s04Record, result *evidence.Scenario) {
+	if rec.CordonedNode == "" || rec.Uncordoned {
+		return
+	}
+	err := h.uncordon(context.WithoutCancel(ctx), rec.CordonedNode)
+	rec.Uncordoned = err == nil
+	if err == nil {
+		return
+	}
+	reason := fmt.Sprintf("make node %s schedulable again: %v", rec.CordonedNode, err)
+	if result.Result == evidence.Pass {
+		result.Result, result.Reason = evidence.Fail, reason
+	} else {
+		result.Reason += "; " + reason
+	}
+}
+
+// uncordon makes a node the run cordoned schedulable again.
+func (h *haRun) uncordon(ctx context.Context, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
+		node := &corev1.Node{}
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: name}, node); err != nil {
+			return false, nil
+		}
+		if !node.Spec.Unschedulable {
+			return true, nil
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		node.Spec.Unschedulable = false
+		return h.Client.Patch(ctx, node, patch) == nil, nil
+	})
+}
+
 // beforeS04 verifies the state the fault starts from: the starting
 // conditions, the same master as at LAB01's end, the master's node Ready, no
 // Broker on it, and its VM not reported stopped.
@@ -659,17 +810,69 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 		return false, fmt.Errorf("node %s was Ready again before the run powered its VM on: the VM came back on "+
 			"its own", rec.Node)
 	}
+	due := h.powerOnDue(ctx, rec, now)
 	survivors := slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == rec.Master })
 	masters, slaves, unmet := h.survivorRoles(ctx, survivors)
 	if unmet != "" || len(masters) != 1 || len(slaves) != len(survivors)-1 {
-		return false, nil
+		return false, h.powerOnNow(rec, due)
 	}
 	if rec.PromotedAt == nil {
 		rec.NewMaster, rec.PromotedAt = masters[0], &now
 	} else if masters[0] != rec.NewMaster {
 		return false, fmt.Errorf("the master moved from %s to %s while the VM was off", rec.NewMaster, masters[0])
 	}
-	return rec.PrimaryResolvedCheckedAfterGrace && now.Sub(*rec.PoweredOffAt) >= h.cfg.VMDownFor, nil
+	if !rec.PrimaryResolvedCheckedAfterGrace {
+		return false, h.powerOnNow(rec, due)
+	}
+	if now.Sub(*rec.PoweredOffAt) >= h.cfg.VMDownFor {
+		return true, nil
+	}
+	rec.VMDownCutShort = due
+	return due, nil
+}
+
+// labEndedOutage reports whether the lab, not the product, ended the outage
+// or left too little of the toleration to observe it.
+func (rec *s04Record) labEndedOutage() bool { return rec.VMReturnedEarly || rec.PowerOnDue }
+
+// powerOnDue reports whether the VM must be powered on now: Kubernetes
+// deletes the member's Pod its taint toleration after the node became
+// NotReady, and the VM's boot takes up to vmBootBudget. It counts from the
+// node's NotReady, which a lab's status read can confirm minutes later, and
+// from the confirmation when the node's condition has no time.
+func (h *haRun) powerOnDue(ctx context.Context, rec *s04Record, now time.Time) bool {
+	if rec.NodeNotReadyAt == nil {
+		since := *rec.PoweredOffAt
+		node := &corev1.Node{}
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err == nil {
+			for _, c := range node.Status.Conditions {
+				if c.Type == corev1.NodeReady && c.Status != corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+					since = c.LastTransitionTime.UTC()
+				}
+			}
+		}
+		rec.NodeNotReadyAt = &since
+	}
+	toleration, err := time.ParseDuration(rec.TaintToleration)
+	if err != nil {
+		toleration = defaultTaintToleration
+	}
+	by := rec.NodeNotReadyAt.Add(toleration - vmBootBudget)
+	rec.PowerOnBy = &by
+	return !now.Before(by)
+}
+
+// powerOnNow ends the wait for the outcome when the VM must be powered on
+// before it was observed: the lab's commands left too little of the
+// toleration, and S04 is blocked.
+func (h *haRun) powerOnNow(rec *s04Record, due bool) error {
+	if !due {
+		return nil
+	}
+	rec.PowerOnDue = true
+	return fmt.Errorf("the VM must be powered on by %s, the member Pod's taint toleration after node %s "+
+		"became NotReady at %s less %s to boot, before the outcome was observed",
+		rec.PowerOnBy.Format(time.RFC3339), rec.Node, rec.NodeNotReadyAt.Format(time.RFC3339), vmBootBudget)
 }
 
 // watchUnobserved reads, while the member on the VM cannot be observed, the

@@ -328,6 +328,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			if err, hooked := f.deleteHooked(ctx, c, obj, opts...); hooked {
 				return err
 			}
+			if err, moved := deleteBroker(t, ctx, c, cfg, obj, opts...); moved {
+				return err
+			}
 			ns, ok := obj.(*corev1.Namespace)
 			if !ok || ns.Name != cfg.Namespace {
 				t.Fatalf("runner deleted %T %s", obj, obj.GetName())
@@ -591,6 +594,22 @@ func (f *haFixture) createChildren(ctx context.Context, c client.WithWatch,
 			Status: appsv1.DeploymentStatus{Replicas: 2, UpdatedReplicas: 2, AvailableReplicas: 2}})
 	}
 	return createAll(ctx, c, objects...)
+}
+
+// deleteBroker deletes a Broker Pod of the run, which S04 moves off the
+// master's node, and requires the deletion's UID precondition; no other Pod
+// of the run is deleted.
+func deleteBroker(t *testing.T, ctx context.Context, c client.WithWatch, cfg HAConfig, obj client.Object,
+	opts ...client.DeleteOption) (error, bool) {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Namespace != cfg.Namespace || pod.Labels["app.kubernetes.io/component"] != brokerComponent {
+		return nil, false
+	}
+	options := (&client.DeleteOptions{}).ApplyOptions(opts)
+	if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID != pod.UID {
+		t.Fatalf("Broker Pod %s deleted without its UID precondition", pod.Name)
+	}
+	return c.Delete(ctx, obj, opts...), true
 }
 
 // fakeWorkload returns the history of a run of ops operations by client c1,

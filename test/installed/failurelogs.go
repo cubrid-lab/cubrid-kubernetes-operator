@@ -117,9 +117,11 @@ func (c clusterState) List(ctx context.Context, list evidence.StateList, w io.Wr
 }
 
 // failureLogNotes keeps the logs of a run that created its namespace and did
-// not pass LAB01, and returns what a reader of the summary should know of them.
+// not pass LAB01 or S04, and returns what a reader of the summary should know
+// of them.
 func (h *haRun) failureLogNotes(namespaced bool) []string {
-	if !namespaced || h.labPassed {
+	s04Failed := h.s04 != nil && h.s04.Result != evidence.Pass
+	if !namespaced || h.labPassed && !s04Failed {
 		return nil
 	}
 	if err := h.keepFailureLogs(); err != nil {

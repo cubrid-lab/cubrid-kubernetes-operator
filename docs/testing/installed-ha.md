@@ -387,21 +387,36 @@ What the commands print is kept only through the run's redactor.
      `/etcd`, or one of its addresses serves the `kubernetes` Service;
    - another member, the workload client or the manager runs there too: the
      scenario would take more than the master. No manager Pod known from
-     LAB01 blocks S04 too;
+     LAB01 blocks S04 too. With `-fault vm-power-off`, the workload client is
+     started on any node but the starting state's master's, so it does not
+     block S04 there;
    - `-failover-limit` plus `-vm-down-for`, the longest the VM can stay off
      before the run starts it, plus two minutes for the VM to boot, is not
      shorter than
      the member Pod's toleration of the `not-ready` and `unreachable` taints
      (300 seconds when the Pod sets none), after which Kubernetes itself, not
      the Operator, would delete the Pod.
-2. As in S06, the run reads each node's clock and is blocked on an offset
+2. A Broker Pod on that node would lose power with the master, and its
+   clients' failures would not be the master's. With two Brokers of each
+   access mode and as many workers as members, one usually is there, and the
+   `CubridCluster` has no field to place them. So the run cordons the node,
+   unless it was cordoned already, deletes the Broker Pods on it, and waits up
+   to five minutes until none runs there and the Brokers and the cluster are
+   ready again. Otherwise S04 is blocked. The run then makes the node
+   schedulable again before the fault: a member Pod that Kubernetes deletes
+   from the node while it is down must be able to come back on it, where its
+   volume is. It records the moved Pods and the node in
+   `S04/power-off/record.json`. When that step fails, the run makes the node
+   schedulable when S04 ends, whatever its result; a failure to do so fails
+   a passing S04 and is added to the reason of any other result.
+3. As in S06, the run reads each node's clock and is blocked on an offset
    over a second, then starts two clients writing through `<cluster>-rw`.
-3. Right before the fault, the starting conditions must be `True`, the master
+4. Right before the fault, the starting conditions must be `True`, the master
    the same as at LAB01's end, the node `Ready`, no Broker Pod on it, and its
    VM not reported `stopped`. Otherwise S04 is blocked.
-4. The run powers the VM off. The fault is confirmed when the status command
+5. The run powers the VM off. The fault is confirmed when the status command
    prints `stopped` and the node is not `Ready`.
-5. While the VM is off, the run reads, on every poll:
+6. While the VM is off, the run reads, on every poll:
    - the roles of the two other members: one must be master and the other a
      slave. That is CUBRID's promotion; the Operator has no action that
      promotes a member.
@@ -419,7 +434,18 @@ What the commands print is kept only through the run's redactor.
    least twice those 30 seconds) has passed since it was confirmed off, all
    within `-failover-limit` plus `-vm-down-for`. A master that moves again
    while the VM is off fails S04.
-6. The run powers the VM on: it reads the VM's state until the status command
+
+   Kubernetes deletes the member's Pod its toleration after the node became
+   `NotReady`, and a lab's status command can confirm the VM off minutes
+   after that (2026-11-13, #110: about three minutes). So the run also
+   powers the VM on by the node's `NotReady` time, read from its `Ready`
+   condition, plus the toleration less two minutes to boot. When that time
+   comes after the promotion and the `PrimaryResolved` reading, the VM is
+   powered on before `-vm-down-for` is up, and the record says so
+   (`vmDownCutShort`). When it comes before them, the VM is powered on and
+   S04 is blocked: the lab left too little of the toleration to observe the
+   outcome.
+7. The run powers the VM on: it reads the VM's state until the status command
    prints `running`, starting the VM whenever it prints `stopped`, and reads
    again after a failed command or a state in between, within
    `-vm-return-limit`. When the run did not start the VM itself, for example
@@ -427,7 +453,7 @@ What the commands print is kept only through the run's redactor.
    once it was read for 30 seconds, so a stop still on its way is seen and
    undone. A VM not seen running again blocks S04: what follows cannot be
    judged, and the VM is the lab's to recover.
-7. Until the node is `Ready` and the member on the VM answers its heartbeat
+8. Until the node is `Ready` and the member on the VM answers its heartbeat
    status as master or slave again, the member still cannot be observed, and
    the reads of step 5 on `PrimaryResolved` and the Pod go on: a node that
    is `Ready` does not mean CUBRID on it runs. The Operator reaches the
@@ -442,7 +468,7 @@ What the commands print is kept only through the run's redactor.
    are `True`. Which member ends as master is recorded (`finalMaster`), not
    judged; a switchover back to the old master interrupts the clients,
    which step 8 then measures.
-8. The clients go on for `-stable-period`, then stop. Answers that failed
+9. The clients go on for `-stable-period`, then stop. Answers that failed
    while the master's VM was off are expected. Every client must be
    acknowledged again without interruption, for at least the stable period,
    and the last of them must have recovered within `-failover-limit`
@@ -450,7 +476,7 @@ What the commands print is kept only through the run's redactor.
    issued, as the contract measures recovery time. The lab's command latency
    is part of that time; `confirmedOffAfter` records how long the stop took
    to be confirmed.
-9. The data rules must hold on every member and both Services, over
+10. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
 Measurements, from the stop command's issue unless named otherwise:
@@ -4536,7 +4562,10 @@ removes the namespace with them. They are in `LAB01/logs/`, in the format of
 [`logs/`](scenario-contract.md#logs), and `LAB01/logs/index.json` is in the
 scenario's evidence. LAB01 injects no fault, so `cubrid heartbeat status` runs
 here. The reading takes at most 90 seconds and never changes LAB01's result. A
-run that passed LAB01 keeps no bundle, also when a later scenario fails.
+run that passed LAB01 keeps no bundle when a later scenario fails, except S04
+power-off: its logs are read after S04's verdict, so they change nothing it
+measures, and they are what explains a member that returned without rows the
+others hold (#110). They are in `LAB01/logs/` too.
 
 ## Cleanup
 
