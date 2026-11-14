@@ -515,9 +515,9 @@ the Pod that was reviewed, so it does not make the annotation inert.
 While the release's master, in the same Pod and container start, is the only
 active master, an exempt member that stays unverified, even one that
 outranks the master or was the last resolved primary, does not start a new
-quarantine by itself. The exemption is read from the persisted status as
-last read, never from the Operator's memory, so it also holds after a
-restart of the Operator. It ends for good, and the usual rules apply again:
+quarantine by itself. Only the Operator process that accepted the release
+and wrote it relies on the exemption (see below). It ends for good, and the
+usual rules apply again:
 
 - for a member, once it is verified (non-master answers at least 2 seconds
   apart), when its Pod UID or restart count differs from the recorded one, or
@@ -529,15 +529,24 @@ restart of the Operator. It ends for good, and the usual rules apply again:
   active master (it gave up the role): `exemptMembers` is cleared. An
   observation with no active master and no such answer, as when the master
   cannot be reached, changes nothing;
+- for every member at once, in the first observation of an Operator process
+  that did not accept the release: after a restart of the Operator or a
+  change of leader;
 - with the next release, automatic or manual: it replaces
   `lastWriteQuarantineRelease`, so a second manual release replaces the
   first one's exemptions with its own.
 
-The persisted status is the only source that grants the exemption. An end is
-also kept in the Operator's memory, which can only end an exemption: if the
-status write of the pass that ended it fails, the next pass still treats it as
-ended and writes it again. An Operator restart before that write succeeds
-loses the end, and the exemption applies until the end is observed anew.
+The exemption is granted only by the persisted status, and only to the
+Operator process that accepted the release. An end is also kept in that
+process's memory, which can only end an exemption: if the status write of the
+pass that ended it fails, the next pass still treats it as ended and writes it
+again. A new Operator process cannot know of an end that was never written,
+and the evidence for it may be gone (an exempt member that was seen as master
+and can no longer be reached), so it ends the exemption in its first
+observation and persists that. The cost: after an Operator restart, an
+accepted member that is still unverified and outranks the active master, or
+was the last resolved primary, starts a new quarantine, which needs a new
+release token. No time window remains in which a stale exemption is used.
 
 Each end is logged (`write_quarantine_exemption_ended`) and reported once
 with a Normal Event `WriteQuarantineExemptionEnded` naming the members and

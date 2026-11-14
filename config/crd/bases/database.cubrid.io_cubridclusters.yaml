@@ -1165,7 +1165,10 @@ spec:
                       members. A member leaves the list for good once it is verified or its
                       Pod UID or restart count changes; the list is cleared for good once
                       another member, or observedMaster in another Pod or container start, is
-                      seen as an active master. Two active masters always start a quarantine.
+                      seen as an active master, once observedMaster answers as no active
+                      master, and in the first observation of an Operator process that did
+                      not accept the release, as after a restart. Two active masters always
+                      start a quarantine.
                     items:
                       type: string
                     type: array

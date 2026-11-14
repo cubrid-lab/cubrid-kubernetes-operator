@@ -237,7 +237,7 @@ func TestManualReleaseExemptionEnds(t *testing.T) {
 			change: func(s *quarantineScenario) { s.identities[q0] = memberIdentity{PodUID: uid0, RestartCount: 1} },
 			obs:    cutOff, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0}},
 		{name: "the active master in another Pod",
-			change: func(s *quarantineScenario) { s.identities[q1] = memberIdentity{PodUID: "uid-1-new"} },
+			change: func(s *quarantineScenario) { s.identities[q1] = memberIdentity{PodUID: uid1New} },
 			obs:    cutOff, reason: databasev1alpha1.WriteQuarantinedMemberUnverified, members: []string{q0}},
 		{name: "another member is the active master",
 			obs: func(now time.Time) map[string]RoleObservation {
@@ -476,5 +476,67 @@ func TestDecideManualReleaseConfirmedTermination(t *testing.T) {
 	if len(rel.ExemptMembers) != 0 || len(rel.Members) != 2 {
 		t.Errorf("exempt members %v, members %+v; want no exemption for the confirmed member, both recorded",
 			rel.ExemptMembers, rel.Members)
+	}
+}
+
+// A quarantine rebased on the new master after the recorded master's Pod
+// termination was confirmed has a new token: an annotation naming the old one is
+// inert. The new token releases it beside the new master, which becomes the
+// release's master. The former master, whose Pod is still being deleted, and
+// the unverified member stay exempt: a Pod being deleted is still the Pod
+// the administrator reviewed.
+func TestManualReleaseAfterAQuarantineRebase(t *testing.T) {
+	s := startUnverified(t) // q0 unverified beside q1
+	old := s.quarantine.DeepCopy()
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, Terminated: true, TerminatedAt: testNow}
+	obs := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: noAnswerAt(now), q1: noRoleAt(now), q2: activeMasterAt(now)}
+	}
+	t1 := testNow.Add(3 * time.Second)
+	d := s.pass(t1, obs(t1))
+	if d.Change != quarantineRevised || d.Quarantine.ObservedMaster != q2 {
+		t.Fatalf("decision = %+v, want the quarantine rebased on %s", d, q2)
+	}
+	stored := storedWith(old.ReleaseToken, s.quarantine.DeepCopy())
+	if v, msg, _ := decideManualRelease(manualReleaseInput{Now: t1, ClusterUID: releaseClusterUID, Stored: stored,
+		Decision: d, Identities: s.identities}); v != manualReleaseInert {
+		t.Fatalf("the token from before the rebase: verdict %q (%s), want inert", v, msg)
+	}
+
+	t2 := t1.Add(3 * time.Second)
+	d = s.pass(t2, obs(t2))
+	v, msg, rel := decideManualRelease(manualReleaseInput{Now: t2, ClusterUID: releaseClusterUID,
+		Stored: storedWith(s.quarantine.ReleaseToken, s.quarantine.DeepCopy()), Decision: d, Identities: s.identities})
+	if v != manualReleaseAccepted {
+		t.Fatalf("the rebased quarantine's token: verdict %q (%s), want accepted", v, msg)
+	}
+	if rel.ObservedMaster != q2 || rel.ObservedMasterPodUID != uid2 || !slices.Equal(rel.ExemptMembers, []string{q0, q1}) {
+		t.Fatalf("release = %+v, want master %s and %s, %s exempt", rel, q2, q0, q1)
+	}
+	s.quarantine, s.lastRelease = nil, rel
+
+	t3 := t2.Add(3 * time.Second)
+	if d = s.pass(t3, obs(t3)); d.Quarantine != nil {
+		t.Fatalf("quarantine = %+v right after the release", d.Quarantine)
+	}
+	if !slices.Equal(s.lastRelease.ExemptMembers, []string{q0, q1}) {
+		t.Errorf("exempt members = %v, want [%s %s]", s.lastRelease.ExemptMembers, q0, q1)
+	}
+}
+
+// Only the Operator process that accepted a manual release may rely on its
+// exemption: an end it computed may not have been written, and nothing a
+// later process observes shows it (review of #871). A reconciler that did not
+// accept the release, as after a restart, ends the exemption for good, and
+// rule 2 applies at once.
+func TestManualReleaseExemptionNotOwned(t *testing.T) {
+	s := exemptScenario(t)
+	s.exemptionNotOwned = true
+	d := s.pass(testNow, cutOff(testNow))
+	if d.Quarantine == nil || !slices.Equal(memberNamesOf(d.Quarantine.Members), []string{q0}) {
+		t.Fatalf("quarantine = %+v, want one about %s", d.Quarantine, q0)
+	}
+	if len(s.lastRelease.ExemptMembers) != 0 || len(d.ExemptionEnded) != 1 {
+		t.Errorf("exempt members %v, ends %v; want none and one end", s.lastRelease.ExemptMembers, d.ExemptionEnded)
 	}
 }

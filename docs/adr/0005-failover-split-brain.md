@@ -566,11 +566,13 @@ seconds apart, the same confirmation as for an unverified member.
   master, or when the release's master gives a fresh, readable answer that
   does not claim an active master; a pass without an answer from it changes
   nothing. Rule 1 (two or more active masters) always applies. The
-  exemption is granted only from the persisted status; Operator memory can
-  only end it, so an end whose status write failed still holds. Limit: an
-  Operator restart between an end and the status write that persists it
-  loses that end, and the exemption applies again until the end is observed
-  anew.
+  exemption is granted only from the persisted status, and only to the
+  Operator process that accepted and wrote the release; that process's
+  memory can only end it, so an end whose status write failed still holds.
+  Any other process (after a restart or a change of leader) cannot rule out
+  an end that was never written, so it ends the exemption in its first
+  observation; an accepted member still unverified then starts a new
+  quarantine with a new token.
 - **Expanded uncertainty:** if a new member becomes unverified, a known
   affected member is removed, or an affected member's identity changes,
   reject prior consent, persist the revised set and **rotate its

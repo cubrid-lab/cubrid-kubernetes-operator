@@ -264,19 +264,13 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
 		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
 
-		By("a restarted Operator with no memory, from the stored release")
-		restarted := reconcilerFor(f, k8sClient)
-		pass(restarted, f)
-		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
-		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
-
 		By("the accepted first member in another Pod: a new quarantine")
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-0", Namespace: f.key.Namespace},
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: appName}}}}
 		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
 		drain(f.recorder)
-		pass(restarted, f)
+		pass(r, f)
 		Expect(drain(f.recorder)).To(ContainElement(SatisfyAll(
 			ContainSubstring("Normal "+reasonWriteQuarantineExemptionEnded), ContainSubstring(f.key.Name+"-0"))))
 		next := stored(f).Status.WriteQuarantine
@@ -357,6 +351,50 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		pass(r, f)
 		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
 		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty())
+	})
+
+	It("ends the exemption in a restarted Operator, which cannot know of an end that was not written", func() {
+		f := newFixture("wq-manual-restart")
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		conflict := false
+		faulty := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource && conflict {
+					return apierrors.NewConflict(databasev1alpha1.GroupVersion.WithResource("cubridclusters").GroupResource(),
+						f.key.Name, errors.New("the object has been modified"))
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, faulty)
+		running(r, f)
+
+		By("a manual release exempts the first member beside the second one as master")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(r, f)
+		annotate(f, stored(f).Status.WriteQuarantine.ReleaseToken)
+		pass(r, f)
+		pass(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+
+		By("the first member becomes the only active master; the status write that ends the exemption fails")
+		conflict = true
+		f.answers.set(roleReports(f.key.Name, [3]string{wqMaster, "", wqSlave}))
+		pass(r, f)
+		Expect(stored(f).Status.LastWriteQuarantineRelease.ExemptMembers).To(Equal([]string{f.key.Name + "-0"}))
+
+		By("a restarted Operator with no memory: the first member cannot be observed, the second one is the only master")
+		conflict = false
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		pass(reconcilerFor(f, k8sClient), f)
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil(), "rule 2 applies in the first pass")
+		Expect(memberNamesOf(c.Status.WriteQuarantine.Members)).To(Equal([]string{f.key.Name + "-0"}))
+		Expect(c.Status.LastWriteQuarantineRelease.ExemptMembers).To(BeEmpty())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
 	})
 
 	It("ignores a consumed token whose annotation could not be removed, also after a restart", func() {

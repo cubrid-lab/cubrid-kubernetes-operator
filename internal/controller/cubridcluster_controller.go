@@ -345,6 +345,7 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 			r.releaseWritten(cluster, report.(*reconcileReport).releasedQuarantine)
 		}
 		if ok && report.(*reconcileReport).consumedReleaseToken != "" {
+			r.ownExemption(cluster, report.(*reconcileReport).consumedReleaseToken)
 			r.removeReleaseAnnotation(ctx, cluster, report.(*reconcileReport).consumedReleaseToken)
 		}
 		// So do the applier readings the next one is compared with.
