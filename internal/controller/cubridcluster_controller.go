@@ -271,6 +271,9 @@ type reconcileReport struct {
 	// reconcile released; once its status is written, memory no longer holds
 	// it.
 	releasedQuarantine string
+	// consumedReleaseToken is the release token this reconcile consumed;
+	// once its release is written, the annotation that names it is removed.
+	consumedReleaseToken string
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -340,6 +343,10 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 		publishClusterMetrics(cluster, readyReplicas)
 		if ok && report.(*reconcileReport).releasedQuarantine != "" {
 			r.releaseWritten(cluster, report.(*reconcileReport).releasedQuarantine)
+		}
+		if ok && report.(*reconcileReport).consumedReleaseToken != "" {
+			r.ownExemption(cluster, report.(*reconcileReport).consumedReleaseToken)
+			r.removeReleaseAnnotation(ctx, cluster, report.(*reconcileReport).consumedReleaseToken)
 		}
 		// So do the applier readings the next one is compared with.
 		if ok && report.(*reconcileReport).positions != nil {

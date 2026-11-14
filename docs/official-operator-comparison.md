@@ -140,7 +140,8 @@ Each item below was found in the official source at `fa7b6c2`.
   unclear, to let retained data rejoin, and to rebuild a member only after an
   explicit PVC-loss decision ([ADR-0005](adr/0005-failover-split-brain.md),
   [ADR-0006](adr/0006-node-join-rebuild.md)). Write quarantine stops the
-  read-write Brokers (envtest only; manual release not implemented yet,
+  read-write Brokers (envtest only, including the manual release on a
+  one-time token; the out-of-service taint release is not implemented,
   [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113)),
   and rejoin and rebuild are not validated.
 - **Backup and restore state.** A backup records its target, operation and
@@ -188,8 +189,8 @@ research questions, using failure-oriented tests:
 
 These are questions, not conclusions. The answers so far come from one
 CUBRID 11.4 configuration, Kind and a three-VM lab, and some of them come
-from single runs. Open items of this project, such as the manual release of
-a write quarantine and its validation ([#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113))
+from single runs. Open items of this project, such as the validation of the
+write quarantine and its manual release ([#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113))
 and standby selection by replication freshness
 ([#291](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/291)),
 are questions about this project; they are not findings about the official

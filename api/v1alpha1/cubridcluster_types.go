@@ -922,6 +922,10 @@ type WriteQuarantineMember struct {
 	// no Pod of that name existed.
 	// +optional
 	PodUID string `json:"podUID,omitempty"`
+	// restartCount is the restart count of the member's database container
+	// when it was recorded.
+	// +optional
+	RestartCount int32 `json:"restartCount,omitempty"`
 	// observedRole is what the member's answer showed when it was recorded,
 	// such as "active master", "slave" or "no answer".
 	// +optional
@@ -997,10 +1001,15 @@ type WriteQuarantine struct {
 	// over.
 	// +optional
 	ReleaseCheckLastTime *metav1.Time `json:"releaseCheckLastTime,omitempty"`
+	// releaseRefusal says why the release annotation that names the current
+	// releaseToken was not accepted in the last observation, such as no
+	// single active master; unset while no such annotation is set.
+	// +optional
+	ReleaseRefusal string `json:"releaseRefusal,omitempty"`
 }
 
 // WriteQuarantineReleaseMethod says how a quarantine was released.
-// +kubebuilder:validation:Enum=Automatic
+// +kubebuilder:validation:Enum=Automatic;Manual
 type WriteQuarantineReleaseMethod string
 
 const (
@@ -1008,6 +1017,11 @@ const (
 	// seconds apart saw the recorded master as the only active master and
 	// every other member verified.
 	WriteQuarantineReleasedAutomatically WriteQuarantineReleaseMethod = "Automatic"
+	// WriteQuarantineReleasedManually: an administrator set the annotation
+	// database.cubrid.io/release-write-quarantine to the quarantine's current
+	// releaseToken while exactly one member was an active master. It is a
+	// risk acceptance, not a verified fence.
+	WriteQuarantineReleasedManually WriteQuarantineReleaseMethod = "Manual"
 )
 
 // WriteQuarantineRelease records a quarantine that was released.
@@ -1028,11 +1042,42 @@ type WriteQuarantineRelease struct {
 	// observedMaster is the active master at the release.
 	// +optional
 	ObservedMaster string `json:"observedMaster,omitempty"`
-	// members are the released quarantine's members.
+	// observedMasterPodUID is the UID of observedMaster's Pod at a manual
+	// release.
+	// +optional
+	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
+	// observedMasterRestartCount is the restart count of observedMaster's
+	// database container at a manual release.
+	// +optional
+	ObservedMasterRestartCount int32 `json:"observedMasterRestartCount,omitempty"`
+	// members are the released quarantine's members; for a manual release,
+	// with their Pod UID and restart count at the release.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
 	Members []WriteQuarantineMember `json:"members,omitempty"`
+	// exemptMembers are the members a manual release accepted that do not,
+	// by themselves, start a new quarantine as unverified members while
+	// observedMaster, in the same Pod and container start, is the only
+	// active master and their Pod UID and restart count are those in
+	// members. A member leaves the list for good once it is verified or its
+	// Pod UID or restart count changes; the list is cleared for good once
+	// another member, or observedMaster in another Pod or container start, is
+	// seen as an active master, once observedMaster answers as no active
+	// master, and in the first observation of an Operator process that did
+	// not accept the release, as after a restart. Two active masters always
+	// start a quarantine.
+	// +listType=set
+	// +optional
+	ExemptMembers []string `json:"exemptMembers,omitempty"`
+	// releaseToken is the one-time token a manual release consumed. An
+	// annotation that still names it is ignored and removed.
+	// +optional
+	ReleaseToken string `json:"releaseToken,omitempty"`
+	// warning is what a manual release accepted: acknowledged writes on a
+	// member that was not fenced may be lost.
+	// +optional
+	Warning string `json:"warning,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).

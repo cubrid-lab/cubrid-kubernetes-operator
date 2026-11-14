@@ -441,11 +441,128 @@ releasable passes more than 30 seconds apart (`releaseCheckLastTime`). A
 restart of the recorded master revises the quarantine. `Ready` stays `False`
 with `ReadWriteBrokersHeld` on the pass that releases it. The release is written to
 `status.lastWriteQuarantineRelease` with the time and the method `Automatic`
-before the read-write Brokers are scaled back in the next pass. A
-`WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`
-quarantine is not released by this build: neither the manual release named
-in ADR-0005 nor a release on an out-of-service taint is implemented, so the
-read-write path stays closed until they are (#113).
+before the read-write Brokers are scaled back in the next pass. Any other
+quarantine, and a `WriteQuarantinedMemberUnverified` one that does not clear,
+ends only by the manual release below. A release on an out-of-service taint
+and the return-to-service procedure of ADR-0005 are not implemented (#113).
+
+#### Manual release
+
+A manual release is a risk acceptance, not a fence the Operator verifies
+(ADR-0005, section 8). Before it, the administrator obtains independent
+evidence that the recorded members (`status.writeQuarantine.members`) were
+actually fenced, reviews possible divergent data, and accepts that writes
+acknowledged by a member that was not fenced may be lost. They then set the
+quarantine's current `status.writeQuarantine.releaseToken` as an annotation:
+
+```sh
+TOKEN=$(kubectl get cubridcluster <name> -o jsonpath='{.status.writeQuarantine.releaseToken}')
+kubectl annotate cubridcluster <name> database.cubrid.io/release-write-quarantine="$TOKEN" --overwrite
+```
+
+The Operator acts on it in the next observation of the roles:
+
+- It reads the cluster from the API server, past its cache, and compares the
+  annotation with the **stored** quarantine's token. A token of an earlier
+  revision, of another quarantine, or a quarantine recorded for another
+  cluster UID is ignored, with one Warning Event
+  `WriteQuarantineReleaseIgnored` per value. When the observation itself
+  revises the members (which replaces the token), the annotation set before
+  is ignored too: the new token has to be read and set after the revised
+  members were reviewed. When the stored cluster cannot be read, or holds a
+  later revision than the one the observation decided from, nothing is
+  accepted and the pass is retried after a second, backing off to 30
+  seconds while that repeats, but no later than the 3-second observation of a
+  quarantine in force or of an unverified member.
+- It refuses the release unless exactly one member is a fresh active master
+  in that observation and the members' Pods were read. No active master, or
+  two or more, is refused: a manual release does not restore a writable
+  primary, and this build has no zero-master override. The refusal is in
+  `status.writeQuarantine.releaseRefusal` and in the `Ready` and
+  `RoutingReady` messages, with one Warning Event
+  `WriteQuarantineReleaseRefused` per value and reason. The annotation is
+  left in place, and is accepted on a later observation that sees exactly
+  one active master while the token is still current.
+- On acceptance it writes, in one status write,
+  `status.lastWriteQuarantineRelease` with the method `Manual`, the consumed
+  `releaseToken`, the accepted `members` with their Pod UIDs and restart
+  counts, the `exemptMembers`, the `revision`, the one active master
+  (`observedMaster`, `observedMasterPodUID`), the UTC `releaseTime` and a
+  `warning` that acknowledged writes may be lost, and clears
+  `status.writeQuarantine`. The read-write Brokers stay at zero in that pass
+  (`Ready` is `False` with `ReadWriteBrokersHeld`) and are scaled back in the
+  next one, as after an automatic release. A Warning Event
+  `WriteQuarantineReleasedManually` names the first 8 characters of the
+  token, the members, the master and the warning.
+- After that status write, it removes the annotation with a patch that
+  applies only while the annotation still names the consumed token. If the
+  removal fails, an annotation naming the token that
+  `status.lastWriteQuarantineRelease.releaseToken` records is ignored and
+  removed again in a later pass; it never releases another quarantine.
+
+The release covers the members it accepted, and no others. It records them
+in `status.lastWriteQuarantineRelease.members` with the Pod UID and database
+container restart count the administrator reviewed, which the release
+requires to be unchanged: a member found in another Pod or container start
+revises the quarantine and replaces its token, and an annotation naming the
+old token is ignored. It also records the active master's Pod UID and restart
+count (`observedMasterPodUID`, `observedMasterRestartCount`), and every
+accepted member but that master in `exemptMembers`, except a member whose old
+Pod's termination the kubelet confirmed: it is not unverified, and its next
+Pod is a new identity. A recorded member whose Pod is being deleted is still
+the Pod that was reviewed, so it does not make the annotation inert.
+
+While the release's master, in the same Pod and container start, is the only
+active master, an exempt member that stays unverified, even one that
+outranks the master or was the last resolved primary, does not start a new
+quarantine by itself. Only the Operator process that accepted the release
+and wrote it relies on the exemption (see below). It ends for good, and the
+usual rules apply again:
+
+- for a member, once it is verified (non-master answers at least 2 seconds
+  apart), when its Pod UID or restart count differs from the recorded one, or
+  when it is no longer a member: it leaves `exemptMembers`;
+- for every member at once, when any member other than the release's master
+  (an exempt member included) is seen as an active master, the release's
+  master is seen as an active master in another Pod or container start, or
+  the release's master gives a fresh, readable answer that does not claim an
+  active master (it gave up the role): `exemptMembers` is cleared. An
+  observation with no active master and no such answer, as when the master
+  cannot be reached, changes nothing;
+- for every member at once, in the first observation of an Operator process
+  that did not accept the release: after a restart of the Operator or a
+  change of leader;
+- with the next release, automatic or manual: it replaces
+  `lastWriteQuarantineRelease`, so a second manual release replaces the
+  first one's exemptions with its own.
+
+The exemption is granted only by the persisted status, and only to the
+Operator process that accepted the release. An end is also kept in that
+process's memory, which can only end an exemption: if the status write of the
+pass that ended it fails, the next pass still treats it as ended and writes it
+again. A new Operator process cannot know of an end that was never written,
+and the evidence for it may be gone (an exempt member that was seen as master
+and can no longer be reached), so it ends the exemption in its first
+observation and persists that. The cost: after an Operator restart, an
+accepted member that is still unverified and outranks the active master, or
+was the last resolved primary, starts a new quarantine, which needs a new
+release token. No time window remains in which a stale exemption is used.
+
+Each end is logged (`write_quarantine_exemption_ended`) and reported once
+with a Normal Event `WriteQuarantineExemptionEnded` naming the members and
+why. A member the release did not accept that becomes unverified starts a
+quarantine as usual, about that member alone. Two or more active masters
+always start one, including when an exempt member claims to be master.
+
+The Operator cannot tell who set the annotation. The actor's identity comes
+from the Kubernetes API audit log. Any principal that may `update` or `patch`
+a `CubridCluster` can set it, so restrict that permission to administrators.
+The Operator itself needs `patch` on `cubridclusters` to remove the
+annotation, which it already held.
+
+Editing `status.writeQuarantine` by hand is not a release: the Operator keeps
+the quarantine it decided in its memory and writes it back to the status.
+The annotation is the supported way to release a quarantine.
 
 The guarantee rests on the status: an object restored without its status,
 or an Operator build that does not know the field, does not keep it.
@@ -542,6 +659,10 @@ underscores.
 | A write quarantine starts, or its reason, members or their Pods change | the quarantine's reason, naming the members, their observed roles and the active masters | Warning | `write_quarantine_started`, `write_quarantine_revised` |
 | A write quarantine is verified as enforced: no read-write Broker Pod or `-rw` endpoint remains | `WriteQuarantineEnforced` | Warning | none |
 | A write quarantine is released | `WriteQuarantineReleased` | Normal | `write_quarantine_released` |
+| A write quarantine is released on the administrator's annotation | `WriteQuarantineReleasedManually` | Warning | `write_quarantine_released` |
+| The release annotation does not name the stored quarantine's current token, or the members were revised in the same observation; once per value | `WriteQuarantineReleaseIgnored` | Warning | none |
+| A manual release's exemption ends for a member, or for all of them | `WriteQuarantineExemptionEnded` | Normal | `write_quarantine_exemption_ended` |
+| The release annotation names the current token, but the observation does not see exactly one active master or could not read the members' Pods; once per value and reason | `WriteQuarantineReleaseRefused` | Warning | none |
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled`, `ApplyFailures` or `LogCopyStalled` | Warning | `replication_stalled`, `apply_failures`, `log_copy_stalled` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
 | A slave's `notReceivingSince` is set, or cleared | none | | `member_log_copy_stalled` (warn, with `copyDelayedPages` and `source`), `member_log_copy_resumed` |

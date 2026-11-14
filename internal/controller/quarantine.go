@@ -347,9 +347,19 @@ type quarantineInput struct {
 	// Terminations are the Pods whose termination the kubelet confirmed, as
 	// the status holds them with this pass's observations added.
 	Terminations []databasev1alpha1.MemberTermination
-	// Verifications and Quarantine are what the status held before this pass.
+	// Verifications, Quarantine and LastRelease are what the status held
+	// before this pass.
 	Verifications []databasev1alpha1.MemberVerification
 	Quarantine    *databasev1alpha1.WriteQuarantine
+	LastRelease   *databasev1alpha1.WriteQuarantineRelease
+	// EndedExemptions are the members of LastRelease's exemptMembers whose
+	// exemption this reconciler ended in an earlier pass whose status write
+	// may have failed; anyExemption stands for all of them. It can only end
+	// an exemption, never grant one.
+	EndedExemptions map[string]bool
+	// ExemptionOwned says that this reconciler accepted LastRelease and wrote
+	// it: only that Operator process may rely on its exemption.
+	ExemptionOwned bool
 	// Nonce returns a new random value of at least 128 bits.
 	Nonce func() (string, error)
 }
@@ -378,6 +388,13 @@ type quarantineDecision struct {
 	Quarantine *databasev1alpha1.WriteQuarantine
 	// Released is set on the pass that released a quarantine.
 	Released *databasev1alpha1.WriteQuarantineRelease
+	// LastRelease replaces status.lastWriteQuarantineRelease when Released
+	// is not set: the members a manual release exempts, less those this pass
+	// verified or found in another Pod or container start.
+	LastRelease *databasev1alpha1.WriteQuarantineRelease
+	// ExemptionEnded describes each end of a manual release's exemption in
+	// this pass.
+	ExemptionEnded []string
 	// Change says what changed.
 	Change quarantineChange
 	// ActiveMasters are the active masters of this pass, and Unverified the
@@ -491,7 +508,8 @@ func ceilSecond(t time.Time) metav1.Time {
 // otherwise none starts, and a quarantine in force stays.
 //
 // While a quarantine is in force, a new member that the rules would name, or
-// a recorded member removed from the cluster or found in another Pod, revises
+// a recorded member removed from the cluster or found in another Pod or
+// container start, revises
 // it: its revision increments and its release token is replaced, its
 // generation stays. A WriteQuarantinedMemberUnverified quarantine becomes
 // WriteQuarantinedMasterChanged, which has no automatic release, when an
@@ -502,6 +520,8 @@ func ceilSecond(t time.Time) metav1.Time {
 // of them; any other pass in between starts over.
 func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	d, verified := verifyMembers(in)
+	var exempt map[string]bool
+	d.LastRelease, exempt, d.ExemptionEnded = releaseExemption(in, d.ActiveMasters, verified)
 	ordinal := make(map[string]int, len(in.Members))
 	for i, m := range in.Members {
 		ordinal[m] = i
@@ -515,7 +535,7 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	case len(d.ActiveMasters) == 1:
 		m := d.ActiveMasters[0]
 		for _, u := range d.Unverified {
-			if ordinal[u] < ordinal[m] || u == in.LastResolvedPrimary {
+			if !exempt[u] && (ordinal[u] < ordinal[m] || u == in.LastResolvedPrimary) {
 				named = append(named, u)
 			}
 		}
@@ -660,7 +680,124 @@ func verifiedAnswer(in quarantineInput, d *quarantineDecision, v databasev1alpha
 // quarantineMember records member m as this pass saw it.
 func quarantineMember(in quarantineInput, m string) databasev1alpha1.WriteQuarantineMember {
 	return databasev1alpha1.WriteQuarantineMember{Name: m, PodUID: in.Identities[m].PodUID,
-		ObservedRole: observedRoleText(in.Observations[m], in.Now)}
+		RestartCount: in.Identities[m].RestartCount, ObservedRole: observedRoleText(in.Observations[m], in.Now)}
+}
+
+// anyExemption, in quarantineInput.EndedExemptions, ends every member's
+// exemption.
+const anyExemption = "*"
+
+// releaseExemption is the members the last manual release accepted that
+// rule 2 does not name in this pass, with the release record whose
+// exemptMembers lose for good the members this pass ends the exemption for,
+// and a description of each ending for the log and Events. It reads only the
+// persisted release record (in.LastRelease), never memory.
+//
+// A member leaves exemptMembers once it is verified, found in another Pod or
+// container start, or gone from the cluster. The whole list is cleared once
+// an active master other than the release's master, which includes an exempt
+// member, or the release's master in another Pod or container start, is
+// seen, or once the release's master gives a fresh, readable answer that
+// claims no active master; a pass with no active master and no such answer
+// changes nothing. Ends kept in memory (in.EndedExemptions) apply too, so an
+// end whose status write failed is not undone. The exemption applies
+// only while the release's master, in the same Pod and container start, is
+// the only active master; rule 1 does not consult it. Without the members'
+// Pods only an active master other than the release's clears it.
+func releaseExemption(in quarantineInput, masters []string,
+	verified map[string]bool) (*databasev1alpha1.WriteQuarantineRelease, map[string]bool, []string) {
+	rel := in.LastRelease.DeepCopy()
+	if rel == nil || rel.Method != databasev1alpha1.WriteQuarantineReleasedManually || len(rel.ExemptMembers) == 0 {
+		return rel, nil, nil
+	}
+	if why := exemptionEndedForAll(in, rel, masters); why != "" {
+		ended := fmt.Sprintf("the exemption of %s ended: %s", strings.Join(rel.ExemptMembers, ", "), why)
+		rel.ExemptMembers = nil
+		return rel, nil, []string{ended}
+	}
+	if in.IdentitiesUnknown {
+		// Only the ends kept in memory apply without the members' Pods.
+		var ended []string
+		kept := slices.DeleteFunc(slices.Clone(rel.ExemptMembers), func(m string) bool { return in.EndedExemptions[m] })
+		for _, m := range rel.ExemptMembers {
+			if in.EndedExemptions[m] {
+				ended = append(ended, fmt.Sprintf("the exemption of %s ended in an earlier observation whose status "+
+					"was not written", m))
+			}
+		}
+		if len(kept) == 0 {
+			kept = nil
+		}
+		rel.ExemptMembers = kept
+		return rel, nil, ended
+	}
+	var ended []string
+	kept := make([]string, 0, len(rel.ExemptMembers))
+	for _, m := range rel.ExemptMembers {
+		i := slices.IndexFunc(rel.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == m })
+		why := ""
+		switch {
+		case in.EndedExemptions[m]:
+			why = "it ended in an earlier observation whose status was not written"
+		case i < 0 || !slices.Contains(in.Members, m):
+			why = "it is no longer a member"
+		case verified[m]:
+			why = "it was verified as no active master"
+		// A Pod being deleted is still the Pod that was accepted; its next
+		// Pod is another identity and ends the exemption.
+		case in.Identities[m].PodUID != rel.Members[i].PodUID || in.Identities[m].RestartCount != rel.Members[i].RestartCount:
+			why = "it runs in another Pod or container start than the one accepted"
+		}
+		if why != "" {
+			ended = append(ended, fmt.Sprintf("the exemption of %s ended: %s", m, why))
+			continue
+		}
+		kept = append(kept, m)
+	}
+	rel.ExemptMembers = kept
+	if len(kept) == 0 {
+		rel.ExemptMembers = nil
+	}
+	if len(masters) != 1 {
+		return rel, nil, ended
+	}
+	exempt := make(map[string]bool, len(kept))
+	for _, m := range kept {
+		exempt[m] = true
+	}
+	return rel, exempt, ended
+}
+
+// exemptionEndedForAll says why this pass ends the exemption of every member
+// of the manual release rel, "" when it does not: a reconciler that did not
+// accept the release, an end kept in memory, the
+// release's master answering as no active master, another member seen as an
+// active master, or the release's master seen as one in another Pod or
+// container start.
+func exemptionEndedForAll(in quarantineInput, rel *databasev1alpha1.WriteQuarantineRelease, masters []string) string {
+	if !in.ExemptionOwned {
+		return "only the Operator process that accepted the release keeps its exemption, and this one did not " +
+			"(a restart or another leader), so an end that was not written cannot be ruled out"
+	}
+	if in.EndedExemptions[anyExemption] {
+		return "it ended in an earlier observation whose status was not written"
+	}
+	if o := in.Observations[rel.ObservedMaster]; fresh(o, in.Now) && o.Reachable && !o.TokenRefused &&
+		!o.Unreadable && !activeMaster(o, in.Now) && o.Role != "" && o.Role != databasev1alpha1.RoleUnknown {
+		return fmt.Sprintf("the release's master %s answered as %s, no longer an active master", rel.ObservedMaster,
+			observedRoleText(o, in.Now))
+	}
+	for _, m := range masters {
+		switch {
+		case m != rel.ObservedMaster:
+			return fmt.Sprintf("%s was seen as an active master, not the release's master %s", m, rel.ObservedMaster)
+		case !in.IdentitiesUnknown && (in.Identities[m].PodUID != rel.ObservedMasterPodUID ||
+			in.Identities[m].RestartCount != rel.ObservedMasterRestartCount):
+			return fmt.Sprintf("the release's master %s was seen as an active master in another Pod or container "+
+				"start", m)
+		}
+	}
+	return ""
 }
 
 // startQuarantine is the quarantine rules 1 and 2 start, or nil under rule 3.
@@ -745,7 +882,8 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 			revised = true
 			continue
 		}
-		if !in.IdentitiesUnknown && in.Identities[r.Name].PodUID != r.PodUID {
+		if !in.IdentitiesUnknown && (in.Identities[r.Name].PodUID != r.PodUID ||
+			in.Identities[r.Name].RestartCount != r.RestartCount) {
 			r, revised = quarantineMember(in, r.Name), true
 		}
 		kept = append(kept, r)
@@ -975,6 +1113,22 @@ type quarantineHold struct {
 	verifications []databasev1alpha1.MemberVerification
 	// reportedUID is the generation whose other cluster UID was reported.
 	reportedUID string
+	// reportedRelease is the release annotation, with what was made of it,
+	// last reported with an Event: an inert or refused annotation is
+	// reported once.
+	reportedRelease string
+	// exemptionOwner is the release token of the manual release this
+	// reconciler accepted and wrote: only its exemption may be relied on.
+	exemptionOwner string
+	// endedExemptions are, by the release token of the manual release whose
+	// exemption they end, the members whose exemption this reconciler ended,
+	// anyExemption for all of them. They may only end an exemption: a status
+	// write that failed does not bring it back. A restart of the Operator
+	// before the end is written loses them.
+	endedExemptions map[string]map[string]bool
+	// releaseWaits counts the consecutive passes that could not apply the
+	// release annotation, for their back-off (releaseWaitRetry).
+	releaseWaits int
 }
 
 // quarantineState is the cluster's entry in quarantineHolds.
@@ -1217,16 +1371,33 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
 		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
-		Terminations:  terminations,
-		Verifications: withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
-		Quarantine:    withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)), Nonce: newQuarantineNonce,
+		Terminations:    terminations,
+		Verifications:   withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
+		Quarantine:      withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)),
+		LastRelease:     cluster.Status.LastWriteQuarantineRelease,
+		EndedExemptions: state.endedExemptions[releaseTokenOf(cluster.Status.LastWriteQuarantineRelease)],
+		ExemptionOwned: state.exemptionOwner != "" &&
+			state.exemptionOwner == releaseTokenOf(cluster.Status.LastWriteQuarantineRelease),
+		Nonce: newQuarantineNonce,
 	})
 	if err != nil {
 		return stepResult{err: errors.Join(steps.err, fmt.Errorf("decide the write quarantine: %w", err))}
 	}
 	state.verifications = d.Verifications
+	var releaseRetry time.Duration
+	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, ids, unknown != nil, now)
 	cluster.Status.MemberVerifications = d.Verifications
 	cluster.Status.MemberTerminations = d.Terminations
+	if d.Released == nil {
+		before := cluster.Status.LastWriteQuarantineRelease
+		cluster.Status.LastWriteQuarantineRelease = d.LastRelease
+		state.rememberEndedExemptions(before, d.LastRelease)
+		for _, msg := range d.ExemptionEnded {
+			logf.FromContext(ctx).Info("Ended the exemption of a manual write quarantine release",
+				"event", "write_quarantine_exemption_ended", "detail", msg)
+			r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineExemptionEnded, msg)
+		}
+	}
 	cluster.Status.WriteQuarantine = d.Quarantine
 	if d.Quarantine != nil {
 		r.holdQuarantine(cluster, d.Quarantine)
@@ -1249,18 +1420,21 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 		log.Info("Released the write quarantine", "event", "write_quarantine_released", "reason", string(rel.Reason),
 			"generationID", rel.GenerationID, "method", string(rel.Method), "observedMaster", rel.ObservedMaster)
+		if rel.Method == databasev1alpha1.WriteQuarantineReleasedManually {
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonWriteQuarantineReleasedManually, fmt.Sprintf(
+				"released the %s quarantine (generation %s, revision %d) on the annotation %s with the token %s, "+
+					"accepting the members %s; %s was the only active master; %s; the read-write Brokers start again",
+				rel.Reason, rel.GenerationID, rel.Revision, releaseWriteQuarantineAnnotation, tokenPrefix(rel.ReleaseToken),
+				quarantineMemberText(rel.Members), rel.ObservedMaster, rel.Warning))
+			break
+		}
 		r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
 			"released the %s quarantine started at %s automatically: %s was the only active master and every other "+
 				"member answered as no active master in two observations %s apart; the read-write Brokers start again",
 			rel.Reason, rel.StartTime.UTC().Format(time.RFC3339), rel.ObservedMaster, quarantineReleaseInterval))
 	}
-	switch {
-	case d.Released != nil:
-		// The next pass starts the read-write Brokers again.
-		steps.retry = time.Second
-	case d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""):
-		steps.retry = unverifiedResyncInterval
-	}
+	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
+		d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
 	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
 		steps.err = errors.Join(steps.err, err)
 	}
@@ -1268,6 +1442,74 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		r.holdQuarantine(cluster, q)
 	}
 	return steps
+}
+
+// ownExemption records that this reconciler wrote the manual release that
+// consumed token: it alone may rely on that release's exemption.
+func (r *CubridClusterReconciler) ownExemption(cluster *databasev1alpha1.CubridCluster, token string) {
+	r.quarantineState(cluster).exemptionOwner = token
+}
+
+// releaseTokenOf is the release token of rel, "" for none.
+func releaseTokenOf(rel *databasev1alpha1.WriteQuarantineRelease) string {
+	if rel == nil {
+		return ""
+	}
+	return rel.ReleaseToken
+}
+
+// rememberEndedExemptions keeps in memory the exemptions of the manual
+// release before that this pass ended in after, before the status that
+// records it is written.
+func (h *quarantineHold) rememberEndedExemptions(before, after *databasev1alpha1.WriteQuarantineRelease) {
+	if before == nil || before.ReleaseToken == "" || len(before.ExemptMembers) == 0 {
+		return
+	}
+	var kept []string
+	if after != nil && after.ReleaseToken == before.ReleaseToken {
+		kept = after.ExemptMembers
+	}
+	if len(kept) == len(before.ExemptMembers) {
+		return
+	}
+	if h.endedExemptions == nil {
+		h.endedExemptions = map[string]map[string]bool{}
+	}
+	ended := h.endedExemptions[before.ReleaseToken]
+	if ended == nil {
+		// Only the last manual release's exemptions are kept.
+		ended = map[string]bool{}
+		h.endedExemptions = map[string]map[string]bool{before.ReleaseToken: ended}
+	}
+	if len(kept) == 0 {
+		ended[anyExemption] = true
+		return
+	}
+	for _, m := range before.ExemptMembers {
+		if !slices.Contains(kept, m) {
+			ended[m] = true
+		}
+	}
+}
+
+// quarantineRetry is how soon the pass is retried for the write quarantine,
+// zero for the usual cadence: a second after a release, so that the next pass
+// starts the read-write Brokers; unverifiedResyncInterval while a quarantine
+// is in force or a member is unverified (watchful); releaseRetry after a
+// release annotation that could not be applied, but never later than a
+// watchful pass would be.
+func quarantineRetry(released bool, releaseRetry time.Duration, watchful bool) time.Duration {
+	switch {
+	case released:
+		return time.Second
+	case releaseRetry > 0 && watchful:
+		return min(releaseRetry, unverifiedResyncInterval)
+	case releaseRetry > 0:
+		return releaseRetry
+	case watchful:
+		return unverifiedResyncInterval
+	}
+	return 0
 }
 
 // releaseWritten lets the read-write path open after the status that
@@ -1336,7 +1578,11 @@ func quarantineConditionMessage(q *databasev1alpha1.WriteQuarantine) string {
 	if q.EnforcedTime != nil {
 		enforced = "no read-write Broker Pod or endpoint remains since " + q.EnforcedTime.UTC().Format(time.RFC3339)
 	}
-	return "the read-write path is quarantined: " + quarantineDescription(q, nil) + "; " + enforced
+	msg := "the read-write path is quarantined: " + quarantineDescription(q, nil) + "; " + enforced
+	if q.ReleaseRefusal != "" {
+		msg += "; the manual release was refused: " + q.ReleaseRefusal
+	}
+	return msg
 }
 
 // setRoutingQuarantined sets RoutingReady=False with the quarantine's reason
