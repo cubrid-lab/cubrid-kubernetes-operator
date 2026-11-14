@@ -1333,11 +1333,39 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
 - **No Kubernetes Job** in the v1alpha1 critical path (RWO PVC + it would
   duplicate the Instance Manager). Jobs are reserved for future
   retention/verification/copy work.
-- **Target selection:** prefer a slave; fall
-  back to master (recording `fallbackUsed`). As implemented, the first
-  freshly observed slave in ordinal order is taken; whether it has caught
-  up is not judged (`internal/controller/backuptarget.go`). The master
-  fallback keeps single-node/degraded clusters backup-capable.
+- **Target eligibility:** a new HA selection requires a resolved primary,
+  and every target, the master included, must be a member the HA bootstrap
+  records as holding the database; a master that is not waits with
+  `MasterNotSeeded`, and no other member is taken in its place. A slave
+  needs a fresh, authoritative role observation, an applier reading for
+  that primary, `failCount: 0`, and a reading of its copied log's end.
+  An observed apply or copy stall lasting at least 60 s excludes it.
+  Applier progress uses log positions when available, so unchanged change
+  counters during a long transaction do not alone establish a stall.
+- **Target ranking:** eligible slaves are ordered by `delayedPages` (copied
+  log pages waiting to be applied), with ordinal only breaking ties.
+  `copyDelayedPages` describes the gap between the master's log and the
+  slave's copy; it is a separate observation, not the ranking key. When the
+  master's log end cannot be read, a slave needs evidence that its copy
+  advanced since a reading of the same source no more than 60 s old.
+  Missing replication evidence never counts as caught up.
+- **Target preference:** `StandbyOnly` waits with `NoHealthyStandby` if no
+  slave is eligible. `PrimaryOnly` selects only the resolved, admitted
+  master. `PreferStandby` selects an eligible slave first, otherwise the
+  resolved, admitted master, recording `fallbackUsed: true`. If no slave
+  is eligible and one was excluded only because the master's log end was
+  unread, it first waits with `PrimaryLogEndNotRead`; after 30 s from that
+  wait's recorded start it may select the master with
+  `MasterFallbackPrimaryLogEndNotRead`. An unresolved or ambiguous HA
+  primary never permits master fallback. For a single-instance cluster,
+  `PreferStandby` also allows its sole member with an unknown role while
+  its primary is unresolved; a resolved single member is selected as an
+  ordinary master.
+- **Recorded target:** selection is persisted before dispatch. Once a
+  target is recorded, retries use that member and the same idempotency key;
+  a lost response never causes selection of a second member. A recorded
+  slave must still be authoritatively observed as a slave; its replication
+  eligibility is not reevaluated because the earlier dispatch may be running.
 - **Successful `backupdb` ≠ successful backup** — completion requires
   upload + checksum + `manifest.json`; restore/rebuild trust only a
   validated manifest.
@@ -1347,8 +1375,16 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
   (`CubridBackup.status`, condition `Ready`; the cluster has no
   `BackupReady` Condition).
 
-See ADR-0007 for the full CR shape, division of labor, artifact/upload
-model, idempotency, status, and the 15-item POC checklist.
+These selection checks use role and replication observations, not Pod
+readiness or a SQL dataset check. They do not prove that every acknowledged
+write is present or that an artifact restores correctly; backup and restore
+validation must establish those outcomes independently.
+
+See [backup execution](docs/adr/0007-backup-execution.md) for the full CR
+shape, dispatch checks, artifact/upload model, idempotency, status and
+validation requirements. The selection and progress rules are in
+[backuptarget.go](internal/controller/backuptarget.go) and
+[replication.go](internal/controller/replication.go).
 
 ---
 
