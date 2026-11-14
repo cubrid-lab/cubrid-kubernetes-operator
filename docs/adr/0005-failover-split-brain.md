@@ -554,8 +554,9 @@ seconds apart, the same confirmation as for an unverified member.
   and a Warning Event. The actor identity comes from Kubernetes API audit
   logs, not from an invented controller field.
 
-  *Amended by #871, pending maintainer review:* the members an accepted
-  manual release names (their Pod UID and container restart count) do not,
+  *Amended by #871, accepted by the maintainer on 2026-11-14 UTC:* the
+  members an accepted manual release names (their Pod UID and container
+  restart count) do not,
   by themselves, start a new rule-2 quarantine afterwards. The exemption
   covers only the identities the **last** manual release accepted, and holds
   only while that release's master, in the same Pod and with the same
