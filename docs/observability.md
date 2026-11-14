@@ -353,6 +353,20 @@ Pod:
   quarantined. When the Pods cannot be read, only two active masters start a
   quarantine, nothing is verified or released, and the read-write Brokers
   are not scaled up in that pass; running ones keep running.
+- A member whose last Pod's termination the kubelet confirmed is not
+  unverified while its next Pod starts (ADR-0005, section 8, as amended by
+  #870, pending maintainer review). Confirmed means that the Operator saw
+  that Pod being deleted with its database container reported `terminated`,
+  through a Pod watch or its own reads, before the Pod was gone. It records
+  the member's last Pod UID in `status.memberPods` and the confirmed Pod in
+  `status.memberTerminations`, and records a termination only for the last
+  Pod it saw of that member. A Pod deleted with `--force`, a termination
+  the Operator did not see (for example while it was stopped) and a lost
+  VM leave the member unverified. The next Pod's first non-master answer
+  starts its ordinary verification; from then on any other answer, or none,
+  ends the exception, and so does a master role or an answer that
+  contradicts itself. Such a member counts as verified for the automatic
+  release.
 - `status.lastResolvedPrimary` is the primary of the last pass that resolved
   one, with `lastResolvedPrimaryTime`; it is never cleared.
 

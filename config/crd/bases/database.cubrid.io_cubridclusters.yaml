@@ -1220,6 +1220,71 @@ spec:
                 - releaseTime
                 - startTime
                 type: object
+              memberPods:
+                description: |-
+                  memberPods records the UID of each promotable member's Pod when the
+                  Operator last read it. A termination seen for a Pod is recorded in
+                  memberTerminations only for the member's last Pod seen, so that a Pod
+                  of the member deleted in between without being seen is never covered
+                  by the termination of an earlier one.
+                items:
+                  description: MemberPod is the Pod of a member the Operator last
+                    read.
+                  properties:
+                    name:
+                      description: name is the member.
+                      type: string
+                    podUID:
+                      description: podUID is that Pod's UID.
+                      type: string
+                  required:
+                  - name
+                  - podUID
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              memberTerminations:
+                description: |-
+                  memberTerminations records, for each promotable member whose Pod's
+                  termination the kubelet confirmed, that Pod's UID: the Operator saw it
+                  being deleted with its database container terminated. While the
+                  member's next Pod starts, the member is not unverified for the
+                  read-write quarantine (ADR-0005, section 8, as amended by #870). A Pod
+                  deleted with --force, or whose terminated state was not seen, is not
+                  recorded.
+                items:
+                  description: |-
+                    MemberTermination is a Pod of a member whose termination the kubelet
+                    confirmed.
+                  properties:
+                    answered:
+                      description: |-
+                        answered is set once a later Pod of the member gave a non-master
+                        answer. From then on any other answer, or none, ends the record.
+                      type: boolean
+                    confirmedAt:
+                      description: confirmedAt is when the Operator recorded it.
+                      format: date-time
+                      type: string
+                    name:
+                      description: name is the member.
+                      type: string
+                    podUID:
+                      description: |-
+                        podUID is the UID of the Pod that was seen being deleted with its
+                        database container terminated.
+                      type: string
+                  required:
+                  - confirmedAt
+                  - name
+                  - podUID
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               memberVerifications:
                 description: |-
                   memberVerifications records, for each promotable member that answered

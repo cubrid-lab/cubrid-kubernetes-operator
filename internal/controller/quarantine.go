@@ -44,6 +44,106 @@ import (
 type memberIdentity struct {
 	PodUID       string
 	RestartCount int32
+	// Terminated is set when the Pod is being deleted and the kubelet
+	// reported its database container terminated (podTerminated).
+	Terminated bool
+}
+
+// podTerminated reports whether the kubelet confirmed the termination of
+// pod's database process: the Pod is being deleted and its database
+// container is reported terminated. A Pod deleted with --force is removed
+// before the kubelet reports anything, so it never is.
+func podTerminated(pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp == nil {
+		return false
+	}
+	for _, c := range pod.Status.ContainerStatuses {
+		if c.Name == appName {
+			return c.State.Terminated != nil
+		}
+	}
+	return false
+}
+
+// podTermination is a Pod termination the Pod watch saw
+// (notePodTermination).
+type podTermination struct {
+	cluster types.NamespacedName
+	member  string
+	at      time.Time
+}
+
+// podTerminationMemory is how long a termination the watch saw is kept in
+// memory for the next pass to record.
+const podTerminationMemory = 10 * time.Minute
+
+// notePodTermination keeps in memory a database Pod of a cluster that the
+// kubelet reported terminated while it was being deleted, and reports
+// whether it was one. The Pod watch calls it on every change, so that the
+// state is kept even when the Pod is gone before the next pass reads it.
+// A change the watch missed leaves the member unverified.
+func (r *CubridClusterReconciler) notePodTermination(pod *corev1.Pod) bool {
+	cluster := pod.Labels["app.kubernetes.io/instance"]
+	if !podTerminated(pod) || cluster == "" || pod.Labels["app.kubernetes.io/component"] != "database" {
+		return false
+	}
+	r.podTerminations.Store(pod.UID, podTermination{
+		cluster: types.NamespacedName{Namespace: pod.Namespace, Name: cluster}, member: pod.Name, at: r.now()})
+	return true
+}
+
+// recordTerminations is status.memberTerminations with the terminations
+// seen for each member's last Pod added: in the reads of this pass (before
+// and ids) or by the watch. It updates status.memberPods with the Pods read
+// in this pass. Only a termination of the Pod the member was last seen in,
+// or is seen in now, is recorded: a Pod deleted in between without being
+// seen could have been force-deleted.
+func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	members []string, before, ids map[string]memberIdentity) []databasev1alpha1.MemberTermination {
+	key := client.ObjectKeyFromObject(cluster)
+	watched := map[string]bool{}
+	r.podTerminations.Range(func(uid, v any) bool {
+		t := v.(podTermination)
+		switch {
+		case r.now().Sub(t.at) > podTerminationMemory:
+			r.podTerminations.Delete(uid)
+		case t.cluster == key:
+			watched[string(uid.(types.UID))] = true
+		}
+		return true
+	})
+	last := map[string]string{}
+	for _, p := range cluster.Status.MemberPods {
+		last[p.Name] = p.PodUID
+	}
+	out := slices.Clone(cluster.Status.MemberTerminations)
+	var pods []databasev1alpha1.MemberPod
+	for _, m := range members {
+		uid := ""
+		switch now, was := ids[m], before[m]; {
+		case now.PodUID != "" && now.Terminated, now.PodUID != "" && now.PodUID == was.PodUID && was.Terminated,
+			now.PodUID != "" && watched[now.PodUID]:
+			uid = now.PodUID
+		case last[m] != "" && last[m] != now.PodUID && (watched[last[m]] || (was.PodUID == last[m] && was.Terminated)):
+			uid = last[m]
+		}
+		if uid != "" && !slices.ContainsFunc(out, func(t databasev1alpha1.MemberTermination) bool {
+			return t.Name == m && t.PodUID == uid
+		}) {
+			out = slices.DeleteFunc(out, func(t databasev1alpha1.MemberTermination) bool { return t.Name == m })
+			out = append(out, databasev1alpha1.MemberTermination{Name: m, PodUID: uid, ConfirmedAt: metav1.NewTime(r.now())})
+			logf.FromContext(ctx).Info("Recorded the confirmed termination of a member's Pod", "member", m, "podUID", uid)
+		}
+		seen := ids[m].PodUID
+		if seen == "" {
+			seen = last[m]
+		}
+		if seen != "" {
+			pods = append(pods, databasev1alpha1.MemberPod{Name: m, PodUID: seen})
+		}
+	}
+	cluster.Status.MemberPods = pods
+	return out
 }
 
 // quarantineInput is what one pass knows for the decision on the read-write
@@ -70,6 +170,9 @@ type quarantineInput struct {
 	IdentitiesUnknown bool
 	// LastResolvedPrimary is status.lastResolvedPrimary before this pass.
 	LastResolvedPrimary string
+	// Terminations are the Pods whose termination the kubelet confirmed, as
+	// the status holds them with this pass's observations added.
+	Terminations []databasev1alpha1.MemberTermination
 	// Verifications and Quarantine are what the status held before this pass.
 	Verifications []databasev1alpha1.MemberVerification
 	Quarantine    *databasev1alpha1.WriteQuarantine
@@ -91,6 +194,12 @@ const (
 type quarantineDecision struct {
 	// Verifications replace status.memberVerifications.
 	Verifications []databasev1alpha1.MemberVerification
+	// Terminations replace status.memberTerminations.
+	Terminations []databasev1alpha1.MemberTermination
+	// Confirmed are the members that are not unverified because their old
+	// Pod's termination was confirmed and their next Pod has not shown
+	// otherwise.
+	Confirmed []string
 	// Quarantine is the quarantine in force after this pass; nil for none.
 	Quarantine *databasev1alpha1.WriteQuarantine
 	// Released is set on the pass that released a quarantine.
@@ -276,40 +385,85 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 	for _, v := range in.Verifications {
 		previous[v.Name] = v
 	}
+	terminations := make(map[string]databasev1alpha1.MemberTermination, len(in.Terminations))
+	for _, t := range in.Terminations {
+		terminations[t.Name] = t
+	}
 	verified := map[string]bool{}
 	if in.IdentitiesUnknown {
-		// Nothing is verified or renewed without the members' Pods.
+		// Nothing is verified, renewed or ended without the members' Pods.
 		d.Verifications = slices.Clone(in.Verifications)
+		d.Terminations = slices.Clone(in.Terminations)
 	}
 	for _, m := range in.Members {
 		o := in.Observations[m]
 		if activeMaster(o, in.Now) {
+			// An active-master claim ends a confirmed termination.
 			d.ActiveMasters = append(d.ActiveMasters, m)
 			continue
 		}
-		if in.IdentitiesUnknown || in.Unstable[m] || !nonMasterAnswer(o, in.Now) {
+		answered := !in.IdentitiesUnknown && !in.Unstable[m] && nonMasterAnswer(o, in.Now)
+		t, recorded := terminations[m]
+		if recorded && !in.IdentitiesUnknown && confirmedDown(&t, in.Identities[m], o, answered, in.Now) {
+			if !answered || !verifiedAnswer(in, &d, previous[m], m) {
+				d.Terminations = append(d.Terminations, t)
+				d.Confirmed = append(d.Confirmed, m)
+				continue
+			}
+			// Verified: the ordinary verification takes over.
+			verified[m] = true
+			continue
+		}
+		if !answered {
 			d.Unverified = append(d.Unverified, m)
 			continue
 		}
-		id := in.Identities[m]
-		v, ok := previous[m]
-		last := v.NonMasterSince.Time
-		if v.LastNonMasterAt != nil {
-			last = v.LastNonMasterAt.Time
-		}
-		if !ok || v.PodUID != id.PodUID || v.RestartCount != id.RestartCount || in.Now.Sub(last) > quarantineAnswerGap {
-			v = databasev1alpha1.MemberVerification{Name: m, PodUID: id.PodUID, RestartCount: id.RestartCount,
-				NonMasterSince: ceilSecond(in.Now)}
-		}
-		v.LastNonMasterAt = &metav1.Time{Time: in.Now}
-		d.Verifications = append(d.Verifications, v)
-		if in.Now.Sub(v.NonMasterSince.Time) >= quarantineVerifyGap {
+		if verifiedAnswer(in, &d, previous[m], m) {
 			verified[m] = true
 		} else {
 			d.Unverified = append(d.Unverified, m)
 		}
 	}
 	return d, verified
+}
+
+// confirmedDown reports whether a member with the record t of a Pod whose
+// termination the kubelet confirmed still does not count as unverified,
+// from its Pod id and its answer o in this pass (ADR-0005, section 8, as
+// amended by #870). The old Pod still listed is confirmed down. A later Pod
+// that has not answered yet is starting. Its first non-master answer
+// (answered) sets t.Answered; from then on, any answer that is not one, or
+// none, ends the record. A master role, or an answer that contradicts
+// itself, ends it at once.
+func confirmedDown(t *databasev1alpha1.MemberTermination, id memberIdentity, o RoleObservation, answered bool,
+	now time.Time) bool {
+	switch {
+	case id.PodUID == t.PodUID:
+		return true
+	case answered:
+		t.Answered = true
+		return true
+	case fresh(o, now) && (o.Role == databasev1alpha1.RoleMaster || o.Conflicting):
+		return false
+	}
+	return !t.Answered
+}
+
+// verifiedAnswer renews member m's verification v from its non-master
+// answer in this pass, adds it to d, and reports whether it verifies m.
+func verifiedAnswer(in quarantineInput, d *quarantineDecision, v databasev1alpha1.MemberVerification, m string) bool {
+	id := in.Identities[m]
+	last := v.NonMasterSince.Time
+	if v.LastNonMasterAt != nil {
+		last = v.LastNonMasterAt.Time
+	}
+	if v.Name != m || v.PodUID != id.PodUID || v.RestartCount != id.RestartCount || in.Now.Sub(last) > quarantineAnswerGap {
+		v = databasev1alpha1.MemberVerification{Name: m, PodUID: id.PodUID, RestartCount: id.RestartCount,
+			NonMasterSince: ceilSecond(in.Now)}
+	}
+	v.LastNonMasterAt = &metav1.Time{Time: in.Now}
+	d.Verifications = append(d.Verifications, v)
+	return in.Now.Sub(v.NonMasterSince.Time) >= quarantineVerifyGap
 }
 
 // quarantineMember records member m as this pass saw it.
@@ -405,7 +559,7 @@ func releaseCheck(in quarantineInput, q *databasev1alpha1.WriteQuarantine, d qua
 	verified map[string]bool) *databasev1alpha1.WriteQuarantineRelease {
 	releasable := len(d.ActiveMasters) == 1 && d.ActiveMasters[0] == q.ObservedMaster
 	for _, m := range in.Members {
-		if m != q.ObservedMaster && !verified[m] {
+		if m != q.ObservedMaster && !verified[m] && !slices.Contains(d.Confirmed, m) {
 			releasable = false
 		}
 	}
@@ -419,7 +573,9 @@ func releaseCheck(in quarantineInput, q *databasev1alpha1.WriteQuarantine, d qua
 	case q.ReleaseCheckSince == nil || previous == nil || in.Now.Sub(previous.Time) > quarantineAnswerGap ||
 		slices.ContainsFunc(d.Verifications, func(v databasev1alpha1.MemberVerification) bool {
 			return v.NonMasterSince.After(q.ReleaseCheckSince.Time)
-		}):
+		}) || slices.ContainsFunc(d.Terminations, func(t databasev1alpha1.MemberTermination) bool {
+		return t.ConfirmedAt.After(q.ReleaseCheckSince.Time)
+	}):
 		// The first releasable pass, a gap since the last one, or a member
 		// verified anew since the first one: start over.
 		since := ceilSecond(in.Now)
@@ -519,6 +675,12 @@ func (r *CubridClusterReconciler) holdQuarantine(cluster *databasev1alpha1.Cubri
 
 // forgetQuarantines drops what is kept in memory for the deleted cluster key.
 func (r *CubridClusterReconciler) forgetQuarantines(key types.NamespacedName) {
+	r.podTerminations.Range(func(uid, t any) bool {
+		if t.(podTermination).cluster == key {
+			r.podTerminations.Delete(uid)
+		}
+		return true
+	})
 	r.quarantineHolds.Range(func(uid, h any) bool {
 		if h.(*quarantineHold).cluster == key {
 			r.quarantineHolds.Delete(uid)
@@ -672,7 +834,7 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 		if err != nil {
 			return nil, fmt.Errorf("read Pod %s: %w", m, err)
 		}
-		id := memberIdentity{PodUID: string(pod.UID)}
+		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod)}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {
 				id.RestartCount = c.RestartCount
@@ -714,9 +876,14 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
 	}
 	state := r.quarantineState(cluster)
+	terminations := cluster.Status.MemberTerminations
+	if unknown == nil {
+		terminations = r.recordTerminations(ctx, cluster, members, before, ids)
+	}
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
 		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
+		Terminations:  terminations,
 		Verifications: withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
 		Quarantine:    cluster.Status.WriteQuarantine, Nonce: newQuarantineNonce,
 	})
@@ -725,6 +892,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	}
 	state.verifications = d.Verifications
 	cluster.Status.MemberVerifications = d.Verifications
+	cluster.Status.MemberTerminations = d.Terminations
 	cluster.Status.WriteQuarantine = d.Quarantine
 	if d.Quarantine != nil {
 		r.holdQuarantine(cluster, d.Quarantine)

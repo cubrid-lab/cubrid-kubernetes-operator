@@ -590,7 +590,12 @@ func (r *haRun) s06Absent() {
 			Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 		},
 		Evidence: files,
-	}, within(operatorResyncLimit, resync), within(failoverLimit, recovery), stableFor(stable))
+		// The master Pod was deleted while the Operator was absent, so the
+		// Operator did not see its termination confirmed: the write
+		// quarantine closes the read-write path when it returns, until the
+		// member's new Pod is verified (ADR-0005, section 8, as amended by
+		// #870). quarantined_failover_limit judges that.
+	}, within(operatorResyncLimit, resync), within(quarantinedFailoverLimit, recovery), stableFor(stable))
 	var agreement faults.Agreement
 	result, agreement = s06Conditions(s06Absent, result, rounds, events, outcome.Timeline, newMaster,
 		absence.returnedAt)

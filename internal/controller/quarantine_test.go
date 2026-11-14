@@ -68,6 +68,7 @@ type quarantineScenario struct {
 	verifications []databasev1alpha1.MemberVerification
 	quarantine    *databasev1alpha1.WriteQuarantine
 	nonces        int
+	terminations  []databasev1alpha1.MemberTermination
 	// unstable and identitiesUnknown are passed to the next pass only.
 	unstable          map[string]bool
 	identitiesUnknown bool
@@ -87,7 +88,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		Now: now, ClusterUID: "cluster-uid", Members: quarantineMembers, Observations: obs,
 		Identities: s.identities, Unstable: s.unstable, IdentitiesUnknown: s.identitiesUnknown,
 		LastResolvedPrimary: s.lastResolved,
-		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(),
+		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
 		Nonce: func() (string, error) {
 			s.nonces++
 			return fmt.Sprintf("nonce-%d", s.nonces), nil
@@ -96,7 +97,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 	if err != nil {
 		s.t.Fatalf("decideWriteQuarantine: %v", err)
 	}
-	s.verifications, s.quarantine = d.Verifications, d.Quarantine
+	s.verifications, s.quarantine, s.terminations = d.Verifications, d.Quarantine, d.Terminations
 	s.unstable, s.identitiesUnknown = nil, false
 	return d
 }
@@ -629,5 +630,98 @@ func TestQuarantineMasterRestartRevises(t *testing.T) {
 	if d.Quarantine == nil || d.Change != quarantineRevised || d.Quarantine.Revision != 2 ||
 		d.Quarantine.ReleaseCheckSince != nil {
 		t.Fatalf("decision = %+v, want a revised quarantine with no release check", d)
+	}
+}
+
+// confirmTermination records that the kubelet confirmed the termination of
+// q0's Pod uid0, and gives q0 the Pod next.
+func (s *quarantineScenario) confirmTermination(next string) {
+	s.terminations = append(s.terminations, databasev1alpha1.MemberTermination{
+		Name: q0, PodUID: uid0, ConfirmedAt: metav1.NewTime(testNow)})
+	s.identities[q0] = memberIdentity{PodUID: next}
+}
+
+// A former master whose old Pod's termination the kubelet confirmed is not
+// unverified while its new Pod starts, and then answers its way into the
+// ordinary verification (ADR-0005, section 8, as amended by #870).
+func TestQuarantineConfirmedTerminationIsNotUnverified(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	s.confirmTermination("")
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine != nil || !slices.Equal(d.Confirmed, []string{q0}) {
+		t.Fatalf("decision = %+v, want no quarantine and %s confirmed", d, q0)
+	}
+	// Its new Pod is created and does not answer yet.
+	s.identities[q0] = memberIdentity{PodUID: uid0New}
+	t1 := testNow.Add(5 * time.Second)
+	if d = s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)}); d.Quarantine != nil {
+		t.Fatalf("a starting new Pod quarantined: %+v", d.Quarantine)
+	}
+	// It answers as a slave, once and then again: it is verified, and the
+	// record ends.
+	t2 := t1.Add(5 * time.Second)
+	if d = s.pass(t2, map[string]RoleObservation{q0: slaveAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)}); d.Quarantine != nil {
+		t.Fatalf("the new Pod's first slave answer quarantined: %+v", d.Quarantine)
+	}
+	t3 := t2.Add(quarantineVerifyGap + time.Second)
+	d = s.pass(t3, map[string]RoleObservation{q0: slaveAt(t3), q1: activeMasterAt(t3), q2: slaveAt(t3)})
+	if d.Quarantine != nil || slices.Contains(d.Unverified, q0) || len(d.Terminations) != 0 {
+		t.Fatalf("decision = %+v, want %s verified and its record ended", d, q0)
+	}
+}
+
+// Once the new Pod has answered, an answer that does not count, or none,
+// ends the record: the member is unverified as without it.
+func TestQuarantineConfirmedTerminationEndsOnABrokenAnswer(t *testing.T) {
+	for name, broken := range map[string]func(time.Time) RoleObservation{
+		"no answer after one": noAnswerAt,
+		"a master that is not active": func(at time.Time) RoleObservation {
+			return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, Conflicting: true,
+				MasterNotYetActive: true, ObservedAt: at}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newQuarantineScenario(t, q0)
+			s.verifiedAll(q2)
+			s.confirmTermination(uid0New)
+			s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+			t1 := testNow.Add(time.Second)
+			d := s.pass(t1, map[string]RoleObservation{q0: broken(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
+			if d.Quarantine == nil || slices.Contains(d.Confirmed, q0) {
+				t.Fatalf("decision = %+v, want %s unverified and quarantined", d, q0)
+			}
+		})
+	}
+}
+
+// A new Pod that claims an active master is a second active master.
+func TestQuarantineConfirmedTerminationAndActiveMasterClaim(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	s.confirmTermination(uid0New)
+	d := s.pass(testNow, map[string]RoleObservation{q0: activeMasterAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine == nil || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMultipleMasters {
+		t.Fatalf("quarantine = %+v, want %s", d.Quarantine, databasev1alpha1.WriteQuarantinedMultipleMasters)
+	}
+}
+
+// A quarantine started before the termination was confirmed is released
+// once it is, while the new Pod has not answered yet.
+func TestQuarantineReleasedOnAConfirmedTermination(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine == nil {
+		t.Fatalf("an unconfirmed former primary without an answer started no quarantine")
+	}
+	s.confirmTermination(uid0)
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
+	t2 := t1.Add(3 * time.Second)
+	s.pass(t2, map[string]RoleObservation{q0: noAnswerAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)})
+	t3 := t2.Add(quarantineReleaseInterval)
+	if d = s.pass(t3, map[string]RoleObservation{q0: noAnswerAt(t3), q1: activeMasterAt(t3), q2: slaveAt(t3)}); d.Released == nil {
+		t.Fatalf("decision = %+v, want a release", d)
 	}
 }

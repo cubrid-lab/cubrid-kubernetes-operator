@@ -257,6 +257,28 @@ func replicationStallStep(r *haRun) {
 		Expect(restartsAfter).To(Equal(restartsBefore),
 			"the container of %s was restarted, so the member is not in the state this step is about", victim)
 
+		// The stopped member comes before the new master in the member list
+		// (it is the first slave, the new master the other one), so while
+		// its heartbeat was stopped it was an unverified member that
+		// outranks the only active master, and the Operator quarantined the
+		// read-write path (ADR-0005, section 8, rule 2). That is correct: it
+		// could not tell that member was not a master. The quarantine is
+		// released once the member answers as a slave again, and the
+		// read-write Brokers are started again. The writes below must all be
+		// acknowledged, so they wait for that; the stall checks after them
+		// are unchanged.
+		By("waiting for the write quarantine to be released and a read-write Broker to be available")
+		Eventually(func(g Gomega) {
+			quarantine, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
+				"jsonpath={.status.writeQuarantine.reason}")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(quarantine).To(BeEmpty(), "status.writeQuarantine")
+			endpoint, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
+				`jsonpath={.status.conditions[?(@.type=="WriteEndpointReady")].status}`)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(endpoint).To(Equal("True"), "WriteEndpointReady")
+		}, 4*time.Minute, 3*time.Second).Should(Succeed(), observed)
+
 		By("writing more, so that log pages wait on the slave")
 		h, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"b OPS=40 ROLLBACK_EVERY=0")
 		Expect(err).NotTo(HaveOccurred())

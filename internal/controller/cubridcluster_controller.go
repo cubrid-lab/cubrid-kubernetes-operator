@@ -40,11 +40,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -186,6 +188,10 @@ type CubridClusterReconciler struct {
 	// quarantineHolds holds, per cluster UID, what this reconciler keeps in
 	// memory about the cluster's write quarantine (quarantineHold).
 	quarantineHolds sync.Map
+	// podTerminations holds, per Pod UID, a database Pod the kubelet
+	// reported terminated while it was being deleted, as the Pod watch saw
+	// it (notePodTermination).
+	podTerminations sync.Map
 	// dbaPasswordCheckedAt holds, per cluster UID, when its member was last
 	// asked whether the DBA password Secret's value is the database's
 	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
@@ -1571,9 +1577,32 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		// A database Pod the kubelet reports terminated while it is
+		// deleted is kept for the write quarantine, which may run after
+		// the Pod is gone (ADR-0005, section 8, as amended by #870).
+		Watches(&corev1.Pod{}, handler.Funcs{
+			UpdateFunc: func(_ context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				r.enqueueTerminated(e.ObjectNew, q)
+			},
+			DeleteFunc: func(_ context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				if !e.DeleteStateUnknown {
+					r.enqueueTerminated(e.Object, q)
+				}
+			},
+		}).
 		Named("cubridcluster").
 		WithOptions(controller.Options{RateLimiter: clusterRateLimiter()}).
 		Complete(r)
+}
+
+// enqueueTerminated keeps a terminated database Pod (notePodTermination) and
+// starts a reconcile of its cluster.
+func (r *CubridClusterReconciler) enqueueTerminated(obj client.Object,
+	q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+	if pod, ok := obj.(*corev1.Pod); ok && r.notePodTermination(pod) {
+		q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: pod.Namespace, Name: pod.Labels["app.kubernetes.io/instance"]}})
+	}
 }
 
 // applierPositions is the store of applier readings this reconciler writes.

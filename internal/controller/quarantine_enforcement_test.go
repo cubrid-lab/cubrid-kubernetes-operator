@@ -484,4 +484,118 @@ var _ = Describe("Write quarantine (#113)", func() {
 		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
 		Expect(rwReplicas(f)).To(Equal(int32(0)), "a read error does not start them")
 	})
+
+	// memberPod creates the Pod of a member as the StatefulSet would, held by
+	// a finalizer so that its deletion leaves it Terminating until released.
+	memberPod := func(f quarantineFixture, member string, held bool) *corev1.Pod {
+		GinkgoHelper()
+		c := stored(f)
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: member, Namespace: f.key.Namespace, Labels: labelsFor(c)},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: "registry.example/im:test"}}}}
+		if held {
+			pod.Finalizers = []string{"test.cubrid.io/hold"}
+		}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() {
+			got := &corev1.Pod{}
+			if k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), got) == nil {
+				got.Finalizers = nil
+				_ = k8sClient.Update(ctx, got)
+				_ = k8sClient.Delete(ctx, got, client.GracePeriodSeconds(0))
+			}
+		})
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: "registry.example/im:test",
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+		return pod
+	}
+	terminated := func(pod *corev1.Pod) {
+		GinkgoHelper()
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+		pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+	}
+	gone := func(pod *corev1.Pod) {
+		GinkgoHelper()
+		got := &corev1.Pod{}
+		if k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), got) == nil {
+			got.Finalizers = nil
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		}
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}))
+		}).Should(BeTrue())
+	}
+
+	It("does not quarantine beside a former master whose Pod termination the kubelet confirmed (#870)", func() {
+		f := newFixture("wq-confirmed")
+		r := reconcilerFor(f, k8sClient)
+		old := memberPod(f, f.key.Name+"-0", true)
+		runVerified(r, f)
+
+		By("the master's Pod deleted gracefully: the Operator sees it Terminating with its container terminated")
+		Expect(k8sClient.Delete(ctx, old)).To(Succeed())
+		terminated(old)
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.MemberTerminations).To(HaveLen(1))
+		Expect(c.Status.MemberTerminations[0].PodUID).To(Equal(string(old.UID)))
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+
+		By("the old Pod gone and its replacement starting without an answer")
+		gone(old)
+		memberPod(f, f.key.Name+"-0", false)
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+
+		By("the replacement answering as a slave twice: verified, and the record ends")
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		c = stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.MemberTerminations).To(BeEmpty())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+	})
+
+	It("keeps the termination a Pod watch saw after the Pod is gone (#870)", func() {
+		f := newFixture("wq-watched")
+		r := reconcilerFor(f, k8sClient)
+		old := memberPod(f, f.key.Name+"-0", false)
+		runVerified(r, f)
+
+		By("the watch seeing the Pod Terminating with its container terminated, then the Pod gone")
+		seen := old.DeepCopy()
+		seen.DeletionTimestamp = new(metav1.Now())
+		seen.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{}}
+		Expect(r.notePodTermination(seen)).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, old, client.GracePeriodSeconds(0))).To(Succeed())
+		gone(old)
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+	})
+
+	It("quarantines beside a former master whose Pod was force-deleted (#870)", func() {
+		f := newFixture("wq-forced")
+		r := reconcilerFor(f, k8sClient)
+		old := memberPod(f, f.key.Name+"-0", false)
+		runVerified(r, f)
+		Expect(k8sClient.Delete(ctx, old, client.GracePeriodSeconds(0))).To(Succeed())
+		gone(old)
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+	})
 })

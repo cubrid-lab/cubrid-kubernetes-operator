@@ -316,6 +316,26 @@ The records are in `docs/poc/RESULTS.md`.
      A wrong or premature taint on a live partitioned node can force-delete
      its Pod and enable a second database process. Record out-of-band
      VM-fence proof, actor and audit evidence in the test campaign.
+  3. **Kubelet-confirmed termination of the old Pod** (amended by #870,
+     pending maintainer review; decided on #113 on 2026-11-14 UTC after the
+     Kind measurement of run 43524691052). A member whose last Pod's
+     termination the kubelet confirmed does not count as unverified while
+     its next Pod starts. Confirmed means that the Operator saw that Pod
+     UID being deleted (`deletionTimestamp` set) with its database
+     container reported `terminated`, by the kubelet, before the object
+     was gone; a graceful deletion reaches that state before the kubelet
+     removes the object. The Operator keeps the Pod UID of each member it
+     last saw and the confirmed termination in status, so a restart does
+     not lose them, and records a termination only for the member's last
+     Pod it saw. A Pod deleted with `--force`, whose object is gone before
+     the kubelet reports anything, a termination the Operator did not see,
+     and a VM lost or cut off stay unverified exactly as above. While the
+     next Pod has not answered, the member is not an active master for
+     rule 2; its first non-master answer starts the ordinary verification,
+     and from then on any answer that is not one, or none, ends the
+     exception. A master role or an answer that contradicts itself ends it
+     at once, and an active-master claim counts under rule 1. For the
+     automatic release, such a member counts like a verified one.
 
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,

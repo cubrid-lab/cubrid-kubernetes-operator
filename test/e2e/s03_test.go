@@ -388,6 +388,19 @@ func (r *haRun) replicationState(spec context.Context, variant string, result *e
 	}
 }
 
+// s03FailoverLimit is the limit on the recovery of a variant. A master Pod
+// deleted with --force is not confirmed terminated, so the write quarantine
+// keeps the read-write path closed until the deleted member's new Pod is
+// verified: the abrupt variants are judged by quarantined_failover_limit. The
+// graceful deletion, whose termination the kubelet confirms, keeps
+// failover_limit (ADR-0005, section 8, as amended by #870).
+func s03FailoverLimit(variant string) faults.Limit {
+	if variant == s03Graceful {
+		return failoverLimit
+	}
+	return quarantinedFailoverLimit
+}
+
 // s03Step registers one variant of S03 (primary Pod termination) of the
 // scenario contract. The run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
@@ -656,7 +669,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 		},
 		Evidence: files,
-	}, within(failoverLimit, recovery), stableFor(stable),
+	}, within(s03FailoverLimit(variant), recovery), stableFor(stable),
 		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
 	var agreement faults.Agreement
 	result, agreement = s03Conditions(variant, result, rounds, events, outcome.Timeline, newMaster)

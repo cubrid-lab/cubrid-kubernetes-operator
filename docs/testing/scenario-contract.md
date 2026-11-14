@@ -2060,8 +2060,16 @@ it needs more.
   `PrimaryResolved=True` again only after all three members are observed with
   exactly one master; never make the returned member the master again.
 - **Expected:** writes through the read-write endpoint succeed again within
-  `failover_limit`, on whichever member CUBRID made the master, and the master
-  does not change a second time. The run records which member it is. How a
+  `failover_limit` in the `graceful` variant, and within
+  `quarantined_failover_limit` in the `abrupt` and `abrupt-first-member`
+  variants, on whichever member CUBRID made the master, and the master
+  does not change a second time. A Pod deleted with `--force` is gone before
+  the kubelet reports its container terminated, so the Operator cannot see
+  the former master's process end: the write quarantine (ADR-0005, section
+  8) closes the read-write path until that member's new Pod is verified.
+  The longer limit is that quarantine's availability cost. A graceful
+  deletion is seen confirmed by the kubelet, so it keeps `failover_limit`
+  (ADR-0005, section 8, as amended by #870). The run records which member it is. How a
   former master comes back is judged by S09 `clean`, which this scenario runs
   as its second half. The suite measures that return against `rejoin_limit`
   inside S03; S09 itself has no test and no result in `summary.json`.
@@ -2098,7 +2106,8 @@ it needs more.
   check above and is not repeated on the Conditions. Each sweep is a line of
   `S03/<variant>/roles.jsonl` with its start and end, the role heartbeat gives
   each member and the state of each member's own node.
-- **Limits:** `failover_limit`, `rejoin_limit`, `stable_period`.
+- **Limits:** `failover_limit` (`graceful`), `quarantined_failover_limit`
+  (`abrupt`, `abrupt-first-member`), `rejoin_limit`, `stable_period`.
 - **Replication record:** after each abrupt variant, passed or failed,
   `S03/<variant>/replication-state.txt` keeps the Events of the members'
   Pods, old and new (the deleted Pod's `Killing`, the replacement's
@@ -2291,7 +2300,14 @@ it needs more.
   status after the return, are made as before and not replaced by the
   Conditions.
 - **Data check:** all data rules on all three members.
-- **Limits:** `failover_limit`, `operator_resync_limit`, `stable_period`.
+- **Limits:** `operator_resync_limit` in both variants;
+  `quarantined_failover_limit` and `stable_period` in
+  `absent-during-failover`, which `failover_limit` judged before. In
+  `absent-during-failover` the master Pod is deleted while the Operator is
+  absent, so it never sees the Pod's termination confirmed; when it returns,
+  the write quarantine (ADR-0005, section 8) closes the read-write path
+  until the deleted member's new Pod is verified, and the client's recovery
+  is judged by `quarantined_failover_limit`.
 - **Source note:** no outside test was read; the contract comes from
   ADR-0005.
 
@@ -2994,7 +3010,8 @@ The values below are the defaults of the Kind suite. Each can be set for
 another environment without changing the code, through an environment
 variable that holds a duration such as `45s` or `2m`:
 `E2E_INSTALL_LIMIT`, `E2E_READY_LIMIT`, `E2E_FORMATION_LIMIT`,
-`E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
+`E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`,
+`E2E_QUARANTINED_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
 `E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT`,
 `E2E_OPERATOR_RESYNC_LIMIT` and `E2E_DELETE_LIMIT`. The value `0` or `unset` runs the scenario as a
 baseline, which is reported as `blocked`. A value that is not a duration,
@@ -3029,6 +3046,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
 | `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured |
+| `quarantined_failover_limit` | The same, for a master Pod whose termination the Operator cannot see confirmed: S03 `abrupt` and `abrupt-first-member` (deleted with `--force`) and S06 `absent-during-failover` (deleted while the Operator is absent). It is the write quarantine's availability cost (ADR-0005, section 8) | Kind on a GitHub-hosted runner: 6 minutes. VM lab: unset | Kind: measured, one run |
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds | choice |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset | Kind: measured |
 | `vm_return_limit` | VM powered on until its member has rejoined | unset | unset |
@@ -3060,6 +3078,7 @@ no limit is unset. S00 records both limits and the resulting
 | `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs, measured before #367 changed the method | Measured then from the return of the workload client, after its last commit, until every member returned the same rows and the same catalog, including the time the checks take (about one second). It is now measured from just before a marker row's commit until every slave returns the marker and the master's ledger row count, which is also an upper bound; no baseline of the new method is recorded yet | 30 seconds |
 
 | `failover_limit` | The same; scenario S03, the variants `graceful` and `abrupt` (the variant `abrupt-first-member` was added later and has no baseline here; POC-19 recorded its clients acknowledged again after 10.9 to 11.4 s) | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
+| `quarantined_failover_limit` | The same; S03 `abrupt` and `abrupt-first-member`, S06 `absent-during-failover`, with the write quarantine of #113 (#870 at `a6754ac`) | 41.3 s (`abrupt`), 38.6 s (`abrupt-first-member`) and 87.1 s (`absent-during-failover`) in one run on 2026-11-13, [E2E run 43524691052](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43524691052). In `abrupt-first-member` the new master acknowledged writes about 2 s after the fault, the quarantine stopped the read-write Brokers about 9 s after it, released them 22 s later, and the first write after that was acknowledged 7 s later (#113) | As for `failover_limit`: from the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed | 6 minutes, about four times the slowest run. One run is a small sample; the value is to be checked against more runs |
 | `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |
 
 | `broker_recovery_limit` | The same; scenario S05, three variants | Slowest of four clients per run, in two runs on 2026-10-05: 1.4 s and 2.4 s (Broker process killed), 0.1 s and 0.2 s (one Broker Pod deleted), 7.7 s and 15.8 s (all read-write Broker Pods deleted) | From the moment the fault was issued to the client's first acknowledged operation after which none failed, taken from each client's history | 1 minute, about four times the slowest run |

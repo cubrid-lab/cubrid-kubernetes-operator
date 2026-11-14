@@ -793,6 +793,28 @@ type CubridClusterStatus struct {
 	// +optional
 	MemberVerifications []MemberVerification `json:"memberVerifications,omitempty"`
 
+	// memberTerminations records, for each promotable member whose Pod's
+	// termination the kubelet confirmed, that Pod's UID: the Operator saw it
+	// being deleted with its database container terminated. While the
+	// member's next Pod starts, the member is not unverified for the
+	// read-write quarantine (ADR-0005, section 8, as amended by #870). A Pod
+	// deleted with --force, or whose terminated state was not seen, is not
+	// recorded.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	MemberTerminations []MemberTermination `json:"memberTerminations,omitempty"`
+
+	// memberPods records the UID of each promotable member's Pod when the
+	// Operator last read it. A termination seen for a Pod is recorded in
+	// memberTerminations only for the member's last Pod seen, so that a Pod
+	// of the member deleted in between without being seen is never covered
+	// by the termination of an earlier one.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	MemberPods []MemberPod `json:"memberPods,omitempty"`
+
 	// writeQuarantine is set while the Operator keeps the read-write Brokers
 	// stopped because a second active master or an unverified member was
 	// observed (ADR-0005, section 8). It is unset when no quarantine is in
@@ -828,6 +850,30 @@ type MemberVerification struct {
 	// alone is written at most every 30 seconds, as for lastObservedTime.
 	// +optional
 	LastNonMasterAt *metav1.Time `json:"lastNonMasterAt,omitempty"`
+}
+
+// MemberPod is the Pod of a member the Operator last read.
+type MemberPod struct {
+	// name is the member.
+	Name string `json:"name"`
+	// podUID is that Pod's UID.
+	PodUID string `json:"podUID"`
+}
+
+// MemberTermination is a Pod of a member whose termination the kubelet
+// confirmed.
+type MemberTermination struct {
+	// name is the member.
+	Name string `json:"name"`
+	// podUID is the UID of the Pod that was seen being deleted with its
+	// database container terminated.
+	PodUID string `json:"podUID"`
+	// confirmedAt is when the Operator recorded it.
+	ConfirmedAt metav1.Time `json:"confirmedAt"`
+	// answered is set once a later Pod of the member gave a non-master
+	// answer. From then on any other answer, or none, ends the record.
+	// +optional
+	Answered bool `json:"answered,omitempty"`
 }
 
 // WriteQuarantineReason is why the read-write path is quarantined.

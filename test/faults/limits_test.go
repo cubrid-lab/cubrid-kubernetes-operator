@@ -88,6 +88,7 @@ func TestLimitDefaults(t *testing.T) {
 		{FormationLimit, "formation_limit", "E2E_FORMATION_LIMIT", 5 * time.Minute},
 		{ReplicationLimit, "replication_limit", "E2E_REPLICATION_LIMIT", 30 * time.Second},
 		{FailoverLimit, "failover_limit", "E2E_FAILOVER_LIMIT", 30 * time.Second},
+		{QuarantinedFailoverLimit, "quarantined_failover_limit", "E2E_QUARANTINED_FAILOVER_LIMIT", 6 * time.Minute},
 		{RejoinLimit, "rejoin_limit", "E2E_REJOIN_LIMIT", 5 * time.Minute},
 		{StablePeriod, "stable_period", "E2E_STABLE_PERIOD", 30 * time.Second},
 		{BrokerRecoveryLimit, "broker_recovery_limit", "E2E_BROKER_RECOVERY_LIMIT", time.Minute},
