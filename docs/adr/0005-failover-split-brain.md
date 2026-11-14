@@ -322,20 +322,29 @@ The records are in `docs/poc/RESULTS.md`.
      termination the kubelet confirmed does not count as unverified while
      its next Pod starts. Confirmed means that the Operator saw that Pod
      UID being deleted (`deletionTimestamp` set) with its database
-     container reported `terminated`, by the kubelet, before the object
-     was gone; a graceful deletion reaches that state before the kubelet
-     removes the object. The Operator keeps the Pod UID of each member it
-     last saw and the confirmed termination in status, so a restart does
-     not lose them, and records a termination only for the member's last
-     Pod it saw. A Pod deleted with `--force`, whose object is gone before
-     the kubelet reports anything, a termination the Operator did not see,
-     and a VM lost or cut off stay unverified exactly as above. While the
-     next Pod has not answered, the member is not an active master for
-     rule 2; its first non-master answer starts the ordinary verification,
-     and from then on any answer that is not one, or none, ends the
-     exception. A master role or an answer that contradicts itself ends it
-     at once, and an active-master claim counts under rule 1. For the
-     automatic release, such a member counts like a verified one.
+     container reported `terminated`, by the kubelet, with an end time no
+     earlier than the deletion was requested (5 s allowed for clock skew)
+     and not `ContainerStatusUnknown`, before the object was gone; a
+     graceful deletion reaches that state before the kubelet removes the
+     object. The Operator keeps the Pod UID of each member it last saw and
+     the confirmed termination in status, so a restart does not lose them,
+     and records a termination only for the member's last Pod it saw. The
+     exception covers that Pod and the first next Pod the Operator sees:
+     any other Pod of the member, the next Pod gone, or a Pod of the member
+     the Operator saw deleted without such a confirmation ends it. It also
+     ends 90 seconds after the confirmation, more than three times the
+     slowest rejoin measured on Kind (26.8 s), so a next Pod that stays
+     Pending, crash-loops or cannot be reached is unverified as any member.
+     A Pod deleted with `--force`, whose object is gone before the kubelet
+     reports anything, a termination the Operator did not see, and a VM
+     lost or cut off stay unverified exactly as above. While the next Pod
+     has not answered, the member is not an active master for rule 2; its
+     first non-master answer starts the ordinary verification, and from
+     then on any answer that is not one, or none, ends the exception. A
+     master role or an answer that contradicts itself ends it at once, and
+     an active-master claim counts under rule 1. For the automatic release,
+     such a member counts like a verified one only once its next Pod has
+     answered as a non-master.
 
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,

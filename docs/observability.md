@@ -356,17 +356,22 @@ Pod:
 - A member whose last Pod's termination the kubelet confirmed is not
   unverified while its next Pod starts (ADR-0005, section 8, as amended by
   #870, pending maintainer review). Confirmed means that the Operator saw
-  that Pod being deleted with its database container reported `terminated`,
-  through a Pod watch or its own reads, before the Pod was gone. It records
-  the member's last Pod UID in `status.memberPods` and the confirmed Pod in
-  `status.memberTerminations`, and records a termination only for the last
-  Pod it saw of that member. A Pod deleted with `--force`, a termination
-  the Operator did not see (for example while it was stopped) and a lost
-  VM leave the member unverified. The next Pod's first non-master answer
+  that Pod being deleted with its database container reported `terminated`
+  no earlier than the deletion was requested (5 s allowed for clock skew;
+  `ContainerStatusUnknown` does not count), through a Pod watch or its own
+  reads, before the Pod was gone. It records the member's last Pod UID in
+  `status.memberPods` and the confirmed Pod in `status.memberTerminations`,
+  and records a termination only for the last Pod it saw of that member.
+  The record covers that Pod and the first next Pod the Operator sees
+  (`nextPodUID`); another Pod of the member, the next Pod gone, a Pod of the
+  member deleted without a confirmation, or 90 seconds after the
+  confirmation end it. A Pod deleted with `--force`, a termination the
+  Operator did not see (for example while it was stopped) and a lost VM
+  leave the member unverified. The next Pod's first non-master answer
   starts its ordinary verification; from then on any other answer, or none,
   ends the exception, and so does a master role or an answer that
-  contradicts itself. Such a member counts as verified for the automatic
-  release.
+  contradicts itself. Once the next Pod has answered as a non-master, such
+  a member counts as verified for the automatic release.
 - `status.lastResolvedPrimary` is the primary of the last pass that resolved
   one, with `lastResolvedPrimaryTime`; it is never cleared.
 

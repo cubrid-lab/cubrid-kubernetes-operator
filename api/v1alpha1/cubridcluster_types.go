@@ -870,6 +870,11 @@ type MemberTermination struct {
 	PodUID string `json:"podUID"`
 	// confirmedAt is when the Operator recorded it.
 	ConfirmedAt metav1.Time `json:"confirmedAt"`
+	// nextPodUID is the UID of the member's first Pod after podUID the
+	// Operator saw. The record covers only these two Pods: any other Pod of
+	// the member, or the next Pod gone, ends it.
+	// +optional
+	NextPodUID string `json:"nextPodUID,omitempty"`
 	// answered is set once a later Pod of the member gave a non-master
 	// answer. From then on any other answer, or none, ends the record.
 	// +optional

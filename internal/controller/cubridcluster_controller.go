@@ -192,6 +192,9 @@ type CubridClusterReconciler struct {
 	// reported terminated while it was being deleted, as the Pod watch saw
 	// it (notePodTermination).
 	podTerminations sync.Map
+	// podUnconfirmed holds, per Pod UID, a database Pod the Pod watch saw
+	// deleted without a confirmed termination (notePodDeleted).
+	podUnconfirmed sync.Map
 	// dbaPasswordCheckedAt holds, per cluster UID, when its member was last
 	// asked whether the DBA password Secret's value is the database's
 	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
@@ -1585,8 +1588,9 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				r.enqueueTerminated(e.ObjectNew, q)
 			},
 			DeleteFunc: func(_ context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-				if !e.DeleteStateUnknown {
-					r.enqueueTerminated(e.Object, q)
+				if pod, ok := e.Object.(*corev1.Pod); ok && r.notePodDeleted(pod, e.DeleteStateUnknown) {
+					q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+						Namespace: pod.Namespace, Name: pod.Labels["app.kubernetes.io/instance"]}})
 				}
 			},
 		}).

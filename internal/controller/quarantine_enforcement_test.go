@@ -513,7 +513,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 		GinkgoHelper()
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
 		pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
-			Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed", FinishedAt: metav1.Now()}}
 		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 	}
 	gone := func(pod *corev1.Pod) {
@@ -574,7 +574,8 @@ var _ = Describe("Write quarantine (#113)", func() {
 		By("the watch seeing the Pod Terminating with its container terminated, then the Pod gone")
 		seen := old.DeepCopy()
 		seen.DeletionTimestamp = new(metav1.Now())
-		seen.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{}}
+		seen.Status.ContainerStatuses[0].State = corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{FinishedAt: metav1.Now()}}
 		Expect(r.notePodTermination(seen)).To(BeTrue())
 		Expect(k8sClient.Delete(ctx, old, client.GracePeriodSeconds(0))).To(Succeed())
 		gone(old)

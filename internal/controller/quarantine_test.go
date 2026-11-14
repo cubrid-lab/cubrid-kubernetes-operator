@@ -706,8 +706,9 @@ func TestQuarantineConfirmedTerminationAndActiveMasterClaim(t *testing.T) {
 	}
 }
 
-// A quarantine started before the termination was confirmed is released
-// once it is, while the new Pod has not answered yet.
+// A quarantine started before the termination was confirmed is not released
+// on the record alone: a next Pod that never answered could be one cut off
+// from the Operator. It is released once that Pod has answered as a slave.
 func TestQuarantineReleasedOnAConfirmedTermination(t *testing.T) {
 	s := newQuarantineScenario(t, q0)
 	s.verifiedAll(q2)
@@ -716,12 +717,65 @@ func TestQuarantineReleasedOnAConfirmedTermination(t *testing.T) {
 		t.Fatalf("an unconfirmed former primary without an answer started no quarantine")
 	}
 	s.confirmTermination(uid0)
-	t1 := testNow.Add(3 * time.Second)
-	s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
-	t2 := t1.Add(3 * time.Second)
-	s.pass(t2, map[string]RoleObservation{q0: noAnswerAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)})
+	for i := 1; i <= 4; i++ {
+		now := testNow.Add(time.Duration(i) * 10 * time.Second)
+		if d = s.pass(now, map[string]RoleObservation{q0: noAnswerAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}); d.Released != nil {
+			t.Fatalf("pass %d released while the next Pod had never answered", i)
+		}
+	}
+	t1 := testNow.Add(45 * time.Second)
+	s.identities[q0] = memberIdentity{PodUID: uid0New}
+	s.pass(t1, map[string]RoleObservation{q0: slaveAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
+	t2 := t1.Add(quarantineVerifyGap + time.Second)
+	s.pass(t2, map[string]RoleObservation{q0: slaveAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)})
 	t3 := t2.Add(quarantineReleaseInterval)
-	if d = s.pass(t3, map[string]RoleObservation{q0: noAnswerAt(t3), q1: activeMasterAt(t3), q2: slaveAt(t3)}); d.Released == nil {
+	if d = s.pass(t3, map[string]RoleObservation{q0: slaveAt(t3), q1: activeMasterAt(t3), q2: slaveAt(t3)}); d.Released == nil {
 		t.Fatalf("decision = %+v, want a release", d)
+	}
+}
+
+// The record covers the confirmed Pod and the first Pod after it only. A
+// third Pod of the member, as after the next Pod was cut off and deleted
+// with --force, or the next Pod gone, ends it: the member is unverified.
+func TestQuarantineConfirmedTerminationCoversOneNextPod(t *testing.T) {
+	for name, then := range map[string]string{"a third Pod": "uid-0-third", "the next Pod gone": ""} {
+		t.Run(name, func(t *testing.T) {
+			s := newQuarantineScenario(t, q0)
+			s.verifiedAll(q2)
+			s.confirmTermination(uid0New)
+			d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+			if d.Quarantine != nil || len(d.Terminations) != 1 || d.Terminations[0].NextPodUID != uid0New {
+				t.Fatalf("decision = %+v, want no quarantine and the record bound to %s", d, uid0New)
+			}
+			s.identities[q0] = memberIdentity{PodUID: then}
+			t1 := testNow.Add(5 * time.Second)
+			d = s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: activeMasterAt(t1), q2: slaveAt(t1)})
+			if d.Quarantine == nil || slices.Contains(d.Confirmed, q0) {
+				t.Fatalf("decision = %+v, want %s unverified and quarantined", d, q0)
+			}
+		})
+	}
+}
+
+// A next Pod that has not answered within quarantineStartBound of the
+// confirmation, as one that stays Pending or crash-loops, no longer keeps the
+// member from being unverified.
+func TestQuarantineConfirmedTerminationTimeBound(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q2)
+	s.confirmTermination(uid0New)
+	obs := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: noAnswerAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}
+	}
+	for now := testNow; !now.After(testNow.Add(quarantineStartBound)); now = now.Add(10 * time.Second) {
+		s.verifications[0].LastNonMasterAt = &metav1.Time{Time: now.Add(-time.Second)}
+		if d := s.pass(now, obs(now)); d.Quarantine != nil {
+			t.Fatalf("quarantined %s after the confirmation, within %s", now.Sub(testNow), quarantineStartBound)
+		}
+	}
+	late := testNow.Add(quarantineStartBound + time.Second)
+	s.verifications[0].LastNonMasterAt = &metav1.Time{Time: late.Add(-time.Second)}
+	if d := s.pass(late, obs(late)); d.Quarantine == nil || len(d.Terminations) != 0 {
+		t.Fatalf("decision = %+v, want the record ended and a quarantine", d)
 	}
 }

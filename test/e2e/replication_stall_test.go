@@ -257,16 +257,15 @@ func replicationStallStep(r *haRun) {
 		Expect(restartsAfter).To(Equal(restartsBefore),
 			"the container of %s was restarted, so the member is not in the state this step is about", victim)
 
-		// The stopped member comes before the new master in the member list
-		// (it is the first slave, the new master the other one), so while
-		// its heartbeat was stopped it was an unverified member that
-		// outranks the only active master, and the Operator quarantined the
-		// read-write path (ADR-0005, section 8, rule 2). That is correct: it
-		// could not tell that member was not a master. The quarantine is
-		// released once the member answers as a slave again, and the
-		// read-write Brokers are started again. The writes below must all be
-		// acknowledged, so they wait for that; the stall checks after them
-		// are unchanged.
+		// When the stopped member outranks the new master, as when it comes
+		// before it in the member list, it was an unverified member beside
+		// the only active master while its heartbeat was stopped, and the
+		// Operator quarantined the read-write path (ADR-0005, section 8,
+		// rule 2). That is correct: it could not tell that member was not a
+		// master. The quarantine is released once the member answers as a
+		// slave again, and the read-write Brokers are started again. The
+		// writes below must all be acknowledged, so they wait for that; the
+		// stall checks after them are unchanged.
 		By("waiting for the write quarantine to be released and a read-write Broker to be available")
 		Eventually(func(g Gomega) {
 			quarantine, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",

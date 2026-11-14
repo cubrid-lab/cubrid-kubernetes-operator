@@ -1271,6 +1271,12 @@ spec:
                     name:
                       description: name is the member.
                       type: string
+                    nextPodUID:
+                      description: |-
+                        nextPodUID is the UID of the member's first Pod after podUID the
+                        Operator saw. The record covers only these two Pods: any other Pod of
+                        the member, or the next Pod gone, ends it.
+                      type: string
                     podUID:
                       description: |-
                         podUID is the UID of the Pod that was seen being deleted with its
