@@ -89,6 +89,8 @@ var spoiledDatabases = map[string]spoilRecord{
 	"database removed":   setDatabase("", true),
 	"empty database":     setDatabase("", false),
 	"malformed database": setDatabase("../"+dbName, false),
+	// One character over the 17 that requests and CUBRID allow.
+	"overlong database": setDatabase(strings.Repeat("a", 18), false),
 }
 
 var spoiledRecords = func() map[string]spoilRecord {

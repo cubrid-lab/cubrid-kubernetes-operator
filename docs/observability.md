@@ -1105,8 +1105,13 @@ bootstrap (`500`, `OperationRecordUnreadable`); the database keeps serving.
    `operation_record_unreadable` log line, or is named in the `500` message
    (`read operation op-…: permission denied`, `decode operation op-…: …`).
    A record that decodes but has no kind, no idempotency key, or no
-   database or one that is not a plain database name is unreadable too: its
-   message names the ID, kind, key length and database it holds (#865).
+   database or one that is not a valid database name (a letter, then
+   letters, digits or underscores, 17 characters at most) is unreadable too,
+   whatever its state: its message names the ID, kind, key length and
+   database it holds (#865). A record left by a build before the 17-character
+   limit with a longer name is one of these. The steps below apply to it as
+   well; a terminal one (`Completed` or `Failed`) holds no database, so
+   removing it (step 3) is safe once its operation is confirmed not to run.
    The file is `$IM_OPERATIONS_DIR/op-<id>.json` in the database container
    (by default `/var/lib/cubrid/operations`, on the PVC).
 2. Confirm that its operation does not run: no `backupdb` and no
