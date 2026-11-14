@@ -179,7 +179,7 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 		Method: databasev1alpha1.WriteQuarantineReleasedManually, Revision: sq.Revision,
 		ObservedMaster: master, ObservedMasterPodUID: in.Identities[master].PodUID,
 		ObservedMasterRestartCount: in.Identities[master].RestartCount, Members: sq.Members,
-		ExemptMembers: exempt, ReleaseToken: token, Warning: manualReleaseWarning}
+		ExemptMembers: exempt, ReleaseToken: token, Warning: manualReleaseWarning, ReturningMember: sq.ReturningMember}
 }
 
 // manualReleaseWarning is recorded with a manual release.

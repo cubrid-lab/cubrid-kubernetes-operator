@@ -815,10 +815,35 @@ type CubridClusterStatus struct {
 	// +optional
 	MemberPods []MemberPod `json:"memberPods,omitempty"`
 
+	// memberFences records, for each promotable member that does not answer
+	// and whose node carries the taint node.kubernetes.io/out-of-service with
+	// the effect NoExecute, since when the Operator has seen that taint
+	// without a break. An administrator adds the taint only after verifying
+	// out of band that the node's VM is powered off or otherwise fenced; the
+	// Operator never adds or removes it. While the taint stays, the member is
+	// not unverified for the read-write quarantine (ADR-0005, section 8,
+	// "Unverified", item 2). Only a member that gives no answer at all is
+	// fenced, and only by a taint with a timeAdded. A pass that does not see
+	// the taint, gets any answer from the member, or sees its Pod on another
+	// node removes the entry.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	MemberFences []MemberFence `json:"memberFences,omitempty"`
+
+	// returnedToService is the value of the annotation
+	// database.cubrid.io/return-to-service whose return was released. While
+	// the annotation keeps this value it is ignored, so a left-over
+	// annotation neither closes the read-write path again nor authorizes a
+	// later return; the Operator clears this field once it sees the
+	// annotation removed or changed.
+	// +optional
+	ReturnedToService string `json:"returnedToService,omitempty"`
+
 	// writeQuarantine is set while the Operator keeps the read-write Brokers
 	// stopped because a second active master or an unverified member was
-	// observed (ADR-0005, section 8). It is unset when no quarantine is in
-	// force. Only a release ends it.
+	// observed, or a member is returning to service (ADR-0005, section 8).
+	// It is unset when no quarantine is in force. Only a release ends it.
 	// +optional
 	WriteQuarantine *WriteQuarantine `json:"writeQuarantine,omitempty"`
 
@@ -858,6 +883,46 @@ type MemberPod struct {
 	Name string `json:"name"`
 	// podUID is that Pod's UID.
 	PodUID string `json:"podUID"`
+	// nodeName is the node the member's Pod was last seen scheduled on. It is
+	// kept while the member has no Pod or a Pod that is not scheduled yet, as
+	// after Kubernetes force-deleted it from a node tainted out of service,
+	// so that the member stays mapped to that node.
+	// +optional
+	NodeName string `json:"nodeName,omitempty"`
+	// nodePodUID is the UID of the Pod nodeName was read from, which may be
+	// an earlier Pod than podUID.
+	// +optional
+	NodePodUID string `json:"nodePodUID,omitempty"`
+	// nodePodCreated is that Pod's creationTimestamp. A Pod of the member
+	// created after it that the Operator saw deleted without a confirmed
+	// termination may have run on another node: nodeName is then not used
+	// for the out-of-service taint.
+	// +optional
+	NodePodCreated *metav1.Time `json:"nodePodCreated,omitempty"`
+}
+
+// MemberFence is an administrator's assertion that a member's node is
+// fenced: the taint node.kubernetes.io/out-of-service with the effect
+// NoExecute on the node the member's Pod was last seen on. It is not proof
+// that the database process cannot run (ADR-0005, section 8).
+type MemberFence struct {
+	// name is the member.
+	Name string `json:"name"`
+	// nodeName is the tainted node.
+	NodeName string `json:"nodeName"`
+	// nodeUID is the UID of the Node object the taint was seen on. A Node
+	// of the same name with another UID, deleted and created again, starts
+	// the entry over.
+	// +optional
+	NodeUID string `json:"nodeUID,omitempty"`
+	// since is when the Operator first saw the taint in this uninterrupted
+	// run of observations, rounded up to the second.
+	Since metav1.Time `json:"since"`
+	// taintTimeAdded is the taint's timeAdded when the Operator first saw
+	// it, if the taint carried one. A different value means the taint was
+	// removed and added again, and starts the entry over.
+	// +optional
+	TaintTimeAdded *metav1.Time `json:"taintTimeAdded,omitempty"`
 }
 
 // MemberTermination is a Pod of a member whose termination the kubelet
@@ -895,7 +960,7 @@ type MemberTermination struct {
 }
 
 // WriteQuarantineReason is why the read-write path is quarantined.
-// +kubebuilder:validation:Enum=WriteQuarantinedMultipleMasters;WriteQuarantinedMemberUnverified;WriteQuarantinedMasterChanged
+// +kubebuilder:validation:Enum=WriteQuarantinedMultipleMasters;WriteQuarantinedMemberUnverified;WriteQuarantinedMasterChanged;WriteQuarantinedMemberReturning
 type WriteQuarantineReason string
 
 const (
@@ -911,6 +976,15 @@ const (
 	// quarantine another active master was observed, or the recorded master
 	// stopped claiming to be one. Only a manual release ends it.
 	WriteQuarantinedMasterChanged WriteQuarantineReason = "WriteQuarantinedMasterChanged"
+	// WriteQuarantinedMemberReturning: an administrator asked, with the
+	// annotation database.cubrid.io/return-to-service, to return a member
+	// to service, as before removing the out-of-service taint of its node.
+	// It is released once the returning member answers as no active master
+	// in two observations at least ten seconds apart beside the recorded
+	// master as the only active master. If the returning member, or another
+	// member, is seen as an active master, it becomes
+	// WriteQuarantinedMasterChanged.
+	WriteQuarantinedMemberReturning WriteQuarantineReason = "WriteQuarantinedMemberReturning"
 )
 
 // WriteQuarantineMember is one member a quarantine is about, with the Pod it
@@ -930,6 +1004,10 @@ type WriteQuarantineMember struct {
 	// such as "active master", "slave" or "no answer".
 	// +optional
 	ObservedRole string `json:"observedRole,omitempty"`
+	// nodeName is the node the member's Pod was last seen scheduled on when
+	// it was recorded: the node to fence before an out-of-service taint.
+	// +optional
+	NodeName string `json:"nodeName,omitempty"`
 }
 
 // WriteQuarantine is a quarantine of the read-write path in force.
@@ -1006,10 +1084,15 @@ type WriteQuarantine struct {
 	// single active master; unset while no such annotation is set.
 	// +optional
 	ReleaseRefusal string `json:"releaseRefusal,omitempty"`
+	// returningMember is the member a return to service is about, from the
+	// annotation database.cubrid.io/return-to-service. It is kept when the
+	// quarantine becomes WriteQuarantinedMasterChanged.
+	// +optional
+	ReturningMember string `json:"returningMember,omitempty"`
 }
 
 // WriteQuarantineReleaseMethod says how a quarantine was released.
-// +kubebuilder:validation:Enum=Automatic;Manual
+// +kubebuilder:validation:Enum=Automatic;Manual;OutOfServiceTaint;ReturnedToService
 type WriteQuarantineReleaseMethod string
 
 const (
@@ -1022,6 +1105,19 @@ const (
 	// releaseToken while exactly one member was an active master. It is a
 	// risk acceptance, not a verified fence.
 	WriteQuarantineReleasedManually WriteQuarantineReleaseMethod = "Manual"
+	// WriteQuarantineReleasedOnOutOfServiceTaint: as Automatic, but at least
+	// one member counted as fenced because its node carried the taint
+	// node.kubernetes.io/out-of-service with the effect NoExecute in both
+	// observations, not because it answered. It is released on an
+	// administrator's fence assertion, which is not proof that the member's
+	// database cannot run; it does not make PrimaryResolved, HAReady or
+	// RoutingReady True.
+	WriteQuarantineReleasedOnOutOfServiceTaint WriteQuarantineReleaseMethod = "OutOfServiceTaint"
+	// WriteQuarantineReleasedReturnedToService: a
+	// WriteQuarantinedMemberReturning quarantine was released once the
+	// returning member answered as no active master in two observations at
+	// least ten seconds apart.
+	WriteQuarantineReleasedReturnedToService WriteQuarantineReleaseMethod = "ReturnedToService"
 )
 
 // WriteQuarantineRelease records a quarantine that was released.
@@ -1078,6 +1174,15 @@ type WriteQuarantineRelease struct {
 	// member that was not fenced may be lost.
 	// +optional
 	Warning string `json:"warning,omitempty"`
+	// fencedMembers are the members that counted as fenced by an
+	// out-of-service taint, with their node, at the release.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	FencedMembers []MemberFence `json:"fencedMembers,omitempty"`
+	// returningMember is the released quarantine's returningMember.
+	// +optional
+	ReturningMember string `json:"returningMember,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).

@@ -77,6 +77,13 @@ type quarantineScenario struct {
 	// unstable and identitiesUnknown are passed to the next pass only.
 	unstable          map[string]bool
 	identitiesUnknown bool
+	// nodes are the members' last nodes; fences the members whose node
+	// carries the out-of-service taint in the next passes.
+	nodes        map[string]string
+	fences       map[string]outOfServiceTaint
+	memberFences []databasev1alpha1.MemberFence
+	// returnRequest is the member the return-to-service annotation names.
+	returnRequest string
 }
 
 func newQuarantineScenario(t *testing.T, lastResolved string) *quarantineScenario {
@@ -95,6 +102,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		LastResolvedPrimary: s.lastResolved,
 		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
 		LastRelease: s.lastRelease.DeepCopy(), ExemptionOwned: !s.exemptionNotOwned,
+		Nodes: s.nodes, Fences: s.fences, MemberFences: s.memberFences, ReturnRequest: s.returnRequest,
 		Nonce: func() (string, error) {
 			s.nonces++
 			return fmt.Sprintf("nonce-%d", s.nonces), nil
@@ -104,7 +112,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		s.t.Fatalf("decideWriteQuarantine: %v", err)
 	}
 	s.verifications, s.quarantine, s.terminations = d.Verifications, d.Quarantine, d.Terminations
-	s.lastRelease = d.LastRelease
+	s.lastRelease, s.memberFences = d.LastRelease, d.MemberFences
 	if d.Released != nil {
 		s.lastRelease = d.Released
 	}
