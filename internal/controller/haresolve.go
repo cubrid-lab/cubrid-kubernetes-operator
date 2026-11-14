@@ -329,11 +329,20 @@ type PrimaryResolution struct {
 // authoritative reports whether an observation may stand for the member's role
 // at `now`: reachable, a known role, stamped within roleObservationTTL (either
 // side, so a skewed future stamp does not count), and not self-contradicting.
+// A role other than the exact master, slave or replica is not known, also when
+// the prober did not already turn it into unknown (#867).
 func authoritative(o RoleObservation, now time.Time) bool {
-	if o.Role == databasev1alpha1.RoleUnknown || o.Role == "" || o.Conflicting {
+	if !recognizedRole(o.Role) || o.Conflicting {
 		return false
 	}
 	return fresh(o, now)
+}
+
+// recognizedRole reports whether r is one of the HA roles the Instance Manager
+// contract defines (ADR-0003): exactly master, slave or replica. Another case
+// or surrounding whitespace is not one of them.
+func recognizedRole(r databasev1alpha1.CubridRole) bool {
+	return r == databasev1alpha1.RoleMaster || r == databasev1alpha1.RoleSlave || r == databasev1alpha1.RoleReplica
 }
 
 // fresh reports whether o is an answer received within roleObservationTTL.

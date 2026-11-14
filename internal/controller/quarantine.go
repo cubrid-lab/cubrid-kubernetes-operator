@@ -529,7 +529,7 @@ func observedRoleText(o RoleObservation, now time.Time) string {
 		return "no fresh answer"
 	case o.Unreadable:
 		return "unreadable answer"
-	case o.Role == "" || o.Role == databasev1alpha1.RoleUnknown:
+	case !recognizedRole(o.Role):
 		return "no role"
 	case o.Conflicting:
 		return "untrusted " + string(o.Role)
