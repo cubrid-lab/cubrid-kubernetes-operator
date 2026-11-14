@@ -360,9 +360,14 @@ The records are in `docs/poc/RESULTS.md`.
      the process ended (a Pod evicted from a node cut off from the API
      server is marked so while its database runs): while M's Pod is only
      marked, the quarantine is held, neither rebased nor escalated, for
-     the Pod's grace period plus 90 seconds from when the Operator first
-     saw the mark; after that, or when the Pod is gone without a confirmed
-     termination, it escalates. A second active master still escalates,
+     the Pod's grace period (at most 10 minutes of it) plus 90 seconds
+     from when the Operator first saw the mark; after that, or when the
+     Pod is gone without a confirmed termination, it escalates. So does M's
+     recorded Pod gone or replaced while the Operator saw neither a mark
+     nor a confirmed end of it, as for a Pod deleted with `--force` on a
+     node cut off; a later confirmed end of a replacement Pod does not
+     undo that. M claiming an active master again from a new Pod after a
+     confirmed end of the old one is M back and changes nothing. A second active master still escalates,
      and so does M ceasing to claim while its Pod is not seen being
      deleted, as when it was deleted with `--force`. No rebase is made in a
      pass that could not read the members' Pods. A

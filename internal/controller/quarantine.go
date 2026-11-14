@@ -770,6 +770,30 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	return true, nil
 }
 
+// quarantineHoldGraceCap is the most of a Pod's deletion grace period that
+// holds a quarantine back while its master's Pod is only marked for
+// deletion: a grace period of hours would otherwise keep a manual-only
+// decision from being reported for as long.
+const quarantineHoldGraceCap = 10 * time.Minute
+
+// withHeldDeparture is stored, the quarantine the status read holds, with the
+// mark of its master's Pod taken from held, the one this reconciler decided
+// and holds in memory, when the status read does not carry it, as after a
+// failed status write: so the hold runs from the first sight of the mark,
+// not from a later pass. stored is not changed.
+func withHeldDeparture(stored, held *databasev1alpha1.WriteQuarantine) *databasev1alpha1.WriteQuarantine {
+	if stored == nil || held == nil || held.GenerationID != stored.GenerationID ||
+		stored.ObservedMasterLeavingPodUID != "" || held.ObservedMasterLeavingPodUID == "" ||
+		held.ObservedMasterLeavingPodUID != stored.ObservedMasterPodUID {
+		return stored
+	}
+	out := stored.DeepCopy()
+	out.ObservedMasterLeavingPodUID = held.ObservedMasterLeavingPodUID
+	out.ObservedMasterLeavingConfirmed = held.ObservedMasterLeavingConfirmed
+	out.ObservedMasterHoldUntil = held.ObservedMasterHoldUntil.DeepCopy()
+	return out
+}
+
 // departure is what the Operator saw of the recorded master's Pod leaving.
 type departure int
 
@@ -812,15 +836,29 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 	}
 	if !in.IdentitiesUnknown {
 		if slices.Contains(masters, m) && q.ObservedMasterLeavingPodUID != "" && id.PodUID != q.ObservedMasterLeavingPodUID {
+			// The master claims again from another Pod. After a confirmed end
+			// of the old Pod that is the master back; otherwise the old
+			// process may still run beside it.
+			confirmed := q.ObservedMasterLeavingConfirmed
 			q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
+			if confirmed {
+				return departureNone
+			}
+			return departureLost
 		}
 		switch {
 		case q.ObservedMasterLeavingPodUID != "":
 		case id.PodUID != "" && id.PodUID == q.ObservedMasterPodUID && id.Deleting:
-			until := metav1.NewTime(in.Now.Add(id.DeletionGrace + quarantineStartBound))
+			until := metav1.NewTime(in.Now.Add(min(id.DeletionGrace, quarantineHoldGraceCap) + quarantineStartBound))
 			q.ObservedMasterLeavingPodUID, q.ObservedMasterHoldUntil = id.PodUID, &until
-		case recorded(q.ObservedMasterPodUID):
+		case recorded(q.ObservedMasterPodUID) || (id.PodUID == q.ObservedMasterPodUID && id.Terminated):
 			q.ObservedMasterLeavingPodUID = q.ObservedMasterPodUID
+		case id.PodUID != q.ObservedMasterPodUID:
+			// The recorded master's Pod is gone or replaced, and the
+			// Operator neither saw it marked for deletion nor its end: it
+			// may have been deleted with --force on a node cut off, its
+			// process still running.
+			return departureLost
 		}
 		leaving := q.ObservedMasterLeavingPodUID
 		if leaving != "" && ((id.PodUID == leaving && id.Terminated) || recorded(leaving)) {
@@ -1181,7 +1219,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
 		Terminations:  terminations,
 		Verifications: withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
-		Quarantine:    cluster.Status.WriteQuarantine, Nonce: newQuarantineNonce,
+		Quarantine:    withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)), Nonce: newQuarantineNonce,
 	})
 	if err != nil {
 		return stepResult{err: errors.Join(steps.err, fmt.Errorf("decide the write quarantine: %w", err))}

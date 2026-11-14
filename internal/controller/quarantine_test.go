@@ -951,3 +951,80 @@ func TestQuarantineNoRebaseWithoutThePods(t *testing.T) {
 		t.Fatalf("quarantine = %+v, want it kept beside %s", d.Quarantine, q1)
 	}
 }
+
+// The recorded master's Pod replaced without the Operator seeing it end, as
+// one deleted with --force on a node cut off whose process may still run:
+// the quarantine escalates at once, and a later confirmed end of the
+// replacement does not rebase it (the probe of the review of 8938b34).
+func TestQuarantineUnseenMasterPodChangeEscalates(t *testing.T) {
+	s := startUnverified(t)
+	t1 := testNow.Add(3 * time.Second)
+	s.identities[q1] = memberIdentity{PodUID: "p2", Created: t1}
+	d := s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: noAnswerAt(t1), q2: slaveAt(t1)})
+	if d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMasterChanged {
+		t.Fatalf("the master's Pod changed unseen: reason %s, want %s", d.Quarantine.Reason,
+			databasev1alpha1.WriteQuarantinedMasterChanged)
+	}
+	t2 := t1.Add(10 * time.Second)
+	s.identities[q1] = memberIdentity{PodUID: "p2", Created: t1, Terminated: true, Deleting: true}
+	s.terminations = []databasev1alpha1.MemberTermination{{Name: q1, PodUID: "p2", ConfirmedAt: metav1.NewTime(t2),
+		PodCreated: &metav1.Time{Time: t1}, DeletionRequestedAt: &metav1.Time{Time: t2.Add(-2 * time.Second)}}}
+	s.pass(t2, map[string]RoleObservation{q0: noAnswerAt(t2), q1: noAnswerAt(t2), q2: activeMasterAt(t2)})
+	s.identities[q1] = memberIdentity{PodUID: "p3", Created: t2.Add(5 * time.Second)}
+	at := t2.Add(20 * time.Second)
+	for range 6 {
+		d = s.pass(at, map[string]RoleObservation{q0: slaveAt(at), q1: slaveAt(at), q2: activeMasterAt(at)})
+		if d.Released != nil || d.Quarantine == nil {
+			t.Fatalf("released %s after the fault although the master's first Pod was never seen ending", at.Sub(testNow))
+		}
+		at = at.Add(quarantineReleaseInterval)
+	}
+}
+
+// The master back as an active master from a new Pod after its old Pod's
+// termination was confirmed does not escalate.
+func TestQuarantineMasterBackAfterAConfirmedEnd(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, Terminated: true, TerminatedAt: testNow}
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: noRoleAt(t1), q2: slaveAt(t1)})
+	s.identities[q1] = memberIdentity{PodUID: uid1New, Created: t1}
+	t2 := t1.Add(5 * time.Second)
+	d := s.pass(t2, map[string]RoleObservation{q0: noAnswerAt(t2), q1: activeMasterAt(t2), q2: slaveAt(t2)})
+	if d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || d.Quarantine.ObservedMasterPodUID != uid1New {
+		t.Fatalf("quarantine = %+v, want it kept beside %s in Pod %s", d.Quarantine, q1, uid1New)
+	}
+}
+
+// A Pod's grace period counts toward the hold for at most ten minutes.
+func TestQuarantineHoldIsCapped(t *testing.T) {
+	s := startUnverified(t)
+	s.identities[q1] = memberIdentity{PodUID: uid1, Deleting: true, DeletionGrace: 24 * time.Hour}
+	t1 := testNow.Add(3 * time.Second)
+	d := s.pass(t1, map[string]RoleObservation{q0: noAnswerAt(t1), q1: noAnswerAt(t1), q2: activeMasterAt(t1)})
+	want := t1.Add(quarantineHoldGraceCap + quarantineStartBound)
+	if until := d.Quarantine.ObservedMasterHoldUntil; until == nil || !until.Time.Equal(want) {
+		t.Fatalf("hold until %v, want %s", until, want)
+	}
+}
+
+// A hold the reconciler decided and holds in memory is kept when the status
+// read does not carry it, as after its status write failed.
+func TestWithHeldDepartureKeepsTheFirstDeadline(t *testing.T) {
+	deadline := metav1.NewTime(testNow.Add(2 * time.Minute))
+	stored := &databasev1alpha1.WriteQuarantine{GenerationID: "g", ObservedMasterPodUID: uid1}
+	held := stored.DeepCopy()
+	held.ObservedMasterLeavingPodUID, held.ObservedMasterHoldUntil = uid1, &deadline
+	got := withHeldDeparture(stored, held)
+	if got.ObservedMasterLeavingPodUID != uid1 || got.ObservedMasterHoldUntil == nil || !got.ObservedMasterHoldUntil.Equal(&deadline) {
+		t.Fatalf("quarantine = %+v, want the held deadline %s", got, deadline)
+	}
+	if stored.ObservedMasterHoldUntil != nil {
+		t.Errorf("the stored quarantine was changed")
+	}
+	other := held.DeepCopy()
+	other.GenerationID = "h"
+	if got := withHeldDeparture(stored, other); got.ObservedMasterHoldUntil != nil {
+		t.Errorf("a hold of another quarantine was taken: %+v", got)
+	}
+}

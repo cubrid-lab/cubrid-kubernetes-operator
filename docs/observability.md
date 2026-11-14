@@ -388,10 +388,11 @@ Pod:
   with no active master it stays. While the master's Pod is only marked for
   deletion, which a Pod evicted from a node cut off from the API server also
   is, the quarantine is held, neither rebased nor escalated, until
-  `observedMasterHoldUntil` (the Pod's grace period plus 90 seconds from
-  when the Operator first saw the mark); after that, or when the Pod is gone
-  without a confirmed termination, it becomes
-  `WriteQuarantinedMasterChanged`. A second active master, or the master
+  `observedMasterHoldUntil` (the Pod's grace period, at most 10 minutes of
+  it, plus 90 seconds from when the Operator first saw the mark); after that,
+  or when the Pod is gone without a confirmed termination, it becomes
+  `WriteQuarantinedMasterChanged`. So does the master's recorded Pod gone or
+  replaced while the Operator saw neither a mark nor a confirmed end of it. A second active master, or the master
   ceasing to claim while its Pod is not seen being deleted, still makes it
   `WriteQuarantinedMasterChanged`. No rebase is made in a pass that could
   not read the members' Pods.
