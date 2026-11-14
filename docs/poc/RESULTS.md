@@ -6449,3 +6449,21 @@ One session as soon as a graceful restart returned, **no shim loaded**:
 **Consequences.**
 - **#855:** the missing row on `ha` is explained by its table having no primary key. It was not lost in the failover, and the slaves' `insert_counter 1` there does not count it.
 - **Users:** every table of an HA cluster needs a primary key, and nothing the Operator reports shows a table that has none. `docs/compatibility.md` and `docs/observability.md` now say so.
+
+## POC-63 — whether a restore from an attempt's own staging directory, beside an interrupted attempt and unrelated leftover files, restores the source dataset, in Docker on 11.4.7.1995 (#866) — **observation: yes; after a `restoredb` killed while it wrote the data volume (its target did not start: no log volume), a new attempt that staged only the verified backup in its own directory restored all 125,000 rows with the source's `sum(id)` and row MD5, and left the leftover files unchanged; `restoredb` writes `<db>_bk0_keys` into the directory it is given with `-B`, so before the fix that file stayed in the shared staging directory for the next restore; with the layout before the fix, one random file named like a second volume did not change the restore of a one-volume backup**
+
+**Question (#866).** The Instance Manager gave `restoredb` the whole `<staging>/backup` directory, which could hold files an earlier attempt, another seed source or a killed process left and that the current manifest does not list. The fix stages each attempt into `<staging>/<operation ID>/backup`, created empty. Does a restore done that way, after an interrupted one and beside leftovers, give the source's dataset, and what does the engine do with the files around it? This is the behavior of one engine build in Docker, not a general CUBRID guarantee.
+
+**Environment (2026-11-14 19:29Z to 19:48Z).** Docker on a shared linux/amd64 host (load average about 14 on 6 CPUs). The VM lab's Instance Manager image, `sha256:2c3013ba9df919499135dc5fa5d1d43ea2b2641dba1828e8d9baa49009e61a89`, CUBRID 11.4.7.1995. One standalone container; the Instance Manager binary was not run, its restore steps were performed with shell commands. No Kubernetes, no Operator, no VM lab.
+
+**Method.** The scripts and raw output are in `docs/poc/poc63/` (`README.md` there is the full record). A 125,000-row table was backed up with `cubrid backupdb -S` and the source deleted. Two leftovers were put in the staging directory: a 1 MiB random `backup/appdb_bk0v001` and `unrelated.txt`. Case A: an attempt staged and verified the backup in its own directory and ran `restoredb -u -B`, which was killed with SIGKILL while it wrote the data volume. Case B: a new attempt did the same to its end beside A's directory and the leftovers. Case C: for comparison, the layout before the fix, the backup and the random file in one `-B` directory.
+
+**Results.**
+- **A:** the target held the data volume and `appdb_vinf` but no log volume, and `cubrid server start` failed (`Unable to mount log disk volume`). `restoredb` had written `appdb_bk0_keys` into A's `-B` directory.
+- **B:** `restoredb` exit 0; `count(*) = 125000`, `sum(id) = 7812562500` and the MD5 of the rows equal the source's. Both leftovers kept size, modification time and SHA-256.
+- **C:** `restoredb` exit 0 and the same three values; the random file was unchanged, and `appdb_bk0_keys` was written into the shared `backup/` directory.
+
+**What this does not show.** `restoreslave`; a kill of the Instance Manager itself; a leftover real volume of another backup or one beside a multi-volume backup; whether `restoredb` reads a `_bk0_keys` file it did not write; other builds; the VM lab. One run of each case.
+
+**Consequences.**
+- **#866:** the fixed layout restores the source dataset after an interrupted attempt and leaves unrelated files as they were. The `_bk0_keys` file `restoredb` writes into its input directory is one more reason the input directory must belong to one attempt: it is now removed with that attempt's directory.

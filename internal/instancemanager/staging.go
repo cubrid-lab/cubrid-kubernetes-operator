@@ -290,3 +290,69 @@ func (s *Server) stagingRel(dir string) (string, error) {
 	}
 	return rel, nil
 }
+
+// reclaimRestoreAttempts removes, before the restore of operation current,
+// the directories that earlier restore attempts left in the request's
+// staging directory, which a killed process does not remove itself
+// (restoreAttemptDir). Only an entry named after another operation is
+// removed, and only when the store records that operation as ended or does
+// not know it and no process holds a file in it; an operation whose record
+// cannot be read, or a directory that is held, is kept. Nothing else in the
+// staging directory is touched, and links are removed, never followed.
+func (s *Server) reclaimRestoreAttempts(req RestoreRequest, current string) {
+	// A request that confine refuses is refused by Restore as well.
+	_, stagingDir, err := confine(req, s.restoreRoots)
+	if err != nil {
+		return
+	}
+	root, err := os.OpenRoot(s.restoreRoots.Staging)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(stagingDir)
+	dir, err := root.Open(name)
+	if err != nil {
+		return
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		s.log().Warn("Could not read the restore staging directory; earlier attempts are kept", "stagingDir", stagingDir, "err", err)
+		return
+	}
+	proc := s.procRoot
+	if proc == "" {
+		proc = defaultProcRoot
+	}
+	for _, e := range entries {
+		id := e.Name()
+		if id == current || !isValidOperationID(id) {
+			continue
+		}
+		op, err := s.store.Get(id)
+		switch {
+		case errors.Is(err, ErrOperationNotFound):
+		case err != nil:
+			s.log().Warn("Could not read the operation record of an earlier restore attempt; its staging is kept",
+				"stagingDir", stagingDir, "operationID", id, "err", err)
+			continue
+		case !op.State.IsTerminal():
+			continue
+		}
+		path := filepath.Join(stagingDir, id)
+		if e.Type()&os.ModeSymlink == 0 {
+			held, err := stagingHolders(proc, procCommReader(proc), path)
+			if err != nil || len(held) > 0 {
+				s.log().Warn("Kept the staging of an earlier restore attempt that a process holds open",
+					"stagingDir", stagingDir, "operationID", id, "holders", describeHolders(held, err))
+				continue
+			}
+		}
+		if err := root.RemoveAll(filepath.Join(name, id)); err != nil {
+			s.log().Warn("Could not remove the staging of an earlier restore attempt", "path", path, "err", err)
+			continue
+		}
+		s.log().Info("Removed the staging of an earlier restore attempt", "path", path, "operationID", id)
+	}
+}

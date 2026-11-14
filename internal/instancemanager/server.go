@@ -1097,6 +1097,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				fail("restore failed: " + err.Error())
 				return
 			}
+			s.reclaimRestoreAttempts(req, id)
 			// The backup is verified and downloaded while the operation is
 			// Downloading; it is Restoring once restoredb is about to run,
 			// which is when the Operator reports the phase Restoring (#598).

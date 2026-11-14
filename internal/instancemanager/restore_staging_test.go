@@ -130,28 +130,53 @@ func TestRestore_RejectsDuplicateManifestKeys(t *testing.T) {
 }
 
 // A symbolic link inside the staging directory must not lead a write outside.
+// A link where this attempt's own directory would be refuses the restore
+// before anything is downloaded; a link anywhere else in the staging
+// directory is not this attempt's, so it is neither written through nor
+// removed (#866).
 func TestRestore_DoesNotFollowALinkOutOfTheStagingDirectory(t *testing.T) {
-	store, bucket, prefix := stageUploadedArtifact(t)
-	req := baseRestoreRequest(t, bucket, prefix)
-	outside := filepath.Join(filepath.Dir(req.TargetDir), "outside")
-	if err := os.MkdirAll(outside, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(req.StagingDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(req.StagingDir, "backup")); err != nil {
-		t.Skipf("cannot create a symbolic link here: %v", err)
-	}
-	cli := &restoreCLI{}
-	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
-		t.Fatal("the restore wrote through a link that leaves the staging directory")
-	}
-	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
-		t.Errorf("files were written outside the staging directory: %v", entries)
-	}
-	if len(cli.calls) != 0 {
-		t.Errorf("restoredb ran: %v", cli.calls)
+	for _, tc := range []struct {
+		name    string
+		link    func(req RestoreRequest) string
+		refused bool
+	}{
+		{"at the attempt's own directory", func(req RestoreRequest) string { return stagedAttemptDir(req) }, true},
+		{"at the backup directory of an earlier layout", func(req RestoreRequest) string { return filepath.Join(req.StagingDir, "backup") }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, bucket, prefix := stageUploadedArtifact(t)
+			req := baseRestoreRequest(t, bucket, prefix)
+			outside := filepath.Join(filepath.Dir(req.TargetDir), "outside")
+			if err := os.MkdirAll(outside, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(req.StagingDir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			link := tc.link(req)
+			if err := os.Symlink(outside, link); err != nil {
+				t.Skipf("cannot create a symbolic link here: %v", err)
+			}
+			cli := &restoreCLI{}
+			_, err := Restore(context.Background(), cli, store, rootsFor(req), req)
+			if tc.refused && err == nil {
+				t.Fatal("the restore was not refused although its own staging directory is a link")
+			}
+			if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+				t.Errorf("files were written outside the staging directory: %v", entries)
+			}
+			if tc.refused && len(cli.calls) != 0 {
+				t.Errorf("restoredb ran: %v", cli.calls)
+			}
+			for _, call := range cli.calls {
+				if dir := restoreInput(t, call); within(dir, link) {
+					t.Errorf("restoredb was given %s, below the link %s", dir, link)
+				}
+			}
+			if to, err := os.Readlink(link); err != nil || to != outside {
+				t.Errorf("the link was changed or removed: %q, %v", to, err)
+			}
+		})
 	}
 }
 
@@ -161,7 +186,7 @@ func TestRestore_RestoresExactlyTheBytesItVerified(t *testing.T) {
 	inner, bucket, prefix := stageUploadedArtifact(t)
 	store := &readCountStore{fakeObjectStore: inner, changeAfter: stagedFileName}
 	req := baseRestoreRequest(t, bucket, prefix)
-	staged := filepath.Join(req.StagingDir, "backup", stagedFileName)
+	staged := filepath.Join(stagedAttemptDir(req), "backup", stagedFileName)
 	var atRestore string
 	cli := &restoreCLI{}
 	cli.onRun = func() {
@@ -196,7 +221,7 @@ func TestRestore_MismatchingObjectIsNotStaged(t *testing.T) {
 	if len(cli.calls) != 0 {
 		t.Errorf("restoredb ran: %v", cli.calls)
 	}
-	if _, statErr := os.Stat(filepath.Join(req.StagingDir, "backup", stagedFileName)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(stagedAttemptDir(req), "backup", stagedFileName)); !os.IsNotExist(statErr) {
 		t.Errorf("the mismatching file is still staged (err=%v)", statErr)
 	}
 	if got := databasesTxtEntry(t, req.TargetDir, dbName); got != nil {

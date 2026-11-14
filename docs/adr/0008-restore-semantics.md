@@ -248,8 +248,16 @@ once; anything else rejects the artifact before a byte is written. Each
 object is downloaded once, through a handle confined to the staging
 directory, and its size and SHA-256 are computed from the bytes written; only
 when every staged file matches the manifest does the restore go on, and
-`restoredb` reads those files. The manifest itself is not signed: this binds
-the restored bytes to the manifest, not the manifest to its author.
+`restoredb` reads those files and no others (#866): each attempt stages into
+a directory of its own below the request's staging directory, named after its
+operation and created empty once the manifest is accepted, and `restoredb -B`
+is given that directory's `backup/`. A file an earlier attempt, another seed
+source or a killed process left in the staging directory is neither given to
+`restoredb` nor changed. The attempt's directory is removed when the restore
+returns; one a killed process left is removed before a later restore once its
+operation has ended and no process holds a file in it. The manifest itself is
+not signed: this binds the restored bytes to the manifest, not the manifest to
+its author.
 
 What the restore reads from the bucket is bounded (#842), so a wrong or
 hostile store cannot fill the Instance Manager's memory or the staging volume
@@ -266,9 +274,8 @@ staged file is removed and `restoredb` does not run. Artifact verification
 (`VerifyArtifact`) applies the same bounds. There is no fixed limit on the
 size of an object or of the whole backup beyond what the manifest declares.
 Before the first object is downloaded, the restore refuses a backup whose
-declared total exceeds the free space of the staging volume, counting the
-files an earlier attempt already staged under the same keys as free; the
-space is checked, not reserved. The staging directory is on the data volume,
+declared total exceeds the free space of the staging volume; the space is
+checked, not reserved. The staging directory is on the data volume,
 where `restoredb` then writes the database itself, so this check is a lower
 bound: a restore that passes it can still run out of space in `restoredb`.
 A staging volume whose free space cannot be read refuses the restore.

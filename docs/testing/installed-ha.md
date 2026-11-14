@@ -3972,9 +3972,12 @@ nothing of it is done.
   `/var/lib/cubrid/restore-staging/<cluster UID>` and restores into
   `/var/lib/cubrid/databases` (`reconcileRecovery`, `restoreStagingRoot`
   and `restoreTargetRoot` in `internal/controller/bootstrap.go`). A
-  recovery into a new cluster runs `cubrid restoredb -u -B <staging>/backup
-  <db>`; `restoreslave` is only for a member seeded from a running master
-  (`Restore` in `internal/instancemanager/restore.go`).
+  recovery into a new cluster runs `cubrid restoredb -u -B
+  <staging>/<operation ID>/backup <db>`, from a directory each attempt
+  creates empty below the staging directory (#866); an Instance Manager
+  built before that ran it on `<staging>/backup`. `restoreslave` is only
+  for a member seeded from a running master (`Restore` in
+  `internal/instancemanager/restore.go`).
 - Before `restoredb`, `Restore` creates and marks
   `/var/lib/cubrid/databases/<db>` and registers it in `databases.txt`
   (`registerRestoreTarget`). `cub_admin restoredb` holds the restored
@@ -4169,7 +4172,7 @@ What the product does, as read from the code:
   Instance Manager stages the seed backup in
   `/var/lib/cubrid/restore-staging/seed-<cluster UID>` (the request's
   `StagingDir`) and runs `cubrid restoreslave -u -s master -m <source> -B
-  <staging>/backup appdb` into `/var/lib/cubrid/databases/appdb` (`Restore`
+  <staging>/<operation ID>/backup appdb` (`<staging>/backup` before #866) into `/var/lib/cubrid/databases/appdb` (`Restore`
   in `internal/instancemanager/restore.go`), the same code as `restoredb`.
   A stop cancels it, its process group is killed (`restoreslave` is a
   group utility, `internal/instancemanager/cli.go`), and `Restore` removes

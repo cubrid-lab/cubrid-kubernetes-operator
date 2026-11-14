@@ -43,7 +43,7 @@ func TestRestore_SeedingFromAMasterUsesRestoreslave(t *testing.T) {
 	if _, err := Restore(context.Background(), cli, store, roots, req); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	want := "cubrid restoreslave -u -s master -m demo-0 -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
+	want := "cubrid restoreslave -u -s master -m demo-0 -B " + filepath.Join(stagedAttemptDir(req), "backup") + " " + dbName
 	if len(cli.calls) != 1 || cli.calls[0] != want {
 		t.Errorf("calls = %v\nwant    [%s]", cli.calls, want)
 	}

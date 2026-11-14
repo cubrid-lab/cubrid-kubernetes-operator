@@ -1,0 +1,22 @@
+start 2026-11-14T19:36:50Z
+image sha256:2c3013ba9df919499135dc5fa5d1d43ea2b2641dba1828e8d9baa49009e61a89
+
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+
+createdb ok
+server started
+Execute OK. (0.215998 sec) Committed. (0.335997 sec) 
+125000 rows affected. (2.531976 sec) Committed. (1.883981 sec) 
+Execute OK. (0.000000 sec) 
+count(*)	sum( cast(id as bigint))
+125000	7812562500
+
+3f2418cb9afed051574c922c5590949f  -
+server stopped
+backupdb ok
+total 27664
+-rw------- 1 cubrid cubrid 28324864 Nov 14 19:40 appdb_bk0v000
+59af5f6e81ef5f14b2e0dbffe6bb41978854ddcd850592eff62dbf3768f564ef  appdb_bk0v000
+source deleted
+0
+end 2026-11-14T19:40:14Z
