@@ -1395,11 +1395,19 @@ func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.
 func (h *haRun) clientPod() *corev1.Pod {
 	jdbc := func(mode string, port int) string { return h.jdbcURL(haClusterName, mode, port) }
 	no, yes, user, grace := false, true, int64(clientUser), int64(1)
+	// S04 powers off the master's node and refuses a client there (#110).
+	var affinity *corev1.Affinity
+	if node := h.masterNode(); h.cfg.Fault == FaultVMPowerOff && node != "" {
+		affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{{
+					Key: "metadata.name", Operator: corev1.NodeSelectorOpNotIn, Values: []string{node}}}}}}}}
+	}
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clientPodName, Namespace: h.cfg.Namespace,
 		Labels: map[string]string{"app.kubernetes.io/name": clientPodName,
 			"app.kubernetes.io/managed-by": installedManagedBy, "app.kubernetes.io/instance": h.rec.RunID}},
 		Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: &no,
-			TerminationGracePeriodSeconds: &grace,
+			TerminationGracePeriodSeconds: &grace, Affinity: affinity,
 			SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &yes,
 				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 			Containers: []corev1.Container{{Name: clientContainer, Image: h.cfg.WorkloadImage,
@@ -1410,6 +1418,20 @@ func (h *haRun) clientPod() *corev1.Pod {
 				SecurityContext: &corev1.SecurityContext{RunAsNonRoot: &yes, RunAsUser: &user,
 					AllowPrivilegeEscalation: &no,
 					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}}}}}
+}
+
+// masterNode is the node of the starting state's master, or "" when either
+// is not known.
+func (h *haRun) masterNode() string {
+	if h.rec.StartingState == nil {
+		return ""
+	}
+	for _, member := range h.rec.Members {
+		if member.Pod == h.rec.StartingState.Master {
+			return member.Node
+		}
+	}
+	return ""
 }
 
 // jdbcURL is the JDBC URL of a cluster's Service of the access mode.

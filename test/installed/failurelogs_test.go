@@ -55,10 +55,15 @@ func labelledPod(name, namespace string, podLabels map[string]string, container 
 // When LAB01 fails, its namespace is removed at the end of the run, and the
 // Broker's and members' logs would go with it (#662). They are read first, and
 // the bundle joins the scenario's evidence.
+// testManagerLabels are the labels of the manager Pods the failure logs read.
+func testManagerLabels() map[string]string {
+	return map[string]string{"control-plane": "controller-manager"}
+}
+
 func TestFailedHARunKeepsItsLogsBeforeItsNamespaceGoes(t *testing.T) {
 	cfg := testHAConfig(t)
 	manager := labelledPod(testFailureManager, cfg.OperatorNamespace,
-		map[string]string{"control-plane": "controller-manager"}, managerContainer)
+		testManagerLabels(), managerContainer)
 	f := newHAFixture(t, cfg, manager)
 	f.history = strings.Replace(f.history, `"opId":"c1-000003","endpoint":"rw","event":"acknowledged"`,
 		`"opId":"c1-000003","endpoint":"rw","event":"failed","error":"broken"`, 1)
@@ -115,7 +120,7 @@ func TestFailureLogsHoldTheBrokerAndTheHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	objects := []client.Object{
-		labelledPod(testFailureManager, operators, map[string]string{"control-plane": "controller-manager"},
+		labelledPod(testFailureManager, operators, testManagerLabels(),
 			managerContainer),
 		labelledPod(testFailureBroker, namespace, map[string]string{"database.cubrid.io/broker-access-mode": "rw",
 			"app.kubernetes.io/instance": haClusterName}, "broker"),
