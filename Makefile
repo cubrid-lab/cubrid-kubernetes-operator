@@ -270,7 +270,9 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	# the builder selected by "buildx use" is not changed. A failed creation stops
 	# the target before anything is built or removed. The builder (only once
 	# created) and the copy are removed whatever the build did, or when the run is
-	# interrupted; the target exits with the failure's status (#461).
+	# interrupted; the target exits with the failure's status (#461). An interrupt
+	# must reach make's process group (Ctrl-C, a CI job's cancel): a signal sent
+	# to make alone is handled only once the running build returns.
 	# The copy of Dockerfile gets --platform=${BUILDPLATFORM} inserted; the original is preserved.
 	cross="$$(mktemp Dockerfile.cross.XXXXXX)" || exit 1; \
 	builder="cubrid-kubernetes-operator-builder-$${cross##*.}"; \

@@ -90,6 +90,37 @@ func runBuildx(t *testing.T, failEnv string) (code int, out string, calls []stri
 	return code, string(output), strings.Split(strings.TrimSpace(string(data)), "\n"), dir
 }
 
+// assertOneBuilderThroughout checks that the builder this run created is the
+// one it built through and the one it removed, and that the build read the
+// run's own mktemp copy of the Dockerfile, not a shared Dockerfile.cross (#869).
+func assertOneBuilderThroughout(t *testing.T, calls []string) {
+	t.Helper()
+	var created, built, removed, file string
+	for _, c := range calls {
+		f := strings.Fields(c)
+		switch {
+		case strings.HasPrefix(c, "buildx create --name ") && len(f) > 3:
+			created = f[3]
+		case strings.HasPrefix(c, "buildx build --builder ") && len(f) > 3:
+			built = f[3]
+			for i, a := range f {
+				if a == "-f" && i+1 < len(f) {
+					file = f[i+1]
+				}
+			}
+		case strings.HasPrefix(c, "buildx rm ") && len(f) > 2:
+			removed = f[2]
+		}
+	}
+	if created == "" || built != created || removed != created {
+		t.Errorf("created %q, built through %q, removed %q: want one builder throughout\ncalls = %q",
+			created, built, removed, calls)
+	}
+	if !strings.HasPrefix(file, "Dockerfile.cross.") {
+		t.Errorf("the build read %q, want the run's own Dockerfile.cross.XXXXXX copy", file)
+	}
+}
+
 func hasCall(calls []string, prefix string) bool {
 	for _, c := range calls {
 		if strings.HasPrefix(c, prefix) {
@@ -135,6 +166,7 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			if !hasCall(calls, "buildx rm cubrid-kubernetes-operator-builder") {
 				t.Errorf("calls = %q, want the removal of the builder", calls)
 			}
+			assertOneBuilderThroughout(t, calls)
 			if hasCall(calls, "buildx use") {
 				t.Errorf("calls = %q, want the user's selected builder left alone", calls)
 			}
