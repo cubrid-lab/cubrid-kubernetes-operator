@@ -259,12 +259,18 @@ var _ = Describe("Ready from conflicting active-master claims (#339)", func() {
 			Expect(meta.IsStatusConditionTrue(status.Conditions, conditionRoutingReady)).To(BeFalse())
 			ready := meta.FindStatusCondition(status.Conditions, conditionReady)
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-			Expect(ready.Reason).To(Equal(reasonMultiplePrimaries))
+			// Two active masters also quarantine the read-write path, whose
+			// reason Ready carries first (ADR-0005, section 8).
+			Expect(ready.Reason).To(Equal(string(databasev1alpha1.WriteQuarantinedMultipleMasters)))
 			Expect(testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(key.Namespace, key.Name))).To(BeZero())
 		}
 
+		// A quarantine of two masters has no automatic release: one master
+		// again leaves Ready False with its reason until it is released.
 		prober.Client.Transport = masterClaimReports(key.Name, false)
-		Expect(meta.IsStatusConditionTrue(reconcileStatus().Conditions, conditionReady)).To(BeTrue())
-		Expect(testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(key.Namespace, key.Name))).To(Equal(float64(1)))
+		ready := meta.FindStatusCondition(reconcileStatus().Conditions, conditionReady)
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal(string(databasev1alpha1.WriteQuarantinedMultipleMasters)))
+		Expect(testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(key.Namespace, key.Name))).To(BeZero())
 	})
 })

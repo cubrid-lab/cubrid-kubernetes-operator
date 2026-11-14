@@ -76,6 +76,14 @@ var (
 	// FailoverLimit: the fault until the client's writes are acknowledged
 	// again without interruption.
 	FailoverLimit = LimitSpec{"failover_limit", "E2E_FAILOVER_LIMIT", 30 * time.Second}
+	// QuarantinedFailoverLimit: the same, for a master Pod whose
+	// termination the Operator cannot see confirmed: deleted with --force
+	// (S03 abrupt and abrupt-first-member), or deleted while the Operator
+	// is absent (S06 absent-during-failover). The write quarantine keeps the
+	// read-write path closed until the deleted member's new Pod is
+	// verified, which is the quarantine's availability cost (ADR-0005,
+	// section 8).
+	QuarantinedFailoverLimit = LimitSpec{"quarantined_failover_limit", "E2E_QUARANTINED_FAILOVER_LIMIT", 6 * time.Minute}
 	// RejoinLimit: the fault until all three members have a role again.
 	RejoinLimit = LimitSpec{"rejoin_limit", "E2E_REJOIN_LIMIT", 5 * time.Minute}
 	// StablePeriod: how long the clients must go on being acknowledged

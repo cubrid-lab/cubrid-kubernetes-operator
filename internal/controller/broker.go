@@ -95,7 +95,25 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 	}
 	available := map[string]int32{}
 	for _, mode := range []string{brokerModeRW, brokerModeRO} {
-		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode))
+		// A write quarantine keeps the read-write Brokers at zero
+		// (ADR-0005, section 8).
+		// Before they are asked for, the stored cluster is read past the
+		// cache, which may be behind a quarantine just written.
+		// A known quarantine stops them; a read that shows none either way
+		// only keeps them from scaling up.
+		replicas, noScaleUp := int32(brokerReplicas), false
+		if mode == brokerModeRW {
+			zero, unknown := r.writesHeld(cluster), r.scaleUpHeld(cluster)
+			if !zero {
+				stored, unread := r.storedQuarantine(ctx, cluster)
+				zero, unknown = stored, unknown || unread
+			}
+			if zero {
+				replicas = 0
+			}
+			noScaleUp = unknown
+		}
+		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode), replicas, noScaleUp)
 		if err != nil {
 			return nil, err
 		}
@@ -216,11 +234,12 @@ func brokerPodLabels(cluster *databasev1alpha1.CubridCluster, mode string) map[s
 // a change of it replaces them and an unchanged configuration replaces
 // nothing. They are replaced one at a time, a new Broker being available
 // before an old one is stopped, so the mode never has fewer Brokers than
-// asked for.
+// asked for. replicas is brokerReplicas, or zero for the read-write Brokers
+// of a quarantined cluster. noScaleUp keeps the replicas at most where they
+// are, zero for a new Deployment.
 func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	mode, image, configHash string) (*appsv1.Deployment, error) {
+	mode, image, configHash string, replicas int32, noScaleUp bool) (*appsv1.Deployment, error) {
 	labels := brokerPodLabels(cluster, mode)
-	replicas := int32(brokerReplicas)
 	noneUnavailable, oneMore := intstr.FromInt32(0), intstr.FromInt32(1)
 
 	dep := &appsv1.Deployment{
@@ -231,7 +250,18 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 		if dep.CreationTimestamp.IsZero() {
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		}
-		dep.Spec.Replicas = &replicas
+		want := replicas
+		if noScaleUp {
+			current := int32(0)
+			if !dep.CreationTimestamp.IsZero() {
+				current = 1
+				if dep.Spec.Replicas != nil {
+					current = *dep.Spec.Replicas
+				}
+			}
+			want = min(want, current)
+		}
+		dep.Spec.Replicas = &want
 		dep.Spec.Strategy = appsv1.DeploymentStrategy{
 			Type: appsv1.RollingUpdateDeploymentStrategyType,
 			RollingUpdate: &appsv1.RollingUpdateDeployment{
@@ -350,6 +380,7 @@ func (r *CubridClusterReconciler) reconcileBrokerService(ctx context.Context, cl
 func (r *CubridClusterReconciler) setBrokerConditions(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, available map[string]int32) {
 	rw := setEndpointConditions(cluster, available)
 	switch {
+	case setRoutingQuarantined(cluster):
 	case !setRoutingUnresolved(cluster, res):
 	case !rw:
 		// A resolved master without a Broker in front of it is no route.
@@ -439,6 +470,9 @@ func setBrokerConditionsUnobserved(cluster *databasev1alpha1.CubridCluster, res 
 	setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, reasonBrokerReconcileFailed, cause.Error())
 	setCondition(cluster, conditionWriteEndpointReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
 	setCondition(cluster, conditionReadEndpointReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
+	if setRoutingQuarantined(cluster) {
+		return
+	}
 	if res == nil || setRoutingUnresolved(cluster, *res) {
 		setCondition(cluster, conditionRoutingReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
 	}

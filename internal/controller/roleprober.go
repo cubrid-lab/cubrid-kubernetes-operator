@@ -108,9 +108,12 @@ type HTTPRoleProber struct {
 	accepted acceptedTokens
 }
 
+// roleProbeTimeout bounds one GET /v1/role.
+const roleProbeTimeout = 5 * time.Second
+
 func NewHTTPRoleProber(tokens TokenSource) *HTTPRoleProber {
 	return &HTTPRoleProber{
-		Client: &http.Client{Timeout: 5 * time.Second},
+		Client: &http.Client{Timeout: roleProbeTimeout},
 		Tokens: tokens,
 	}
 }

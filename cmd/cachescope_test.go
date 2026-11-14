@@ -308,6 +308,9 @@ func TestGeneratedRoleGrantsOnlyWhatTheManagerCalls(t *testing.T) {
 		// Policies are removed when spec.networkPolicy turns them off.
 		"networking.k8s.io/networkpolicies": removals,
 		"policy/poddisruptionbudgets":       writes,
+		// A write quarantine is reported enforced only once the read-write
+		// Service's EndpointSlices, listed past the cache, hold no endpoint.
+		"discovery.k8s.io/endpointslices": "list",
 		// The member spread default is recorded in an annotation by a patch.
 		"database.cubrid.io/cubridclusters":        read + " patch",
 		"database.cubrid.io/cubridclusters/status": update,

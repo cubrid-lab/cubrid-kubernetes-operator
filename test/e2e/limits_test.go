@@ -33,16 +33,19 @@ import (
 // runs a scenario as a baseline: it is then reported as blocked with reason
 // time_limit_unset, never as a pass, including S00 (faults.JudgeS00Limits).
 var (
-	installLimit        = limit(faults.InstallLimit)
-	readyLimit          = limit(faults.ReadyLimit)
-	formationLimit      = limit(faults.FormationLimit)
-	replicationLimit    = limit(faults.ReplicationLimit)
-	failoverLimit       = limit(faults.FailoverLimit)
-	rejoinLimit         = limit(faults.RejoinLimit)
-	stablePeriod        = limit(faults.StablePeriod)
-	brokerRecoveryLimit = limit(faults.BrokerRecoveryLimit)
-	operatorResyncLimit = limit(faults.OperatorResyncLimit)
-	deleteLimit         = limit(faults.DeleteLimit)
+	installLimit     = limit(faults.InstallLimit)
+	readyLimit       = limit(faults.ReadyLimit)
+	formationLimit   = limit(faults.FormationLimit)
+	replicationLimit = limit(faults.ReplicationLimit)
+	failoverLimit    = limit(faults.FailoverLimit)
+	// quarantinedFailoverLimit judges the variants whose master Pod is
+	// deleted with --force, which the write quarantine keeps closed longer.
+	quarantinedFailoverLimit = limit(faults.QuarantinedFailoverLimit)
+	rejoinLimit              = limit(faults.RejoinLimit)
+	stablePeriod             = limit(faults.StablePeriod)
+	brokerRecoveryLimit      = limit(faults.BrokerRecoveryLimit)
+	operatorResyncLimit      = limit(faults.OperatorResyncLimit)
+	deleteLimit              = limit(faults.DeleteLimit)
 )
 
 // limit reads one limit. A value that cannot be read stops the suite before

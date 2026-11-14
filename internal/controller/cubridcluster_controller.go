@@ -40,11 +40,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -183,6 +185,16 @@ type CubridClusterReconciler struct {
 	// unresolvedSince holds, per cluster, since when PrimaryResolved has not
 	// been True (unresolvedStart).
 	unresolvedSince sync.Map
+	// quarantineHolds holds, per cluster UID, what this reconciler keeps in
+	// memory about the cluster's write quarantine (quarantineHold).
+	quarantineHolds sync.Map
+	// podTerminations holds, per Pod UID, a database Pod the kubelet
+	// reported terminated while it was being deleted, as the Pod watch saw
+	// it (notePodTermination).
+	podTerminations sync.Map
+	// podUnconfirmed holds, per Pod UID, a database Pod the Pod watch saw
+	// deleted without a confirmed termination (notePodDeleted).
+	podUnconfirmed sync.Map
 	// dbaPasswordCheckedAt holds, per cluster UID, when its member was last
 	// asked whether the DBA password Secret's value is the database's
 	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
@@ -252,6 +264,13 @@ type reconcileReport struct {
 	// brokerRefused says that the Broker tier met an object the cluster does
 	// not control.
 	brokerRefused bool
+	// noScaleUp keeps the read-write Brokers from scaling up in this pass,
+	// without stopping running ones.
+	noScaleUp bool
+	// releasedQuarantine is the generation of the write quarantine this
+	// reconcile released; once its status is written, memory no longer holds
+	// it.
+	releasedQuarantine string
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -319,6 +338,9 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 	if err == nil {
 		// The metrics say what the stored status says.
 		publishClusterMetrics(cluster, readyReplicas)
+		if ok && report.(*reconcileReport).releasedQuarantine != "" {
+			r.releaseWritten(cluster, report.(*reconcileReport).releasedQuarantine)
+		}
 		// So do the applier readings the next one is compared with.
 		if ok && report.(*reconcileReport).positions != nil {
 			r.applierPositions().commit(cluster.UID, client.ObjectKeyFromObject(cluster), report.(*reconcileReport).positions)
@@ -381,6 +403,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.placementReported.Delete(req.NamespacedName)
 		r.unresolvedSince.Delete(req.NamespacedName)
 		if apierrors.IsNotFound(err) {
+			r.forgetQuarantines(req.NamespacedName)
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
 		}
@@ -395,6 +418,16 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// written; it cannot change, so it is not retried.
 	if err := validateManagedClusterName(cluster.Name); err != nil {
 		return r.refuseClusterName(ctx, &cluster, err)
+	}
+
+	// A write quarantine in the status is enforced before anything else, from
+	// the status alone, so that no later step or failure of this pass, and no
+	// restart of the Operator, lets the read-write Brokers run (ADR-0005,
+	// section 8). One this reconciler holds in memory and the status read
+	// does not, as after a failed status write, is put back first.
+	r.restoreWriteQuarantine(ctx, &cluster)
+	if err := r.enforceWriteQuarantine(ctx, &cluster); err != nil {
+		return r.failed(ctx, &cluster, reasonWriteQuarantineEnforcementFailed, err)
 	}
 
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
@@ -1224,7 +1257,16 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	sts *appsv1.StatefulSet) (bool, stepResult) {
 	// The first database is created once, on one member (ADR-0010).
 	r.reconcileHABootstrap(ctx, cluster)
-	res := r.reconcileHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	lastResolved := cluster.Status.LastResolvedPrimary
+	members := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
+	// The members' Pods are read before and after the probes, so that an
+	// answer is counted only for the Pod it came from.
+	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
+	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	// The write quarantine is decided from the same observation, before the
+	// Broker tier, which keeps the read-write Brokers at zero while one is in
+	// force (ADR-0005, section 8).
+	quarantine := r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the
@@ -1232,6 +1274,10 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	available, ok, steps := r.brokerTier(ctx, cluster, sts, &res)
 	if ok {
 		r.setBrokerConditions(cluster, res, available)
+	}
+	steps.err = errors.Join(quarantine.err, steps.err)
+	if quarantine.retry > 0 && (steps.retry == 0 || quarantine.retry < steps.retry) {
+		steps.retry = quarantine.retry
 	}
 	// Rolling update (ADR-0009): only when the engine-version guard permits
 	// (no blocked upgrade / unverifiable version), roll outdated slaves one at
@@ -1372,10 +1418,11 @@ const primaryUnresolvedGrace = 60 * time.Second
 // has not recorded a member as seeded keeps Ready False too: with
 // InstancesNotReady while a member's server does not run yet, and with
 // MemberNotSeeded once every instance is ready, as while the last member
-// catches up after its seed restore. The order is: two masters observed on
-// ready instances, a failed HA bootstrap, then on ready instances a member not
-// seeded, a primary unresolved past the grace period, or else ClusterReady,
-// and otherwise InstancesNotReady.
+// catches up after its seed restore. The order is: a write quarantine in
+// force, which makes Ready False with its reason at once (ADR-0005, section
+// 8), two masters observed on ready instances, a failed HA bootstrap, then on
+// ready instances a member not seeded, a primary unresolved past the grace
+// period, or else ClusterReady, and otherwise InstancesNotReady.
 func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
 	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	instancesReady := ready >= desired && desired > 0
@@ -1387,6 +1434,21 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 	// yet seeded (MemberNotSeeded).
 	_, unseededMessage, unseeded := haBootstrapUnadmitted(cluster)
 	switch {
+	case cluster.Status.WriteQuarantine != nil:
+		// A quarantine of the read-write path makes Ready False at once,
+		// without the grace of PrimaryUnresolved (ADR-0005, section 8).
+		q := cluster.Status.WriteQuarantine
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, string(q.Reason),
+			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, quarantineConditionMessage(q)))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, string(q.Reason),
+			"the read-write Brokers are kept stopped until the quarantine is released, see RoutingReady")
+	case r.writesHeld(cluster):
+		// The pass that released a quarantine, before the release is
+		// written.
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonReadWriteBrokersHeld,
+			fmt.Sprintf("%d/%d instances ready, but the read-write Brokers are held at zero in this pass", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reasonReadWriteBrokersHeld,
+			"the read-write Brokers start once no write quarantine holds them")
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
@@ -1518,9 +1580,33 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		// A database Pod the kubelet reports terminated while it is
+		// deleted is kept for the write quarantine, which may run after
+		// the Pod is gone (ADR-0005, section 8, as amended by #870).
+		Watches(&corev1.Pod{}, handler.Funcs{
+			UpdateFunc: func(_ context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				r.enqueueTerminated(e.ObjectNew, q)
+			},
+			DeleteFunc: func(_ context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				if pod, ok := e.Object.(*corev1.Pod); ok && r.notePodDeleted(pod, e.DeleteStateUnknown) {
+					q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+						Namespace: pod.Namespace, Name: pod.Labels["app.kubernetes.io/instance"]}})
+				}
+			},
+		}).
 		Named("cubridcluster").
 		WithOptions(controller.Options{RateLimiter: clusterRateLimiter()}).
 		Complete(r)
+}
+
+// enqueueTerminated keeps a terminated database Pod (notePodTermination) and
+// starts a reconcile of its cluster.
+func (r *CubridClusterReconciler) enqueueTerminated(obj client.Object,
+	q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+	if pod, ok := obj.(*corev1.Pod); ok && r.notePodTermination(pod) {
+		q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: pod.Namespace, Name: pod.Labels["app.kubernetes.io/instance"]}})
+	}
 }
 
 // applierPositions is the store of applier readings this reconciler writes.
