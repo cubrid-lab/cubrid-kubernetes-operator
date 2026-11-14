@@ -62,15 +62,23 @@ func answerText(o RoleObservation, now time.Time) string {
 	return observedRoleText(o, now)
 }
 
-// unseenLaterPod reports whether the Pod watch saw a Pod of member, other than
-// its last Pod seen (last), deleted without a confirmed termination: that Pod
-// may have run on another node than the one recorded for the member.
-func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.CubridCluster, member, last string) bool {
+// unseenLaterPod reports whether the Pod watch saw a Pod of the member p
+// describes deleted without a confirmed termination that is not the Pod its
+// node was read from (p.NodePodUID) and was created after it, or at a time
+// not known: that Pod may have run on another node than p.NodeName. The
+// deletion of the Pod the node was read from, as when Kubernetes force-deletes
+// it from a node tainted out of service, and of an earlier Pod, do not count.
+func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.CubridCluster, p databasev1alpha1.MemberPod) bool {
 	key := client.ObjectKeyFromObject(cluster)
+	from := p.NodePodUID
+	if from == "" {
+		from = p.PodUID
+	}
 	found := false
 	r.podUnconfirmed.Range(func(uid, v any) bool {
 		t := v.(podTermination)
-		if t.cluster == key && t.member == member && string(uid.(types.UID)) != last {
+		if t.cluster == key && t.member == p.Name && string(uid.(types.UID)) != from &&
+			(p.NodePodCreated == nil || t.created.IsZero() || t.created.After(p.NodePodCreated.Time)) {
 			found = true
 			return false
 		}
@@ -115,7 +123,7 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 		node := ids[m].NodeName
 		if i := slices.IndexFunc(cluster.Status.MemberPods, func(p databasev1alpha1.MemberPod) bool {
 			return p.Name == m
-		}); node == "" && i >= 0 && !r.unseenLaterPod(cluster, m, cluster.Status.MemberPods[i].PodUID) {
+		}); node == "" && i >= 0 && !r.unseenLaterPod(cluster, cluster.Status.MemberPods[i]) {
 			node = cluster.Status.MemberPods[i].NodeName
 		}
 		nodes[m] = node

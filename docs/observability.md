@@ -471,10 +471,14 @@ partitioned node can let a second database process run.
   member's Pod was last seen scheduled on. It is kept while the member has no
   Pod, or one that is not scheduled yet, as after Kubernetes force-deleted the
   Pod from the tainted node and the StatefulSet recreated it `Pending`. A Pod
-  of the member scheduled on another node replaces it. When the Operator's Pod
-  watch saw a later Pod of the member deleted without a confirmed termination
-  (it may have run on another node), the recorded node is not used and the
-  member is not fenced; the watch keeps such a deletion for 10 minutes.
+  of the member scheduled on another node replaces it. The Pod the node was
+  read from is recorded with it (`nodePodUID`, `nodePodCreated`). The
+  deletion of that Pod, as when Kubernetes force-deletes it from the tainted
+  node, keeps the mapping. When the Operator's Pod watch saw a Pod of the
+  member created after it (or at a time not known) deleted without a
+  confirmed termination, that Pod may have run on another node: the recorded
+  node is not used and the member is not fenced. The watch keeps such a
+  deletion for 10 minutes.
 - **Reading the taint.** In each pass, for every member that gave neither an
   active-master nor a trusted non-master answer, and every member with a fence
   record, the Operator reads that node's Node object from the API server, past

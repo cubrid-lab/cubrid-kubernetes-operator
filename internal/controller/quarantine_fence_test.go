@@ -344,3 +344,41 @@ func TestReturnRequestAlreadyReleased(t *testing.T) {
 			request, msg, q0)
 	}
 }
+
+// The usual power-off: the member's Pod P1 on the tainted node is
+// force-deleted by Kubernetes, which the Pod watch sees as a deletion without
+// a confirmed termination, and the StatefulSet creates P2, which stays
+// Pending. The member stays fenced on P1's node in the pass that records P2
+// as its last Pod and in the passes after it: P1 is the Pod the node came
+// from, not a later one.
+func TestOutOfServiceFencesAcrossTheForceDeletedPod(t *testing.T) {
+	c := fake.NewClientBuilder().WithObjects(tainted()).Build()
+	r := &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
+	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns"}}
+	p1Created := testNow.Add(-time.Hour)
+	cluster.Status.MemberPods = []databasev1alpha1.MemberPod{{Name: q0, PodUID: uid0, NodeName: node0,
+		NodePodUID: uid0, NodePodCreated: &metav1.Time{Time: p1Created}}}
+	p1 := createdPod(uid0, p1Created, testNow.Add(-5*time.Second), 0,
+		corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	r.notePodDeleted(p1, false)
+	obs := map[string]RoleObservation{q0: noAnswerAt(testNow)}
+	pending := map[string]memberIdentity{q0: {PodUID: uid0New, Created: testNow.Add(-3 * time.Second)}}
+	for pass := 1; pass <= 3; pass++ {
+		nodes, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, obs, pending)
+		if _, ok := fences[q0]; err != nil || !ok || nodes[q0] != node0 {
+			t.Fatalf("pass %d: node %q, fences %+v, error %v; want %s fenced on %s", pass, nodes[q0], fences, err, q0, node0)
+		}
+		cluster.Status.MemberTerminations = r.recordTerminations(context.Background(), cluster, []string{q0}, pending, pending)
+		if p := cluster.Status.MemberPods[0]; p.PodUID != uid0New || p.NodeName != node0 || p.NodePodUID != uid0 {
+			t.Fatalf("pass %d: member Pod %+v, want %s recorded with the node of %s", pass, p, uid0New, uid0)
+		}
+	}
+	// A Pod created after P1 and deleted unseen may have run elsewhere.
+	p3 := createdPod("uid-0-third", testNow.Add(-2*time.Second), testNow.Add(-time.Second), 0,
+		corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	r.notePodDeleted(p3, false)
+	if nodes, fences, _, _ := r.outOfServiceFences(context.Background(), cluster, []string{q0}, obs,
+		map[string]memberIdentity{q0: {}}); nodes[q0] != "" || len(fences) != 0 {
+		t.Fatalf("node %q, fences %+v after a later Pod was deleted unseen; want neither", nodes[q0], fences)
+	}
+}

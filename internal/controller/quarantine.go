@@ -258,9 +258,9 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 		}
 		return false
 	})
-	last, lastNode := map[string]string{}, map[string]string{}
+	last, lastNode := map[string]string{}, map[string]databasev1alpha1.MemberPod{}
 	for _, p := range cluster.Status.MemberPods {
-		last[p.Name], lastNode[p.Name] = p.PodUID, p.NodeName
+		last[p.Name], lastNode[p.Name] = p.PodUID, p
 	}
 	var pods []databasev1alpha1.MemberPod
 	for _, m := range members {
@@ -289,19 +289,29 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 		if seen == "" {
 			seen = last[m]
 		}
-		// The node is kept while the member's Pod is gone or not scheduled,
-		// so that a member whose Pod Kubernetes force-deleted from a node
-		// tainted out of service stays mapped to that node.
-		node := ids[m].NodeName
-		if node == "" {
-			node = lastNode[m]
-		}
 		if seen != "" {
-			pods = append(pods, databasev1alpha1.MemberPod{Name: m, PodUID: seen, NodeName: node})
+			pods = append(pods, memberPodRecord(lastNode[m], m, seen, ids[m]))
 		}
 	}
 	cluster.Status.MemberPods = pods
 	return out
+}
+
+// memberPodRecord is member m's status.memberPods entry for its last Pod
+// seen, uid, read in this pass as id; before is the entry before this pass.
+// The node, with the Pod it was read from, is kept while the member's Pod is
+// gone or not scheduled, so that a member whose Pod Kubernetes force-deleted
+// from a node tainted out of service stays mapped to that node.
+func memberPodRecord(before databasev1alpha1.MemberPod, m, uid string, id memberIdentity) databasev1alpha1.MemberPod {
+	p := databasev1alpha1.MemberPod{Name: m, PodUID: uid, NodeName: before.NodeName, NodePodUID: before.NodePodUID,
+		NodePodCreated: before.NodePodCreated}
+	if id.NodeName != "" {
+		p.NodeName, p.NodePodUID, p.NodePodCreated = id.NodeName, id.PodUID, nil
+		if !id.Created.IsZero() {
+			p.NodePodCreated = &metav1.Time{Time: id.Created}
+		}
+	}
+	return p
 }
 
 // trustedEnd is the time a confirmed termination runs from: the end the

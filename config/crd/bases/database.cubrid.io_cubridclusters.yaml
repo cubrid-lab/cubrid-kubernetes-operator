@@ -1398,6 +1398,19 @@ spec:
                         after Kubernetes force-deleted it from a node tainted out of service,
                         so that the member stays mapped to that node.
                       type: string
+                    nodePodCreated:
+                      description: |-
+                        nodePodCreated is that Pod's creationTimestamp. A Pod of the member
+                        created after it that the Operator saw deleted without a confirmed
+                        termination may have run on another node: nodeName is then not used
+                        for the out-of-service taint.
+                      format: date-time
+                      type: string
+                    nodePodUID:
+                      description: |-
+                        nodePodUID is the UID of the Pod nodeName was read from, which may be
+                        an earlier Pod than podUID.
+                      type: string
                     podUID:
                       description: podUID is that Pod's UID.
                       type: string

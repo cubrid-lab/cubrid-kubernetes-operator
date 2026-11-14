@@ -723,8 +723,9 @@ var _ = Describe("Write quarantine (#113)", func() {
 		r := newReconciler()
 		runVerified(r, f)
 		first, second := f.key.Name+"-0", f.key.Name+"-1"
-		Expect(stored(f).Status.MemberPods).To(ContainElement(databasev1alpha1.MemberPod{Name: first,
-			PodUID: string(pod.UID), NodeName: node.Name}))
+		Expect(stored(f).Status.MemberPods).To(ContainElement(SatisfyAll(HaveField("Name", first),
+			HaveField("PodUID", string(pod.UID)), HaveField("NodeName", node.Name),
+			HaveField("NodePodUID", string(pod.UID)))))
 
 		By("the first member's VM powered off: it no longer answers, and the second member is master")
 		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))

@@ -889,6 +889,16 @@ type MemberPod struct {
 	// so that the member stays mapped to that node.
 	// +optional
 	NodeName string `json:"nodeName,omitempty"`
+	// nodePodUID is the UID of the Pod nodeName was read from, which may be
+	// an earlier Pod than podUID.
+	// +optional
+	NodePodUID string `json:"nodePodUID,omitempty"`
+	// nodePodCreated is that Pod's creationTimestamp. A Pod of the member
+	// created after it that the Operator saw deleted without a confirmed
+	// termination may have run on another node: nodeName is then not used
+	// for the out-of-service taint.
+	// +optional
+	NodePodCreated *metav1.Time `json:"nodePodCreated,omitempty"`
 }
 
 // MemberFence is an administrator's assertion that a member's node is
