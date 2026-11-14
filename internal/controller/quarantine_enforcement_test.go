@@ -43,6 +43,9 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
+// memberTestImage is the image of the member Pods the specs create.
+const memberTestImage = "registry.example/im:test"
+
 // reachableReports answers each member's GET /v1/role with the
 // `cubrid heartbeat status` report set for it; a member without one cannot be
 // reached, as a member cut off from the Operator.
@@ -491,7 +494,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 		GinkgoHelper()
 		c := stored(f)
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: member, Namespace: f.key.Namespace, Labels: labelsFor(c)},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: "registry.example/im:test"}}}}
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: appName, Image: memberTestImage}}}}
 		if held {
 			pod.Finalizers = []string{"test.cubrid.io/hold"}
 		}
@@ -504,7 +507,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 				_ = k8sClient.Delete(ctx, got, client.GracePeriodSeconds(0))
 			}
 		})
-		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: "registry.example/im:test",
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: memberTestImage,
 			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}
 		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 		return pod
@@ -656,5 +659,264 @@ var _ = Describe("Write quarantine (#113)", func() {
 		reconcileOnce(r, f)
 		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
 		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("WriteQuarantinedMasterChanged")))
+	})
+
+	// fencedNode creates a Node for the first member and its Pod scheduled on
+	// it, before the cluster runs, as a StatefulSet and a scheduler would.
+	fencedNode := func(f quarantineFixture) (*corev1.Node, *corev1.Pod) {
+		GinkgoHelper()
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-node-0"}}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-0", Namespace: f.key.Namespace,
+			Labels: labelsFor(stored(f))},
+			Spec: corev1.PodSpec{NodeName: node.Name,
+				Containers: []corev1.Container{{Name: appName, Image: memberTestImage}}}}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		return node, pod
+	}
+	// setTaint adds the out-of-service taint to node, as an administrator does
+	// after verifying out of band that its VM is powered off, or removes it.
+	setTaint := func(node *corev1.Node, on bool, at time.Time) {
+		GinkgoHelper()
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(node), node)).To(Succeed())
+		node.Spec.Taints = nil
+		if on {
+			node.Spec.Taints = []corev1.Taint{{Key: corev1.TaintNodeOutOfService, Value: "nodeshutdown",
+				Effect: corev1.TaintEffectNoExecute, TimeAdded: &metav1.Time{Time: at}}}
+		}
+		Expect(k8sClient.Update(ctx, node)).To(Succeed())
+	}
+	// annotateReturn sets the return-to-service annotation, or removes it
+	// when member is empty.
+	annotateReturn := func(f quarantineFixture, member string) {
+		GinkgoHelper()
+		c := stored(f)
+		patch := client.MergeFrom(c.DeepCopy())
+		if member == "" {
+			delete(c.Annotations, returnToServiceAnnotation)
+		} else {
+			if c.Annotations == nil {
+				c.Annotations = map[string]string{}
+			}
+			c.Annotations[returnToServiceAnnotation] = member
+		}
+		Expect(k8sClient.Patch(ctx, c, patch)).To(Succeed())
+	}
+
+	It("releases on an out-of-service taint, never adds one, and returns the member to service behind the barrier", func() {
+		f := newFixture("wq-taint")
+		node, pod := fencedNode(f)
+		recorder := record.NewFakeRecorder(200)
+		newReconciler := func() *CubridClusterReconciler {
+			r := reconcilerFor(f, k8sClient)
+			r.Recorder = recorder
+			return r
+		}
+		step := func(r *CubridClusterReconciler, d time.Duration) *databasev1alpha1.CubridCluster {
+			GinkgoHelper()
+			*f.clock = f.clock.Add(d)
+			reconcileOnce(r, f)
+			return stored(f)
+		}
+		r := newReconciler()
+		runVerified(r, f)
+		first, second := f.key.Name+"-0", f.key.Name+"-1"
+		Expect(stored(f).Status.MemberPods).To(ContainElement(SatisfyAll(HaveField("Name", first),
+			HaveField("PodUID", string(pod.UID)), HaveField("NodeName", node.Name),
+			HaveField("NodePodUID", string(pod.UID)))))
+
+		By("the first member's VM powered off: it no longer answers, and the second member is master")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		c := step(r, 3*time.Second)
+		q := c.Status.WriteQuarantine
+		Expect(q).NotTo(BeNil())
+		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberUnverified))
+		Expect(q.Members).To(HaveLen(1))
+		Expect(q.Members[0].NodeName).To(Equal(node.Name), "the record names the node to fence")
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+
+		By("an administrator, having verified the VM is off, taints its Node out of service")
+		setTaint(node, true, *f.clock)
+		c = step(r, 3*time.Second)
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.ReleaseCheckSince).NotTo(BeNil())
+		Expect(c.Status.MemberFences).To(HaveLen(1))
+		Expect(c.Status.MemberFences[0].NodeName).To(Equal(node.Name))
+		c = step(r, quarantineReleaseInterval)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		rel := c.Status.LastWriteQuarantineRelease
+		Expect(rel).NotTo(BeNil())
+		Expect(rel.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint))
+		Expect(rel.FencedMembers).To(HaveLen(1))
+		Expect(rel.FencedMembers[0].Name).To(Equal(first))
+		Expect(drain(recorder)).To(ContainElement(ContainSubstring("Warning " + reasonWriteQuarantineReleasedOnTaint)))
+		Expect(meta.FindStatusCondition(c.Status.Conditions, conditionPrimaryResolved).Status).
+			NotTo(Equal(metav1.ConditionTrue), "the taint does not resolve the primary")
+		Expect(meta.FindStatusCondition(c.Status.Conditions, conditionHAReady).Status).NotTo(Equal(metav1.ConditionTrue))
+		c = step(r, time.Second)
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+		Expect(meta.FindStatusCondition(c.Status.Conditions, conditionPrimaryResolved).Status).
+			NotTo(Equal(metav1.ConditionTrue), "the taint does not resolve the primary after the release either")
+		got := &corev1.Node{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(node), got)).To(Succeed())
+		Expect(got.Spec.Taints).To(HaveLen(1), "the Operator neither adds nor removes a taint")
+		Expect(got.Spec.Taints[0].Key).To(Equal(corev1.TaintNodeOutOfService))
+
+		By("Kubernetes force-deletes the member's Pod: it stays mapped to the tainted node and starts no quarantine")
+		Expect(k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0))).To(Succeed())
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}))
+		}).Should(BeTrue())
+		c = step(r, 3*time.Second)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.MemberPods).To(ContainElement(HaveField("NodeName", node.Name)))
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+
+		By("the administrator asks to return the member: the barrier closes the path and is recorded enforced")
+		annotateReturn(f, first)
+		c = step(r, 3*time.Second)
+		q = c.Status.WriteQuarantine
+		Expect(q).NotTo(BeNil())
+		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberReturning))
+		Expect(q.ReturningMember).To(Equal(first))
+		Expect(q.ObservedMaster).To(Equal(second))
+		Expect(q.EnforcedTime).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+		Expect(drain(recorder)).To(ContainElement(ContainSubstring("may now be removed (" + node.Name + ")")))
+
+		By("a restarted Operator, with the read-write Brokers scaled up by hand, keeps the barrier")
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, f.rw, dep)).To(Succeed())
+		dep.Spec.Replicas = new(int32(2))
+		Expect(k8sClient.Update(ctx, dep)).To(Succeed())
+		r = newReconciler()
+		c = step(r, 3*time.Second)
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberReturning))
+		c = step(r, quarantineReleaseInterval)
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil(), "the taint does not release a return")
+
+		By("the taint removed after the barrier is enforced; the member starts and answers as a slave")
+		setTaint(node, false, *f.clock)
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		c = step(r, 3*time.Second)
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.ReleaseCheckSince).To(BeNil(), "one answer does not verify the member")
+		c = step(r, quarantineVerifyGap+time.Second)
+		Expect(c.Status.WriteQuarantine.ReleaseCheckSince).NotTo(BeNil())
+		c = step(r, quarantineReleaseInterval)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		rel = c.Status.LastWriteQuarantineRelease
+		Expect(rel.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedReturnedToService))
+		Expect(rel.ReturningMember).To(Equal(first))
+		Expect(c.Status.ReturnedToService).To(Equal(first))
+		Expect(c.Status.MemberFences).To(BeEmpty())
+		Expect(rwReplicas(f)).To(Equal(int32(0)), "the release is written before the Brokers start")
+
+		By("the annotation left in place is ignored: it does not close the path again")
+		step(r, time.Second)
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+		c = step(r, 3*time.Second)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+
+		By("the annotation removed: the consumed return is forgotten, and a new request would start a new barrier")
+		annotateReturn(f, "")
+		c = step(r, 3*time.Second)
+		Expect(c.Status.ReturnedToService).To(BeEmpty())
+		annotateReturn(f, first)
+		c = step(r, 3*time.Second)
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberReturning))
+	})
+
+	It("refuses the out-of-service taint of a member that still answers, and does not release on it", func() {
+		f := newFixture("wq-taint-live")
+		node, _ := fencedNode(f)
+		recorder := record.NewFakeRecorder(200)
+		r := reconcilerFor(f, k8sClient)
+		r.Recorder = recorder
+		runVerified(r, f)
+
+		By("the first member answering without a role beside the second one as master, its Node tainted")
+		live := roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave})
+		live[f.key.Name+"-0"] = ""
+		f.answers.set(live)
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		setTaint(node, true, *f.clock)
+		for range 3 {
+			*f.clock = f.clock.Add(quarantineReleaseInterval)
+			reconcileOnce(r, f)
+			c := stored(f)
+			Expect(c.Status.WriteQuarantine).NotTo(BeNil(), "a live answer contradicts the taint")
+			Expect(c.Status.MemberFences).To(BeEmpty())
+			Expect(rwReplicas(f)).To(Equal(int32(0)))
+		}
+		refusals := 0
+		for _, e := range drain(recorder) {
+			if strings.Contains(e, reasonOutOfServiceTaintRefused) {
+				refusals++
+				Expect(e).To(ContainSubstring(node.Name))
+			}
+		}
+		Expect(refusals).To(Equal(1), "the refusal is reported once")
+	})
+
+	It("keeps the return barrier until the member is verified when the taint is removed before it is enforced", func() {
+		f := newFixture("wq-early-untaint")
+		node, _ := fencedNode(f)
+		r := reconcilerFor(f, k8sClient)
+		runVerified(r, f)
+
+		By("the first member's Node tainted out of service before it is cut off: it never becomes unverified")
+		setTaint(node, true, *f.clock)
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).To(BeNil())
+		Expect(stored(f).Status.MemberFences).To(HaveLen(1))
+
+		By("the return asked for while a read-write endpoint is still listed: not enforced yet")
+		slice := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-rw-abcde", Namespace: f.key.Namespace,
+				Labels: map[string]string{discoveryv1.LabelServiceName: rwServiceName(f.key.Name)}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Endpoints:   []discoveryv1.Endpoint{{Addresses: []string{"10.1.2.3"}}},
+		}
+		Expect(k8sClient.Create(ctx, slice)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, slice) })
+		annotateReturn(f, f.key.Name+"-0")
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		q := stored(f).Status.WriteQuarantine
+		Expect(q).NotTo(BeNil())
+		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberReturning))
+		Expect(q.EnforcedTime).To(BeNil())
+
+		By("the taint removed before enforced, which the procedure forbids: the quarantine still holds")
+		setTaint(node, false, *f.clock)
+		for range 3 {
+			*f.clock = f.clock.Add(quarantineReleaseInterval)
+			reconcileOnce(r, f)
+			Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+			Expect(rwReplicas(f)).To(Equal(int32(0)))
+		}
+
+		By("released only after the member is verified as no active master in two observations ten seconds apart")
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		for _, d := range []time.Duration{3 * time.Second, quarantineVerifyGap + time.Second} {
+			*f.clock = f.clock.Add(d)
+			reconcileOnce(r, f)
+			Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		}
+		*f.clock = f.clock.Add(quarantineReleaseInterval)
+		reconcileOnce(r, f)
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.LastWriteQuarantineRelease.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedReturnedToService))
 	})
 })

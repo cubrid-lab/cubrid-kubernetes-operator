@@ -300,6 +300,10 @@ func TestGeneratedRoleGrantsOnlyWhatTheManagerCalls(t *testing.T) {
 		// Replacing a member during an update deletes its Pod.
 		"/pods":                   read + " delete",
 		"/persistentvolumeclaims": read,
+		// A member's Node is read past the cache for the out-of-service
+		// taint (ADR-0005, section 8). Only get: the Operator never adds,
+		// removes or watches a taint.
+		"/nodes": "get",
 		// The recorder creates an Event and patches a repeated one.
 		"/events":           "create patch",
 		"apps/statefulsets": writes,

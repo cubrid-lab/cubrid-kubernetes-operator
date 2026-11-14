@@ -2165,9 +2165,11 @@ it needs more.
   the member has rejoined.
 - **Limits:** `failover_limit` (from the taint), `vm_return_limit`,
   `stable_period`.
-- **Implementation:** the installed harness (`test/installed/`) does not yet
-  add or remove the taint, or run the return procedure. That follows the
-  quarantine itself (#113) and its VM-lab validation (#115).
+- **Implementation:** the Operator reads the taint for the release and runs
+  the return-to-service barrier (#113; unit/envtest only, S04 not run). The
+  installed harness (`test/installed/`) does not yet add or remove the taint,
+  or run the return procedure; that follows with the VM-lab validation
+  (#115).
 - **Source note:** no outside test was read for this scenario; the contract
   comes from ADR-0005 alone.
 

@@ -141,7 +141,8 @@ Each item below was found in the official source at `fa7b6c2`.
   explicit PVC-loss decision ([ADR-0005](adr/0005-failover-split-brain.md),
   [ADR-0006](adr/0006-node-join-rebuild.md)). Write quarantine stops the
   read-write Brokers (envtest only, including the manual release on a
-  one-time token; the out-of-service taint release is not implemented,
+  one-time token, the release on an out-of-service taint and the
+  return-to-service barrier,
   [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113)),
   and rejoin and rebuild are not validated.
 - **Backup and restore state.** A backup records its target, operation and

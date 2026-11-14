@@ -40,7 +40,11 @@ type RoleObservation struct {
 	// the cluster's token. The member is then not reachable for the operator
 	// and its role stays unknown, as for an unreachable one.
 	TokenRefused bool
-	Role         databasev1alpha1.CubridRole
+	// Responded is set when the Instance Manager returned an HTTP response
+	// other than 200, such as a refused token or a server error: the member
+	// is not reachable for its role, but its Pod's process answered.
+	Responded bool
+	Role      databasev1alpha1.CubridRole
 	// ObservedAt is when the answer was received. An observation without it, or
 	// older than roleObservationTTL, is not authoritative (ADR-0005).
 	ObservedAt time.Time
@@ -148,7 +152,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return RoleObservation{Reachable: false, TokenRefused: tokenRefused(resp.StatusCode), ObservedAt: p.now(),
-			Reason: fmt.Sprintf("status %d", resp.StatusCode), RequestID: id}
+			Reason: fmt.Sprintf("status %d", resp.StatusCode), RequestID: id, Responded: true}
 	}
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
