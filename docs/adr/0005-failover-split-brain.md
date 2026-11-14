@@ -335,13 +335,19 @@ The records are in `docs/poc/RESULTS.md`.
      created after the confirmed one (or at a time not known) that the
      Operator saw deleted without such a confirmation ends it and keeps it
      from being recorded. It also ends 90 seconds after the kubelet's
-     report of the container's end, and is not recorded again after that,
+     report of the container's end, or after the Operator observed it if
+     that is earlier (an end time more than 5 s after the observation, as
+     from a node clock running ahead, is not trusted and nothing is
+     recorded), and is not recorded again after that,
      so a next Pod that stays Pending, crash-loops or cannot be reached is
      unverified as any member. The 90 seconds come from the Kind rejoin
      baselines (all members back with a role 21.4 to 26.8 s after a master
      Pod deletion, `rejoin_limit` in the scenario contract), more than
      three times the slowest; they are not measured at the head that
-     implements this exception, nor on the VM lab.
+     implements this exception, nor on the VM lab. A next Pod created and
+     deleted with `--force` entirely while the Operator's Pod watch was
+     disconnected, or while the Operator was restarting, is not seen; the
+     same 90 seconds bound that window.
      A Pod deleted with `--force`, whose object is gone before the kubelet
      reports anything, a termination the Operator did not see, and a VM
      lost or cut off stay unverified exactly as above. While the next Pod

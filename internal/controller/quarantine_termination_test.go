@@ -166,3 +166,23 @@ func TestRecordTerminationsAtTheKubeletReport(t *testing.T) {
 		t.Fatalf("records = %+v, want an expired termination not recorded", got)
 	}
 }
+
+// An end time the node stamps after the Operator observed the termination,
+// as from a node clock that runs ahead, is not trusted: one more than
+// terminationSkew ahead is not recorded, and a smaller one is recorded at
+// the Operator's observation, so that quarantineStartBound runs from it.
+func TestRecordTerminationsDoNotTrustAFutureEndTime(t *testing.T) {
+	observed := testNow.Add(10 * time.Second)
+	r := &CubridClusterReconciler{Clock: func() time.Time { return observed }}
+	r.notePodTermination(createdPod("a", testNow.Add(-time.Hour), testNow, 30, finishedAt(observed.Add(time.Hour))))
+	if got := recordFor(r, "a", nil, memberIdentity{}); len(got) != 0 {
+		t.Fatalf("records = %+v, want an end time an hour ahead not recorded", got)
+	}
+
+	r = &CubridClusterReconciler{Clock: func() time.Time { return observed }}
+	r.notePodTermination(createdPod("a", testNow.Add(-time.Hour), testNow, 30, finishedAt(observed.Add(3*time.Second))))
+	got := recordFor(r, "a", nil, memberIdentity{})
+	if len(got) != 1 || !got[0].ConfirmedAt.Time.Equal(observed) {
+		t.Fatalf("records = %+v, want one confirmed at the observation %s", got, observed)
+	}
+}

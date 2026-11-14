@@ -362,7 +362,9 @@ Pod:
   reads, before the Pod was gone. It records the member's last Pod UID in
   `status.memberPods` and the confirmed Pod in `status.memberTerminations`,
   and records a termination only for the last Pod it saw of that member.
-  The record (`confirmedAt` is the kubelet's report of the container's end)
+  The record (`confirmedAt` is the kubelet's report of the container's end,
+  or the Operator's observation of it if earlier; an end more than 5 s after
+  the observation is not trusted and not recorded)
   covers that Pod and the first next Pod the Operator sees, created no
   earlier than the confirmed Pod's deletion was requested (`nextPodUID`);
   another Pod of the member, the next Pod gone, a Pod of the member created

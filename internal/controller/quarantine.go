@@ -214,8 +214,8 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 	confirmed, unconfirmed := kept(&r.podTerminations), kept(&r.podUnconfirmed)
 	for _, read := range []map[string]memberIdentity{before, ids} {
 		for m, id := range read {
-			if id.Terminated {
-				confirmed[id.PodUID] = podTermination{cluster: key, member: m, created: id.Created,
+			if _, watched := confirmed[id.PodUID]; id.Terminated && !watched {
+				confirmed[id.PodUID] = podTermination{cluster: key, member: m, at: r.now(), created: id.Created,
 					finished: id.TerminatedAt, requested: id.DeletionRequested}
 			}
 		}
@@ -250,6 +250,7 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 	for _, m := range members {
 		uid := lastPodConfirmed(m, last[m], confirmed)
 		c := confirmed[uid]
+		c.finished = trustedEnd(c.finished, c.at)
 		if uid != "" && (c.finished.IsZero() || r.now().Sub(c.finished) > quarantineStartBound ||
 			laterUnconfirmed(m, uid, c.created) != "" || unconfirmed[uid].member != "") {
 			uid = ""
@@ -278,6 +279,21 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 	}
 	cluster.Status.MemberPods = pods
 	return out
+}
+
+// trustedEnd is the time a confirmed termination runs from: the end the
+// node stamped, finished, bounded by the Operator's observation of it,
+// observed. An end later than the observation by more than terminationSkew
+// is not trusted and is zero, so a node clock ahead cannot lengthen
+// quarantineStartBound.
+func trustedEnd(finished, observed time.Time) time.Time {
+	switch {
+	case !finished.After(observed):
+		return finished
+	case finished.Sub(observed) > terminationSkew:
+		return time.Time{}
+	}
+	return observed
 }
 
 // lastPodConfirmed is the UID of member's last Pod seen before this pass,

@@ -1267,7 +1267,9 @@ spec:
                     confirmedAt:
                       description: |-
                         confirmedAt is when the kubelet reported the database container
-                        terminated (its finishedAt).
+                        terminated (its finishedAt), or when the Operator observed that,
+                        whichever is earlier. An end time more than 5 seconds after the
+                        observation is not trusted, and the termination is not recorded.
                       format: date-time
                       type: string
                     deletionRequestedAt:

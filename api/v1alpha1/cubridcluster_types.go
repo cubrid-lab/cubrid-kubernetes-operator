@@ -869,7 +869,9 @@ type MemberTermination struct {
 	// database container terminated.
 	PodUID string `json:"podUID"`
 	// confirmedAt is when the kubelet reported the database container
-	// terminated (its finishedAt).
+	// terminated (its finishedAt), or when the Operator observed that,
+	// whichever is earlier. An end time more than 5 seconds after the
+	// observation is not trusted, and the termination is not recorded.
 	ConfirmedAt metav1.Time `json:"confirmedAt"`
 	// podCreated is the confirmed Pod's creationTimestamp. A Pod of the
 	// member deleted without a confirmation and created after it ends the
