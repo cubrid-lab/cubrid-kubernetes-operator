@@ -77,7 +77,7 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready, no recovery bootstrap is in progress, the HA bootstrap is not `Failed` and has recorded every member as holding the database, no more than one master is observed, and `PrimaryResolved` (HA) is not `False` after 60 seconds or more without being `True` (`ClusterReady`) | the reason of a write quarantine in force (`WriteQuarantinedMultipleMasters`, `WriteQuarantinedMemberUnverified`, `WriteQuarantinedMasterChanged`; see [The write quarantine](#the-write-quarantine)), at once and before every other reason of a reconcile that wrote its objects; `ReadWriteBrokersHeld` (the read-write Brokers are kept at zero in this pass without a quarantine in the status: the pass that released one, before the release is written), which comes next; `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, the failure reason of an HA bootstrap that is `Failed` (`BootstrapReady`'s reason, such as `DatabaseCreationFailed`, `SeedRestoreFailed`, `SeedSourceChangedDuringSeed` or `RecordedOperationLost`, whose message the message carries; `HABootstrapFailed` when `BootstrapReady` names none; #770), `MemberNotSeeded` (every instance is ready, but the HA bootstrap created or restored the database and has not yet recorded every other member in `status.databases[].seededMembers`, as while the last member catches up after its seed restore; the message names those members, as `HAReady`'s does; #770), `PrimaryUnresolved` (HA: `PrimaryResolved` is `False` and has not been `True` for 60 seconds or more, whatever its reason, which the message names; #716), the reason of `DBAPasswordSecretResolved` while the StatefulSet waits for the DBA password Secret (#805), or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` or `DisruptionBudgetReconcileFailed` (see below). After a reconcile that wrote its objects, the first that holds of these comes first: a write quarantine, `MultiplePrimariesObserved` (on ready instances), the failed HA bootstrap (whether or not every instance is ready), `InstancesNotReady`, then, on ready instances, `MemberNotSeeded` and `PrimaryUnresolved`. So an HA bootstrap in progress keeps `Ready` `False` from start to end: with `InstancesNotReady` while a member's server does not run yet, and with `MemberNotSeeded` once every member runs and one is still not recorded as seeded |
+| `Ready` | The expected members are ready, no recovery bootstrap is in progress, the HA bootstrap is not `Failed` and has recorded every member as holding the database, no more than one master is observed, and `PrimaryResolved` (HA) is not `False` after 60 seconds or more without being `True` (`ClusterReady`) | the reason of a write quarantine in force (`WriteQuarantinedMultipleMasters`, `WriteQuarantinedMemberUnverified`, `WriteQuarantinedMasterChanged`, `WriteQuarantinedMemberReturning`; see [The write quarantine](#the-write-quarantine)), at once and before every other reason of a reconcile that wrote its objects; `ReadWriteBrokersHeld` (the read-write Brokers are kept at zero in this pass without a quarantine in the status: the pass that released one, before the release is written), which comes next; `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, the failure reason of an HA bootstrap that is `Failed` (`BootstrapReady`'s reason, such as `DatabaseCreationFailed`, `SeedRestoreFailed`, `SeedSourceChangedDuringSeed` or `RecordedOperationLost`, whose message the message carries; `HABootstrapFailed` when `BootstrapReady` names none; #770), `MemberNotSeeded` (every instance is ready, but the HA bootstrap created or restored the database and has not yet recorded every other member in `status.databases[].seededMembers`, as while the last member catches up after its seed restore; the message names those members, as `HAReady`'s does; #770), `PrimaryUnresolved` (HA: `PrimaryResolved` is `False` and has not been `True` for 60 seconds or more, whatever its reason, which the message names; #716), the reason of `DBAPasswordSecretResolved` while the StatefulSet waits for the DBA password Secret (#805), or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` or `DisruptionBudgetReconcileFailed` (see below). After a reconcile that wrote its objects, the first that holds of these comes first: a write quarantine, `MultiplePrimariesObserved` (on ready instances), the failed HA bootstrap (whether or not every instance is ready), `InstancesNotReady`, then, on ready instances, `MemberNotSeeded` and `PrimaryUnresolved`. So an HA bootstrap in progress keeps `Ready` `False` from start to end: with `InstancesNotReady` while a member's server does not run yet, and with `MemberNotSeeded` once every member runs and one is still not recorded as seeded |
 | `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), the HA bootstrap has not recorded every member as seeded while every instance is ready (`MemberNotSeeded`; the message carries `BootstrapReady`'s status, reason and message, which say whether a copy runs, waits, or is held by the configuration), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed`; the failure reason of an HA bootstrap that is `Failed`, which waits for a person (#770); `InvalidClusterName` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True`, every member other than the primary is observed as a slave, `ReplicationHealthy` is `True` (a single-member cluster: `PrimaryResolved` alone), and the HA bootstrap neither failed nor left a member unrecorded | `MemberNotSeeded`: the HA bootstrap created or restored the database and has not completed (`status.databases[].haConfigured`), and a member other than the one it was created or restored on is not in `status.databases[].seededMembers`; the message names those members. Such a member may apply the master's log with nothing waiting while it lacks what the master committed (POC-57, #768), so the roles and the replication do not make `HAReady` `True` for it (#770). During a normal bootstrap this is the reason from the database's creation until the last member is recorded as seeded. The failure reason of an HA bootstrap or recovery that is `Failed` (`BootstrapReady`'s reason). Either comes before the reasons below; once the roles were observed, the message carries what they showed after `roles:`. The reason of `PrimaryResolved`; the reason of `ReplicationHealthy` (`ReplicationStalled`, `ApplyFailures`, `LogCopyStalled`); `HADisabled`; `Unknown` with `ReplicasNotObserved`, `ReplicationNotObserved`, `RoleDiscoveryDisabled` or `RolesNotObserved` (also while a recovery bootstrap runs). These report only: the Operator starts, deletes or chooses nothing because of them (ADR-0005) |
@@ -396,6 +396,11 @@ Pod:
   ceasing to claim while its Pod is not seen being deleted, still makes it
   `WriteQuarantinedMasterChanged`. No rebase is made in a pass that could
   not read the members' Pods.
+- A member that gives no answer is not unverified while the node its Pod was
+  last seen scheduled on carries the taint
+  `node.kubernetes.io/out-of-service` with the effect `NoExecute` (ADR-0005,
+  section 8, "Unverified", item 2): see
+  [Release on an out-of-service taint](#release-on-an-out-of-service-taint).
 - `status.lastResolvedPrimary` is the primary of the last pass that resolved
   one, with `lastResolvedPrimaryTime`; it is never cleared.
 
@@ -404,7 +409,8 @@ A quarantine starts when two or more members are active masters
 comes before it in ordinal order, or the last resolved primary, is not
 verified (`WriteQuarantinedMemberUnverified`). It is recorded in
 `status.writeQuarantine`: a random 128-bit `generationID`, the `reason`,
-`startTime`, the `members` with their Pod UID and observed role, the
+`startTime`, the `members` with their Pod UID, observed role and the node
+their Pod was last seen on (`nodeName`, the node to fence), the
 `observedMaster` beside which it started, a `revision` and a random
 `releaseToken`. A new member, a member removed or found in another Pod, or a
 change of reason increments the revision and replaces the token; the
@@ -433,18 +439,131 @@ are not touched. While a quarantine is in force, or a member is unverified in
 a cluster whose primary was resolved once, the roles are observed every 3
 seconds instead of 10.
 
-Only `WriteQuarantinedMemberUnverified` is released by the Operator: when two
+Only `WriteQuarantinedMemberUnverified`, and `WriteQuarantinedMemberReturning`
+(see [Return to service](#return-to-service)), are released by the Operator.
+`WriteQuarantinedMemberUnverified` is released when two
 passes at least 10 seconds apart each see the recorded master, in the same
 Pod and container start, as the only active master and every other member
-verified since before the first of them (`releaseCheckSince`), with no two
+verified (or fenced, see
+[Release on an out-of-service taint](#release-on-an-out-of-service-taint))
+since before the first of them (`releaseCheckSince`), with no two
 releasable passes more than 30 seconds apart (`releaseCheckLastTime`). A
 restart of the recorded master revises the quarantine. `Ready` stays `False`
 with `ReadWriteBrokersHeld` on the pass that releases it. The release is written to
 `status.lastWriteQuarantineRelease` with the time and the method `Automatic`
 before the read-write Brokers are scaled back in the next pass. Any other
-quarantine, and a `WriteQuarantinedMemberUnverified` one that does not clear,
-ends only by the manual release below. A release on an out-of-service taint
-and the return-to-service procedure of ADR-0005 are not implemented (#113).
+quarantine, and a `WriteQuarantinedMemberUnverified` or
+`WriteQuarantinedMemberReturning` one that does not clear, ends only by the
+manual release below.
+
+#### Release on an out-of-service taint
+
+ADR-0005 section 8 lets a `WriteQuarantinedMemberUnverified` quarantine be
+released while a member cannot answer, as after its VM was powered off, on an
+administrator's fence assertion: the taint
+`node.kubernetes.io/out-of-service:NoExecute` on the member's Node. The
+administrator adds it **only after** verifying out of band that the VM is
+powered off or otherwise fenced, and records that proof; the taint itself
+proves nothing about the database process, and a wrong taint on a live,
+partitioned node can let a second database process run.
+
+- **The member's node.** `status.memberPods[].nodeName` records the node the
+  member's Pod was last seen scheduled on. It is kept while the member has no
+  Pod, or one that is not scheduled yet, as after Kubernetes force-deleted the
+  Pod from the tainted node and the StatefulSet recreated it `Pending`. A Pod
+  of the member scheduled on another node replaces it.
+- **Reading the taint.** In each pass, for every member that gave neither an
+  active-master nor a non-master answer, the Operator reads that node's Node
+  object from the API server, past its cache (RBAC: `get` on `nodes`, nothing
+  more). Only the key `node.kubernetes.io/out-of-service` with the effect
+  `NoExecute` counts; its value does not. A Node that does not exist fences
+  nothing. A Node that cannot be read is handled as Pods that cannot be read:
+  only two active masters start a quarantine, nothing is verified, fenced or
+  released, and the read-write Brokers are not scaled up in that pass.
+- **The fence record.** `status.memberFences` keeps, for each member counted as
+  fenced, the `nodeName`, since when the taint has been seen without a break
+  (`since`, rounded up to the second) and the taint's `timeAdded`
+  (`taintTimeAdded`). A pass that does not see the taint removes the entry; a
+  taint seen on another node, or with another `timeAdded` (removed and added
+  again), starts it over.
+- **What the taint does.** A fenced member is not unverified: it does not start
+  a rule-2 quarantine, and it counts for the automatic release as a verified
+  member does. It is still an active master when it claims to be one, so two
+  active masters still start a `WriteQuarantinedMultipleMasters` quarantine.
+- **The release.** The automatic release of a `WriteQuarantinedMemberUnverified`
+  quarantine needs the same two passes at least 10 seconds apart as above;
+  each other member must be verified by its answers or fenced by the taint in
+  both, and a fence that started after the first of them starts the release
+  check over. When a member counted as fenced, the release is recorded in
+  `status.lastWriteQuarantineRelease` with the method `OutOfServiceTaint` and
+  `fencedMembers` (member, node, `since`, `taintTimeAdded`), and reported with
+  the Warning Event `WriteQuarantineReleasedOnOutOfServiceTaint`.
+- **Not primary resolution.** The taint never makes `PrimaryResolved`,
+  `HAReady` or `RoutingReady` `True`: they keep reporting what was observed,
+  so `PrimaryResolved` stays not `True` while the fenced member cannot be
+  observed. The release only lets the read-write Brokers start.
+- **The Operator never adds, removes or infers the taint.** It does not treat
+  a Node's Lease, its `Ready` condition or a Pod that disappeared as a fence.
+- **Removing the taint** is part of the return to service below. A taint
+  removed without it leaves the member unverified, and rule 2 quarantines the
+  path again on the next pass; writes the returning database acknowledges
+  before that pass are not protected.
+
+#### Return to service
+
+Before the taint is removed, the administrator closes the read-write path
+with a barrier the Operator keeps across its own restarts (ADR-0005,
+section 8, "Return to service"):
+
+1. **Request.** Set the annotation to the returning member's name:
+
+   ```sh
+   kubectl annotate cubridcluster <name> database.cubrid.io/return-to-service=<name>-0
+   ```
+
+2. **Enforcing.** With no other quarantine in force, the members' Pods read
+   and exactly one active master M that is not the returning member, the
+   Operator starts a quarantine with the reason
+   `WriteQuarantinedMemberReturning`, recording the member
+   (`writeQuarantine.returningMember`, `members` with its `nodeName`) and M
+   (`observedMaster`), and stops the read-write Brokers as for any quarantine.
+   Until then the request waits, with one Warning Event
+   `ReturnToServiceWaiting` per value and reason; an annotation that names no
+   promotable member is reported the same way.
+3. **Enforced.** Once no read-write Broker Pod and no `-rw` endpoint remains,
+   `writeQuarantine.enforcedTime` is set and the Warning Event
+   `WriteQuarantineEnforced` says that the taint of the member's node may now
+   be removed.
+4. **Untaint.** The administrator removes the taint, only after step 3. The
+   member's Pod is scheduled and starts.
+5. **Verified.** The Operator needs the returning member verified by its own
+   answers (non-master answers from one Pod and container start, at least 2
+   seconds apart) in two passes at least 10 seconds apart, with M, in the same
+   Pod and container start, the only active master and every other member
+   verified, fenced by its own taint, or covered by a confirmed termination.
+   The taint and a confirmed termination never count for the returning
+   member, so this quarantine is never released by the taint.
+6. **Released.** The release is recorded with the method `ReturnedToService`
+   and `returningMember`, reported with the Normal Event
+   `WriteQuarantineReleased`, and the read-write Brokers start in the next
+   pass. The administrator then removes the annotation.
+
+- **The barrier holds by itself.** Steps 2 to 5 are an ordinary persisted
+  quarantine: it is enforced first in every pass, including the first after an
+  Operator restart, and only step 5 or a manual release ends it. Removing the
+  annotation does not end it.
+- **Escalation.** If the returning member claims an active master, or another
+  member does, the quarantine becomes `WriteQuarantinedMasterChanged`, which
+  only a manual release ends; `returningMember` is kept.
+- **One use.** After a release of a quarantine with a returning member,
+  automatic or manual, `status.returnedToService` holds the member, and an
+  annotation with that value is ignored: it does not close the path again or
+  authorize a later return. The Operator clears the field once it sees the
+  annotation removed or changed, so a later request for the same member needs
+  the annotation removed first.
+- **Taint removed before step 3.** The procedure forbids it, and the Operator
+  cannot prevent it: the database may start and acknowledge writes before the
+  barrier is enforced. A barrier already started still holds until step 5.
 
 #### Manual release
 
@@ -660,6 +779,8 @@ underscores.
 | A write quarantine is verified as enforced: no read-write Broker Pod or `-rw` endpoint remains | `WriteQuarantineEnforced` | Warning | none |
 | A write quarantine is released | `WriteQuarantineReleased` | Normal | `write_quarantine_released` |
 | A write quarantine is released on the administrator's annotation | `WriteQuarantineReleasedManually` | Warning | `write_quarantine_released` |
+| A write quarantine is released with at least one member counted as fenced by an out-of-service taint | `WriteQuarantineReleasedOnOutOfServiceTaint` | Warning | `write_quarantine_released` |
+| The return-to-service annotation is not taken up: it names no promotable member, another quarantine is in force, or there is not exactly one active master; once per value and reason | `ReturnToServiceWaiting` | Warning | none |
 | The release annotation does not name the stored quarantine's current token, or the members were revised in the same observation; once per value | `WriteQuarantineReleaseIgnored` | Warning | none |
 | A manual release's exemption ends for a member, or for all of them | `WriteQuarantineExemptionEnded` | Normal | `write_quarantine_exemption_ended` |
 | The release annotation names the current token, but the observation does not see exactly one active master or could not read the members' Pods; once per value and reason | `WriteQuarantineReleaseRefused` | Warning | none |

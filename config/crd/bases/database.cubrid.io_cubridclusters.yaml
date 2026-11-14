@@ -1173,6 +1173,45 @@ spec:
                       type: string
                     type: array
                     x-kubernetes-list-type: set
+                  fencedMembers:
+                    description: |-
+                      fencedMembers are the members that counted as fenced by an
+                      out-of-service taint, with their node, at the release.
+                    items:
+                      description: |-
+                        MemberFence is an administrator's assertion that a member's node is
+                        fenced: the taint node.kubernetes.io/out-of-service with the effect
+                        NoExecute on the node the member's Pod was last seen on. It is not proof
+                        that the database process cannot run (ADR-0005, section 8).
+                      properties:
+                        name:
+                          description: name is the member.
+                          type: string
+                        nodeName:
+                          description: nodeName is the tainted node.
+                          type: string
+                        since:
+                          description: |-
+                            since is when the Operator first saw the taint in this uninterrupted
+                            run of observations, rounded up to the second.
+                          format: date-time
+                          type: string
+                        taintTimeAdded:
+                          description: |-
+                            taintTimeAdded is the taint's timeAdded when the Operator first saw
+                            it, if the taint carried one. A different value means the taint was
+                            removed and added again, and starts the entry over.
+                          format: date-time
+                          type: string
+                      required:
+                      - name
+                      - nodeName
+                      - since
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   generationID:
                     description: generationID is the released quarantine's.
                     type: string
@@ -1187,6 +1226,11 @@ spec:
                       properties:
                         name:
                           description: name is the member.
+                          type: string
+                        nodeName:
+                          description: |-
+                            nodeName is the node the member's Pod was last seen scheduled on when
+                            it was recorded: the node to fence before an out-of-service taint.
                           type: string
                         observedRole:
                           description: |-
@@ -1216,6 +1260,8 @@ spec:
                     enum:
                     - Automatic
                     - Manual
+                    - OutOfServiceTaint
+                    - ReturnedToService
                     type: string
                   observedMaster:
                     description: observedMaster is the active master at the release.
@@ -1237,6 +1283,7 @@ spec:
                     - WriteQuarantinedMultipleMasters
                     - WriteQuarantinedMemberUnverified
                     - WriteQuarantinedMasterChanged
+                    - WriteQuarantinedMemberReturning
                     type: string
                   releaseTime:
                     description: releaseTime is when it was released.
@@ -1246,6 +1293,9 @@ spec:
                     description: |-
                       releaseToken is the one-time token a manual release consumed. An
                       annotation that still names it is ignored and removed.
+                    type: string
+                  returningMember:
+                    description: returningMember is the released quarantine's returningMember.
                     type: string
                   revision:
                     description: revision is the released quarantine's last revision.
@@ -1267,6 +1317,52 @@ spec:
                 - releaseTime
                 - startTime
                 type: object
+              memberFences:
+                description: |-
+                  memberFences records, for each promotable member that does not answer
+                  and whose node carries the taint node.kubernetes.io/out-of-service with
+                  the effect NoExecute, since when the Operator has seen that taint
+                  without a break. An administrator adds the taint only after verifying
+                  out of band that the node's VM is powered off or otherwise fenced; the
+                  Operator never adds or removes it. While the taint stays, the member is
+                  not unverified for the read-write quarantine (ADR-0005, section 8,
+                  "Unverified", item 2). A pass that does not see the taint, or sees the
+                  member's Pod on another node, removes the entry.
+                items:
+                  description: |-
+                    MemberFence is an administrator's assertion that a member's node is
+                    fenced: the taint node.kubernetes.io/out-of-service with the effect
+                    NoExecute on the node the member's Pod was last seen on. It is not proof
+                    that the database process cannot run (ADR-0005, section 8).
+                  properties:
+                    name:
+                      description: name is the member.
+                      type: string
+                    nodeName:
+                      description: nodeName is the tainted node.
+                      type: string
+                    since:
+                      description: |-
+                        since is when the Operator first saw the taint in this uninterrupted
+                        run of observations, rounded up to the second.
+                      format: date-time
+                      type: string
+                    taintTimeAdded:
+                      description: |-
+                        taintTimeAdded is the taint's timeAdded when the Operator first saw
+                        it, if the taint carried one. A different value means the taint was
+                        removed and added again, and starts the entry over.
+                      format: date-time
+                      type: string
+                  required:
+                  - name
+                  - nodeName
+                  - since
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               memberPods:
                 description: |-
                   memberPods records the UID of each promotable member's Pod when the
@@ -1280,6 +1376,13 @@ spec:
                   properties:
                     name:
                       description: name is the member.
+                      type: string
+                    nodeName:
+                      description: |-
+                        nodeName is the node the member's Pod was last seen scheduled on. It is
+                        kept while the member has no Pod or a Pod that is not scheduled yet, as
+                        after Kubernetes force-deleted it from a node tainted out of service,
+                        so that the member stays mapped to that node.
                       type: string
                     podUID:
                       description: podUID is that Pod's UID.
@@ -1417,6 +1520,15 @@ spec:
                   by the operator.
                 format: int64
                 type: integer
+              returnedToService:
+                description: |-
+                  returnedToService is the value of the annotation
+                  database.cubrid.io/return-to-service whose return was released. While
+                  the annotation keeps this value it is ignored, so a left-over
+                  annotation neither closes the read-write path again nor authorizes a
+                  later return; the Operator clears this field once it sees the
+                  annotation removed or changed.
+                type: string
               update:
                 description: update reports rolling-update progress (ADR-0009).
                 properties:
@@ -1437,8 +1549,8 @@ spec:
                 description: |-
                   writeQuarantine is set while the Operator keeps the read-write Brokers
                   stopped because a second active master or an unverified member was
-                  observed (ADR-0005, section 8). It is unset when no quarantine is in
-                  force. Only a release ends it.
+                  observed, or a member is returning to service (ADR-0005, section 8).
+                  It is unset when no quarantine is in force. Only a release ends it.
                 properties:
                   clusterUID:
                     description: |-
@@ -1468,6 +1580,11 @@ spec:
                       properties:
                         name:
                           description: name is the member.
+                          type: string
+                        nodeName:
+                          description: |-
+                            nodeName is the node the member's Pod was last seen scheduled on when
+                            it was recorded: the node to fence before an out-of-service taint.
                           type: string
                         observedRole:
                           description: |-
@@ -1535,6 +1652,7 @@ spec:
                     - WriteQuarantinedMultipleMasters
                     - WriteQuarantinedMemberUnverified
                     - WriteQuarantinedMasterChanged
+                    - WriteQuarantinedMemberReturning
                     type: string
                   releaseCheckLastTime:
                     description: |-
@@ -1560,6 +1678,12 @@ spec:
                     description: |-
                       releaseToken is a random value of 128 bits, new whenever revision
                       changes. A manual release must name it.
+                    type: string
+                  returningMember:
+                    description: |-
+                      returningMember is the member a return to service is about, from the
+                      annotation database.cubrid.io/return-to-service. It is kept when the
+                      quarantine becomes WriteQuarantinedMasterChanged.
                     type: string
                   revision:
                     description: |-

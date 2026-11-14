@@ -59,6 +59,8 @@ type memberIdentity struct {
 	// TerminatedAt and DeletionRequested are terminatedAt and
 	// deletionRequested of the Pod.
 	TerminatedAt, DeletionRequested time.Time
+	// NodeName is the node the Pod is scheduled on; empty while it is not.
+	NodeName string
 }
 
 // terminationSkew is how much earlier than the deletion request the kubelet
@@ -199,9 +201,9 @@ func (r *CubridClusterReconciler) notePodTermination(pod *corev1.Pod) bool {
 // recordTerminations is status.memberTerminations with the terminations
 // seen for each member's last Pod added: in the reads of this pass (before
 // and ids) or by the watch. It updates status.memberPods with the Pods read
-// in this pass. Only a termination of the Pod the member was last seen in
-// is recorded: a Pod deleted in between without being seen could have been
-// force-deleted. A Pod of the member the watch saw deleted unconfirmed and
+// in this pass and the nodes they are scheduled on. Only a termination of
+// the Pod the member was last seen in is recorded: a Pod deleted in between
+// without being seen could have been force-deleted. A Pod of the member the watch saw deleted unconfirmed and
 // created after the confirmed one, or created at a time not known, keeps
 // that termination from being recorded and ends its record: it may be the
 // next Pod, deleted with --force before a pass read it. One created before
@@ -256,9 +258,9 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 		}
 		return false
 	})
-	last := map[string]string{}
+	last, lastNode := map[string]string{}, map[string]string{}
 	for _, p := range cluster.Status.MemberPods {
-		last[p.Name] = p.PodUID
+		last[p.Name], lastNode[p.Name] = p.PodUID, p.NodeName
 	}
 	var pods []databasev1alpha1.MemberPod
 	for _, m := range members {
@@ -287,8 +289,15 @@ func (r *CubridClusterReconciler) recordTerminations(ctx context.Context, cluste
 		if seen == "" {
 			seen = last[m]
 		}
+		// The node is kept while the member's Pod is gone or not scheduled,
+		// so that a member whose Pod Kubernetes force-deleted from a node
+		// tainted out of service stays mapped to that node.
+		node := ids[m].NodeName
+		if node == "" {
+			node = lastNode[m]
+		}
 		if seen != "" {
-			pods = append(pods, databasev1alpha1.MemberPod{Name: m, PodUID: seen})
+			pods = append(pods, databasev1alpha1.MemberPod{Name: m, PodUID: seen, NodeName: node})
 		}
 	}
 	cluster.Status.MemberPods = pods
@@ -360,8 +369,28 @@ type quarantineInput struct {
 	// ExemptionOwned says that this reconciler accepted LastRelease and wrote
 	// it: only that Operator process may rely on its exemption.
 	ExemptionOwned bool
+	// Nodes are the node each member's Pod was last seen scheduled on
+	// (status.memberPods with this pass's reads).
+	Nodes map[string]string
+	// Fences are the members whose node carries the out-of-service taint in
+	// this pass (outOfServiceFences).
+	Fences map[string]outOfServiceTaint
+	// MemberFences are what status.memberFences held before this pass.
+	MemberFences []databasev1alpha1.MemberFence
+	// ReturnRequest is the member the return-to-service annotation asks to
+	// return, "" when none is asked or the annotation is ignored.
+	ReturnRequest string
 	// Nonce returns a new random value of at least 128 bits.
 	Nonce func() (string, error)
+}
+
+// outOfServiceTaint is the taint node.kubernetes.io/out-of-service with the
+// effect NoExecute seen on a member's node in one pass.
+type outOfServiceTaint struct {
+	// Node is the tainted node.
+	Node string
+	// TimeAdded is the taint's timeAdded; zero when it carries none.
+	TimeAdded time.Time
 }
 
 // quarantineChange says what a decision changed about the quarantine.
@@ -401,6 +430,14 @@ type quarantineDecision struct {
 	// other members that are not verified, in ordinal order.
 	ActiveMasters []string
 	Unverified    []string
+	// Fenced are the members that are not unverified because their node
+	// carries the out-of-service taint, in ordinal order.
+	Fenced []string
+	// MemberFences replace status.memberFences.
+	MemberFences []databasev1alpha1.MemberFence
+	// ReturnWaiting says why the return-to-service request was not taken up
+	// in this pass; "" when it was, or none was made.
+	ReturnWaiting string
 }
 
 const (
@@ -544,10 +581,23 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	}
 	if in.Quarantine == nil {
 		q, err := startQuarantine(in, d.ActiveMasters, named)
+		switch {
+		case err != nil:
+			return d, err
+		case q != nil && in.ReturnRequest != "":
+			d.ReturnWaiting = fmt.Sprintf("a %s quarantine started in this observation; the return is taken up "+
+				"after its release", q.Reason)
+		case q == nil && in.ReturnRequest != "":
+			q, d.ReturnWaiting, err = startReturn(in, d.ActiveMasters)
+		}
 		if q != nil {
 			d.Quarantine, d.Change = q, quarantineStarted
 		}
 		return d, err
+	}
+	if in.ReturnRequest != "" && in.ReturnRequest != in.Quarantine.ReturningMember {
+		d.ReturnWaiting = fmt.Sprintf("another write quarantine is in force (%s, generation %s); the return is "+
+			"taken up after its release", in.Quarantine.Reason, in.Quarantine.GenerationID)
 	}
 	q := in.Quarantine.DeepCopy()
 	d.Quarantine = q
@@ -563,7 +613,8 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 		// Without the members' Pods, or for a quarantine recorded for another
 		// cluster UID, nothing is released.
 		q.ReleaseCheckSince, q.ReleaseCheckLastTime = nil, nil
-	case q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified:
+	case q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified,
+		q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning:
 		if d.Released = releaseCheck(in, q, d, verified); d.Released != nil {
 			d.Quarantine, d.Change = nil, quarantineReleased
 		}
@@ -583,18 +634,30 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 	for _, t := range in.Terminations {
 		terminations[t.Name] = t
 	}
+	fences := make(map[string]databasev1alpha1.MemberFence, len(in.MemberFences))
+	for _, f := range in.MemberFences {
+		fences[f.Name] = f
+	}
 	verified := map[string]bool{}
 	if in.IdentitiesUnknown {
-		// Nothing is verified, renewed or ended without the members' Pods.
+		// Nothing is verified, fenced, renewed or ended without the members'
+		// Pods.
 		d.Verifications = slices.Clone(in.Verifications)
 		d.Terminations = slices.Clone(in.Terminations)
+		d.MemberFences = slices.Clone(in.MemberFences)
 	}
 	for _, m := range in.Members {
 		o := in.Observations[m]
 		if activeMaster(o, in.Now) {
-			// An active-master claim ends a confirmed termination.
+			// An active-master claim ends a confirmed termination, and the
+			// out-of-service taint does not make it any less one (rule 1).
 			d.ActiveMasters = append(d.ActiveMasters, m)
 			continue
+		}
+		taint, fenced := in.Fences[m]
+		fenced = fenced && !in.IdentitiesUnknown
+		if fenced {
+			d.MemberFences = append(d.MemberFences, renewFence(fences[m], m, taint, in.Now))
 		}
 		answered := !in.IdentitiesUnknown && !in.Unstable[m] && nonMasterAnswer(o, in.Now)
 		t, recorded := terminations[m]
@@ -608,17 +671,35 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 			verified[m] = true
 			continue
 		}
-		if !answered {
-			d.Unverified = append(d.Unverified, m)
-			continue
-		}
-		if verifiedAnswer(in, &d, previous[m], m) {
+		switch {
+		case answered && verifiedAnswer(in, &d, previous[m], m):
 			verified[m] = true
-		} else {
+		case fenced:
+			d.Fenced = append(d.Fenced, m)
+		default:
 			d.Unverified = append(d.Unverified, m)
 		}
 	}
 	return d, verified
+}
+
+// renewFence is member m's fence record after a pass that saw the
+// out-of-service taint t on its node: the record before, f, while it names the
+// same node and the same taint; a new one from now otherwise. A taint with
+// another timeAdded was removed and added again in between.
+func renewFence(f databasev1alpha1.MemberFence, m string, t outOfServiceTaint, now time.Time) databasev1alpha1.MemberFence {
+	var added time.Time
+	if f.TaintTimeAdded != nil {
+		added = f.TaintTimeAdded.Time
+	}
+	if f.Name == m && f.NodeName == t.Node && added.Truncate(time.Second).Equal(t.TimeAdded.Truncate(time.Second)) {
+		return f
+	}
+	f = databasev1alpha1.MemberFence{Name: m, NodeName: t.Node, Since: ceilSecond(now)}
+	if !t.TimeAdded.IsZero() {
+		f.TaintTimeAdded = &metav1.Time{Time: t.TimeAdded}
+	}
+	return f
 }
 
 // confirmedDown reports whether a member with the record t of a Pod whose
@@ -679,8 +760,13 @@ func verifiedAnswer(in quarantineInput, d *quarantineDecision, v databasev1alpha
 
 // quarantineMember records member m as this pass saw it.
 func quarantineMember(in quarantineInput, m string) databasev1alpha1.WriteQuarantineMember {
+	node := in.Identities[m].NodeName
+	if node == "" {
+		node = in.Nodes[m]
+	}
 	return databasev1alpha1.WriteQuarantineMember{Name: m, PodUID: in.Identities[m].PodUID,
-		RestartCount: in.Identities[m].RestartCount, ObservedRole: observedRoleText(in.Observations[m], in.Now)}
+		RestartCount: in.Identities[m].RestartCount, ObservedRole: observedRoleText(in.Observations[m], in.Now),
+		NodeName: node}
 }
 
 // anyExemption, in quarantineInput.EndedExemptions, ends every member's
@@ -810,6 +896,12 @@ func startQuarantine(in quarantineInput, masters, named []string) (*databasev1al
 	default:
 		return nil, nil
 	}
+	return newQuarantine(in, reason, master, named)
+}
+
+// newQuarantine is a new quarantine with reason beside master about members.
+func newQuarantine(in quarantineInput, reason databasev1alpha1.WriteQuarantineReason, master string,
+	members []string) (*databasev1alpha1.WriteQuarantine, error) {
 	generation, err := in.Nonce()
 	if err != nil {
 		return nil, err
@@ -824,10 +916,35 @@ func startQuarantine(in quarantineInput, masters, named []string) (*databasev1al
 		q.ObservedMasterPodUID = in.Identities[master].PodUID
 		q.ObservedMasterRestartCount = in.Identities[master].RestartCount
 	}
-	for _, m := range named {
+	for _, m := range members {
 		q.Members = append(q.Members, quarantineMember(in, m))
 	}
 	return q, nil
+}
+
+// startReturn is the WriteQuarantinedMemberReturning quarantine the
+// return-to-service request starts when no other quarantine is in force
+// (ADR-0005, section 8, "Return to service", step 2), recording the returning
+// member and the one active master; or, when the request cannot be taken up
+// in this pass, why. It needs the members' Pods and exactly one active master
+// that is not the returning member.
+func startReturn(in quarantineInput, masters []string) (*databasev1alpha1.WriteQuarantine, string, error) {
+	m := in.ReturnRequest
+	switch {
+	case in.IdentitiesUnknown:
+		return nil, "the members' Pods could not be read in this observation", nil
+	case len(masters) == 0:
+		return nil, "no active master in this observation; a return needs exactly one to record beside it", nil
+	case len(masters) > 1:
+		return nil, fmt.Sprintf("%d members are active masters in this observation", len(masters)), nil
+	case masters[0] == m:
+		return nil, fmt.Sprintf("%s is the active master; only another member can return to service", m), nil
+	}
+	q, err := newQuarantine(in, databasev1alpha1.WriteQuarantinedMemberReturning, masters[0], []string{m})
+	if q != nil {
+		q.ReturningMember = m
+	}
+	return q, "", err
 }
 
 // reviseQuarantine escalates q, adds the members this pass names, removes
@@ -844,6 +961,11 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 		departure = masterDeparture(in, q, masters)
 	}
 	switch {
+	case q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning && len(others) > 0:
+		// The returning member, or another member, claims an active master
+		// beside or in place of the recorded one: divergent data is a
+		// person's decision.
+		q.Reason, revised = databasev1alpha1.WriteQuarantinedMasterChanged, true
 	case !unverifiedQuarantine:
 	case departure == departureConfirmed && !in.IdentitiesUnknown && len(masters) == 1 && len(others) == 1:
 		// The kubelet confirmed the termination of the recorded master's
@@ -1022,12 +1144,26 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 func releaseCheck(in quarantineInput, q *databasev1alpha1.WriteQuarantine, d quarantineDecision,
 	verified map[string]bool) *databasev1alpha1.WriteQuarantineRelease {
 	releasable := len(d.ActiveMasters) == 1 && d.ActiveMasters[0] == q.ObservedMaster
+	returning := q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning
+	var fenced []databasev1alpha1.MemberFence
 	for _, m := range in.Members {
 		answeredConfirmed := slices.Contains(d.Confirmed, m) &&
 			slices.ContainsFunc(d.Terminations, func(t databasev1alpha1.MemberTermination) bool {
 				return t.Name == m && t.Answered
 			})
-		if m != q.ObservedMaster && !verified[m] && !answeredConfirmed {
+		switch {
+		case m == q.ObservedMaster:
+		case returning && m == q.ReturningMember:
+			// The returning member counts only by its own answers: never by
+			// the taint, nor by a confirmed termination.
+			releasable = releasable && verified[m]
+		case verified[m], answeredConfirmed:
+		case slices.Contains(d.Fenced, m):
+			// Option (b): an out-of-service taint seen on its node in this
+			// pass, without a break since its record started.
+			i := slices.IndexFunc(d.MemberFences, func(f databasev1alpha1.MemberFence) bool { return f.Name == m })
+			fenced = append(fenced, d.MemberFences[i])
+		default:
 			releasable = false
 		}
 	}
@@ -1043,16 +1179,25 @@ func releaseCheck(in quarantineInput, q *databasev1alpha1.WriteQuarantine, d qua
 			return v.NonMasterSince.After(q.ReleaseCheckSince.Time)
 		}) || slices.ContainsFunc(d.Terminations, func(t databasev1alpha1.MemberTermination) bool {
 		return t.ConfirmedAt.After(q.ReleaseCheckSince.Time)
+	}) || slices.ContainsFunc(fenced, func(f databasev1alpha1.MemberFence) bool {
+		return f.Since.After(q.ReleaseCheckSince.Time)
 	}):
 		// The first releasable pass, a gap since the last one, or a member
-		// verified anew since the first one: start over.
+		// verified or fenced anew since the first one: start over.
 		since := ceilSecond(in.Now)
 		q.ReleaseCheckSince = &since
 	case in.Now.Sub(q.ReleaseCheckSince.Time) >= quarantineReleaseInterval:
+		method := databasev1alpha1.WriteQuarantineReleasedAutomatically
+		switch {
+		case returning:
+			method = databasev1alpha1.WriteQuarantineReleasedReturnedToService
+		case len(fenced) > 0:
+			method = databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint
+		}
 		return &databasev1alpha1.WriteQuarantineRelease{GenerationID: q.GenerationID, Reason: q.Reason,
-			StartTime: q.StartTime, ReleaseTime: metav1.NewTime(in.Now),
-			Method: databasev1alpha1.WriteQuarantineReleasedAutomatically, Revision: q.Revision,
-			ObservedMaster: q.ObservedMaster, Members: q.Members}
+			StartTime: q.StartTime, ReleaseTime: metav1.NewTime(in.Now), Method: method, Revision: q.Revision,
+			ObservedMaster: q.ObservedMaster, Members: q.Members, FencedMembers: fenced,
+			ReturningMember: q.ReturningMember}
 	}
 	return nil
 }
@@ -1117,6 +1262,9 @@ type quarantineHold struct {
 	// last reported with an Event: an inert or refused annotation is
 	// reported once.
 	reportedRelease string
+	// reportedReturn is the return-to-service annotation, with why it was
+	// not taken up, last reported with an Event.
+	reportedReturn string
 	// exemptionOwner is the release token of the manual release this
 	// reconciler accepted and wrote: only its exemption may be relied on.
 	exemptionOwner string
@@ -1294,9 +1442,19 @@ func (r *CubridClusterReconciler) enforceWriteQuarantine(ctx context.Context, cl
 	if q.EnforcedTime == nil {
 		at := metav1.NewTime(r.now())
 		q.EnforcedTime = &at
-		r.statusEvent(cluster, corev1.EventTypeWarning, reasonWriteQuarantineEnforced, fmt.Sprintf(
-			"no read-write Broker Pod exists and Service %s has no endpoint: the managed read-write path is closed (%s)",
-			rwServiceName(cluster.Name), q.Reason))
+		msg := fmt.Sprintf("no read-write Broker Pod exists and Service %s has no endpoint: the managed read-write "+
+			"path is closed (%s)", rwServiceName(cluster.Name), q.Reason)
+		if q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning {
+			// Step 3 of the return to service: the administrator may now
+			// remove the taint, and not before.
+			msg += fmt.Sprintf("; the out-of-service taint of the node of %s may now be removed", q.ReturningMember)
+			if i := slices.IndexFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+				return m.Name == q.ReturningMember
+			}); i >= 0 && q.Members[i].NodeName != "" {
+				msg += " (" + q.Members[i].NodeName + ")"
+			}
+		}
+		r.statusEvent(cluster, corev1.EventTypeWarning, reasonWriteQuarantineEnforced, msg)
 	}
 	return nil
 }
@@ -1322,7 +1480,7 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 		}
 		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod), Created: pod.CreationTimestamp.Time,
 			Deleting: pod.DeletionTimestamp != nil, DeletionGrace: deletionGrace(&pod),
-			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod)}
+			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod), NodeName: pod.Spec.NodeName}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {
 				id.RestartCount = c.RestartCount
@@ -1356,14 +1514,22 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 			unstable[m] = true
 		}
 	}
+	var nodes map[string]string
+	var fences map[string]outOfServiceTaint
+	if unknown == nil {
+		// A Node that could not be read is treated as Pods that could not
+		// be read: nothing is fenced, verified or released in this pass.
+		nodes, fences, unknown = r.outOfServiceFences(ctx, cluster, members, obs, ids)
+	}
 	if unknown != nil {
-		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods could not be read")
+		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods or Nodes could not be read")
 		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 			report.(*reconcileReport).noScaleUp = true
 		}
 		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
 	}
 	state := r.quarantineState(cluster)
+	request, ignored := returnRequest(cluster, members)
 	terminations := cluster.Status.MemberTerminations
 	if unknown == nil {
 		terminations = r.recordTerminations(ctx, cluster, members, before, ids)
@@ -1378,6 +1544,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		EndedExemptions: state.endedExemptions[releaseTokenOf(cluster.Status.LastWriteQuarantineRelease)],
 		ExemptionOwned: state.exemptionOwner != "" &&
 			state.exemptionOwner == releaseTokenOf(cluster.Status.LastWriteQuarantineRelease),
+		Nodes: nodes, Fences: fences, MemberFences: cluster.Status.MemberFences, ReturnRequest: request,
 		Nonce: newQuarantineNonce,
 	})
 	if err != nil {
@@ -1388,6 +1555,17 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, ids, unknown != nil, now)
 	cluster.Status.MemberVerifications = d.Verifications
 	cluster.Status.MemberTerminations = d.Terminations
+	cluster.Status.MemberFences = d.MemberFences
+	if ignored == "" {
+		ignored = d.ReturnWaiting
+	}
+	if ignored == "" {
+		state.reportedReturn = ""
+	} else if value := cluster.Annotations[returnToServiceAnnotation]; state.reportedReturn != value+"/"+ignored {
+		state.reportedReturn = value + "/" + ignored
+		r.event(cluster, corev1.EventTypeWarning, reasonReturnToServiceWaiting, fmt.Sprintf(
+			"did not start the return to service the annotation %s=%q asks for: %s", returnToServiceAnnotation, value, ignored))
+	}
 	if d.Released == nil {
 		before := cluster.Status.LastWriteQuarantineRelease
 		cluster.Status.LastWriteQuarantineRelease = d.LastRelease
@@ -1414,6 +1592,10 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	case quarantineReleased:
 		rel := d.Released
 		cluster.Status.LastWriteQuarantineRelease = rel
+		if rel.ReturningMember != "" {
+			// One use: the annotation is ignored while it names this member.
+			cluster.Status.ReturnedToService = rel.ReturningMember
+		}
 		// The memory lets the path open only once the release is written.
 		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 			report.(*reconcileReport).releasedQuarantine = rel.GenerationID
@@ -1428,10 +1610,32 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 				quarantineMemberText(rel.Members), rel.ObservedMaster, rel.Warning))
 			break
 		}
-		r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
-			"released the %s quarantine started at %s automatically: %s was the only active master and every other "+
-				"member answered as no active master in two observations %s apart; the read-write Brokers start again",
-			rel.Reason, rel.StartTime.UTC().Format(time.RFC3339), rel.ObservedMaster, quarantineReleaseInterval))
+		switch rel.Method {
+		case databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint:
+			var fenced []string
+			for _, f := range rel.FencedMembers {
+				fenced = append(fenced, fmt.Sprintf("%s (node %s)", f.Name, f.NodeName))
+			}
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonWriteQuarantineReleasedOnTaint, fmt.Sprintf(
+				"released the %s quarantine started at %s on an out-of-service taint: %s was the only active master, "+
+					"and %s counted as fenced because the node carried %s:%s in two observations %s apart; that is an "+
+					"administrator's fence assertion, not proof that the member's database cannot run, and the "+
+					"conditions keep reporting what is observed; the read-write Brokers start again",
+				rel.Reason, rel.StartTime.UTC().Format(time.RFC3339), rel.ObservedMaster, strings.Join(fenced, ", "),
+				corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute, quarantineReleaseInterval))
+		case databasev1alpha1.WriteQuarantineReleasedReturnedToService:
+			r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
+				"released the return of %s to service: it answered as no active master in two observations %s apart "+
+					"beside %s as the only active master; the annotation %s may be removed; the read-write Brokers "+
+					"start again", rel.ReturningMember, quarantineReleaseInterval, rel.ObservedMaster,
+				returnToServiceAnnotation))
+		default:
+			r.statusEvent(cluster, corev1.EventTypeNormal, reasonWriteQuarantineReleased, fmt.Sprintf(
+				"released the %s quarantine started at %s automatically: %s was the only active master and every "+
+					"other member answered as no active master in two observations %s apart; the read-write Brokers "+
+					"start again", rel.Reason, rel.StartTime.UTC().Format(time.RFC3339), rel.ObservedMaster,
+				quarantineReleaseInterval))
+		}
 	}
 	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
 		d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
@@ -1560,6 +1764,9 @@ func quarantineDescription(q *databasev1alpha1.WriteQuarantine, masters []string
 	case databasev1alpha1.WriteQuarantinedMemberUnverified:
 		why = fmt.Sprintf("%s is the only active master, and not verified as no active master: %s",
 			q.ObservedMaster, quarantineMemberText(q.Members))
+	case databasev1alpha1.WriteQuarantinedMemberReturning:
+		why = fmt.Sprintf("%s returns to service beside %s as the only active master, and is not verified as no "+
+			"active master yet; members: %s", q.ReturningMember, q.ObservedMaster, quarantineMemberText(q.Members))
 	default:
 		why = fmt.Sprintf("the master changed during a quarantine started beside %s; members: %s",
 			q.ObservedMaster, quarantineMemberText(q.Members))
