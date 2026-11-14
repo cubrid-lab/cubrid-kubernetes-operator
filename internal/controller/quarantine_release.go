@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -142,7 +143,8 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 		return manualReleaseRefused, "the members' Pods could not be read in this observation", nil
 	}
 	for _, m := range sq.Members {
-		if in.Identities[m.Name] != (memberIdentity{PodUID: m.PodUID, RestartCount: m.RestartCount}) {
+		// A Pod being terminated is still the Pod that was reviewed.
+		if id := in.Identities[m.Name]; id.PodUID != m.PodUID || id.RestartCount != m.RestartCount {
 			// Unreachable while reviseQuarantine replaces the token on such a
 			// change; kept as a safety net.
 			return manualReleaseInert, "the recorded members' identities changed since the token was issued; " +
@@ -165,7 +167,10 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 	master := in.Decision.ActiveMasters[0]
 	var exempt []string
 	for _, m := range sq.Members {
-		if m.Name != master {
+		// A member whose old Pod's termination the kubelet confirmed is not
+		// unverified (ADR-0005, section 8, as amended by #870) and needs no
+		// exemption; its next Pod is a new identity anyway.
+		if m.Name != master && !slices.Contains(in.Decision.Confirmed, m.Name) {
 			exempt = append(exempt, m.Name)
 		}
 	}

@@ -458,3 +458,23 @@ func TestQuarantineRetryKeepsTheCadence(t *testing.T) {
 		}
 	}
 }
+
+// A member whose old Pod's termination the kubelet confirmed is not
+// unverified (ADR-0005, section 8, as amended by #870), so a manual release
+// does not exempt it. A Pod being terminated is still the Pod the
+// administrator reviewed: it does not make the annotation inert.
+func TestDecideManualReleaseConfirmedTermination(t *testing.T) {
+	q := releaseQuarantine()
+	d := unchangedDecision(q, q1)
+	d.Confirmed = []string{q0}
+	verdict, msg, rel := decideManualRelease(manualReleaseInput{Now: testNow, ClusterUID: releaseClusterUID,
+		Stored: storedWith(releaseToken2, q), Decision: d,
+		Identities: map[string]memberIdentity{q0: {PodUID: uid0, Terminated: true}, q1: {PodUID: uid1}}})
+	if verdict != manualReleaseAccepted {
+		t.Fatalf("verdict %q (%s), want accepted", verdict, msg)
+	}
+	if len(rel.ExemptMembers) != 0 || len(rel.Members) != 2 {
+		t.Errorf("exempt members %v, members %+v; want no exemption for the confirmed member, both recorded",
+			rel.ExemptMembers, rel.Members)
+	}
+}

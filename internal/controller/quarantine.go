@@ -740,6 +740,8 @@ func releaseExemption(in quarantineInput, masters []string,
 			why = "it is no longer a member"
 		case verified[m]:
 			why = "it was verified as no active master"
+		// A Pod being deleted (Terminated) ends the exemption too: its next
+		// Pod would end it anyway.
 		case in.Identities[m] != (memberIdentity{PodUID: rel.Members[i].PodUID, RestartCount: rel.Members[i].RestartCount}):
 			why = "it runs in another Pod or container start than the one accepted"
 		}

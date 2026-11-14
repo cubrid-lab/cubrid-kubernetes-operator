@@ -507,7 +507,10 @@ requires to be unchanged: a member found in another Pod or container start
 revises the quarantine and replaces its token, and an annotation naming the
 old token is ignored. It also records the active master's Pod UID and restart
 count (`observedMasterPodUID`, `observedMasterRestartCount`), and every
-accepted member but that master in `exemptMembers`.
+accepted member but that master in `exemptMembers`, except a member whose old
+Pod's termination the kubelet confirmed: it is not unverified, and its next
+Pod is a new identity. A recorded member whose Pod is being deleted is still
+the Pod that was reviewed, so it does not make the annotation inert.
 
 While the release's master, in the same Pod and container start, is the only
 active master, an exempt member that stays unverified, even one that
