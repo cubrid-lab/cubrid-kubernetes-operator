@@ -534,6 +534,28 @@ func (r *haRun) s06Absent() {
 	}, 5*time.Minute, time.Second).Should(Succeed())
 	resync := time.Since(absence.returnedAt)
 
+	// The returned Operator did not see the former master's Pod leave or end,
+	// so that member is unverified until it answers as a slave, and the
+	// Operator may quarantine the read-write path on its first passes back
+	// (ADR-0005, section 8, rule 2; #870). That closure is judged by
+	// quarantined_failover_limit through the recovery time below. The stable
+	// period measures that writes keep going once the path is open again, so
+	// it starts only after any quarantine is released and a read-write Broker
+	// is available (#885).
+	By("waiting for any write quarantine to be released and a read-write Broker to be available")
+	Eventually(func(g Gomega) {
+		quarantine, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
+			"jsonpath={.status.writeQuarantine.reason}")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(quarantine).To(BeEmpty(), "status.writeQuarantine")
+		endpoint, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
+			`jsonpath={.status.conditions[?(@.type=="WriteEndpointReady")].status}`)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(endpoint).To(Equal("True"), "WriteEndpointReady")
+	}, 5*time.Minute, 2*time.Second).Should(Succeed())
+	GinkgoWriter.Printf("S06/%s: the read-write path was open %s after the Operator returned\n",
+		s06Absent, time.Since(absence.returnedAt).Round(time.Second))
+
 	By("letting the client run for the stable period, then stopping it")
 	time.Sleep(stablePeriod.Value + 2*time.Second)
 	rounds := sampler.stop()
