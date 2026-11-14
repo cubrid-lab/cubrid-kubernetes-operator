@@ -29,17 +29,17 @@ import (
 )
 
 // containerStandIn records each call in $CALLS, fails "buildx build" with exit
-// status 42 when $FAIL_BUILD is set and "buildx use" with 43 when $FAIL_USE is
-// set.
+// status 42 when $FAIL_BUILD is set and "buildx create" with 44 when
+// $FAIL_CREATE is set.
 const containerStandIn = `#!/bin/sh
 echo "$*" >> "$CALLS"
 if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$FAIL_BUILD" ]; then
   echo 'SIMULATED BUILD/PUSH FAILURE' >&2
   exit 42
 fi
-if [ "$1" = buildx ] && [ "$2" = use ] && [ -n "$FAIL_USE" ]; then
-  echo 'SIMULATED BUILDX USE FAILURE' >&2
-  exit 43
+if [ "$1" = buildx ] && [ "$2" = create ] && [ -n "$FAIL_CREATE" ]; then
+  echo 'SIMULATED BUILDER CREATION FAILURE: builder already exists' >&2
+  exit 44
 fi
 exit 0
 `
@@ -92,9 +92,9 @@ func hasCall(calls []string, prefix string) bool {
 	return false
 }
 
-// A failed "buildx use" or "buildx build --push" fails the target, with the
-// failure in its output, after the builder and Dockerfile.cross have been
-// cleaned up; a build that succeeds leaves the target successful (#461).
+// A failed "buildx build --push" fails the target, with the failure in its
+// output, after the builder this run created and its Dockerfile.cross copy have
+// been cleaned up; a build that succeeds leaves the target successful (#461).
 func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make is not installed")
@@ -109,7 +109,6 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 		build   bool
 	}{
 		{"a failed build and push", "FAIL_BUILD", "SIMULATED BUILD/PUSH FAILURE", true},
-		{"a failed buildx use", "FAIL_USE", "SIMULATED BUILDX USE FAILURE", false},
 		{"a successful build and push", "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,7 +119,7 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			if tc.failEnv == "" && code != 0 {
 				t.Errorf("make docker-buildx exited %d after a successful build and push:\n%s", code, out)
 			}
-			if tc.build && !hasCall(calls, "buildx build --push") {
+			if tc.build && !hasCall(calls, "buildx build --builder") {
 				t.Errorf("calls = %q, want the build", calls)
 			}
 			if !tc.build && hasCall(calls, "buildx build") {
@@ -129,11 +128,40 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			if !hasCall(calls, "buildx rm cubrid-kubernetes-operator-builder") {
 				t.Errorf("calls = %q, want the removal of the builder", calls)
 			}
-			if _, err := os.Stat(filepath.Join(dir, "Dockerfile.cross")); !os.IsNotExist(err) {
-				t.Errorf("Dockerfile.cross was left behind (stat: %v)", err)
+			if hasCall(calls, "buildx use") {
+				t.Errorf("calls = %q, want the user's selected builder left alone", calls)
 			}
+			assertNoDockerfileCross(t, dir)
 		})
 	}
+}
+
+func assertNoDockerfileCross(t *testing.T, dir string) {
+	t.Helper()
+	left, _ := filepath.Glob(filepath.Join(dir, "Dockerfile.cross*"))
+	if len(left) != 0 {
+		t.Errorf("Dockerfile.cross copy left behind: %v", left)
+	}
+}
+
+// If the project's builder cannot be created, for example because a builder of
+// that name already exists, the target fails with that message and neither
+// builds through nor removes any builder: a builder this run did not create
+// must survive it.
+func TestDockerBuildx_FailedCreationLeavesExistingBuildersAlone(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	code, out, calls, dir := runBuildx(t, "FAIL_CREATE")
+	if code == 0 || !strings.Contains(out, "SIMULATED BUILDER CREATION FAILURE") {
+		t.Errorf("make docker-buildx exited %d after a failed builder creation, want a failure that shows it:\n%s", code, out)
+	}
+	for _, forbidden := range []string{"buildx use", "buildx build", "buildx rm"} {
+		if hasCall(calls, forbidden) {
+			t.Errorf("calls = %q, want no %q after a failed creation", calls, forbidden)
+		}
+	}
+	assertNoDockerfileCross(t, dir)
 }
 
 // childMakeEnv returns the environment without the caller's make flags

@@ -264,17 +264,23 @@ docker-build-workload: container-tool ## Build the test-only SQL workload client
 PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 .PHONY: docker-buildx
 docker-buildx: container-tool ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name cubrid-kubernetes-operator-builder
-	# The builder and Dockerfile.cross are removed whatever "buildx use" or the
-	# build did; the target then exits with that failure's status (#461).
-	status=0; \
-	$(CONTAINER_TOOL) buildx use cubrid-kubernetes-operator-builder && \
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --tag ${IMG} -f Dockerfile.cross . || status=$$?; \
-	$(CONTAINER_TOOL) buildx rm cubrid-kubernetes-operator-builder || echo "Could not remove the buildx builder cubrid-kubernetes-operator-builder" >&2; \
-	rm -f Dockerfile.cross; \
-	exit $$status
+	# Each run owns a builder and a Dockerfile.cross copy named after a unique
+	# suffix, so concurrent runs and builders that already exist are never shared,
+	# selected or removed (#869). The build names its builder with --builder, so
+	# the builder selected by "buildx use" is not changed. A failed creation stops
+	# the target before anything is built or removed. The builder (only once
+	# created) and the copy are removed whatever the build did, or when the run is
+	# interrupted; the target exits with the failure's status (#461).
+	# The copy of Dockerfile gets --platform=${BUILDPLATFORM} inserted; the original is preserved.
+	cross="$$(mktemp Dockerfile.cross.XXXXXX)" || exit 1; \
+	builder="cubrid-kubernetes-operator-builder-$${cross##*.}"; \
+	created=; \
+	trap 'if [ -n "$$created" ]; then $(CONTAINER_TOOL) buildx rm "$$builder" || echo "Could not remove the buildx builder $$builder" >&2; fi; rm -f "$$cross"' EXIT; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; \
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > "$$cross" || exit 1; \
+	$(CONTAINER_TOOL) buildx create --name "$$builder" || { echo "Could not create the buildx builder $$builder; no builder was used or removed" >&2; exit 1; }; \
+	created=1; \
+	$(CONTAINER_TOOL) buildx build --builder "$$builder" --push --platform=$(PLATFORMS) $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --tag ${IMG} -f "$$cross" .
 
 # Render config/default with the manager image set to ${IMG} through a throwaway
 # overlay under the ignored dist/ directory, so no tracked file is edited.
