@@ -822,8 +822,10 @@ type CubridClusterStatus struct {
 	// out of band that the node's VM is powered off or otherwise fenced; the
 	// Operator never adds or removes it. While the taint stays, the member is
 	// not unverified for the read-write quarantine (ADR-0005, section 8,
-	// "Unverified", item 2). A pass that does not see the taint, or sees the
-	// member's Pod on another node, removes the entry.
+	// "Unverified", item 2). Only a member that gives no answer at all is
+	// fenced, and only by a taint with a timeAdded. A pass that does not see
+	// the taint, gets any answer from the member, or sees its Pod on another
+	// node removes the entry.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -898,6 +900,11 @@ type MemberFence struct {
 	Name string `json:"name"`
 	// nodeName is the tainted node.
 	NodeName string `json:"nodeName"`
+	// nodeUID is the UID of the Node object the taint was seen on. A Node
+	// of the same name with another UID, deleted and created again, starts
+	// the entry over.
+	// +optional
+	NodeUID string `json:"nodeUID,omitempty"`
 	// since is when the Operator first saw the taint in this uninterrupted
 	// run of observations, rounded up to the second.
 	Since metav1.Time `json:"since"`

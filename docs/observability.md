@@ -471,24 +471,40 @@ partitioned node can let a second database process run.
   member's Pod was last seen scheduled on. It is kept while the member has no
   Pod, or one that is not scheduled yet, as after Kubernetes force-deleted the
   Pod from the tainted node and the StatefulSet recreated it `Pending`. A Pod
-  of the member scheduled on another node replaces it.
+  of the member scheduled on another node replaces it. When the Operator's Pod
+  watch saw a later Pod of the member deleted without a confirmed termination
+  (it may have run on another node), the recorded node is not used and the
+  member is not fenced; the watch keeps such a deletion for 10 minutes.
 - **Reading the taint.** In each pass, for every member that gave neither an
-  active-master nor a non-master answer, the Operator reads that node's Node
-  object from the API server, past its cache (RBAC: `get` on `nodes`, nothing
-  more). Only the key `node.kubernetes.io/out-of-service` with the effect
-  `NoExecute` counts; its value does not. A Node that does not exist fences
-  nothing. A Node that cannot be read is handled as Pods that cannot be read:
+  active-master nor a trusted non-master answer, and every member with a fence
+  record, the Operator reads that node's Node object from the API server, past
+  its cache (RBAC: `get` on `nodes`, nothing more). Only the key
+  `node.kubernetes.io/out-of-service` with the effect `NoExecute` counts; its
+  value does not. A Node that does not exist fences nothing.
+- **Only a silent member is fenced.** The taint fences a member only when it
+  gave no answer at all in the pass: it could not be reached, or its last
+  answer is older than 15 seconds. Any answer, including one without a
+  trusted role (a master not yet active, no role, an unreadable answer) or an
+  HTTP error such as a refused token, shows that the node the administrator
+  asserted powered off is up. The taint then does not fence that member, its
+  fence record ends, and a Warning Event `OutOfServiceTaintRefused` names the
+  member, the node and the answer (once per member and message).
+- **A taint without `timeAdded` is refused** the same way: without it a taint
+  removed and added again between two passes cannot be told apart.
+  `kubectl taint` sets `timeAdded` on a `NoExecute` taint. A Node that cannot be read is handled as Pods that cannot be read:
   only two active masters start a quarantine, nothing is verified, fenced or
   released, and the read-write Brokers are not scaled up in that pass.
 - **The fence record.** `status.memberFences` keeps, for each member counted as
   fenced, the `nodeName`, since when the taint has been seen without a break
   (`since`, rounded up to the second) and the taint's `timeAdded`
-  (`taintTimeAdded`). A pass that does not see the taint removes the entry; a
-  taint seen on another node, or with another `timeAdded` (removed and added
-  again), starts it over.
-- **What the taint does.** A fenced member is not unverified: it does not start
-  a rule-2 quarantine, and it counts for the automatic release as a verified
-  member does. It is still an active master when it claims to be one, so two
+  (`taintTimeAdded`) and the Node's UID (`nodeUID`). A pass that does not see
+  the taint removes the entry; a taint seen on another node, with another
+  `timeAdded` (removed and added again), or on a Node object with another UID
+  (deleted and created again) starts it over.
+- **What the taint does.** A fenced member is not unverified: from the first
+  pass that sees the taint, before any release check, it keeps rule 2 from
+  starting a quarantine about it, and it counts for the automatic release as a
+  verified member does. It is still an active master when it claims to be one, so two
   active masters still start a `WriteQuarantinedMultipleMasters` quarantine.
 - **The release.** The automatic release of a `WriteQuarantinedMemberUnverified`
   quarantine needs the same two passes at least 10 seconds apart as above;
@@ -533,7 +549,11 @@ section 8, "Return to service"):
 3. **Enforced.** Once no read-write Broker Pod and no `-rw` endpoint remains,
    `writeQuarantine.enforcedTime` is set and the Warning Event
    `WriteQuarantineEnforced` says that the taint of the member's node may now
-   be removed.
+   be removed. The only signal to untaint is `enforcedTime` set on a
+   `WriteQuarantinedMemberReturning` quarantine whose `returningMember` is the
+   member and whose `generationID` is the one the request started; an
+   `enforcedTime` of another quarantine, or one read before the request, is
+   not.
 4. **Untaint.** The administrator removes the taint, only after step 3. The
    member's Pod is scheduled and starts.
 5. **Verified.** The Operator needs the returning member verified by its own
@@ -558,9 +578,10 @@ section 8, "Return to service"):
 - **One use.** After a release of a quarantine with a returning member,
   automatic or manual, `status.returnedToService` holds the member, and an
   annotation with that value is ignored: it does not close the path again or
-  authorize a later return. The Operator clears the field once it sees the
-  annotation removed or changed, so a later request for the same member needs
-  the annotation removed first.
+  authorize a later return; it is reported once with `ReturnToServiceWaiting`,
+  saying that the return was already released. The Operator clears the field
+  once it sees the annotation removed or changed, so a later request for the
+  same member needs the annotation removed first.
 - **Taint removed before step 3.** The procedure forbids it, and the Operator
   cannot prevent it: the database may start and acknowledge writes before the
   barrier is enforced. A barrier already started still holds until step 5.
@@ -780,7 +801,8 @@ underscores.
 | A write quarantine is released | `WriteQuarantineReleased` | Normal | `write_quarantine_released` |
 | A write quarantine is released on the administrator's annotation | `WriteQuarantineReleasedManually` | Warning | `write_quarantine_released` |
 | A write quarantine is released with at least one member counted as fenced by an out-of-service taint | `WriteQuarantineReleasedOnOutOfServiceTaint` | Warning | `write_quarantine_released` |
-| The return-to-service annotation is not taken up: it names no promotable member, another quarantine is in force, or there is not exactly one active master; once per value and reason | `ReturnToServiceWaiting` | Warning | none |
+| The return-to-service annotation is not taken up: it names no promotable member, a return already released, another quarantine is in force, or there is not exactly one active master; once per value and reason | `ReturnToServiceWaiting` | Warning | none |
+| An out-of-service taint is not counted as a fence: the member still answers, or the taint has no `timeAdded`; once per member and message | `OutOfServiceTaintRefused` | Warning | none |
 | The release annotation does not name the stored quarantine's current token, or the members were revised in the same observation; once per value | `WriteQuarantineReleaseIgnored` | Warning | none |
 | A manual release's exemption ends for a member, or for all of them | `WriteQuarantineExemptionEnded` | Normal | `write_quarantine_exemption_ended` |
 | The release annotation names the current token, but the observation does not see exactly one active master or could not read the members' Pods; once per value and reason | `WriteQuarantineReleaseRefused` | Warning | none |

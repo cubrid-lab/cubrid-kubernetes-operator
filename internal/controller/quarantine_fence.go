@@ -20,10 +20,13 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -36,43 +39,91 @@ const returnToServiceAnnotation = "database.cubrid.io/return-to-service"
 const (
 	reasonWriteQuarantineReleasedOnTaint = "WriteQuarantineReleasedOnOutOfServiceTaint"
 	reasonReturnToServiceWaiting         = "ReturnToServiceWaiting"
+	reasonOutOfServiceTaintRefused       = "OutOfServiceTaintRefused"
 )
+
+// silent reports whether o shows no answer at all from the member in this
+// pass: it was not asked, nothing answered, or the answer is not fresh. Any
+// HTTP response, a refused token or a server error included, is an answer:
+// the member's process runs.
+func silent(o RoleObservation, now time.Time) bool {
+	if !o.Reachable && !o.TokenRefused && !o.Responded || o.ObservedAt.IsZero() {
+		return true
+	}
+	age := now.Sub(o.ObservedAt)
+	return age > roleObservationTTL || age < -roleObservationTTL
+}
+
+// answerText says what a member answered, for a refused taint.
+func answerText(o RoleObservation, now time.Time) string {
+	if !o.Reachable && !o.TokenRefused && o.Reason != "" {
+		return o.Reason
+	}
+	return observedRoleText(o, now)
+}
+
+// unseenLaterPod reports whether the Pod watch saw a Pod of member, other than
+// its last Pod seen (last), deleted without a confirmed termination: that Pod
+// may have run on another node than the one recorded for the member.
+func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.CubridCluster, member, last string) bool {
+	key := client.ObjectKeyFromObject(cluster)
+	found := false
+	r.podUnconfirmed.Range(func(uid, v any) bool {
+		t := v.(podTermination)
+		if t.cluster == key && t.member == member && string(uid.(types.UID)) != last {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
 
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get
 
 // outOfServiceFences returns the node each member's Pod was last seen
-// scheduled on, and the members whose node carries the taint
+// scheduled on, the members whose node carries the taint
 // node.kubernetes.io/out-of-service with the effect NoExecute in this pass
-// (ADR-0005, section 8, "Unverified", item 2). The node is the one of the
-// member's Pod read in this pass, or, while it has none or one not scheduled
-// yet, the one status.memberPods recorded, as after Kubernetes force-deleted
-// the Pod from the tainted node. Only the Node of a member that gave no
-// active-master or non-master answer in this pass is read, from the API
-// server past the cache. A Node that does not exist fences nothing; a failed
-// read is returned, and fences nothing. The Operator only reads Nodes: it
-// never adds or removes the taint, and never infers a fence from a Node's
+// (ADR-0005, section 8, "Unverified", item 2), and, by member, why a taint
+// seen on its node does not fence it. The node is the one of the member's Pod
+// read in this pass, or, while it has none or one not scheduled yet, the one
+// status.memberPods recorded, as after Kubernetes force-deleted the Pod from
+// the tainted node; not when the Pod watch saw a later Pod of the member
+// deleted without a confirmed termination, which may have run elsewhere.
+//
+// Only a member that gave no answer at all in this pass (silent) is fenced.
+// Any answer, even one without a trusted role, shows that the node the
+// administrator asserted powered off is up: the taint is refused for that
+// member. So is a taint without timeAdded, whose continuity cannot be
+// checked. The Node is read, from the API server past the cache, for every
+// member that gave no active-master or trusted non-master answer, and for a
+// member with a fence record. A Node that does not exist fences nothing; a
+// failed read is returned, and fences nothing. The Operator only reads Nodes:
+// it never adds or removes the taint, and never infers a fence from a Node's
 // Lease or Ready condition.
 func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string, obs map[string]RoleObservation, ids map[string]memberIdentity) (map[string]string,
-	map[string]outOfServiceTaint, error) {
+	map[string]outOfServiceTaint, map[string]string, error) {
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
 	}
 	now := r.now()
 	nodes := make(map[string]string, len(members))
-	fences := map[string]outOfServiceTaint{}
+	fences, refused := map[string]outOfServiceTaint{}, map[string]string{}
 	for _, m := range members {
 		node := ids[m].NodeName
-		if node == "" {
-			if i := slices.IndexFunc(cluster.Status.MemberPods, func(p databasev1alpha1.MemberPod) bool {
-				return p.Name == m
-			}); i >= 0 {
-				node = cluster.Status.MemberPods[i].NodeName
-			}
+		if i := slices.IndexFunc(cluster.Status.MemberPods, func(p databasev1alpha1.MemberPod) bool {
+			return p.Name == m
+		}); node == "" && i >= 0 && !r.unseenLaterPod(cluster, m, cluster.Status.MemberPods[i].PodUID) {
+			node = cluster.Status.MemberPods[i].NodeName
 		}
 		nodes[m] = node
-		if o := obs[m]; node == "" || activeMaster(o, now) || nonMasterAnswer(o, now) {
+		o := obs[m]
+		recorded := slices.ContainsFunc(cluster.Status.MemberFences, func(f databasev1alpha1.MemberFence) bool {
+			return f.Name == m
+		})
+		if node == "" || (!recorded && (activeMaster(o, now) || nonMasterAnswer(o, now))) {
 			continue
 		}
 		var n corev1.Node
@@ -81,20 +132,26 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 		case apierrors.IsNotFound(err):
 			continue
 		case err != nil:
-			return nodes, nil, fmt.Errorf("read Node %s of member %s for its out-of-service taint: %w", node, m, err)
+			return nodes, nil, refused, fmt.Errorf("read Node %s of member %s for its out-of-service taint: %w", node, m, err)
 		}
-		for _, t := range n.Spec.Taints {
-			if t.Key == corev1.TaintNodeOutOfService && t.Effect == corev1.TaintEffectNoExecute {
-				f := outOfServiceTaint{Node: node}
-				if t.TimeAdded != nil {
-					f.TimeAdded = t.TimeAdded.Time
-				}
-				fences[m] = f
-				break
-			}
+		i := slices.IndexFunc(n.Spec.Taints, func(t corev1.Taint) bool {
+			return t.Key == corev1.TaintNodeOutOfService && t.Effect == corev1.TaintEffectNoExecute
+		})
+		switch {
+		case i < 0:
+		case !silent(o, now):
+			refused[m] = fmt.Sprintf("%s answered (%s) although its node %s carries the taint %s:%s that asserts the "+
+				"node is powered off; the taint contradicts a live answer and does not fence the member",
+				m, answerText(o, now), node, corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute)
+		case n.Spec.Taints[i].TimeAdded == nil:
+			refused[m] = fmt.Sprintf("the taint %s:%s on the node %s of %s has no timeAdded, so the Operator cannot "+
+				"tell whether it was removed and added again; it does not fence the member (kubectl taint sets "+
+				"timeAdded on a NoExecute taint)", corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute, node, m)
+		default:
+			fences[m] = outOfServiceTaint{Node: node, NodeUID: string(n.UID), TimeAdded: n.Spec.Taints[i].TimeAdded.Time}
 		}
 	}
-	return nodes, fences, nil
+	return nodes, fences, refused, nil
 }
 
 // returnRequest is the member the return-to-service annotation of cluster
@@ -108,10 +165,36 @@ func returnRequest(cluster *databasev1alpha1.CubridCluster, members []string) (s
 		cluster.Status.ReturnedToService = ""
 	}
 	switch {
-	case value == "", value == cluster.Status.ReturnedToService:
+	case value == "":
 		return "", ""
+	case value == cluster.Status.ReturnedToService:
+		return "", fmt.Sprintf("the return of %s to service was already released; remove the annotation and set "+
+			"it again to return the member again", value)
 	case !slices.Contains(members, value):
 		return "", fmt.Sprintf("%q is not a promotable member of the cluster", value)
 	}
 	return value, ""
+}
+
+// reportRefusedTaints reports each refused out-of-service taint with a
+// Warning Event, once per member and message, and logs it.
+func (r *CubridClusterReconciler) reportRefusedTaints(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	refused map[string]string) {
+	state := r.quarantineState(cluster)
+	if state.reportedTaints == nil {
+		state.reportedTaints = map[string]string{}
+	}
+	for m := range state.reportedTaints {
+		if refused[m] == "" {
+			delete(state.reportedTaints, m)
+		}
+	}
+	for m, msg := range refused {
+		if state.reportedTaints[m] == msg {
+			continue
+		}
+		state.reportedTaints[m] = msg
+		logf.FromContext(ctx).Info("Did not count an out-of-service taint as a fence", "member", m, "reason", msg)
+		r.event(cluster, corev1.EventTypeWarning, reasonOutOfServiceTaintRefused, msg)
+	}
 }

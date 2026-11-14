@@ -831,6 +831,40 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(c.Status.WriteQuarantine.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberReturning))
 	})
 
+	It("refuses the out-of-service taint of a member that still answers, and does not release on it", func() {
+		f := newFixture("wq-taint-live")
+		node, _ := fencedNode(f)
+		recorder := record.NewFakeRecorder(200)
+		r := reconcilerFor(f, k8sClient)
+		r.Recorder = recorder
+		runVerified(r, f)
+
+		By("the first member answering without a role beside the second one as master, its Node tainted")
+		live := roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave})
+		live[f.key.Name+"-0"] = ""
+		f.answers.set(live)
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		setTaint(node, true, *f.clock)
+		for range 3 {
+			*f.clock = f.clock.Add(quarantineReleaseInterval)
+			reconcileOnce(r, f)
+			c := stored(f)
+			Expect(c.Status.WriteQuarantine).NotTo(BeNil(), "a live answer contradicts the taint")
+			Expect(c.Status.MemberFences).To(BeEmpty())
+			Expect(rwReplicas(f)).To(Equal(int32(0)))
+		}
+		refusals := 0
+		for _, e := range drain(recorder) {
+			if strings.Contains(e, reasonOutOfServiceTaintRefused) {
+				refusals++
+				Expect(e).To(ContainSubstring(node.Name))
+			}
+		}
+		Expect(refusals).To(Equal(1), "the refusal is reported once")
+	})
+
 	It("keeps the return barrier until the member is verified when the taint is removed before it is enforced", func() {
 		f := newFixture("wq-early-untaint")
 		node, _ := fencedNode(f)

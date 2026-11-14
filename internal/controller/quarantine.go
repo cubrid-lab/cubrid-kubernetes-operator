@@ -387,8 +387,8 @@ type quarantineInput struct {
 // outOfServiceTaint is the taint node.kubernetes.io/out-of-service with the
 // effect NoExecute seen on a member's node in one pass.
 type outOfServiceTaint struct {
-	// Node is the tainted node.
-	Node string
+	// Node is the tainted node, and NodeUID the UID of its Node object.
+	Node, NodeUID string
 	// TimeAdded is the taint's timeAdded; zero when it carries none.
 	TimeAdded time.Time
 }
@@ -685,17 +685,19 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 
 // renewFence is member m's fence record after a pass that saw the
 // out-of-service taint t on its node: the record before, f, while it names the
-// same node and the same taint; a new one from now otherwise. A taint with
-// another timeAdded was removed and added again in between.
+// same Node object and the same taint; a new one from now otherwise. A taint
+// with another timeAdded was removed and added again in between, and a Node
+// with another UID was deleted and created again.
 func renewFence(f databasev1alpha1.MemberFence, m string, t outOfServiceTaint, now time.Time) databasev1alpha1.MemberFence {
 	var added time.Time
 	if f.TaintTimeAdded != nil {
 		added = f.TaintTimeAdded.Time
 	}
-	if f.Name == m && f.NodeName == t.Node && added.Truncate(time.Second).Equal(t.TimeAdded.Truncate(time.Second)) {
+	if f.Name == m && f.NodeName == t.Node && f.NodeUID == t.NodeUID &&
+		added.Truncate(time.Second).Equal(t.TimeAdded.Truncate(time.Second)) {
 		return f
 	}
-	f = databasev1alpha1.MemberFence{Name: m, NodeName: t.Node, Since: ceilSecond(now)}
+	f = databasev1alpha1.MemberFence{Name: m, NodeName: t.Node, NodeUID: t.NodeUID, Since: ceilSecond(now)}
 	if !t.TimeAdded.IsZero() {
 		f.TaintTimeAdded = &metav1.Time{Time: t.TimeAdded}
 	}
@@ -1265,6 +1267,9 @@ type quarantineHold struct {
 	// reportedReturn is the return-to-service annotation, with why it was
 	// not taken up, last reported with an Event.
 	reportedReturn string
+	// reportedTaints are, by member, the refusal of an out-of-service taint
+	// last reported with an Event.
+	reportedTaints map[string]string
 	// exemptionOwner is the release token of the manual release this
 	// reconciler accepted and wrote: only its exemption may be relied on.
 	exemptionOwner string
@@ -1519,7 +1524,9 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	if unknown == nil {
 		// A Node that could not be read is treated as Pods that could not
 		// be read: nothing is fenced, verified or released in this pass.
-		nodes, fences, unknown = r.outOfServiceFences(ctx, cluster, members, obs, ids)
+		var refused map[string]string
+		nodes, fences, refused, unknown = r.outOfServiceFences(ctx, cluster, members, obs, ids)
+		r.reportRefusedTaints(ctx, cluster, refused)
 	}
 	if unknown != nil {
 		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods or Nodes could not be read")

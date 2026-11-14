@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -122,6 +124,7 @@ func TestQuarantineTaintMustBeContinuous(t *testing.T) {
 		"gone":            nil,
 		"added again":     {q0: taintedAt(node0, testNow.Add(5*time.Second))},
 		"on another node": {q0: taintedAt(node9, testNow)},
+		"Node recreated":  {q0: {Node: node0, NodeUID: "recreated", TimeAdded: testNow}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := fencedUnverified(t)
@@ -178,7 +181,7 @@ func TestQuarantineNoFenceWithoutThePods(t *testing.T) {
 // fenceNode is the Node node0, with a taint of key and effect when key is
 // set.
 func fenceNode(key string, effect corev1.TaintEffect) *corev1.Node {
-	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: node0}}
+	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: node0, UID: "node-0-uid"}}
 	if key != "" {
 		added := metav1.NewTime(testNow.Add(-time.Minute))
 		n.Spec.Taints = []corev1.Taint{{Key: key, Value: "nodeshutdown", Effect: effect, TimeAdded: &added}}
@@ -186,32 +189,58 @@ func fenceNode(key string, effect corev1.TaintEffect) *corev1.Node {
 	return n
 }
 
+// wantAnswered is in the refusal of a taint on the node of a member that
+// answered.
+const wantAnswered = "answered"
+
+// tainted is the Node node0 with the out-of-service taint.
+func tainted() *corev1.Node {
+	return fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute)
+}
+
 // The fences are read from the Node of the node each member was last seen on,
 // past the cache: only the taint node.kubernetes.io/out-of-service with the
-// effect NoExecute fences, only for a member that did not answer, and only
-// while its Pod is not scheduled on another node. A member without a Pod keeps
-// the node status.memberPods recorded, as after Kubernetes force-deleted its
-// Pod. A failed Node read is an error, never a fence.
+// effect NoExecute and a timeAdded fences, only for a member that gave no
+// answer at all, and only while its Pod is not scheduled on another node. A
+// member without a Pod keeps the node status.memberPods recorded, as after
+// Kubernetes force-deleted its Pod. Any answer from a member whose node is
+// tainted shows the node is up: the taint is refused for it, and the refusal
+// names the node. A failed Node read is an error, never a fence.
 func TestOutOfServiceFences(t *testing.T) {
 	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns"}}
 	cluster.Status.MemberPods = []databasev1alpha1.MemberPod{{Name: q0, PodUID: uid0, NodeName: node0}}
 	noAnswer := map[string]RoleObservation{q0: noAnswerAt(testNow)}
+	answered := func(o RoleObservation) map[string]RoleObservation { return map[string]RoleObservation{q0: o} }
+	noTimeAdded := tainted()
+	noTimeAdded.Spec.Taints[0].TimeAdded = nil
 	for name, tc := range map[string]struct {
-		node      *corev1.Node
-		obs       map[string]RoleObservation
-		id        memberIdentity
-		wantFence bool
-		wantNode  string
+		node        *corev1.Node
+		obs         map[string]RoleObservation
+		id          memberIdentity
+		wantFence   bool
+		wantNode    string
+		wantRefused string
 	}{
-		"tainted, Pod gone":           {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{}, true, node0},
-		"tainted, Pod on the node":    {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0, NodeName: node0}, true, node0},
-		"tainted, next Pod Pending":   {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0New}, true, node0},
-		"Pod on another node":         {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0New, NodeName: node9}, false, node9},
-		"effect NoSchedule":           {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoSchedule), noAnswer, memberIdentity{}, false, node0},
-		"another taint":               {fenceNode(corev1.TaintNodeUnreachable, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{}, false, node0},
-		"no taint":                    {fenceNode("", ""), noAnswer, memberIdentity{}, false, node0},
-		"no Node":                     {nil, noAnswer, memberIdentity{}, false, node0},
-		"the member answers as slave": {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), map[string]RoleObservation{q0: slaveAt(testNow)}, memberIdentity{}, false, node0},
+		// Answers that are no trusted role, but come from a process on the
+		// node the administrator asserted is powered off.
+		"answers master not yet active": {tainted(), answered(RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster,
+			MasterNotYetActive: true, ObservedAt: testNow}), memberIdentity{}, false, node0, wantAnswered},
+		"answers with a refused token": {tainted(), answered(RoleObservation{TokenRefused: true, Responded: true,
+			ObservedAt: testNow, Reason: "refused"}), memberIdentity{}, false, node0, wantAnswered},
+		"answers without a role": {tainted(), answered(RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown,
+			ObservedAt: testNow}), memberIdentity{}, false, node0, wantAnswered},
+		"answers with a server error": {tainted(), answered(RoleObservation{Responded: true, ObservedAt: testNow,
+			Reason: "status 503"}), memberIdentity{}, false, node0, wantAnswered},
+		"a taint without timeAdded":   {noTimeAdded, noAnswer, memberIdentity{}, false, node0, "timeAdded"},
+		"tainted, Pod gone":           {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{}, true, node0, ""},
+		"tainted, Pod on the node":    {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0, NodeName: node0}, true, node0, ""},
+		"tainted, next Pod Pending":   {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0New}, true, node0, ""},
+		"Pod on another node":         {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{PodUID: uid0New, NodeName: node9}, false, node9, ""},
+		"effect NoSchedule":           {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoSchedule), noAnswer, memberIdentity{}, false, node0, ""},
+		"another taint":               {fenceNode(corev1.TaintNodeUnreachable, corev1.TaintEffectNoExecute), noAnswer, memberIdentity{}, false, node0, ""},
+		"no taint":                    {fenceNode("", ""), noAnswer, memberIdentity{}, false, node0, ""},
+		"no Node":                     {nil, noAnswer, memberIdentity{}, false, node0, ""},
+		"the member answers as slave": {fenceNode(corev1.TaintNodeOutOfService, corev1.TaintEffectNoExecute), map[string]RoleObservation{q0: slaveAt(testNow)}, memberIdentity{}, false, node0, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := fake.NewClientBuilder()
@@ -220,7 +249,7 @@ func TestOutOfServiceFences(t *testing.T) {
 			}
 			c := b.Build()
 			r := &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
-			nodes, fences, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, tc.obs,
+			nodes, fences, refused, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, tc.obs,
 				map[string]memberIdentity{q0: tc.id})
 			if err != nil {
 				t.Fatalf("outOfServiceFences: %v", err)
@@ -228,8 +257,14 @@ func TestOutOfServiceFences(t *testing.T) {
 			if nodes[q0] != tc.wantNode {
 				t.Errorf("node = %q, want %q", nodes[q0], tc.wantNode)
 			}
-			if f, ok := fences[q0]; ok != tc.wantFence || (ok && (f.Node != node0 || f.TimeAdded.IsZero())) {
+			if f, ok := fences[q0]; ok != tc.wantFence || (ok && (f.Node != node0 || f.TimeAdded.IsZero() || f.NodeUID == "")) {
 				t.Errorf("fence = %+v (%t), want %t on %s", f, ok, tc.wantFence, node0)
+			}
+			switch msg := refused[q0]; {
+			case tc.wantRefused == "" && msg != "":
+				t.Errorf("refused %q, want no refusal", msg)
+			case tc.wantRefused != "" && (!strings.Contains(msg, tc.wantRefused) || !strings.Contains(msg, node0)):
+				t.Errorf("refused %q, want one naming %s and %q", msg, node0, tc.wantRefused)
 			}
 		})
 	}
@@ -245,10 +280,67 @@ func TestOutOfServiceFences(t *testing.T) {
 				return c.Get(ctx, key, obj, opts...)
 			}}).Build()
 		r := &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
-		_, fences, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, noAnswer,
+		_, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, noAnswer,
 			map[string]memberIdentity{q0: {}})
 		if err == nil || !strings.Contains(err.Error(), node0) || len(fences) != 0 {
 			t.Fatalf("fences %+v, error %v; want an error naming %s and no fence", fences, err, node0)
 		}
 	})
+}
+
+// A member whose later Pod the Pod watch saw deleted without a confirmed
+// termination is not mapped to the node of its earlier Pod: that later Pod may
+// have run on another node, and been force-deleted there.
+func TestOutOfServiceFencesNoFallbackAfterAnUnseenPod(t *testing.T) {
+	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns"}}
+	cluster.Status.MemberPods = []databasev1alpha1.MemberPod{{Name: q0, PodUID: uid0, NodeName: node0}}
+	c := fake.NewClientBuilder().WithObjects(tainted()).Build()
+	r := &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
+	later := terminatingPod(uid0New, testNow, 0, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	r.notePodDeleted(later, false)
+	nodes, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0},
+		map[string]RoleObservation{q0: noAnswerAt(testNow)}, map[string]memberIdentity{q0: {}})
+	if err != nil || nodes[q0] != "" || len(fences) != 0 {
+		t.Fatalf("node %q, fences %+v, error %v; want no node and no fence", nodes[q0], fences, err)
+	}
+	// The deletion of the recorded Pod itself, as by the taint, keeps the node.
+	r = &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
+	r.notePodDeleted(terminatingPod(uid0, testNow, 0, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}), false)
+	if nodes, fences, _, _ = r.outOfServiceFences(context.Background(), cluster, []string{q0},
+		map[string]RoleObservation{q0: noAnswerAt(testNow)}, map[string]memberIdentity{q0: {}}); nodes[q0] != node0 || len(fences) != 1 {
+		t.Fatalf("node %q, fences %+v; want %s fenced", nodes[q0], fences, node0)
+	}
+}
+
+// statusOnly answers every request with status.
+type statusOnly int
+
+func (s statusOnly) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: int(s), Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")),
+		Request: req}, nil
+}
+
+// An HTTP response other than 200 is no role, but it shows the member's
+// process answered.
+func TestProbeRoleRespondedWithoutARole(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable} {
+		p := &HTTPRoleProber{Client: &http.Client{Transport: statusOnly(status)}, Tokens: staticToken("tok"),
+			Now: func() time.Time { return testNow }}
+		if o := p.ProbeRole(context.Background(), q0, "ns"); o.Reachable || !o.Responded {
+			t.Errorf("status %d: %+v, want an unreachable answer that responded", status, o)
+		}
+	}
+}
+
+// An annotation naming a return that was already released is reported, so an
+// administrator who set it again for a new return learns to remove it first.
+func TestReturnRequestAlreadyReleased(t *testing.T) {
+	c := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc",
+		Annotations: map[string]string{returnToServiceAnnotation: q0}}}
+	c.Status.ReturnedToService = q0
+	request, msg := returnRequest(c, quarantineMembers)
+	if request != "" || !strings.Contains(msg, "already released") || !strings.Contains(msg, q0) {
+		t.Fatalf("request %q, message %q; want none, and a message that the return of %s was already released",
+			request, msg, q0)
+	}
 }
