@@ -1333,8 +1333,10 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
 - **No Kubernetes Job** in the v1alpha1 critical path (RWO PVC + it would
   duplicate the Instance Manager). Jobs are reserved for future
   retention/verification/copy work.
-- **Target eligibility:** a new HA selection requires a resolved primary
-  and a member the HA bootstrap records as holding the database. A slave
+- **Target eligibility:** a new HA selection requires a resolved primary,
+  and every target, the master included, must be a member the HA bootstrap
+  records as holding the database; a master that is not waits with
+  `MasterNotSeeded`, and no other member is taken in its place. A slave
   needs a fresh, authoritative role observation, an applier reading for
   that primary, `failCount: 0`, and a reading of its copied log's end.
   An observed apply or copy stall lasting at least 60 s excludes it.
@@ -1356,7 +1358,9 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
   wait's recorded start it may select the master with
   `MasterFallbackPrimaryLogEndNotRead`. An unresolved or ambiguous HA
   primary never permits master fallback. For a single-instance cluster,
-  `PreferStandby` also allows its sole member with an unknown role.
+  `PreferStandby` also allows its sole member with an unknown role while
+  its primary is unresolved; a resolved single member is selected as an
+  ordinary master.
 - **Recorded target:** selection is persisted before dispatch. Once a
   target is recorded, retries use that member and the same idempotency key;
   a lost response never causes selection of a second member. A recorded

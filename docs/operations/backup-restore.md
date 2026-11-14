@@ -82,6 +82,7 @@ and retain a redacted copy. The full status field definitions are in
 | Backup `Completed`, `Ready=True` | The operation reported completion and the controller accepted its artifact facts. The controller does not independently download and rehash the objects. |
 | Recovery `Preparing` | A restore is being requested, or its backup is being verified/downloaded. |
 | Recovery `Restoring` | The restore utility runs, or the restored database is starting. |
+| Recovery `Validating` | The restored database is being validated before the bootstrap continues. |
 | Recovery `SeedingReplicas` | HA peers are being copied from the restored data; inspect `status.databases[].seeding`. |
 | Recovery `Complete` | The bootstrap finished. Application SQL and dataset checks remain separate. |
 | Backup or recovery `Failed` | This resource's workflow is terminal; ordinary reconciliation does not reset it. |
@@ -94,14 +95,17 @@ different retry rules. Do not treat every repeated reconcile as a new attempt.
 
 | Condition reason or state | Controller behavior and operator response |
 |---|---|
-| `ObjectStorageNotConfigured`, `ObjectStorageNotApplied`, `EngineVersionMismatch`, or a capability hold | Inspect the named prerequisite and the running Pod's configuration/image. Some waits have no overall deadline; elapsed time alone does not prove failure. |
+| `ObjectStorageNotApplied` on a backup | The selected Pod does not run with the object-storage settings. The wait is bounded: 30 minutes from `status.objectStorageNotAppliedSince`, after which the backup ends `Failed` with `ObjectStorageWaitExpired` and nothing was started. |
+| A backup whose cluster does not exist | The backup waits up to 10 minutes for the cluster, then ends `Failed`. |
+| `ObjectStorageNotConfigured` with no recorded target, `EngineVersionMismatch` on a recovery, or a capability hold | Inspect the named prerequisite and the running Pod's configuration/image. These waits have no overall deadline, so elapsed time alone does not prove failure. |
 | `InstanceManagerUnavailable` or `InstanceManagerTokenRefused` | The controller cannot obtain the required answer. Verify reachability or the token configuration without displaying the token. A request may already have started; retain its target and operation identity. |
 | `InstanceManagerOperationInProgress`, `InstanceManagerStagingInUse`, `InstanceManagerRequestConflict` | A busy resource or a different request under an existing key is not permission to clear the store. The controller waits or follows the existing keyed operation as applicable. |
 | `InstanceManagerOperationRecordUnreadable` | Preserve the unreadable record and investigate storage/permissions with the maintainer. Do not delete it to permit another operation. |
 | `RecordedOperationMissing` | The member explicitly reports that the recorded ID is absent. The controller waits against a 30-minute bound from the persisted missing-since time, checked on each reconcile. This is different from an unreachable member. |
 | `RecordedOperationLost` | The missing-record bound expired. The workflow stops without issuing a replacement attempt; the earlier utility may still run or have left data. Inspect the member before starting anything else. |
 | Recovery `RestoreFailedRetrying`, `SeedBackupFailedRetrying`, `SeedRestoreFailedRetrying` | A failed operation or refused request consumes the relevant retry budget. Follow the new operation ID and retain the failed attempt's evidence. |
-| Backup `BackupFailed`, `ArtifactUnverified`, `RecordedTargetNotStarted`, or `RecordedTargetUnverified` | The backup ends `Failed`. In the unverified-target case, work may still exist on the target. A new backup is a separate planned operation, not an automatic retry of this CR. |
+| Backup `UnsupportedDestination` | The backup's destination type has no execution path; the backup ends `Failed` at once. |
+| Backup `BackupFailed`, `ArtifactUnverified`, `RecordedTargetNotStarted`, or `RecordedTargetUnverified` | The backup ends `Failed`. The two `RecordedTarget*` reasons end a wait of at most 30 minutes for the recorded target. In the unverified-target case, work may still exist on the target. A new backup is a separate planned operation, not an automatic retry of this CR. |
 
 The initial recovery restore has **at most three attempts in total**.
 `status.bootstrap.attempts` is the retry index: zero/omitted for the initial
@@ -115,12 +119,23 @@ bootstrap remains `Failed`. See the
 
 A missing recorded operation is never treated as an ordinary failed attempt.
 The clocks are retained in `status.operationMissingSince` for a backup and
-`status.bootstrap.operationMissingSince` for the initial restore; seeding
-keeps its own missing-since field. An Operator restart does not reset these
+`status.bootstrap.operationMissingSince` for the initial restore,
+`status.databases[].bootstrapOperationMissingSince` for the HA
+database-creation step, and `status.databases[].seeding.operationMissingSince`
+for seeding. An Operator restart does not reset these
 recorded waits. The
 [backup](../../internal/controller/backup_operation_missing_test.go) and
 [recovery](../../internal/controller/recovery_operation_missing_test.go)
 regressions cover that distinction.
+
+Some HA bootstrap reasons end the database `Failed` at once, without using an
+attempt and without starting the step again: `RecordedOperationMismatch`,
+`SeedSourceContradicted`, `SeedSourceChangedDuringSeed` and
+`SeedSourceUnverified`. Check the member named in the message before relying
+on its data. Do not clear the recorded operation or the seeding record in the
+status by hand: the step would start again under the same key. The
+`BootstrapReady` row of [observability](../observability.md) lists every
+reason and what to do.
 
 ### Deadlines and a lost response
 
