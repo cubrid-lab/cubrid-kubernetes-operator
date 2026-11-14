@@ -489,6 +489,19 @@ of it not `True` after its last `True` until the cluster converged),
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
 the fault flow.
 
+When S04 ends before step 9 read the clients' histories (a failed step, a
+VM not powered on again, a cluster that did not converge, the run's
+timeout), the run stops the clients and, before the namespace is deleted,
+reads each client's history and keeps it as the client wrote it in
+`S04/power-off/clients/<client>.jsonl`, listed in S04's evidence. A line the
+client was stopped in stays as it was. `clientHistories` in
+`S04/power-off/record.json` lists each client with its file, whether its last
+line is unfinished, its operations by kind without that line, or why they
+could not be counted, and `judged: false`: S04 judged none of them, and they
+are not added to `LAB01/history.jsonl`. The reading takes at most a minute
+and never changes S04's result; a history that could not be read or kept is
+recorded there with the reason (`captureError`).
+
 The limits have no recorded value yet; the defaults are the run's bounds.
 As for S06 in this lane, a run with them is judged against those bounds and
 is a baseline run for the values the contract will record.
@@ -4267,7 +4280,8 @@ and S12 variant other than `complete` and `exact` only those under
   and the cluster converged, the final master and the members after),
   `S04/power-off/timeline.jsonl` (the fault flow) and
   `S04/power-off/data-check.json`. The clients' operations are in
-  `LAB01/history.jsonl` with the rest.
+  `LAB01/history.jsonl` with the rest, or, when S04 ended before it read
+  them, in `S04/power-off/clients/<client>.jsonl` as the clients wrote them.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
   started and the status time it wrote, the members before and after),

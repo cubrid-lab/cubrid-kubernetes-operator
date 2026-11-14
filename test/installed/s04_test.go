@@ -37,6 +37,7 @@ import (
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
 const (
@@ -321,6 +322,10 @@ func TestRunS04PassesWhenCUBRIDPromotesAndTheClusterConverges(t *testing.T) {
 	}
 	if stops != 1 || starts != 1 {
 		t.Errorf("VM commands %v, want one stop and one start of %s", lab.commands, testMasterNode)
+	}
+	if rec := readS04Record(t, cfg.EvidenceDir); !rec.ClientsRead || len(rec.ClientHistories) != 0 {
+		t.Errorf("clientsRead %t, clientHistories %+v; want the histories read once, by the judged run",
+			rec.ClientsRead, rec.ClientHistories)
 	}
 }
 
@@ -823,6 +828,90 @@ func TestRunS04FailureKeepsTheLogs(t *testing.T) {
 		t.Fatal("no log was read for the failed S04")
 	}
 	if _, err := os.Stat(filepath.Join(cfg.EvidenceDir, haScenarioID, "logs", "index.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A power-off run that ends before finishS04 has stopped the background
+// clients, so their SQL histories must be read before the namespace goes.
+// Here the VM is not powered on again: S04 stays blocked, each client's raw
+// history is kept under S04, a line a client was stopped in stays as it was
+// written and is flagged, and the histories are listed as not judged (#110).
+func TestRunS04KeepsTheClientHistoriesWhenItEndsEarly(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.failStart = true
+	written := map[string]string{}
+	f.backgroundHistory = func(id string) string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.deletes) != 0 {
+			t.Errorf("history of %s read after the namespace was deleted", id)
+		}
+		history, _ := backgroundWorkload(id, nil)
+		written[id] = history + "\n" + `{"t":"2026-11-14T09:00:00Z","client":"` + id + `","ev`
+		return written[id]
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "not powered on again") {
+		t.Fatalf("S04 = %+v, want blocked: the VM is still off", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if len(rec.ClientHistories) != len(s04Clients) {
+		t.Fatalf("clientHistories = %+v, want one per client", rec.ClientHistories)
+	}
+	for i, id := range s04Clients {
+		file := s04ClientsDir + id + ".jsonl"
+		data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != written[id] {
+			t.Errorf("%s = %q, want the client's history as written", file, data)
+		}
+		if !slices.Contains(s04.Evidence, file) {
+			t.Errorf("S04 evidence %v does not list %s", s04.Evidence, file)
+		}
+		got := rec.ClientHistories[i]
+		if got.Client != id || got.File != file || !got.UnfinishedLastLine || got.Judged ||
+			got.Operations[workload.Attempted] != 40 || got.CaptureError != "" || got.ParseError != "" {
+			t.Errorf("clientHistories[%d] = %+v", i, got)
+		}
+	}
+	if s04.Operations != nil {
+		t.Errorf("operations = %+v, want none counted from histories S04 did not judge", s04.Operations)
+	}
+}
+
+// A history that cannot be read leaves S04's verdict as it was; the failure
+// is recorded for that client, and the other client's history is kept.
+func TestRunS04KeepsItsVerdictWhenAClientHistoryCannotBeRead(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.failStart = true
+	f.clientHook = func(script string) (string, error, bool) {
+		if strings.Contains(script, "cat /tmp/s04r1.jsonl") {
+			return "", errors.New("container not found"), true
+		}
+		return "", nil, false
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "not powered on again") ||
+		strings.Contains(s04.Reason, "container not found") {
+		t.Fatalf("S04 = %+v, want the blocked verdict of the VM still off", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if len(rec.ClientHistories) != 2 || !strings.Contains(rec.ClientHistories[0].CaptureError, "container not found") ||
+		rec.ClientHistories[0].File != "" || rec.ClientHistories[1].File != s04ClientsDir+"s04r2.jsonl" {
+		t.Fatalf("clientHistories = %+v", rec.ClientHistories)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.EvidenceDir, s04ClientsDir+"s04r2.jsonl")); err != nil {
 		t.Fatal(err)
 	}
 }

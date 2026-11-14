@@ -37,6 +37,7 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
 const (
@@ -48,6 +49,9 @@ const (
 	s04RecordFile    = "S04/power-off/record.json"
 	s04TimelineFile  = "S04/power-off/timeline.jsonl"
 	s04DataCheckFile = "S04/power-off/data-check.json"
+	// s04ClientsDir keeps each background client's history as the client
+	// wrote it, when S04 ended before it read and judged them.
+	s04ClientsDir = "S04/power-off/clients/"
 	// failoverLimitName and vmReturnLimitName are the contract's limits on
 	// the promotion of a slave and on the VM's return.
 	failoverLimitName = "failover_limit"
@@ -75,6 +79,9 @@ const (
 	// brokerMoveLimit bounds how long the Brokers moved off the master's
 	// node take to be available again elsewhere.
 	brokerMoveLimit = 5 * time.Minute
+	// s04HistoryLimit bounds how long the end of an S04 run that did not
+	// read the clients' histories takes to keep them.
+	s04HistoryLimit = time.Minute
 )
 
 // vmSettle is how long the cleanup must read a VM running before it trusts
@@ -164,6 +171,31 @@ type s04Record struct {
 	FinalMaster      string     `json:"finalMaster,omitempty"`
 	ClientsStopped   bool       `json:"clientsStopped"`
 	NotAcknowledged  *int       `json:"operationsNotAcknowledgedAfterFault,omitempty"`
+	// ClientsRead is set once finishS04 read the clients' histories into the
+	// run's history. Until then, S04's end keeps each history as it is in
+	// ClientHistories, before the namespace is deleted.
+	ClientsRead     bool               `json:"clientsRead"`
+	ClientHistories []s04ClientHistory `json:"clientHistories,omitempty"`
+}
+
+// s04ClientHistory is a background client's history kept when S04 ended
+// before it judged them. It is evidence only: Judged is always false, and
+// nothing in it changes S04's result.
+type s04ClientHistory struct {
+	Client string `json:"client"`
+	// File is the evidence file that holds the history as read from the
+	// client, unfinished last line included; empty when it was not read.
+	File string `json:"file,omitempty"`
+	// UnfinishedLastLine is set when the history does not end with a line
+	// break: the client was stopped while it wrote that line.
+	UnfinishedLastLine bool `json:"unfinishedLastLine,omitempty"`
+	// Operations counts the history's events by kind, without its
+	// unfinished last line; ParseError is why they could not be counted.
+	Operations map[string]int `json:"operations,omitempty"`
+	ParseError string         `json:"parseError,omitempty"`
+	// CaptureError is why the history could not be read or kept.
+	CaptureError string `json:"captureError,omitempty"`
+	Judged       bool   `json:"judged"`
 }
 
 // validateS04 refuses S04 outside the VM lab, without the lab's VM controls
@@ -347,12 +379,8 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	clientsStarted := false
 	defer func() {
 		h.endCordon(ctx, &rec, &result)
-		if clientsStarted && !rec.ClientsStopped {
-			err := h.stopBackgroundClients(ctx, s04Clients)
-			rec.ClientsStopped = err == nil
-			if err != nil && result.Result == evidence.Pass {
-				result.Result, result.Reason = evidence.Fail, "stop the clients: "+err.Error()
-			}
+		if clientsStarted {
+			h.endClients(ctx, &rec, &result)
 		}
 		if err := h.writeJSON(s04RecordFile, rec); err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S04 evidence: "+err.Error()
@@ -476,6 +504,7 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	if err != nil {
 		return end(evidence.Fail, "collect the clients: %v", err)
 	}
+	rec.ClientsRead = true
 	result.Operations = &clients.operations
 	rec.NotAcknowledged = &clients.notAcknowledged
 	result.Measurements["operationsNotAcknowledged"] = clients.notAcknowledged
@@ -506,6 +535,58 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 		"True and deleted no Pod, the VM's node returned, the cluster converged on master %s, the clients were "+
 		"acknowledged again and the data rules held", rec.NewMaster, rec.FinalMaster)
 	return *result
+}
+
+// endClients stops the clients that S04 started when it did not, and keeps
+// their histories when it did not read them, before the namespace goes. A
+// failure to stop them fails a passing S04.
+func (h *haRun) endClients(ctx context.Context, rec *s04Record, result *evidence.Scenario) {
+	if !rec.ClientsStopped {
+		err := h.stopBackgroundClients(ctx, s04Clients)
+		rec.ClientsStopped = err == nil
+		if err != nil && result.Result == evidence.Pass {
+			result.Result, result.Reason = evidence.Fail, "stop the clients: "+err.Error()
+		}
+	}
+	if !rec.ClientsRead {
+		rec.ClientHistories = h.keepClientHistories(ctx, s04Clients)
+	}
+}
+
+// keepClientHistories reads each background client's history and keeps it,
+// as the client wrote it, under s04ClientsDir: runS04 calls it when it ended
+// before finishS04 read the histories, so before the namespace and the
+// client's files go. It goes on when ctx has ended, within its own bound. It
+// judges nothing and changes no result; a history it could not read or keep
+// is recorded with the reason.
+func (h *haRun) keepClientHistories(ctx context.Context, ids []string) []s04ClientHistory {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s04HistoryLimit)
+	defer cancel()
+	kept := make([]s04ClientHistory, 0, len(ids))
+	for _, id := range ids {
+		k := s04ClientHistory{Client: id}
+		text, err := h.clientRun(ctx, fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+		if err != nil {
+			k.CaptureError = "read the history: " + err.Error()
+			kept = append(kept, k)
+			continue
+		}
+		file := s04ClientsDir + id + ".jsonl"
+		if err := h.write(file, []byte(text)); err != nil {
+			k.CaptureError = "keep the history: " + err.Error()
+		} else {
+			k.File = file
+		}
+		k.UnfinishedLastLine = text != "" && !strings.HasSuffix(text, "\n")
+		history, err := workload.ReadHistory(strings.NewReader(text[:strings.LastIndex(text, "\n")+1]))
+		if err != nil {
+			k.ParseError = err.Error()
+		} else {
+			k.Operations = history.Counts
+		}
+		kept = append(kept, k)
+	}
+	return kept
 }
 
 // controlPlaneLabels mark a node that runs the API server or etcd, as
