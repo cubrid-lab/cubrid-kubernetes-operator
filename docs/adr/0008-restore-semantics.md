@@ -255,7 +255,11 @@ is given that directory's `backup/`. A file an earlier attempt, another seed
 source or a killed process left in the staging directory is neither given to
 `restoredb` nor changed. The attempt's directory is removed when the restore
 returns; one a killed process left is removed before a later restore once its
-operation has ended and no process holds a file in it. The manifest itself is
+operation has ended and no process holds a file in it. A `backup/` directory
+that an Instance Manager built before this layout left directly in the
+staging directory is never read or removed by the manager; it is logged
+(`restore_staging_legacy`), and a person may remove it once no restore of an
+earlier build runs (runbook in `docs/observability.md`). The manifest itself is
 not signed: this binds the restored bytes to the manifest, not the manifest to
 its author.
 

@@ -6463,7 +6463,7 @@ One session as soon as a graceful restart returned, **no shim loaded**:
 - **B:** `restoredb` exit 0; `count(*) = 125000`, `sum(id) = 7812562500` and the MD5 of the rows equal the source's. Both leftovers kept size, modification time and SHA-256.
 - **C:** `restoredb` exit 0 and the same three values; the random file was unchanged, and `appdb_bk0_keys` was written into the shared `backup/` directory.
 
-**What this does not show.** `restoreslave`; a kill of the Instance Manager itself; a leftover real volume of another backup or one beside a multi-volume backup; whether `restoredb` reads a `_bk0_keys` file it did not write; other builds; the VM lab. One run of each case.
+**What this does not show.** `restoreslave`; a kill of the Instance Manager itself; a leftover real volume of another backup or one beside a multi-volume backup; whether `restoredb` reads a `_bk0_keys` file it did not write; the Instance Manager's own cleanup, which was simulated with `rm -rf` (`reclaimRestoreAttempts` and its checks are covered by Go tests only); whether A's worker process, still listed 1 s after SIGKILL and gone by 19:48:05Z, was alive while B ran; other builds; the VM lab. One run of each case.
 
 **Consequences.**
 - **#866:** the fixed layout restores the source dataset after an interrupted attempt and leaves unrelated files as they were. The `_bk0_keys` file `restoredb` writes into its input directory is one more reason the input directory must belong to one attempt: it is now removed with that attempt's directory.

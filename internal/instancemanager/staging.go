@@ -325,8 +325,23 @@ func (s *Server) reclaimRestoreAttempts(req RestoreRequest, current string) {
 	if proc == "" {
 		proc = defaultProcRoot
 	}
+	// A process names the files it holds by their resolved path, so the
+	// holders are looked for below the staging directory with its links
+	// resolved, as stagingScanPath does for backup staging.
+	resolved := stagingDir
+	if r, err := filepath.EvalSymlinks(stagingDir); err == nil {
+		resolved = r
+	}
 	for _, e := range entries {
 		id := e.Name()
+		if id == "backup" && e.IsDir() {
+			// An Instance Manager built before attempts had directories of
+			// their own (#866) staged here; nothing reads these files now.
+			s.log().Warn("Kept backup files an earlier Instance Manager staged directly in the restore staging directory; "+
+				"no restore reads them, and a person may remove them (runbook in docs/observability.md)",
+				"event", "restore_staging_legacy", "path", filepath.Join(stagingDir, id))
+			continue
+		}
 		if id == current || !isValidOperationID(id) {
 			continue
 		}
@@ -342,7 +357,7 @@ func (s *Server) reclaimRestoreAttempts(req RestoreRequest, current string) {
 		}
 		path := filepath.Join(stagingDir, id)
 		if e.Type()&os.ModeSymlink == 0 {
-			held, err := stagingHolders(proc, procCommReader(proc), path)
+			held, err := stagingHolders(proc, procCommReader(proc), filepath.Join(resolved, id))
 			if err != nil || len(held) > 0 {
 				s.log().Warn("Kept the staging of an earlier restore attempt that a process holds open",
 					"stagingDir", stagingDir, "operationID", id, "holders", describeHolders(held, err))

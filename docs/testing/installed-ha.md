@@ -3579,9 +3579,15 @@ What the product does:
   to take over (`adoptRestored` needs `restored`); what the failed restore
   left under its own marker is removed (`reclaimIncomplete`). It stages into
   the same directory, `/var/lib/cubrid/restore-staging/<cluster UID>`
-  (`restoreStagingRoot` in `bootstrap.go`), which a successful restore
-  removes, dropping the error of that removal (`Restore` in
-  `internal/instancemanager/restore.go`).
+  (`restoreStagingRoot` in `bootstrap.go`), in a new directory named after
+  its operation. `Restore` (`internal/instancemanager/restore.go`) removes
+  that attempt's directory when it returns, and the staging directory only
+  when the same call created it and nothing else is in it, dropping the
+  errors of those removals. The killed attempt's directory is removed before
+  the next restore once its operation has ended (`reclaimRestoreAttempts`).
+  The staging directory itself can therefore still exist at the end, for
+  example when it held another entry before the restore; `stagingLeftAtEnd`
+  records whether it does and is not judged.
 
 What differs from the steps above:
 - **Wait for Preparing** (step 2): until a reading shows `Preparing` with an

@@ -17,10 +17,12 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +348,152 @@ func TestServer_Restore_RemovesOnlyTheStagingOfEndedAttempts(t *testing.T) {
 	}
 	for _, k := range kept {
 		k.check(t)
+	}
+}
+
+// The reclaim before a restore removes the directory of an earlier attempt
+// only when nothing may still use it. An operation whose record cannot be
+// read may be running, and a directory a process holds a file in is still
+// written, so both are kept. A link named like an operation is removed, and
+// what it points to is not touched. The holders are looked for by the
+// resolved path, so a staging root reached through a link still finds them
+// (#866).
+func TestServer_ReclaimRestoreAttempts_KeepsWhatMayStillBeUsed(t *testing.T) {
+	const otherOp = "op-dddddddddddddddddddddddddddddddd"
+	for _, tc := range []struct {
+		name string
+		// prepare lays out the entry otherOp of the staging directory dir,
+		// whose links resolved are at resolved, and returns the process
+		// list to scan.
+		prepare func(t *testing.T, store *OperationStore, storeDir, dir, resolved string) (proc string, id string)
+		kept    bool
+		// linkedRoot reaches the staging root through a link.
+		linkedRoot bool
+	}{
+		{name: "an operation whose record cannot be read", kept: true,
+			prepare: func(t *testing.T, store *OperationStore, storeDir, dir, _ string) (string, string) {
+				op, _, err := store.FindOrCreate(OpRestore, "earlier", "h", dbName)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Settle(op.ID, func(o *Operation) { o.State = OpFailed }); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(storeDir, op.ID+".json"), "{not json")
+				writeKeptFile(t, filepath.Join(dir, op.ID, "backup", "appdb_bk0v000"), "volume")
+				return t.TempDir(), op.ID
+			}},
+		{name: "a directory a process holds a file in", kept: true,
+			prepare: func(t *testing.T, _ *OperationStore, _, dir, resolved string) (string, string) {
+				writeKeptFile(t, filepath.Join(dir, otherOp, "backup", "appdb_bk0v000"), "volume")
+				return fakeProc(t, map[string]struct {
+					comm string
+					fds  []string
+				}{"42": {comm: "cub_admin", fds: []string{filepath.Join(resolved, otherOp, "backup", "appdb_bk0v000")}}}), otherOp
+			}},
+		{name: "a held directory below a staging root reached through a link", kept: true, linkedRoot: true,
+			prepare: func(t *testing.T, _ *OperationStore, _, dir, resolved string) (string, string) {
+				writeKeptFile(t, filepath.Join(dir, otherOp, "backup", "appdb_bk0v000"), "volume")
+				return fakeProc(t, map[string]struct {
+					comm string
+					fds  []string
+				}{"42": {comm: "cub_admin", fds: []string{filepath.Join(resolved, otherOp, "backup", "appdb_bk0v000")}}}), otherOp
+			}},
+		{name: "an ended attempt nothing holds", kept: false,
+			prepare: func(t *testing.T, _ *OperationStore, _, dir, _ string) (string, string) {
+				writeKeptFile(t, filepath.Join(dir, otherOp, "backup", "appdb_bk0v000"), "volume")
+				return t.TempDir(), otherOp
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			realRoot := filepath.Join(base, "restore-staging")
+			stagingRoot := realRoot
+			if tc.linkedRoot {
+				stagingRoot = filepath.Join(base, "linked-staging")
+				if err := os.MkdirAll(realRoot, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(realRoot, stagingRoot); err != nil {
+					t.Skipf("cannot create a symbolic link here: %v", err)
+				}
+			}
+			req := RestoreRequest{Database: dbName, Bucket: "b", Prefix: "p",
+				StagingDir: filepath.Join(stagingRoot, "uid-1"), TargetDir: filepath.Join(base, "databases")}
+			storeDir := t.TempDir()
+			store, err := NewOperationStore(storeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proc, id := tc.prepare(t, store, storeDir, req.StagingDir, filepath.Join(realRoot, "uid-1"))
+			srv := NewServer(&restoreCLI{}, "tok").WithOperationStore(store).
+				WithRestoreRoots(RestoreRoots{Target: req.TargetDir, Staging: stagingRoot})
+			srv.procRoot = proc
+
+			srv.reclaimRestoreAttempts(req, "op-"+strings.Repeat("e", 32))
+
+			_, err = os.Lstat(filepath.Join(req.StagingDir, id))
+			if kept := err == nil; kept != tc.kept {
+				t.Errorf("the earlier attempt's directory kept = %v (err=%v), want %v", kept, err, tc.kept)
+			}
+		})
+	}
+}
+
+// A link named like an earlier attempt's directory is removed as a link: the
+// directory it points to, outside the staging directory, is not touched.
+func TestServer_ReclaimRestoreAttempts_RemovesALinkWithoutFollowingIt(t *testing.T) {
+	const otherOp = "op-dddddddddddddddddddddddddddddddd"
+	base := t.TempDir()
+	req := RestoreRequest{Database: dbName, Bucket: "b", Prefix: "p",
+		StagingDir: filepath.Join(base, "restore-staging", "uid-1"), TargetDir: filepath.Join(base, "databases")}
+	outside := writeKeptFile(t, filepath.Join(base, "outside", "backup", "appdb_bk0v000"), "not staging")
+	if err := os.MkdirAll(req.StagingDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(req.StagingDir, otherOp)
+	if err := os.Symlink(filepath.Join(base, "outside"), link); err != nil {
+		t.Skipf("cannot create a symbolic link here: %v", err)
+	}
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(&restoreCLI{}, "tok").WithOperationStore(store).
+		WithRestoreRoots(RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir)})
+	srv.procRoot = t.TempDir()
+
+	srv.reclaimRestoreAttempts(req, "op-"+strings.Repeat("e", 32))
+
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("the link named like an earlier attempt is still there (err=%v)", err)
+	}
+	outside.check(t)
+}
+
+// Backup files an Instance Manager built before attempts had their own
+// directories staged directly in the staging directory are kept, and the
+// reclaim says so in a warning a person can act on (#866).
+func TestServer_ReclaimRestoreAttempts_KeepsAndReportsTheEarlierLayout(t *testing.T) {
+	base := t.TempDir()
+	req := RestoreRequest{Database: dbName, Bucket: "b", Prefix: "p",
+		StagingDir: filepath.Join(base, "restore-staging", "uid-1"), TargetDir: filepath.Join(base, "databases")}
+	legacy := writeKeptFile(t, filepath.Join(req.StagingDir, "backup", "appdb_bk0v000"), "earlier layout")
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	srv := NewServer(&restoreCLI{}, "tok").WithOperationStore(store).
+		WithRestoreRoots(RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir)}).
+		WithLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	srv.procRoot = t.TempDir()
+
+	srv.reclaimRestoreAttempts(req, "op-"+strings.Repeat("e", 32))
+
+	legacy.check(t)
+	if !strings.Contains(logged.String(), `"event":"restore_staging_legacy"`) ||
+		!strings.Contains(logged.String(), filepath.Join(req.StagingDir, "backup")) {
+		t.Errorf("no warning names the earlier layout's directory: %s", logged.String())
 	}
 }
