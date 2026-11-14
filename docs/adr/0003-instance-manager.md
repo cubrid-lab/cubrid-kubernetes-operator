@@ -448,7 +448,10 @@ operation on that member until the record is readable again or removed by
 hand, rather than risk a second `backupdb` or restore writer beside one that
 may run. Reads by ID and the read-only key lookup already answer `500` for a
 record they cannot read. A record that decodes but names another operation
-ID, or has no kind or idempotency key, counts as one that cannot be read. A
+ID, has no kind or idempotency key, or has no database or one that is not a
+plain database name (the form a request's `database` must have), counts as
+one that cannot be read: admission keeps one operation at a time per
+database, so such a record may hold any database (#865). A
 backup whose staging destination holds an entry of such a record gets the
 same answer, not `StagingDestinationInUse`. At start the manager fails every
 readable record that has not ended and leaves an unreadable one as it is: it

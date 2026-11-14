@@ -1104,6 +1104,9 @@ bootstrap (`500`, `OperationRecordUnreadable`); the database keeps serving.
 1. Find the record. The operation ID is the `operationID` of the
    `operation_record_unreadable` log line, or is named in the `500` message
    (`read operation op-…: permission denied`, `decode operation op-…: …`).
+   A record that decodes but has no kind, no idempotency key, or no
+   database or one that is not a plain database name is unreadable too: its
+   message names the ID, kind, key length and database it holds (#865).
    The file is `$IM_OPERATIONS_DIR/op-<id>.json` in the database container
    (by default `/var/lib/cubrid/operations`, on the PVC).
 2. Confirm that its operation does not run: no `backupdb` and no
