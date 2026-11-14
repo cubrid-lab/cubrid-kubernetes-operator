@@ -521,10 +521,13 @@ func (s *OperationStore) decodeLocked(id string) (*Operation, error) {
 		return nil, fmt.Errorf("decode operation %s: %w", id, err)
 	}
 	// A record that is not this operation's, or lacks what admission
-	// matches on, is no more usable than one that does not decode.
-	if op.ID != id || op.Kind == "" || op.IdempotencyKey == "" {
-		return nil, fmt.Errorf("decode operation %s: the record has ID %q, kind %q and an idempotency key of %d bytes",
-			id, op.ID, op.Kind, len(op.IdempotencyKey))
+	// matches on, is no more usable than one that does not decode. Its
+	// database is the one admission keeps to one operation at a time, so a
+	// record whose database is not a name a request may carry could hold
+	// any database (#865).
+	if op.ID != id || op.Kind == "" || op.IdempotencyKey == "" || !databaseNamePattern.MatchString(op.Database) {
+		return nil, fmt.Errorf("decode operation %s: the record has ID %q, kind %q, an idempotency key of %d bytes and database %q",
+			id, op.ID, op.Kind, len(op.IdempotencyKey), op.Database)
 	}
 	return &op, nil
 }

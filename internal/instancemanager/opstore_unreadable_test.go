@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,28 +55,70 @@ func overwrite(content string) spoilRecord {
 	}
 }
 
-var spoiledRecords = map[string]spoilRecord{
-	// A record cut short, as a torn write or a damaged block leaves it.
-	"not decodable": overwrite("{"),
-	// A record that decodes but is no operation's: admission could not
-	// match its key or kind.
-	"decodes to no operation": overwrite("{}"),
-	// A record the manager may not read, as a wrong owner or mode leaves it.
-	"permission denied": func(t *testing.T, path string) func() {
+// setDatabase spoils a record by changing only its database: absent drops
+// the field, otherwise it is set to database. The record keeps its ID, kind
+// and idempotency key, and still decodes.
+func setDatabase(database string, absent bool) spoilRecord {
+	return func(t *testing.T, path string) func() {
 		t.Helper()
-		if os.Geteuid() == 0 {
-			t.Skip("a file mode does not keep root from reading")
-		}
-		if err := os.Chmod(path, 0o000); err != nil {
+		good, err := os.ReadFile(path) // #nosec G304 -- a file of the test
+		if err != nil {
 			t.Fatal(err)
 		}
-		return func() {
-			if err := os.Chmod(path, 0o600); err != nil {
+		var record map[string]any
+		if err := json.Unmarshal(good, &record); err != nil {
+			t.Fatal(err)
+		}
+		if absent {
+			delete(record, "database")
+		} else {
+			record["database"] = database
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overwrite(string(data))(t, path)
+	}
+}
+
+// spoiledDatabases are records that keep their ID, kind and key but no
+// longer name the database that admission keeps to one operation at a time
+// (#865).
+var spoiledDatabases = map[string]spoilRecord{
+	"database removed":   setDatabase("", true),
+	"empty database":     setDatabase("", false),
+	"malformed database": setDatabase("../"+dbName, false),
+	// One character over the 17 that requests and CUBRID allow.
+	"overlong database": setDatabase(strings.Repeat("a", 18), false),
+}
+
+var spoiledRecords = func() map[string]spoilRecord {
+	records := map[string]spoilRecord{
+		// A record cut short, as a torn write or a damaged block leaves it.
+		"not decodable": overwrite("{"),
+		// A record that decodes but is no operation's: admission could not
+		// match its key or kind.
+		"decodes to no operation": overwrite("{}"),
+		// A record the manager may not read, as a wrong owner or mode leaves it.
+		"permission denied": func(t *testing.T, path string) func() {
+			t.Helper()
+			if os.Geteuid() == 0 {
+				t.Skip("a file mode does not keep root from reading")
+			}
+			if err := os.Chmod(path, 0o000); err != nil {
 				t.Fatal(err)
 			}
-		}
-	},
-}
+			return func() {
+				if err := os.Chmod(path, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		},
+	}
+	maps.Copy(records, spoiledDatabases)
+	return records
+}()
 
 // recordFiles counts the operation records in dir.
 func recordFiles(t *testing.T, dir string) int {
@@ -143,6 +186,57 @@ func TestOperationStore_FindOrCreate_RefusesWhileARecordCannotBeRead(t *testing.
 			if err != nil || !existed || again.ID != first.ID {
 				t.Errorf("after the record is readable again = %+v (existed %v), %v; want operation %s",
 					again, existed, err, first.ID)
+			}
+		})
+	}
+}
+
+// An operation that is still running and whose record has lost its database,
+// though it keeps its ID, kind and idempotency key, may hold any database.
+// Another request for the same database, under another key or of another
+// kind, is refused as unreadable and creates no second record, and the record
+// is left as it is on disk (#865).
+func TestOperationStore_FindOrCreate_RefusesBesideARunningRecordWithoutADatabase(t *testing.T) {
+	for name, spoil := range spoiledDatabases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := NewOperationStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			running, _, err := store.FindOrCreate(OpRestore, "restore-key", sameBody, dbName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Update(running.ID, func(o *Operation) { o.State = OpRestoring }); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, running.ID+".json")
+			t.Cleanup(spoil(t, path))
+			spoiled, err := os.ReadFile(path) // #nosec G304 -- a file of the test
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, r := range []struct {
+				what string
+				kind OperationKind
+				key  string
+			}{
+				{"another key", OpRestore, "other-key"},
+				{"another kind", OpBackup, "other-kind-key"},
+			} {
+				second, existed, err := store.FindOrCreate(r.kind, r.key, sameBody, dbName)
+				if !errors.Is(err, ErrOperationRecordUnreadable) {
+					t.Errorf("%s: FindOrCreate = %+v (existed %v), %v; want ErrOperationRecordUnreadable",
+						r.what, second, existed, err)
+				}
+			}
+			if n := recordFiles(t, dir); n != 1 {
+				t.Errorf("records = %d, want only the running one: another operation was admitted", n)
+			}
+			if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, spoiled) { // #nosec G304 -- a file of the test
+				t.Errorf("the record was changed: %q, %v; want %q", data, err, spoiled)
 			}
 		})
 	}

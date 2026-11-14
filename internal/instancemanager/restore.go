@@ -258,7 +258,9 @@ const databasesTxt = "databases.txt"
 // databaseNamePattern is a database name that cannot carry a path: a letter,
 // then letters, digits or underscores, 17 characters at most. CUBRID 11.4
 // does not create a database with a longer name (docs/poc/RESULTS.md,
-// POC-24).
+// POC-24). A stored operation record is checked against it too
+// (decodeLocked, #865): a record whose database fails it is unreadable, so
+// loosening this rule later must keep records written under it readable.
 var databaseNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,16}$`)
 
 // hostLabelPattern is a DNS label, the form of an HA member's host name
