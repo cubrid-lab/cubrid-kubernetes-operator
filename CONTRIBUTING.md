@@ -108,6 +108,21 @@ make test-e2e KIND_CLUSTER=cubrid-contributor-e2e E2E_REUSE_CLUSTER=1
 make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 ```
 
+Before the Go suite starts, `make test-e2e` uses `CONTAINER_TOOL` to fetch
+three test-only helper images (S3 mock, Python and curl) if they are not already
+present on the host, then loads them into the **named** Kind cluster. The
+corresponding test Pods use `imagePullPolicy: Never` and cannot silently pull
+a different image from Docker Hub. This also applies to an explicitly reused
+Kind cluster; reuse never authorizes its deletion. A helper-image fetch or
+load failure stops the run before any scenarios, with owned-cluster cleanup.
+
+The first host fetch still needs external registry access and can itself fail
+with HTTP 429. If that happens, authenticate the host's container tool to an
+approved registry or use an approved mirror/cache; increasing scenario timeouts
+or treating skipped tests as passing is not a fix. The pinned helper **tags**
+are not immutable digests: retain the observed image identities in CI evidence
+when judging candidate reproducibility.
+
 The target builds the manager image and the images its groups need. It
 creates the named Kind cluster and deletes it when the run ends: after a pass,
 a failure or a timeout, and after Ctrl-C or SIGTERM, which reach the suite
