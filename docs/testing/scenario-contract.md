@@ -2309,7 +2309,11 @@ it needs more.
   absent, so it never sees the Pod's termination confirmed; when it returns,
   the write quarantine (ADR-0005, section 8) closes the read-write path
   until the deleted member's new Pod is verified, and the client's recovery
-  is judged by `quarantined_failover_limit`.
+  is judged by `quarantined_failover_limit`. The `stable_period` of
+  uninterrupted acknowledgements starts only once no write quarantine is in
+  force and `WriteEndpointReady` is `True` (#885), so a quarantine that the
+  returned Operator starts on its first passes is judged by the limit, not
+  counted as a broken stable period.
 - **Source note:** no outside test was read; the contract comes from
   ADR-0005.
 
