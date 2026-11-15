@@ -146,8 +146,21 @@ values of `process_resident_memory_bytes`, `go_memstats_heap_inuse_bytes`,
 `go_memstats_alloc_bytes`, `go_memstats_sys_bytes` and `go_goroutines`, and
 `summary.json` carries them as the scenario's `managerRSSBytes`,
 `managerHeapInuseBytes`, `managerHeapAllocBytes`, `managerSysBytes` and
-`managerGoroutines` measurements, `unknown` when the read failed. The range
-observed in a CI run is not stated here yet and will be filled in from the
-`e2e-evidence` artifact of such a run. Even then, no limit is chosen from Kind
-alone: a Kind run has a few clusters and objects, so its values bound nothing
-about a reference deployment.
+`managerGoroutines` measurements, `unknown` when the read failed.
+
+The first run that recorded them, [E2E run 43684081228](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43684081228)
+on 2026-11-15 UTC (PR #892, head `16e9480`), read the manager at all 16
+scenario points. That run had one Operator and a few small test clusters on a
+Kind cluster in a GitHub-hosted runner.
+
+| Series | Lowest | Highest |
+|---|---|---|
+| `process_resident_memory_bytes` | 58,343,424 (55.6 MiB, S06 `restart`, just after the manager started again) | 64,065,536 (61.1 MiB, S05) |
+| `go_memstats_heap_inuse_bytes` | 10,846,208 (10.3 MiB) | 14,688,256 (14.0 MiB) |
+| `go_memstats_sys_bytes` | 27,367,688 (26.1 MiB) | 32,086,280 (30.6 MiB) |
+| `go_goroutines` | 173 | 190 |
+
+These are single reads per scenario, not peaks between reads. No limit is
+chosen from them: a Kind run has a few clusters and objects, so its values
+bound nothing about a reference deployment. Choosing a limit still needs the
+same series read at a reference deployment's cluster and object count.
