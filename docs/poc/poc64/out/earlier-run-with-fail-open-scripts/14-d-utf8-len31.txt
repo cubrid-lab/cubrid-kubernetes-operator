@@ -1,0 +1,27 @@
+== d-utf8-len31 db=db_d31 no_backslash_escapes=yes start 2026-11-15T04:19:48Z
+createdb ok rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+empty-login-after-failing-alters rc=0 (0 = still no password)
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31 -c SELECT 1","durationMs":3745,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31","durationMs":5852,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31 -c SELECT 1","durationMs":3386,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31 -c SELECT 1","durationMs":7149,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31 -c SELECT 1","durationMs":4473,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"command","command":"csql -u dba -S db_d31 -c SELECT 1","durationMs":7845,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-values","database":"db_d31","event":"dba_password_already_set"}
+check-dba-password rc=0
+check-dba-password-with-changed-value rc=1 (1 = refused)
+check-dba-password-with-prefix-value rc=1 (1 = refused)
+empty-login-after-apply rc=1 (1 = refused)
+server-start rc=0
+{"state":"Matches"}
+
+client-mode-check curl_rc=0
+manager stopped
+server-stop rc=0
+backupdb rc=0
+backup_files_holding_value=0
+== d-utf8-len31 end 2026-11-15T04:23:21Z

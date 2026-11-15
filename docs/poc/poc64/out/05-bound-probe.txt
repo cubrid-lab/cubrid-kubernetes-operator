@@ -1,0 +1,8 @@
+start 2026-11-15T06:01:39Z
+ascii-8 bytes=8 csql_rc=0 error=[] login_and_reset_rc=0 OK
+ascii-31 bytes=31 csql_rc=0 error=[] login_and_reset_rc=0 OK
+ascii-32 bytes=32 csql_rc=0 error=['ERROR: Password string cannot have more than 31 bytes.'] OK
+ascii-256 bytes=256 csql_rc=0 error=['ERROR: Password string cannot have more than 31 bytes.'] OK
+utf8-10chars-30bytes bytes=30 csql_rc=0 error=[] login_and_reset_rc=0 OK
+utf8-11chars-33bytes bytes=33 csql_rc=0 error=['ERROR: Password string cannot have more than 31 bytes.'] OK
+end 2026-11-15T06:04:10Z PASS
