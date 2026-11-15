@@ -22,7 +22,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // Stub Kind and the container tool: no real cluster or image is changed.
@@ -125,5 +127,94 @@ exit 0
 				t.Fatalf("owned Kind cluster was not created and cleaned up:\n%s", got)
 			}
 		})
+	}
+}
+
+
+// A canceled CI run must not wait for a blocked registry pull before it
+// deletes the Kind cluster that it created. This catches a Bash foreground
+// command whose TERM trap would only run after the pull had finished.
+func TestRunE2ETermDuringImagePullDeletesOwnedCluster(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix process signals")
+	}
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "trace.txt")
+	kind := filepath.Join(dir, "kind")
+	containerTool := filepath.Join(dir, "container")
+	for _, stub := range []struct{ path, body string }{
+		{kind, `#!/bin/sh
+printf 'kind %s\n' "$*" >> "$TRACE"
+exit 0
+`},
+		{containerTool, `#!/bin/sh
+printf 'container %s\n' "$*" >> "$TRACE"
+if [ "$1" = image ] && [ "$2" = inspect ]; then exit 1; fi
+if [ "$1" = pull ]; then
+  echo 'pull started' >> "$TRACE"
+  sleep 20
+  echo 'pull finished' >> "$TRACE"
+fi
+exit 0
+`},
+	} {
+		if err := os.WriteFile(stub.path, []byte(stub.body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "run-e2e.sh", "sh", "-c", `echo 'suite ran' >> "$TRACE"`)
+	cmd.Env = append(os.Environ(),
+		"KIND="+kind,
+		"KIND_CLUSTER=ci-preload-signal-test",
+		"KIND_NODE_IMAGE=example.com/kind-node:test",
+		"CONTAINER_TOOL="+containerTool,
+		"TRACE="+trace,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+	// Wait for the fake host pull to start before sending the termination
+	// signal. No timing assumption about Kind creation or the runner CPU.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, _ := os.ReadFile(trace)
+		if strings.Contains(string(data), "pull started") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the fake image pull never started: %s", data)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		status, ok := err.(*exec.ExitError)
+		if !ok || status.ExitCode() != 143 {
+			t.Errorf("termination returned %v, want exit 143", err)
+		}
+	case <-time.After(3 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("a blocked pull delayed the termination handler and Kind cleanup")
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "kind delete cluster --name ci-preload-signal-test") {
+		t.Errorf("owned Kind cluster was not deleted after TERM:\n%s", log)
+	}
+	if strings.Contains(log, "suite ran") || strings.Contains(log, "pull finished") {
+		t.Errorf("the canceled preload continued to the suite or returned late:\n%s", log)
 	}
 }
