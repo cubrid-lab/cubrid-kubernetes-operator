@@ -154,7 +154,6 @@ func TestS03FailureDataCheckSkipsUnfinishedFaults(t *testing.T) {
 	}
 }
 
-
 // The failure-path collector must not invoke a second command after the
 // first client Pod exec times out. A successful case still preserves full
 // event lines and ignores the partial line left by a stopped writer.
