@@ -148,7 +148,7 @@ func dbaPasswordScenario() {
 	Context("Standalone cluster with a DBA password from a Secret on the real CUBRID image",
 		Label("db", "dba-password"), Ordered, func() {
 			const (
-				dbaNamespace = "cubrid-dba-password"
+				dbaNamespace = dbaPasswordStandaloneNamespace
 				// clientNamespace holds the mock object store and the Broker
 				// clients: outside the clusters' namespace.
 				clientNamespace = "cubrid-dba-password-client"
@@ -339,14 +339,18 @@ spec:
 					brokerLogins(clusterName, "broker-client-source", true)
 				})
 
-			It("writes the password into no status, Event, StatefulSet or Operator log line", func() {
-				noLeak(password, map[string][]string{
-					"the cluster":      {"-n", dbaNamespace, "get", "cubridcluster", clusterName, "-o", "json"},
-					"the StatefulSet":  {"-n", dbaNamespace, "get", "statefulset", clusterName, "-o", "json"},
-					"the Events":       {"-n", dbaNamespace, "get", "events", "-o", "json"},
-					"the Operator log": operatorLog,
+			It("writes the password into no status, Event, StatefulSet, Operator or member log line, or file of the member",
+				func() {
+					noLeak(password, map[string][]string{
+						"the cluster":       {"-n", dbaNamespace, "get", "cubridcluster", clusterName, "-o", "json"},
+						"the StatefulSet":   {"-n", dbaNamespace, "get", "statefulset", clusterName, "-o", "json"},
+						"the Events":        {"-n", dbaNamespace, "get", "events", "-o", "json"},
+						"the Operator log":  operatorLog,
+						"the log of " + pod: memberLog(pod),
+					})
+					By("searching the member's operation store, $CUBRID/log and /tmp for the password")
+					h.expectNoDBAPasswordOnDisk(pod)
 				})
-			})
 
 			It("backs the database up to object storage", func() {
 				apply(fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
@@ -461,28 +465,40 @@ spec:
 					"the Events":       {"-n", dbaNamespace, "get", "events", "-o", "json"},
 					"the Operator log": operatorLog,
 				}
+				places["the log of "+otherName+"-0"] = memberLog(otherName + "-0")
 				noLeak(otherPassword, places)
 				noLeak(password, places)
+				By("searching the member's operation store, $CUBRID/log and /tmp for its password")
+				h.expectNoDBAPasswordOnDisk(otherName + "-0")
 
 				By("deleting the cluster, whose restore is retried until it gives up")
 				_, err = kubectl("delete", "cubridcluster", otherName, "--timeout=5m")
 				Expect(err).NotTo(HaveOccurred())
 			})
 
-			It("writes the password into no restored cluster, backup, StatefulSet, Event or Operator log line", func() {
+			It("writes the password into no restored cluster, backup, StatefulSet, Event, Operator or member log line, "+
+				"file of the member or object of the bucket", func() {
+				restoredPod := restoredName + "-0"
 				noLeak(password, map[string][]string{
-					"the restored cluster":     {"-n", dbaNamespace, "get", "cubridcluster", restoredName, "-o", "json"},
-					"the restored StatefulSet": {"-n", dbaNamespace, "get", "statefulset", restoredName, "-o", "json"},
-					"the backup":               {"-n", dbaNamespace, "get", "cubridbackup", backupName, "-o", "json"},
-					"the Events":               {"-n", dbaNamespace, "get", "events", "-o", "json"},
-					"the Broker clients":       {"-n", clientNamespace, "get", "pods", "-o", "json"},
-					"the Operator log":         operatorLog,
+					"the restored cluster":      {"-n", dbaNamespace, "get", "cubridcluster", restoredName, "-o", "json"},
+					"the restored StatefulSet":  {"-n", dbaNamespace, "get", "statefulset", restoredName, "-o", "json"},
+					"the backup":                {"-n", dbaNamespace, "get", "cubridbackup", backupName, "-o", "json"},
+					"the Events":                {"-n", dbaNamespace, "get", "events", "-o", "json"},
+					"the Broker clients":        {"-n", clientNamespace, "get", "pods", "-o", "json"},
+					"the Operator log":          operatorLog,
+					"the log of " + restoredPod: memberLog(restoredPod),
 				})
+				By("searching the restored member's operation store, $CUBRID/log and /tmp for the password")
+				h.expectNoDBAPasswordOnDisk(restoredPod)
+				By("reading every object of the backup bucket, the backup and its manifest, for the password")
+				h.expectNoDBAPasswordInBucket(restoredPod, backupBucket)
 			})
 		})
 }
 
 const (
+	// dbaPasswordStandaloneNamespace holds the standalone scenario's clusters.
+	dbaPasswordStandaloneNamespace = "cubrid-dba-password"
 	// dbaPasswordFile is where the Operator mounts the key in the DB
 	// container (internal/controller/dbapassword.go).
 	dbaPasswordFile = "/etc/cubrid-dba-password/password"
@@ -563,6 +579,13 @@ stringData:
 `, name, namespace, value)
 }
 
+// memberLog is the kubectl arguments that print the whole log of all the
+// containers of member in the standalone scenario's namespace: the DB container, which runs
+// the entrypoint and the Instance Manager, and the others.
+func memberLog(member string) []string {
+	return []string{"-n", dbaPasswordStandaloneNamespace, "logs", member, "--all-containers", "--tail=-1"}
+}
+
 // expectNoDBAPassword checks that value is in none of the places, each the
 // arguments of a kubectl command.
 func expectNoDBAPassword(value string, places map[string][]string) {
@@ -571,6 +594,52 @@ func expectNoDBAPassword(value string, places map[string][]string) {
 		ExpectWithOffset(1, err).NotTo(HaveOccurred(), what)
 		ExpectWithOffset(1, out).NotTo(ContainSubstring(value), "%s holds a DBA password", what)
 	}
+}
+
+// diskScanDone ends the output of expectNoDBAPasswordOnDisk's search.
+const diskScanDone = "DBA-PASSWORD-DISK-SCAN-DONE"
+
+// expectNoDBAPasswordOnDisk searches, in the DB container of member, the
+// Instance Manager's operation store, CUBRID's log directory and /tmp for the
+// value of the member's own mounted password file (grep -F -f), so that the
+// value is on no command line, also not inside the Pod. A directory that is
+// missing is reported, so a moved directory is not taken for a clean one.
+func (h dbaPasswordHelpers) expectNoDBAPasswordOnDisk(member string) {
+	out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
+		`for d in "$IM_OPERATIONS_DIR" "$CUBRID/log" /tmp; do `+
+			`if [ -z "$d" ] || [ ! -d "$d" ]; then echo "MISSING directory '$d'"; continue; fi; `+
+			`grep -rlaF -f "$0" -- "$d" 2>/dev/null | sed 's/^/HOLDS /'; done; echo "$1"`,
+		dbaPasswordFile, diskScanDone)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), out)
+	ExpectWithOffset(1, strings.TrimSpace(out)).To(Equal(diskScanDone),
+		"on %s, the operation store, $CUBRID/log or /tmp holds the DBA password, or one is missing:\n%s", member, out)
+}
+
+// bucketScanObjects prefixes the count of objects expectNoDBAPasswordInBucket
+// read.
+const bucketScanObjects = "OBJECTS "
+
+// expectNoDBAPasswordInBucket lists, from the DB container of member, every
+// object of bucket on the mock object store in the client namespace, the
+// backups and their manifests, reads each one and searches it for the value
+// of the member's own mounted password file. A backup holds the engine's
+// stored form of the password (docs/poc/RESULTS.md, POC-64), never the value
+// as given. The mock store checks no credentials and lists at most 1000 keys
+// at once, more than these scenarios write.
+func (h dbaPasswordHelpers) expectNoDBAPasswordInBucket(member, bucket string) {
+	endpoint := "http://s3mock." + h.clientNamespace + ".svc:9090/" + bucket
+	out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
+		`set -o pipefail; keys=$(curl -sSf "$1?list-type=2" | grep -o '<Key>[^<]*</Key>' | sed -e 's/<Key>//' -e 's/<\/Key>//') `+
+			`|| { echo "LIST FAILED"; exit 1; }; n=0; `+
+			`for k in $keys; do n=$((n+1)); curl -sSf "$1/$k" | grep -qaF -f "$0"; st=("${PIPESTATUS[@]}"); `+
+			`[ "${st[1]}" = 0 ] && echo "HOLDS $k"; [ "${st[1]}" = 0 ] || [ "${st[0]}" = 0 ] || echo "READ FAILED $k"; `+
+			`done; echo "`+bucketScanObjects+`$n"`,
+		dbaPasswordFile, endpoint)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), out)
+	ExpectWithOffset(1, out).NotTo(ContainSubstring("HOLDS "), "an object of the bucket %s holds the DBA password", bucket)
+	ExpectWithOffset(1, out).NotTo(ContainSubstring("READ FAILED"), "an object of the bucket %s could not be read", bucket)
+	ExpectWithOffset(1, out).To(MatchRegexp(bucketScanObjects+`[1-9][0-9]*\s*$`),
+		"no object of the bucket %s was read:\n%s", bucket, out)
 }
 
 // operatorLogArgs are the kubectl arguments that print the whole Operator log.
@@ -910,6 +979,31 @@ spec:
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.Fields(events)).To(ContainElement("Warning"))
 
+				// The Event says that a DB container that starts again does not
+				// start its database until the Secret holds the database's password
+				// again: the entrypoint checks it before heartbeat starts
+				// (build/instance-manager/entrypoint.sh, check_dba_password).
+				var standby string
+				for _, member := range members {
+					if member != primary {
+						standby = member
+						break
+					}
+				}
+				By("restarting the standby " + standby + " while the Secret holds another value")
+				_, err = h.kubectl("delete", "pod", standby, "--wait=true", "--timeout=3m")
+				Expect(err).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					current, _ := h.kubectl("logs", standby, "-c", "cubrid", "--tail=-1")
+					previous, _ := h.kubectl("logs", standby, "-c", "cubrid", "--previous", "--tail=-1")
+					g.Expect(current+previous).To(ContainSubstring("is not the requested one"),
+						"the restarted standby did not refuse to start with the changed value")
+				}, 5*time.Minute, 5*time.Second).Should(Succeed())
+				ready, err := h.kubectl("get", "pod", standby,
+					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ready).NotTo(Equal("True"), "the standby is Ready although its database was not started")
+
 				By("putting the database's password back")
 				changeTo(password)
 				Eventually(func(g Gomega) {
@@ -917,6 +1011,15 @@ spec:
 					g.Expect(status).To(Equal("True"))
 					g.Expect(reason).To(Equal("DBAPasswordSecretResolved"))
 				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+
+				By("waiting for the standby to start again with the database's password and the cluster to be healthy")
+				Eventually(func(g Gomega) {
+					out, err := h.kubectl("get", "pod", standby,
+						"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(out).To(Equal("True"))
+					haHealthy(g, clusterName)
+				}, 10*time.Minute, 5*time.Second).Should(Succeed())
 			})
 
 			It("writes the password into no status, Event, StatefulSet, Broker client or Operator log line", func() {
@@ -933,6 +1036,10 @@ spec:
 				}
 				expectNoDBAPassword(password, places)
 				expectNoDBAPassword(changed, places)
+				for _, member := range members {
+					By("searching the operation store, $CUBRID/log and /tmp of " + member + " for the password")
+					h.expectNoDBAPasswordOnDisk(member)
+				}
 			})
 
 			// The steps below restore a backup of this cluster into two new HA
@@ -1104,6 +1211,12 @@ spec:
 				expectNoDBAPassword(password, places)
 				expectNoDBAPassword(otherPassword, places)
 				expectNoDBAPassword(changed, places)
+				for _, member := range membersOf(restoredName) {
+					By("searching the operation store, $CUBRID/log and /tmp of " + member + " for the password")
+					h.expectNoDBAPasswordOnDisk(member)
+				}
+				By("reading every object of the seed bucket, the backups and their manifests, for the password")
+				h.expectNoDBAPasswordInBucket(membersOf(restoredName)[0], seedBucket)
 			})
 		})
 }
