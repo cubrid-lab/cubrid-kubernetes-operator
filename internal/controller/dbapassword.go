@@ -70,8 +70,9 @@ const (
 	// container can read it.
 	dbaPasswordFileMode int32 = 0o440
 	// maxDBAPasswordBytes is the longest value the Instance Manager accepts
-	// (instancemanager.ReadDBAPassword).
-	maxDBAPasswordBytes = 256
+	// (instancemanager.ReadDBAPassword), CUBRID's own bound on a password
+	// (docs/poc/RESULTS.md, POC-64).
+	maxDBAPasswordBytes = 31
 )
 
 // dbaPasswordFile is where the DB container finds the password.
@@ -308,7 +309,7 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 			"back into the Secret", ref.Key, ref.Name)
 		if was.Reason != reasonDBAPasswordRotationUnsupported {
 			r.statusEvent(cluster, corev1.EventTypeWarning, reasonDBAPasswordRotationUnsupported,
-				msg+"; the DB Pod is not restarted, and a DB container that starts again does not start its server until they match")
+				msg+"; the DB Pod is not restarted, and a DB container that starts again does not start its database (server or heartbeat) until they match")
 		}
 		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionFalse,
 			reasonDBAPasswordRotationUnsupported, msg)

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,7 +35,7 @@ import (
 )
 
 func main() {
-	logger, err := newLogger()
+	logger, err := newLogger(os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "instance-manager:", err)
 		os.Exit(1)
@@ -85,6 +86,21 @@ func main() {
 		}
 		return
 	}
+	// "instance-manager check-dba-password" checks, and never sets, the DBA
+	// password of the stopped database. The entrypoint runs it before it
+	// starts a database it did not create (an HA member's, a restored one)
+	// when CUBRID_DBA_PASSWORD_FILE is set, and starts nothing when it fails.
+	if len(os.Args) > 1 && os.Args[1] == "check-dba-password" {
+		ctx, cancel := context.WithTimeout(context.Background(), applyDBAPasswordTimeout)
+		cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Logger: logger}, Logger: logger}
+		err := checkDBAPassword(ctx, logger, cli)
+		cancel()
+		if err != nil {
+			logger.Error("Could not confirm the DBA password", "event", "dba_password_failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(logger); err != nil {
 		logger.Error("Instance Manager stopped", "err", err)
 		os.Exit(1)
@@ -115,20 +131,27 @@ func shutdown(logger *slog.Logger, stopFile string) error {
 		os.Getenv("IM_TOKEN"), envOr("CUBRID_DB", "appdb"), cli, budget)
 }
 
-// newLogger builds the structured log on stdout. IM_LOG_LEVEL sets its level
-// (debug, info, warn, error; info when unset). The token and the
-// object-storage keys are registered so that they are never written.
-func newLogger() (*slog.Logger, error) {
+// newLogger builds the structured log on w. IM_LOG_LEVEL sets its level
+// (debug, info, warn, error; info when unset). The token, the object-storage
+// keys and the DBA password are registered so that they are never written.
+// The DBA password is the value of the file CUBRID_DBA_PASSWORD_FILE names
+// when the log is built; a file that cannot be used registers nothing, since
+// its value is then never used either.
+func newLogger(w io.Writer) (*slog.Logger, error) {
 	level, err := instancemanager.ParseLogLevel(os.Getenv("IM_LOG_LEVEL"))
 	if err != nil {
 		return nil, fmt.Errorf("IM_LOG_LEVEL: %w", err)
 	}
 	member, _ := os.Hostname()
-	return instancemanager.NewLogger(os.Stdout, instancemanager.LogSettings{
+	var dbaPassword string
+	if path := os.Getenv(instancemanager.DBAPasswordFileEnv); path != "" {
+		dbaPassword, _ = instancemanager.ReadDBAPassword(path)
+	}
+	return instancemanager.NewLogger(w, instancemanager.LogSettings{
 		Level:    level,
 		Member:   member,
 		Database: envOr("CUBRID_DB", "appdb"),
-		Secrets:  []string{os.Getenv("IM_TOKEN"), os.Getenv("IM_S3_ACCESS_KEY"), os.Getenv("IM_S3_SECRET_KEY")},
+		Secrets:  []string{os.Getenv("IM_TOKEN"), os.Getenv("IM_S3_ACCESS_KEY"), os.Getenv("IM_S3_SECRET_KEY"), dbaPassword},
 	}), nil
 }
 
@@ -309,8 +332,9 @@ func processGrace() (time.Duration, error) {
 	return grace, nil
 }
 
-// applyDBAPasswordTimeout bounds "instance-manager apply-dba-password": its
-// csql runs each open the stopped database in standalone mode.
+// applyDBAPasswordTimeout bounds "instance-manager apply-dba-password" and
+// "instance-manager check-dba-password": their csql runs each open the
+// stopped database in standalone mode.
 const applyDBAPasswordTimeout = 5 * time.Minute
 
 // haConfigFromEnv is what an HA member needs to create the cluster's first
@@ -341,4 +365,19 @@ func applyDBAPassword(ctx context.Context, logger *slog.Logger, cli instancemana
 		return err
 	}
 	return instancemanager.ApplyDBAPassword(ctx, cli, logger, envOr("CUBRID_DB", "appdb"), password)
+}
+
+// checkDBAPassword checks, and never sets, the DBA password of the stopped
+// database CUBRID_DB against the file DBAPasswordFileEnv names
+// (instancemanager.ConfirmDBAPassword). Unset, it does nothing.
+func checkDBAPassword(ctx context.Context, logger *slog.Logger, cli instancemanager.CLI) error {
+	path := os.Getenv(instancemanager.DBAPasswordFileEnv)
+	if path == "" {
+		return nil
+	}
+	password, err := instancemanager.ReadDBAPassword(path)
+	if err != nil {
+		return err
+	}
+	return instancemanager.ConfirmDBAPassword(ctx, cli, logger, envOr("CUBRID_DB", "appdb"), password)
 }

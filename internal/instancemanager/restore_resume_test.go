@@ -68,11 +68,13 @@ type resumeFixture struct {
 	// any CUBRID process.
 	processes func() (map[string]bool, error)
 	objects   ObjectStore
-	req       RestoreRequest
-	storeDir  string
-	databases string
-	server    *Server
-	handler   http.Handler
+	// dbaPasswordFile is the manager's DBA password file; empty is none.
+	dbaPasswordFile string
+	req             RestoreRequest
+	storeDir        string
+	databases       string
+	server          *Server
+	handler         http.Handler
 }
 
 func newResumeFixture(t *testing.T) *resumeFixture {
@@ -91,10 +93,11 @@ func (f *resumeFixture) start(cli CLI) {
 	}
 	f.server = NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(f.objects).
 		WithRestoreRoots(rootsFor(f.req))
-	if f.haConf != "" {
-		f.server = f.server.WithHAConfig(HAConfig{ConfPath: f.haConf})
-	} else {
+	if f.haConf == "" {
 		f.server = f.server.WithStandaloneDatabase(dbName)
+	}
+	if f.haConf != "" || f.dbaPasswordFile != "" {
+		f.server = f.server.WithHAConfig(HAConfig{ConfPath: f.haConf, DBAPasswordFile: f.dbaPasswordFile})
 	}
 	f.server.heartbeatProcesses, f.server.heartbeatSettle = processTable(), 0
 	if f.processes != nil {

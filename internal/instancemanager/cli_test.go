@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"sync"
 	"testing"
@@ -130,6 +131,37 @@ func TestExecCLI_DoesNotWaitForADaemonHoldingTheOutput(t *testing.T) {
 	}
 	if out != "started\n" {
 		t.Errorf("output = %q, want the command's own output", out)
+	}
+}
+
+// What a command prints, such as csql echoing the ALTER USER statement that
+// carries the DBA password, never sits in a file a name can reach: the output
+// file is unlinked before the command starts and read through its descriptor
+// (#801). While the command runs, and after it, the temporary directory holds
+// nothing of it.
+func TestExecCLI_OutputHasNoNameInTheTemporaryDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	for name, run := range map[string]func() (string, error){
+		"Run": func() (string, error) {
+			return ExecCLI{}.Run(context.Background(), "sh", "-c", `ls -A "$TMPDIR"; echo printed`)
+		},
+		"RunWithStdin": func() (string, error) {
+			return ExecCLI{}.RunWithStdin(context.Background(), "fed\n", "sh", "-c", `ls -A "$TMPDIR"; cat`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := run()
+			if err != nil {
+				t.Fatalf("%s: %v (%s)", name, err, out)
+			}
+			if want := map[string]string{"Run": "printed\n", "RunWithStdin": "fed\n"}[name]; out != want {
+				t.Errorf("output = %q, want %q: the command saw a file in the temporary directory, or its output was lost", out, want)
+			}
+			if left, _ := os.ReadDir(dir); len(left) != 0 {
+				t.Errorf("the temporary directory holds %v after the command", left)
+			}
+		})
 	}
 }
 

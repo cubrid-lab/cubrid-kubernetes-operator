@@ -53,6 +53,20 @@ type haCLI struct {
 	// set nothing, with exit 0 as csql does.
 	alterFails bool
 	stdins     []string
+	// dbaPassword is the password the last ALTER USER set.
+	dbaPassword string
+}
+
+// RunOnTerminal stands in for a csql login on a terminal (POC-61): accepted
+// only with the password the last ALTER USER set.
+func (c *haCLI) RunOnTerminal(_ context.Context, _, input, name string, args ...string) (string, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, "terminal "+name+" "+strings.Join(args, " "))
+	if c.dbaPasswordSet && input == c.dbaPassword {
+		return "\n" + outAccepted, true, nil
+	}
+	return "\n" + outRefused, true, c.exit
 }
 
 func (c *haCLI) RunWithStdin(_ context.Context, stdin, name string, args ...string) (string, error) {
@@ -63,8 +77,8 @@ func (c *haCLI) RunWithStdin(_ context.Context, stdin, name string, args ...stri
 	if c.alterFails {
 		return "ERROR: the statement failed\n", nil
 	}
-	c.dbaPasswordSet = true
-	return "Execute OK.\n", nil
+	c.dbaPasswordSet, c.dbaPassword = true, alterPassword(stdin)
+	return outAlterOK, nil
 }
 
 func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -88,7 +102,7 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 		return "++ cubrid " + args[0] + ": fail", errors.New("exit status 1")
 	}
 	switch {
-	case name == "csql":
+	case name == csqlCommand:
 		if c.dbaPasswordSet {
 			return outRefused, c.exit
 		}
@@ -229,7 +243,7 @@ func TestHABootstrap_SetsTheDBAPasswordAfterCreatedbBeforeHeartbeatStart(t *test
 		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
 	}
 	got := f.cli.recorded()
-	want := []string{"cubrid createdb", callEmptyLogin, callSetPass, callEmptyLogin, callHeartbeatStart}
+	want := []string{"cubrid createdb", callEmptyLogin, callSetPass, callEmptyLogin, callTerminalLogin, callHeartbeatStart}
 	if len(got) != len(want) {
 		t.Fatalf("commands = %q\nwant       %q", got, want)
 	}
@@ -279,7 +293,7 @@ func TestHABootstrap_AFailedPasswordStepStartsNothing(t *testing.T) {
 		t.Fatalf("retry: state = %s (%s), want Completed", again.State, again.FailureReason)
 	}
 	got := f.cli.recorded()[before:]
-	if len(got) != 5 || !strings.HasPrefix(got[0], "cubrid createdb") || got[2] != callSetPass || got[4] != callHeartbeatStart {
+	if len(got) != 6 || !strings.HasPrefix(got[0], "cubrid createdb") || got[2] != callSetPass || got[5] != callHeartbeatStart {
 		t.Errorf("retry commands = %q, want createdb, the password step, heartbeat start", got)
 	}
 	f.wantNoPasswordInOperations(testPassword)
