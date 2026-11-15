@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -151,4 +152,60 @@ func TestS03FailureDataCheckSkipsUnfinishedFaults(t *testing.T) {
 			}
 		})
 	}
+}
+
+
+// The failure-path collector must not invoke a second command after the
+// first client Pod exec times out. A successful case still preserves full
+// event lines and ignores the partial line left by a stopped writer.
+func TestCollectFailedClientUsesTheBoundedContext(t *testing.T) {
+	t.Run("stops then reads complete lines", func(t *testing.T) {
+		var commands []string
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		text, err := collectFailedClient(ctx, "s03f", func(ctx context.Context, script string) (string, error) {
+			if _, ok := ctx.Deadline(); !ok {
+				t.Error("client command has no deadline")
+			}
+			commands = append(commands, script)
+			if len(commands) == 1 {
+				return "", nil
+			}
+			return "{\"event\":\"acknowledged\"}\n{\"event\":\"attempted\"", nil
+		})
+		if err != nil || text != "{\"event\":\"acknowledged\"}\n" {
+			t.Errorf("collected %q, err=%v", text, err)
+		}
+		if len(commands) != 2 || !strings.Contains(commands[0], "kill ") ||
+			!strings.Contains(commands[1], "cat /tmp/s03f.jsonl") {
+			t.Errorf("unexpected client-only commands: %v", commands)
+		}
+	})
+	t.Run("unresponsive client cannot outlive context", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		commands := 0
+		_, err := collectFailedClient(ctx, "s03f", func(ctx context.Context, _ string) (string, error) {
+			commands++
+			<-ctx.Done()
+			return "", ctx.Err()
+		})
+		if !errors.Is(err, context.DeadlineExceeded) || commands != 1 {
+			t.Errorf("client command did not honor deadline: err=%v, commands=%d", err, commands)
+		}
+	})
+	t.Run("failed read returns no invented history", func(t *testing.T) {
+		commands := 0
+		text, err := collectFailedClient(context.Background(), "s03f",
+			func(_ context.Context, _ string) (string, error) {
+				commands++
+				if commands == 1 {
+					return "", nil
+				}
+				return "", errors.New("client Pod disappeared")
+			})
+		if text != "" || err == nil || !strings.Contains(err.Error(), "client Pod disappeared") {
+			t.Errorf("client read failure was not preserved: text=%q err=%v", text, err)
+		}
+	})
 }
