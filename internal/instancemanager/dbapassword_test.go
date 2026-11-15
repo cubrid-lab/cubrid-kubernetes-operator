@@ -448,6 +448,9 @@ func TestConfirmDBAPassword(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("ConfirmDBAPassword = %v, want ok=%v", err, tc.ok)
 			}
+			if !tc.ok && !errors.Is(err, ErrPasswordNotRequested) {
+				t.Errorf("ConfirmDBAPassword = %v, want ErrPasswordNotRequested", err)
+			}
 			if len(cli.stdins) != 0 {
 				t.Errorf("a statement was fed on a seeded slave: %q", cli.stdins)
 			}

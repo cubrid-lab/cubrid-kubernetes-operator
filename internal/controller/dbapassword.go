@@ -309,7 +309,9 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 			"back into the Secret", ref.Key, ref.Name)
 		if was.Reason != reasonDBAPasswordRotationUnsupported {
 			r.statusEvent(cluster, corev1.EventTypeWarning, reasonDBAPasswordRotationUnsupported,
-				msg+"; the DB Pod is not restarted, and a DB container that starts again does not start its database (server or heartbeat) until they match")
+				msg+"; the DB Pod is not restarted. A standalone member, created new or restored from a backup, "+
+					"does not start its server after a restart until they match; an HA member is not checked when it "+
+					"restarts, and this check goes on reporting the change")
 		}
 		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionFalse,
 			reasonDBAPasswordRotationUnsupported, msg)

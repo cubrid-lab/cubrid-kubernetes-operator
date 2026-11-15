@@ -411,9 +411,10 @@ type CubridClusterSpec struct {
 	//
 	// The reference is fixed when the cluster is created. Changing the value
 	// in the Secret later does not change the database's password: the
-	// condition DBAPasswordSecretResolved reports it, and a DB container that
-	// starts again does not start its database until the key holds the
-	// database's password again.
+	// condition DBAPasswordSecretResolved reports it, and a standalone DB
+	// container that starts again does not start its server until the key
+	// holds the database's password again. An HA member is not checked when it
+	// starts again.
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name.size() > 0",message="dbaPasswordSecretRef.name is required"
 	// +kubebuilder:validation:XValidation:rule="self.key.size() > 0",message="dbaPasswordSecretRef.key is required"

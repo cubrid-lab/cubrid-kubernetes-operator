@@ -404,21 +404,24 @@ func TestEntrypoint_AFailedDBAPasswordStepStartsNothing(t *testing.T) {
 // The password is set only on a new standalone database. An HA member's
 // password is set by the HA bootstrap, on the bootstrap member only, and a
 // restored database keeps its source's password; neither is ever given one
-// here. Their database is checked instead before heartbeat or the server
-// starts (check-dba-password), so a member whose Secret no longer holds the
-// database's password does not start serving.
+// here. A standalone database restored from a backup is checked before its
+// server starts (check-dba-password). An HA member is not checked when it
+// starts again: a standalone-mode open of its database before heartbeat is
+// not shown to leave the HA log, copy and apply state unchanged, and a
+// changed value is reported by the Operator's rotation check instead.
 func TestEntrypoint_DBAPasswordIsSetOnlyForANewStandaloneDatabase(t *testing.T) {
 	for _, components := range haComponents {
 		t.Run(components, func(t *testing.T) {
 			f := newFixture(t, managerStub)
-			path := f.requestDBAPassword()
+			f.requestDBAPassword()
 			f.env["CUBRID_COMPONENTS"] = components
+			f.env["CHECK_EXIT"] = "3"
 			f.configureHA()
 			f.registerDatabase()
 			if code, out := f.run(); code != 0 {
 				t.Fatalf("exit %d:\n%s", code, out)
 			}
-			wantCalls(t, f.recorded(), callCheckPassword+path, callHeartbeat, callManagerStart)
+			wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
 		})
 	}
 	t.Run("recovery", func(t *testing.T) {
@@ -433,33 +436,37 @@ func TestEntrypoint_DBAPasswordIsSetOnlyForANewStandaloneDatabase(t *testing.T) 
 	})
 }
 
-// A check that fails (the database's password is not the one in the Secret,
-// or the check could not run) stops the start with a non-zero exit, as a
-// failed password step does: heartbeat or the server is not started, and the
-// Pod is restarted until the Secret holds the database's password again.
+// A standalone database restored from a backup is not started when the check
+// fails, whatever the cause: the server is not started and the container
+// ends, so the Pod is restarted (fail closed). The log tells a database whose
+// password is not the Secret's (exit 3) from a check that could not tell
+// (any other exit), which a person handles differently.
 func TestEntrypoint_AFailedDBAPasswordCheckStartsNothing(t *testing.T) {
-	for _, tc := range []struct{ name, components, bootstrap string }{
-		{name: "HA", components: componentsHA, bootstrap: bootstrapNew},
-		{name: "HA recovery", components: componentsHA, bootstrap: bootstrapRecovery},
-		{name: "standalone recovery", components: componentsServer, bootstrap: bootstrapRecovery},
+	for _, tc := range []struct {
+		name, exit    string
+		want, notWant string
+	}{
+		{name: "the password is another one", exit: "3",
+			want: "is not the requested one", notWant: "could not be checked"},
+		{name: "the check could not tell", exit: "1",
+			want: "could not be checked (exit 1", notWant: "is not the requested one"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, managerStub)
 			path := f.requestDBAPassword()
-			f.env["CUBRID_COMPONENTS"] = tc.components
-			f.env["CUBRID_BOOTSTRAP"] = tc.bootstrap
-			f.env["CHECK_EXIT"] = "1"
-			if tc.components != componentsServer {
-				f.configureHA()
-			}
+			f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
+			f.env["CHECK_EXIT"] = tc.exit
 			f.registerDatabase()
 			code, out := f.run()
 			if code == 0 {
 				t.Fatalf("exit 0 after a failed password check:\n%s", out)
 			}
 			wantCalls(t, f.recorded(), callCheckPassword+path)
-			if !strings.Contains(out, "DBA password") {
-				t.Errorf("no log line names the DBA password:\n%s", out)
+			if !strings.Contains(out, tc.want) || strings.Contains(out, tc.notWant) {
+				t.Errorf("log does not say %q (or says %q):\n%s", tc.want, tc.notWant, out)
+			}
+			if tc.exit == "3" && !strings.Contains(out, "back into the Secret") {
+				t.Errorf("the log does not say to put the database's password back into the Secret:\n%s", out)
 			}
 		})
 	}

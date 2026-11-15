@@ -97,7 +97,7 @@ func main() {
 		cancel()
 		if err != nil {
 			logger.Error("Could not confirm the DBA password", "event", "dba_password_failed", "err", err)
-			os.Exit(1)
+			os.Exit(checkExitCode(err))
 		}
 		return
 	}
@@ -131,9 +131,14 @@ func shutdown(logger *slog.Logger, stopFile string) error {
 		os.Getenv("IM_TOKEN"), envOr("CUBRID_DB", "appdb"), cli, budget)
 }
 
+// minRedactedDBAPassword is the shortest DBA password the log redacts.
+// Redaction is a backstop: no path of the Instance Manager logs the value.
+const minRedactedDBAPassword = 8
+
 // newLogger builds the structured log on w. IM_LOG_LEVEL sets its level
 // (debug, info, warn, error; info when unset). The token, the object-storage
-// keys and the DBA password are registered so that they are never written.
+// keys and a DBA password of at least minRedactedDBAPassword bytes are
+// registered so that they are never written.
 // The DBA password is the value of the file CUBRID_DBA_PASSWORD_FILE names
 // when the log is built; a file that cannot be used registers nothing, since
 // its value is then never used either.
@@ -146,6 +151,12 @@ func newLogger(w io.Writer) (*slog.Logger, error) {
 	var dbaPassword string
 	if path := os.Getenv(instancemanager.DBAPasswordFileEnv); path != "" {
 		dbaPassword, _ = instancemanager.ReadDBAPassword(path)
+	}
+	// A shorter value is not redacted: replacing every occurrence of, say,
+	// "dba" or the database's name would garble ordinary lines and show the
+	// value by where the placeholder lands.
+	if len(dbaPassword) < minRedactedDBAPassword {
+		dbaPassword = ""
 	}
 	return instancemanager.NewLogger(w, instancemanager.LogSettings{
 		Level:    level,
@@ -380,4 +391,17 @@ func checkDBAPassword(ctx context.Context, logger *slog.Logger, cli instancemana
 		return err
 	}
 	return instancemanager.ConfirmDBAPassword(ctx, cli, logger, envOr("CUBRID_DB", "appdb"), password)
+}
+
+// checkMismatchExit is the exit status of "instance-manager check-dba-password"
+// when the database's password is not the file's value; any other failure, a
+// check that could not tell, exits 1.
+const checkMismatchExit = 3
+
+// checkExitCode is the exit status of a failed check-dba-password.
+func checkExitCode(err error) int {
+	if errors.Is(err, instancemanager.ErrPasswordNotRequested) {
+		return checkMismatchExit
+	}
+	return 1
 }

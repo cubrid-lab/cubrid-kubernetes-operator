@@ -312,3 +312,41 @@ func (c *interruptCLI) stdins() []string {
 	}
 	return runs
 }
+
+// An HA member is not checked before the manager starts heartbeat on data it
+// takes over or resumes: a standalone-mode open of a database that may have
+// run in HA, with its restart recovery, is not shown to leave the member's
+// HA log, copy and apply state unchanged, and a changed value on an HA
+// cluster is reported by the Operator's rotation check instead. Its password
+// was set or confirmed before the restore was recorded.
+func TestResumeCompletedRestores_DoesNotCheckTheDBAPasswordOfAnHAMember(t *testing.T) {
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.dbaPasswordFile = passwordFile(t, testPassword)
+	disk := &diskPassword{}
+	first := newInterruptCLI(t, f, disk, "")
+	first.failing = map[string]bool{stepHeartbeatStatus: true}
+	f.start(first)
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	if err := os.WriteFile(filepath.Join(f.databases, dbName, ownershipMarker), []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f.dbaPasswordFile = passwordFile(t, otherSourcePassword)
+	restarted := newInterruptCLI(t, f, disk, "")
+	restarted.failing = map[string]bool{stepHeartbeatStatus: true}
+	f.start(restarted)
+	if err := f.server.ResumeCompletedRestores(t.Context()); err != nil {
+		t.Fatalf("ResumeCompletedRestores: %v", err)
+	}
+	calls := restarted.recorded()
+	if indexOf(calls, callHeartbeatStart) < 0 || indexOf(calls, "terminal ") >= 0 || indexOf(calls, "csql ") >= 0 {
+		t.Errorf("calls = %q, want heartbeat started without a csql login", calls)
+	}
+}

@@ -143,9 +143,11 @@ const csqlPasswordPrompt = "Enter Password"
 // errNoTerminal is returned when the CLI cannot run a command on a terminal.
 var errNoTerminal = errors.New("the command runner cannot run a command on a terminal")
 
-// errPasswordNotRequested says that a database has a DBA password other than
-// the requested one. It names neither value.
-var errPasswordNotRequested = errors.New("the database's DBA password is not the requested one: " +
+// ErrPasswordNotRequested says that a database's DBA password is not the
+// requested one: another password, or, for a database that is only checked,
+// none. It names neither value. "instance-manager check-dba-password" exits 3
+// on it, so the entrypoint can tell it from a check that could not tell.
+var ErrPasswordNotRequested = errors.New("the database's DBA password is not the requested one: " +
 	"a database keeps the password it was created or backed up with (a restored database keeps its " +
 	"source's), and the Instance Manager does not change a password it does not know")
 
@@ -216,7 +218,7 @@ func confirmRequestedPassword(ctx context.Context, cli CLI, logger *slog.Logger,
 		return fmt.Errorf("check that the DBA password is the requested one: %w", err)
 	}
 	if !accepted {
-		return errPasswordNotRequested
+		return ErrPasswordNotRequested
 	}
 	logger.Info("DBA password is already the requested one; it was not changed", "event", eventDBAPasswordAlreadySet)
 	return nil
@@ -239,9 +241,10 @@ func ConfirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, datab
 		return fmt.Errorf("check the DBA password: %w", err)
 	}
 	if !refused {
-		return errors.New("the database has no DBA password, but one is requested; " +
-			"this database is only checked, never given one: a seeded slave gets its master's by replication, " +
-			"and an HA member or a restored database got its password when it was created or restored")
+		return fmt.Errorf("the database has no DBA password, but one is requested; "+
+			"this database is only checked, never given one: a seeded slave gets its master's by replication, "+
+			"and an HA member or a restored database got its password when it was created or restored: %w",
+			ErrPasswordNotRequested)
 	}
 	return confirmRequestedPassword(ctx, cli, logger, database, password)
 }
@@ -283,6 +286,11 @@ func ApplyDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, databas
 	if refused {
 		return confirmRequestedPassword(ctx, cli, logger, database, password)
 	}
+	// Doubling single quotes is the only escaping: a backslash stays a plain
+	// character only while no_backslash_escapes=yes, which the entrypoint pins
+	// in cubrid.conf at every start (docs/poc/RESULTS.md, POC-64). With it set
+	// to no, a backslash before a quote leaves the literal open; the login with
+	// the value just set, below, then fails the step.
 	statement := "ALTER USER dba PASSWORD '" + strings.ReplaceAll(password, "'", "''") + "';\n"
 	out, err := stdinCLI.RunWithStdin(ctx, statement, "csql", "-u", "dba", "-S", database)
 	if err != nil {

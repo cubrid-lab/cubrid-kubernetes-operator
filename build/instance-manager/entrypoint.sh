@@ -31,10 +31,11 @@
 #      container's start (ADR-0003).
 #   7. With CUBRID_DBA_PASSWORD_FILE set, a new standalone database gets the
 #      requested DBA password from "instance-manager apply-dba-password"
-#      before each start of its server, and is not started without it. Every
-#      other database this script starts (an HA member's, a restored one) is
-#      only checked, by "instance-manager check-dba-password", and is not
-#      started unless a login with the requested password is accepted.
+#      before each start of its server, and is not started without it. A
+#      standalone database restored from a backup is only checked, by
+#      "instance-manager check-dba-password", and is not started unless a
+#      login with the requested password is accepted. An HA member's password
+#      is not checked here.
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.
@@ -222,19 +223,29 @@ install_ha_conf() {
   log "HA configuration installed from ${CUBRID_HA_CONF}"
 }
 
-# A database this script does not create (an HA member's, which the HA
-# bootstrap or a seed gave its password, or a restored one, which the restore
-# gave or checked it) is never given a password here. With a password
-# requested, it is started only once a login with that password is accepted:
-# a Secret whose value was changed after the database got its password does
-# not let the member start serving with the old one. A failure ends the
-# container, and the Pod is restarted until the Secret holds the database's
-# password again. Returns 1 when a termination arrived during the check.
+# A standalone database restored from a backup, which the restore gave its
+# password or checked it, is never given one here. With a password requested,
+# its server is started only once a login with that password is accepted
+# ("instance-manager check-dba-password", which checks and never sets): a
+# Secret whose value was changed after the restore does not let it start
+# serving with the old one. A check that could not tell stops the start too
+# (fail closed). Either way the container ends, and the Pod is restarted. The
+# manager exits 3 when the password is another one and 1 when it could not
+# check. An HA member is not checked here: a standalone-mode open of its
+# database before heartbeat starts is not shown to leave its HA log, copy and
+# apply state unchanged, and a changed value on an HA cluster is reported by
+# the Operator's rotation check. Returns 1 when a termination arrived during
+# the check.
 check_dba_password() {
   [ -n "${CUBRID_DBA_PASSWORD_FILE:-}" ] || return 0
   log "checking that the DBA password of '${CUBRID_DB}' is the requested one before it starts"
-  "${IM_BIN}" check-dba-password \
-    || die "the DBA password of '${CUBRID_DB}' is not the requested one (CUBRID_DBA_PASSWORD_FILE), or could not be checked: nothing is started. Put the database's current DBA password back into the Secret"
+  local rc=0
+  "${IM_BIN}" check-dba-password || rc=$?
+  if [ "${rc}" = "3" ]; then
+    die "the DBA password of '${CUBRID_DB}' is not the requested one (CUBRID_DBA_PASSWORD_FILE): the server is not started. Put the database's current DBA password back into the Secret"
+  elif [ "${rc}" != "0" ]; then
+    die "the DBA password of '${CUBRID_DB}' could not be checked (exit ${rc}, see dba_password_failed): the server is not started"
+  fi
   if [ "${terminating}" = "1" ]; then
     log "termination requested while the DBA password was checked: nothing is started"
     return 1
@@ -288,8 +299,8 @@ start_cubrid() {
     MASTER|SLAVE|HA)
       # An HA member never creates its database here: the first one is created
       # once, on one member, through the Instance Manager, and the others are
-      # seeded from it (ADR-0010). This only restarts an initialized member.
-      check_dba_password || return 0
+      # seeded from it (ADR-0010). This only restarts an initialized member;
+      # its DBA password is not checked here (check_dba_password).
       stop_recorded && return 0
       started=1
       cubrid heartbeat start ;;

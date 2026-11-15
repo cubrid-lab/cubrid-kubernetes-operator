@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -179,6 +180,11 @@ func TestCheckDBAPasswordCommand(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("checkDBAPassword = %v, want ok=%v", err, tc.ok)
 			}
+			// A database whose password is not the file's value, another one or
+			// none, is the mismatch the entrypoint reports as such (exit 3).
+			if !tc.ok && (!errors.Is(err, instancemanager.ErrPasswordNotRequested) || checkExitCode(err) != 3) {
+				t.Errorf("checkDBAPassword = %v (exit %d), want the mismatch, exit 3", err, checkExitCode(err))
+			}
 			if err != nil && strings.Contains(err.Error(), subcommandPassword) {
 				t.Errorf("the error carries the password: %v", err)
 			}
@@ -191,6 +197,53 @@ func TestCheckDBAPasswordCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A check that cannot tell (the file is unusable, csql did not answer) is not
+// a mismatch: it exits 1, so the entrypoint says that the password could not
+// be checked rather than that it is another one.
+func TestCheckExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{err: fmt.Errorf("wrapped: %w", instancemanager.ErrPasswordNotRequested), want: 3},
+		{err: errors.New("csql did not prompt for the DBA password on a terminal"), want: 1},
+	} {
+		if got := checkExitCode(tc.err); got != tc.want {
+			t.Errorf("checkExitCode(%v) = %d, want %d", tc.err, got, tc.want)
+		}
+	}
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+	err := checkDBAPassword(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), &dbaCLI{})
+	if err == nil || checkExitCode(err) != 1 {
+		t.Errorf("an empty password file: checkDBAPassword = %v (exit %d), want exit 1", err, checkExitCode(err))
+	}
+}
+
+// A DBA password shorter than 8 bytes is not redacted: replacing every
+// occurrence of a short value, such as one that is also "dba" or the
+// database's name, would garble ordinary lines and show the value by where
+// the placeholder lands. Redaction is a backstop; no path logs the value.
+func TestNewLogger_DoesNotRedactAShortDBAPassword(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, []byte("appdb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+	var buf strings.Builder
+	logger, err := newLogger(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("Started appdb")
+	if !strings.Contains(buf.String(), "Started appdb") {
+		t.Errorf("a short DBA password was redacted from an ordinary line:\n%s", buf.String())
 	}
 }
 

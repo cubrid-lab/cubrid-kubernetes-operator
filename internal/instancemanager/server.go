@@ -1093,10 +1093,14 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			return
 		}
 		// Data taken over got its DBA password, or had it confirmed, before
-		// it was recorded as restored. The value requested now is confirmed
-		// again before it is started: the Secret may have been changed since,
-		// and the data is then kept and not started (#801).
-		adopted := restored != nil
+		// it was recorded as restored. On a standalone member the value
+		// requested now is confirmed again before it is started: the Secret
+		// may have been changed since, and the data is then kept and not
+		// started (#801). An HA member is not checked here: a standalone-mode
+		// open of data that may have run in HA is not shown to leave its HA
+		// state unchanged, and the Operator's rotation check reports a changed
+		// value on an HA cluster.
+		adopted := restored != nil && !haMember
 		if restored == nil {
 			// What an interrupted restore of this manager left is removed first;
 			// anything else in the target is refused by the restore's own guard.
@@ -1266,12 +1270,13 @@ func (s *Server) confirmBeforeStart(ctx context.Context, database, password stri
 }
 
 // dbaPasswordBeforeResume is what ResumeCompletedRestores runs right before it
-// starts database: nothing without a DBA password file, and otherwise the
-// confirmation that the database's password is the file's value, so a Secret
-// changed since the restore does not let the member start serving with the
-// old password. A file that cannot be used starts nothing.
+// starts database: nothing without a DBA password file or on an HA member
+// (the restore's own start explains why), and otherwise the confirmation that
+// the database's password is the file's value, so a Secret changed since the
+// restore does not let a standalone member start serving with the old
+// password. A file that cannot be used starts nothing.
 func (s *Server) dbaPasswordBeforeResume(ctx context.Context, database string) func() error {
-	if s.ha.DBAPasswordFile == "" {
+	if s.ha.DBAPasswordFile == "" || s.standaloneDB == "" {
 		return nil
 	}
 	return func() error {
