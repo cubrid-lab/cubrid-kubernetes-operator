@@ -24,7 +24,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -124,5 +126,29 @@ func TestS03FailureEvidenceCountsOnlyFilesActuallyWritten(t *testing.T) {
 		})
 	if len(got) != 1 || got[0] != "S03/graceful/data-check-error.txt" {
 		t.Errorf("recorded files that were not written: %v", got)
+	}
+}
+
+func TestS03FailureDataCheckSkipsUnfinishedFaults(t *testing.T) {
+	issued := time.Unix(12, 0)
+	for _, tc := range []struct {
+		name string
+		outcome faults.Outcome
+		blocked string
+	}{
+		{name: "starting-state failure before any injected fault", outcome: faults.Outcome{}},
+		{name: "cleaned up fault", outcome: faults.Outcome{FaultIssuedAt: issued, CleanupSucceeded: true}},
+		{name: "failed cleanup", outcome: faults.Outcome{FaultIssuedAt: issued},
+			blocked: "cleanup did not succeed"},
+		{name: "unreturned callback", outcome: faults.Outcome{FaultIssuedAt: issued,
+			CleanupSucceeded: true, StillRunning: []string{"check"}},
+			blocked: "fault step still running (check)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s03DataCheckBlocked(tc.outcome)
+			if tc.blocked == "" && got != "" || tc.blocked != "" && !strings.Contains(got, tc.blocked) {
+				t.Errorf("blocked = %q, want %q", got, tc.blocked)
+			}
+		})
 	}
 }
