@@ -262,6 +262,16 @@ func TestDockerBuildx_InterruptionCleansUpOnlyThisRunsResources(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("make docker-buildx did not stop after the interruption")
 			}
+			// The signal reaches make and the recipe's shell together, and make
+			// may exit while the shell's EXIT trap is still removing the builder
+			// and the Dockerfile.cross copy. The cleanup is the shell's, so the
+			// check waits until every process of the group has ended.
+			for deadline := time.Now().Add(10 * time.Second); syscall.Kill(-pgid, 0) == nil; {
+				if time.Now().After(deadline) {
+					t.Fatal("the recipe's processes did not end after the interruption")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 
 			data, err := os.ReadFile(log)
 			if err != nil {
