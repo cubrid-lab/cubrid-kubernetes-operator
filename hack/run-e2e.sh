@@ -38,6 +38,7 @@ created=
 signal=
 starting=
 child=
+preload_child=
 
 delete_cluster() {
 	local status=$?
@@ -58,9 +59,10 @@ delete_cluster() {
 }
 trap delete_cluster EXIT
 
-# on_signal records the first signal and passes every signal on to the
-# command's process group. Before the command starts it ends the run, which
-# deletes what was created so far.
+# on_signal records the first signal and stops the process group currently
+# owned by this run: a test command or a helper-image preload. A TERM during
+# a slow registry pull/load must not keep the owned Kind cluster alive.
+# Before either command starts, it ends the run and deletes the cluster.
 on_signal() {
 	local sig="$1" num="$2"
 	if [ -z "$signal" ]; then
@@ -69,6 +71,10 @@ on_signal() {
 	if [ -n "$child" ]; then
 		echo "Received SIG$sig; stopping the e2e run..." >&2
 		kill -s "$sig" -- "-$child" 2>/dev/null || true
+	elif [ -n "$preload_child" ]; then
+		echo "Received SIG$sig; stopping Kind helper image preload..." >&2
+		kill -s "$sig" -- "-$preload_child" 2>/dev/null || true
+		exit $((128 + num))
 	elif [ -z "$starting" ]; then
 		exit $((128 + num))
 	fi
@@ -110,17 +116,31 @@ if [ -z "${CONTAINER_TOOL:-}" ]; then
 	echo "error: CONTAINER_TOOL must name Docker or Podman to preload Kind helper images." >&2
 	exit 2
 fi
+# Like the suite, run every external preload command in a tracked process
+# group. A trapped signal interrupts the wait builtin immediately, kills that
+# group in on_signal, and then lets the EXIT trap clean up the owned cluster.
+# This also works for an explicitly reused cluster, which must never be deleted.
+run_preload_command() {
+	local result=0
+	set -m
+	"$@" &
+	preload_child=$!
+	set +m
+	wait "$preload_child" || result=$?
+	preload_child=
+	return "$result"
+}
 preload_helper_image() {
 	local image="$1"
-	if ! "$CONTAINER_TOOL" image inspect "$image" >/dev/null 2>&1; then
+	if ! run_preload_command "$CONTAINER_TOOL" image inspect "$image" >/dev/null 2>&1; then
 		echo "Fetching Kind test helper image '$image' on the host..."
-		if ! "$CONTAINER_TOOL" pull "$image"; then
+		if ! run_preload_command "$CONTAINER_TOOL" pull "$image"; then
 			echo "error: could not fetch Kind test helper '$image' on the host (check registry access/rate limits)." >&2
 			return 1
 		fi
 	fi
 	echo "Loading Kind test helper image '$image' into '$KIND_CLUSTER'..."
-	if ! "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"; then
+	if ! run_preload_command "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"; then
 		echo "error: could not load Kind test helper '$image' into '$KIND_CLUSTER'." >&2
 		return 1
 	fi
