@@ -577,9 +577,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		var dataErr error
 		if historyErr == nil && strings.TrimSpace(history) != "" {
 			r.addHistory(history)
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			report, dataErr = r.dataCheck(ctx)
-			cancel()
+			if reason := s03DataCheckBlocked(outcome); reason != "" {
+				dataErr = fmt.Errorf("%s", reason)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				report, dataErr = r.dataCheck(ctx)
+				cancel()
+			}
 		} else {
 			if historyErr == nil {
 				historyErr = fmt.Errorf("the client produced no complete history lines")
@@ -768,4 +772,17 @@ func s03FailedOutcomeFiles(variant, history string, historyErr error, report wor
 		put("data-check-error.txt", []byte("not run: no member data report was produced\n"))
 	}
 	return files
+}
+
+// s03DataCheckBlocked keeps the failure-evidence reader away from a fault
+// whose callback is still running or whose cleanup failed. The client history
+// can be kept, but new SQL/Pod reads cannot safely be started in parallel.
+func s03DataCheckBlocked(outcome faults.Outcome) string {
+	if len(outcome.StillRunning) != 0 {
+		return "not run: fault step still running (" + strings.Join(outcome.StillRunning, ", ") + ")"
+	}
+	if !outcome.FaultIssuedAt.IsZero() && !outcome.CleanupSucceeded {
+		return "not run: fault cleanup did not succeed"
+	}
+	return ""
 }
