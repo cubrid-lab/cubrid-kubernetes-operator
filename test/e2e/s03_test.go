@@ -215,7 +215,9 @@ func (r *haRun) startClient(id string) {
 // killClient stops a client started with startClient. It is safe to call
 // more than once.
 func (r *haRun) killClient(id string) {
-	_, _ = r.client(context.Background(), fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = r.client(ctx, fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
 }
 
 // lastAnswerAcknowledged reports whether the latest answer a running client
@@ -572,7 +574,17 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		// Preserve the first failure verdict, but stop the client and attempt
 		// the SQL/member comparison before the namespace is cleaned up.
 		// Even a successful data check cannot turn this failed fault into pass.
-		history, historyErr := r.collectClient(client)
+		// Stop further client writes even when the fault did not converge.
+		// The client-only stop/history commands share a bounded context, so a
+		// missing client Pod cannot prevent the failed scenario from ending.
+		collectCtx, collectCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		history, historyErr := collectFailedClient(collectCtx, client, r.client)
+		collectCancel()
+		if historyErr == nil {
+			r.mu.Lock()
+			delete(r.running, client)
+			r.mu.Unlock()
+		}
 		var report workload.Report
 		var dataErr error
 		if historyErr == nil && strings.TrimSpace(history) != "" {
@@ -785,4 +797,23 @@ func s03DataCheckBlocked(outcome faults.Outcome) string {
 		return "not run: fault cleanup did not succeed"
 	}
 	return ""
+}
+
+// collectFailedClient issues only *client Pod* commands: first stop further
+// workload writes, then retain complete client events. Unlike the normal
+// collector it uses the caller's bounded context. In particular, no
+// unbounded kubectl operation is started when the fault has not converged.
+func collectFailedClient(ctx context.Context, id string,
+	client func(context.Context, string) (string, error)) (string, error) {
+	if _, err := client(ctx, fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id)); err != nil {
+		return "", fmt.Errorf("stop workload client: %w", err)
+	}
+	text, err := client(ctx, fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	if err != nil {
+		return "", fmt.Errorf("read workload client history: %w", err)
+	}
+	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
+		return text[:cut+1], nil
+	}
+	return "", nil
 }
