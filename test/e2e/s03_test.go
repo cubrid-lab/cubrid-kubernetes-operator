@@ -569,10 +569,25 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
 		result.Result, result.Reason = outcome.Result, outcome.Reason
-		// Keep what the client saw: the scenario ends here.
-		if text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
-			writeScenarioFile("S03/"+variant+"/client-history.jsonl", []byte(text))
+		// Preserve the first failure verdict, but stop the client and attempt
+		// the SQL/member comparison before the namespace is cleaned up.
+		// Even a successful data check cannot turn this failed fault into pass.
+		history, historyErr := r.collectClient(client)
+		var report workload.Report
+		var dataErr error
+		if historyErr == nil && strings.TrimSpace(history) != "" {
+			r.addHistory(history)
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			report, dataErr = r.dataCheck(ctx)
+			cancel()
+		} else {
+			if historyErr == nil {
+				historyErr = fmt.Errorf("the client produced no complete history lines")
+			}
+			dataErr = fmt.Errorf("not run: the fault client's history was unavailable")
 		}
+		result.Evidence = append(result.Evidence, s03FailedOutcomeFiles(variant, history, historyErr,
+			report, dataErr, writeScenarioFile)...)
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
@@ -721,4 +736,36 @@ func s03Conditions(variant string, result evidence.Scenario, rounds []conditionR
 	}
 	result.Measurements["conditionAgreement"] = measured
 	return withAgreement(result, agreement), agreement
+}
+
+// s03FailedOutcomeFiles keeps *diagnostic* evidence for a failed or blocked
+// fault. A successful read here does not change the original scenario result,
+// and a read error must not be misrepresented as a zero-loss data check.
+func s03FailedOutcomeFiles(variant, history string, historyErr error, report workload.Report, dataErr error,
+	write func(string, []byte) string) []string {
+	dir := "S03/" + variant
+	var files []string
+	put := func(name string, content []byte) {
+		if file := write(dir+"/"+name, content); file != "" {
+			files = append(files, file)
+		}
+	}
+	if historyErr != nil {
+		put("client-history-error.txt", []byte(historyErr.Error()+"\n"))
+	} else {
+		put("client-history.jsonl", []byte(history))
+	}
+	if dataErr != nil {
+		put("data-check-error.txt", []byte(dataErr.Error()+"\n"))
+	} else if report.Members != nil {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			put("data-check-error.txt", []byte(err.Error()+"\n"))
+		} else {
+			put("data-check.json", append(data, '\n'))
+		}
+	} else {
+		put("data-check-error.txt", []byte("not run: no member data report was produced\n"))
+	}
+	return files
 }
