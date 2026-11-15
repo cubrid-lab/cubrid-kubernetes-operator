@@ -428,9 +428,29 @@ func TestRunS12WrongTargetNamesTheSchedulerWhenTheFirstClusterCannotForm(t *test
 // The 5 s guard is only for a broken fixture; the test's actual end is
 // triggered by the specific Pod observation, not by sleeping for the timeout.
 func runWithRefusedMember(t *testing.T, scheduled *corev1.PodCondition) (*fixture, evidence.Scenario, error) {
+	return runWithRefusedMemberAfterPreflight(t, scheduled, 0)
+}
+
+// A deliberately slow *unrelated* version preflight is a regression control:
+// the runner must still see and classify the scheduler's PodScheduled state.
+// This confirms the result no longer depends on a 300 ms total-run clock.
+func runWithRefusedMemberAfterPreflight(t *testing.T, scheduled *corev1.PodCondition,
+	preflightDelay time.Duration) (*fixture, evidence.Scenario, error) {
 	t.Helper()
 	f := newFixture(t)
 	f.cfg.Timeout = 5 * time.Second
+	if preflightDelay > 0 {
+		f.commandHook = func(ctx context.Context, args []string) (string, error) {
+			if len(args) != 0 && args[0] == "version" {
+				select {
+				case <-time.After(preflightDelay):
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			return f.answer(t, args)
+		}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
@@ -471,6 +491,37 @@ func TestRunStaysFailedWhenTheSchedulerRefusesForAnotherReason(t *testing.T) {
 			got := readRecord(t, f.cfg.EvidenceDir).UnschedulableMembers
 			if len(got) != 1 || got[0].Message != message || got[0].BlocksRun {
 				t.Fatalf("unschedulable members = %+v, want the refusal recorded without blocking", got)
+			}
+		})
+	}
+}
+
+// A slow unrelated environment read used to expire the old whole-run 300 ms
+// context before the scheduler's Pending member was even observed. The fake
+// scheduler verdict is now published and seen before the test cancels the run.
+func TestRunSchedulerRefusalAfterSlowUnrelatedPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		blocked bool
+	}{
+		{name: "anti-affinity is still a failure", message: testOtherRefusals["anti-affinity"]},
+		{name: "capacity is still blocked", message: testNoFit, blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, err := runWithRefusedMemberAfterPreflight(t,
+				testRefusal(tc.message, time.Hour), 350*time.Millisecond)
+			want := evidence.Fail
+			if tc.blocked {
+				want = evidence.Blocked
+			}
+			if err == nil || s.Result != want || !strings.Contains(s.Reason, tc.message) {
+				t.Fatalf("LAB00 = %+v, %v; want %s with scheduler refusal", s, err, want)
+			}
+			got := readRecord(t, f.cfg.EvidenceDir).UnschedulableMembers
+			if len(got) != 1 || got[0].Message != tc.message || got[0].BlocksRun != tc.blocked {
+				t.Fatalf("recorded scheduler evidence = %+v; want %q, blocked=%v",
+					got, tc.message, tc.blocked)
 			}
 		})
 	}
