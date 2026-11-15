@@ -51,6 +51,7 @@ spec:
   containers:
     - name: curl
       image: docker.io/curlimages/curl:8.10.1
+      imagePullPolicy: Never
       command: ["sleep", "3600"]
 `
 
