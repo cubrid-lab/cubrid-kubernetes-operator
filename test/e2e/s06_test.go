@@ -563,8 +563,19 @@ func (r *haRun) s06Absent() {
 	GinkgoWriter.Printf("S06/%s: the read-write path was open %s after the Operator returned\n",
 		s06Absent, time.Since(absence.returnedAt).Round(time.Second))
 
-	By("letting the client run for the stable period, then stopping it")
-	time.Sleep(stablePeriod.Value + 2*time.Second)
+	// The path being open does not mean the client has reconnected: its
+	// connection to a Broker that the quarantine stopped is renewed only on
+	// its next attempts, about 10 s after WriteEndpointReady in E2E run
+	// 43669801409. So the client runs until its own history shows the stable
+	// period of uninterrupted acknowledgements, counted as the check below
+	// counts it, or until the bound; the check after it is unchanged.
+	By("letting the client run until it has been acknowledged for the stable period, then stopping it")
+	for deadline := time.Now().Add(stablePeriod.Value + 2*time.Minute); time.Now().Before(deadline); {
+		if _, live, ok := r.liveRecovery(client, masterDeletedAt); ok && live >= stablePeriod.Value {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
 	rounds := sampler.stop()
 	events, history := r.stopClient(client)
 	recoveredAt, stable, recovered := workload.Recovery(events, masterDeletedAt)

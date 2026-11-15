@@ -2313,7 +2313,10 @@ it needs more.
   uninterrupted acknowledgements starts only once no write quarantine is in
   force and `WriteEndpointReady` is `True` (#885), so a quarantine that the
   returned Operator starts on its first passes is judged by the limit, not
-  counted as a broken stable period.
+  counted as a broken stable period. The client then runs until its own
+  history shows that period without interruption, at most `stable_period`
+  plus 2 minutes, because it reconnects to the restarted Brokers only on its
+  next attempts; the period is checked as before.
 - **Source note:** no outside test was read; the contract comes from
   ADR-0005.
 
