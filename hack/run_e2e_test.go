@@ -130,7 +130,6 @@ exit 0
 	}
 }
 
-
 // A canceled CI run must not wait for a blocked registry pull before it
 // deletes the Kind cluster that it created. This catches a Bash foreground
 // command whose TERM trap would only run after the pull had finished.
