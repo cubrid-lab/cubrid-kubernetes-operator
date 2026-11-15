@@ -36,6 +36,12 @@ import (
 // named by that variable and then blocks, so a test can interrupt the run.
 const containerStandIn = `#!/bin/sh
 echo "$*" >> "$CALLS"
+if [ "$1" = buildx ] && [ -n "$INTERRUPT_CLEANUP" ]; then
+  case "$2" in
+    build) kill -TERM "$PPID"; exit 143 ;;
+    rm) kill -TERM "$PPID" ;;
+  esac
+fi
 if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$FAIL_BUILD" ]; then
   echo 'SIMULATED BUILD/PUSH FAILURE' >&2
   exit 42
@@ -181,6 +187,20 @@ func assertNoDockerfileCross(t *testing.T, dir string) {
 	if len(left) != 0 {
 		t.Errorf("Dockerfile.cross copy left behind: %v", left)
 	}
+}
+
+// A further cancellation during builder removal must not abort the EXIT trap
+// before it removes the temporary Dockerfile. The original build stays failed.
+func TestDockerBuildx_CancellationDuringCleanupRemovesOwnedResources(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	code, out, calls, dir := runBuildx(t, "INTERRUPT_CLEANUP")
+	if code == 0 {
+		t.Errorf("make docker-buildx succeeded after cancellation:\n%s", out)
+	}
+	assertOneBuilderThroughout(t, calls)
+	assertNoDockerfileCross(t, dir)
 }
 
 // If the project's builder cannot be created, for example because a builder of
