@@ -441,7 +441,7 @@ func runWithRefusedMemberAfterPreflight(t *testing.T, scheduled *corev1.PodCondi
 	f.cfg.Timeout = 5 * time.Second
 	if preflightDelay > 0 {
 		f.commandHook = func(ctx context.Context, args []string) (string, error) {
-			if len(args) != 0 && args[0] == "version" {
+			if len(args) != 0 && args[0] == testKubectlVersionArg {
 				select {
 				case <-time.After(preflightDelay):
 				case <-ctx.Done():
