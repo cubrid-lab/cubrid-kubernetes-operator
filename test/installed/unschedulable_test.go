@@ -553,7 +553,7 @@ func TestRunIsBlockedByARefusalThatAlsoNamesCapacity(t *testing.T) {
 // the deadline error without racing a 300 ms whole-run setup timer (#900).
 func TestSchedulerRefusalIsClassifiedAfterRealContextDeadline(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name    string
 		message string
 		blocked bool
 	}{
