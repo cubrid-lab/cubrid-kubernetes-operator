@@ -4297,13 +4297,14 @@ and S12 variant other than `complete` and `exact` only those under
 - `LAB01/data-check.json`: the last data-rule report.
 - with `-fault vm-power-off`, `S04/power-off/record.json` (the master, its Pod
   and node, the clock offsets, the read-write probe's operation, when the VM
-  was confirmed off, the promoted member and when it was seen, any reading of `PrimaryResolved` `True` or Pod
-  deletion while the VM was off, when the VM was powered on, its node `Ready`
-  and the cluster converged, the final master and the members after),
-  `S04/power-off/timeline.jsonl` (the fault flow) and
+  was confirmed off, the promoted member and when it was seen, any reading of
+  `PrimaryResolved` `True` or Pod deletion while the VM was off, when the VM
+  was powered on, its node `Ready` and the cluster converged, the final master
+  and the members after), `S04/power-off/timeline.jsonl` (the fault flow) and
   `S04/power-off/data-check.json`. The read-write probe's operation is in
   `LAB01/history.jsonl`, and so are the clients' operations, or, when S04
-  ended before it read them, in `S04/power-off/clients/<client>.jsonl` as the clients wrote them.
+  ended before it read them, in `S04/power-off/clients/<client>.jsonl` as the
+  clients wrote them.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
   started and the status time it wrote, the members before and after),

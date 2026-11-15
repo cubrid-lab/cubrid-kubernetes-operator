@@ -832,7 +832,8 @@ func (h *haRun) probeReadWrite(ctx context.Context, rec *s04Record) error {
 	}
 	dump, err := h.clientRun(ctx, dumps["rw"]+" 2>/tmp/dump.err")
 	if err != nil {
-		return fmt.Errorf("read back %s through the read-write Service: %w", opID, err)
+		diagnostics, _ := h.clientRun(ctx, "cat /tmp/dump.err")
+		return fmt.Errorf("read back %s through the read-write Service: %w\n%s", opID, err, diagnostics)
 	}
 	rows, err := workload.ReadRows(strings.NewReader(dump))
 	if err != nil {

@@ -960,36 +960,72 @@ func TestRunS04ReadsBackAWriteThroughTheMovedReadWritePath(t *testing.T) {
 }
 
 // A write through the moved read-write path that is acknowledged but cannot
-// be read back, or that is not acknowledged at all, means the path does not
-// work before the fault: S04 is blocked, not failed, with a reason that names
-// the probe, and no VM is powered off (#884).
+// be read back, or read back with other values, or that is not acknowledged
+// at all, means the path does not work before the fault: S04 is blocked, not
+// failed, with a reason that names the probe. Neither the clocks are read nor
+// the background clients started, and no VM is powered off. Whatever the
+// probe's client recorded is in the run's history, so a later data check
+// accounts for its row (#884).
 func TestRunS04IsBlockedWhenTheReadWriteProbeFails(t *testing.T) {
+	const opID = `"opId":"s04probe-000001"`
 	for name, tc := range map[string]struct {
-		answer func() (string, error)
-		reason string
+		// answer plays the probe's write; failDump fails the read-back.
+		answer   func(f *haFixture) (string, error)
+		failDump bool
+		reason   string
+		// inHistory is whether the probe's operation must be in the
+		// run's history, acknowledged whether it must be acknowledged there.
+		inHistory, acknowledged bool
 	}{
-		"the row is not read back": {func() (string, error) {
+		"the row is not read back": {answer: func(*haFixture) (string, error) {
 			history, _ := probeWorkload()
 			return history, nil
-		}, "was not read back"},
-		"the write is not acknowledged": {func() (string, error) {
+		}, reason: "was not read back", inHistory: true, acknowledged: true},
+		"the row is read back with other values": {answer: func(f *haFixture) (string, error) {
+			history, row := probeWorkload()
+			row.Amount++
+			f.mu.Lock()
+			f.rows = append(f.rows, row)
+			f.mu.Unlock()
+			return history, nil
+		}, reason: "read back through the read-write Service is", inHistory: true, acknowledged: true},
+		"the read-back fails": {answer: func(f *haFixture) (string, error) {
+			history, row := probeWorkload()
+			f.mu.Lock()
+			f.rows = append(f.rows, row)
+			f.mu.Unlock()
+			return history, nil
+		}, failDump: true, reason: "the Broker did not answer", inHistory: true, acknowledged: true},
+		"the write is not acknowledged": {answer: func(*haFixture) (string, error) {
 			history, _ := probeWorkload()
 			return strings.Replace(history, `"event":"acknowledged"`, `"event":"failed","error":"connection reset"`,
 				1), nil
-		}, "was not acknowledged"},
-		"the client cannot write": {func() (string, error) {
+		}, reason: "was not acknowledged", inHistory: true},
+		"the client is cut off in its acknowledgement": {answer: func(*haFixture) (string, error) {
+			history, _ := probeWorkload()
+			return history[:strings.LastIndex(history, `"event":"acknowledged"`)+10], nil
+		}, reason: "was not acknowledged", inHistory: true},
+		"the client cannot write": {answer: func(*haFixture) (string, error) {
 			return "", errors.New("kubectl failed: exit status 1")
-		}, "the Broker did not answer"},
+		}, reason: "the Broker did not answer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS04Config(t)
 			f, lab := newS04Fixture(t, cfg, brokerOnMastersNode(cfg))
+			var scripts []string
+			probed := false
 			f.clientHook = func(script string) (string, error, bool) {
+				f.mu.Lock()
+				scripts = append(scripts, script)
+				f.mu.Unlock()
 				switch {
 				case strings.Contains(script, "CLIENT_ID=s04probe "):
-					out, err := tc.answer()
+					probed = true
+					out, err := tc.answer(f)
 					return out, err, true
-				case script == "cat /tmp/s04probe.err":
+				case probed && tc.failDump && strings.Contains(script, "workload dump"):
+					return "", errors.New("kubectl failed: exit status 1"), true
+				case script == "cat /tmp/s04probe.err" || script == "cat /tmp/dump.err":
 					return "Exception: the Broker did not answer\n", nil, true
 				}
 				return "", nil, false
@@ -1002,8 +1038,35 @@ func TestRunS04IsBlockedWhenTheReadWriteProbeFails(t *testing.T) {
 				!strings.Contains(s04.Reason, tc.reason) {
 				t.Fatalf("S04 = %+v, want blocked by the read-write probe: %s", s04, tc.reason)
 			}
-			if rec := readS04Record(t, cfg.EvidenceDir); rec.ReadWriteProbe != "" {
+			rec := readS04Record(t, cfg.EvidenceDir)
+			if rec.ReadWriteProbe != "" {
 				t.Errorf("readWriteProbe = %q, want none recorded", rec.ReadWriteProbe)
+			}
+			if len(rec.ClockOffsets) != 0 {
+				t.Errorf("clockOffsets = %v, want the clocks not read after a failed probe", rec.ClockOffsets)
+			}
+			for _, script := range scripts {
+				if strings.Contains(script, "nohup workload run") || strings.HasPrefix(script, "date ") {
+					t.Errorf("client command %q ran after a failed probe", script)
+				}
+			}
+			data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, haHistoryFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if history := string(data); strings.Contains(history, opID) != tc.inHistory {
+				t.Errorf("the probe's operation in the run's history is %t, want %t:\n%s",
+					strings.Contains(history, opID), tc.inHistory, history)
+			}
+			acknowledged := false
+			for line := range strings.SplitSeq(string(data), "\n") {
+				if strings.Contains(line, opID) && strings.Contains(line, `"event":"acknowledged"`) {
+					acknowledged = true
+				}
+			}
+			if acknowledged != tc.acknowledged {
+				t.Errorf("the probe's acknowledgement in the run's history is %t, want %t", acknowledged,
+					tc.acknowledged)
 			}
 			assertNoPower(t, lab)
 			if masterNodeUnschedulable(t, f) {
