@@ -547,6 +547,56 @@ func TestRunIsBlockedByARefusalThatAlsoNamesCapacity(t *testing.T) {
 	}
 }
 
+// An *actual* expired context, not only context.Canceled from the fake
+// observation hook, must retain the exact scheduler reason after a Pending
+// Pod has been observed. This exercises waitCut and blockOnUnschedulable with
+// the deadline error without racing a 300 ms whole-run setup timer (#900).
+func TestSchedulerRefusalIsClassifiedAfterRealContextDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		message string
+		blocked bool
+	}{
+		{name: "anti-affinity remains failed", message: testOtherRefusals["anti-affinity"]},
+		{name: "capacity remains blocked", message: testNoFit, blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			key := client.ObjectKey{Namespace: cfg.Namespace, Name: clusterName + "-0"}
+			pending := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, UID: "test-pod-uid"},
+				Status: corev1.PodStatus{Phase: corev1.PodPending,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+						*testRefusal(tc.message, time.Hour),
+					}},
+			}
+			f := newConfiguredFixture(t, cfg, pending)
+			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+			defer cancel()
+			<-ctx.Done()
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) || !waitCut(ctx, ctx.Err()) {
+				t.Fatal("the test did not exercise an actual context deadline")
+			}
+			var recorded []unschedulableMember
+			err := f.runner.blockOnUnschedulable(cfg.Namespace, []string{key.Name}, &recorded, ctx.Err())
+			want := evidence.Fail
+			if tc.blocked {
+				want = evidence.Blocked
+			}
+			if got := unfinishedResult(true, true, err); got != want {
+				t.Errorf("deadline verdict = %v, want %v (err %v)", got, want, err)
+			}
+			if len(recorded) != 1 || recorded[0].Message != tc.message || recorded[0].BlocksRun != tc.blocked {
+				t.Errorf("the scheduler refusal was not retained across the deadline: %+v", recorded)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.message) {
+				t.Errorf("deadline error did not preserve scheduler message: %v", err)
+			}
+		})
+	}
+}
+
 // One reading at the deadline must not decide on a refusal seconds old: the
 // scheduler may yet place the member, so the run has not shown it does not
 // fit. JSON keeps whole seconds, hence the margin around the boundary.
