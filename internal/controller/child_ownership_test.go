@@ -236,11 +236,18 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 	// behindLabelledCache makes the reconciler read as the manager does: the
 	// client finds only objects with the managed-by label, as the manager's
 	// cache holds no others, and APIReader finds every object.
-	behindLabelledCache := func(r *CubridClusterReconciler) {
+	// It returns the number of creates attempted per object, by type and name
+	// (a PodDisruptionBudget shares a name with a Broker Deployment).
+	behindLabelledCache := func(r *CubridClusterReconciler) map[string]int {
+		creates := map[string]int{}
 		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
 		Expect(err).NotTo(HaveOccurred())
 		r.APIReader = k8sClient
 		r.Client = interceptor.NewClient(base, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				creates[fmt.Sprintf("%T/%s", obj, obj.GetName())]++
+				return c.Create(ctx, obj, opts...)
+			},
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 				if _, cluster := obj.(*databasev1alpha1.CubridCluster); cluster {
 					return c.Get(ctx, key, obj, opts...)
@@ -255,6 +262,7 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 				return c.Get(ctx, key, obj, opts...)
 			},
 		})
+		return creates
 	}
 
 	for p, path := range childPaths() {
@@ -274,9 +282,14 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 				before := stored(foreign)
 
 				r := reconciler(name)
-				behindLabelledCache(r)
+				creates := behindLabelledCache(r)
 				_, err := r.Reconcile(ctx, request(cluster))
+				for range 2 {
+					_, _ = r.Reconcile(ctx, request(cluster))
+				}
 
+				// The name is known to be taken, so no create is attempted.
+				Expect(creates[fmt.Sprintf("%T/%s", foreign, foreign.GetName())]).To(BeZero(), "a create was attempted for the taken name")
 				Expect(stored(foreign)).To(Equal(before), "the object was changed")
 				reported := condition(cluster, conditionBrokerReady)
 				if path.reason != "" {
