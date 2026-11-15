@@ -1,0 +1,13 @@
+createdb ok
+len=8 error=[]
+  reset rc=0
+len=31 error=[]
+  reset rc=0
+len=32 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=33 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=64 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=127 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=128 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=129 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=255 error=[ERROR: Password string cannot have more than 31 bytes.]
+len=256 error=[ERROR: Password string cannot have more than 31 bytes.]

@@ -1,0 +1,142 @@
+start 2026-11-15T04:30:17Z
+files under $CUBRID/log:
+/home/cubrid/CUBRID/log:
+total 200
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:09 cub_client.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:04 cub_server.access
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:04 cub_server.err
+-rw-rw-r-- 1 cubrid cubrid  5261 Nov 15 04:28 cubrid_utility.log
+-rw-rw-r-- 1 cubrid cubrid   320 Nov 15 04:09 db_a31_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1337 Nov 15 04:09 db_a31_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:04 db_a31_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:07 db_a31_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:12 db_a32_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1337 Nov 15 04:12 db_a32_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:09 db_a32_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:11 db_a32_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:15 db_b_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1329 Nov 15 04:16 db_b_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:12 db_b_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14124 Nov 15 04:14 db_b_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:19 db_c_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1329 Nov 15 04:19 db_c_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:16 db_c_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14124 Nov 15 04:18 db_c_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:28 db_cno_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1337 Nov 15 04:28 db_cno_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:26 db_cno_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:27 db_cno_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:23 db_d31_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1337 Nov 15 04:23 db_d31_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:19 db_d31_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:21 db_d31_createdb.err
+-rw-rw-r-- 1 cubrid cubrid   321 Nov 15 04:25 db_d33_backupdb.access
+-rw-rw-r-- 1 cubrid cubrid  1337 Nov 15 04:26 db_d33_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:23 db_d33_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:25 db_d33_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:24 db_len_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14126 Nov 15 04:25 db_len_createdb.err
+drwxr-xr-x 2 cubrid cubrid  4096 Nov 15 04:28 pl
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 15 04:09 poc-dbapw-values_master.err
+drwxrwxr-x 2 cubrid cubrid  4096 Nov 15 04:28 server
+
+/home/cubrid/CUBRID/log/pl:
+total 72
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:07 db_a31_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:07 db_a31_pl.err
+-rw-r--r-- 1 cubrid cubrid 4995 Nov 15 04:09 db_a31_pl.log
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:07 db_a31_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:11 db_a32_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:11 db_a32_pl.err
+-rw-r--r-- 1 cubrid cubrid 1665 Nov 15 04:12 db_a32_pl.log
+-rw-rw-r-- 1 cubrid cubrid  333 Nov 15 04:12 db_a32_pl.log.1
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:12 db_a32_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:11 db_a32_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:14 db_b_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:14 db_b_pl.err
+-rw-r--r-- 1 cubrid cubrid 4662 Nov 15 04:15 db_b_pl.log
+-rw------- 1 cubrid cubrid  333 Nov 15 04:15 db_b_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 15 04:15 db_b_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:14 db_b_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:18 db_c_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:18 db_c_pl.err
+-rw-r--r-- 1 cubrid cubrid 4662 Nov 15 04:19 db_c_pl.log
+-rw-rw-r-- 1 cubrid cubrid  333 Nov 15 04:19 db_c_pl.log.1
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:19 db_c_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:18 db_c_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:27 db_cno_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:27 db_cno_pl.err
+-rw-r--r-- 1 cubrid cubrid 2997 Nov 15 04:28 db_cno_pl.log
+-rw------- 1 cubrid cubrid  666 Nov 15 04:28 db_cno_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 15 04:28 db_cno_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:27 db_cno_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:21 db_d31_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:21 db_d31_pl.err
+-rw-r--r-- 1 cubrid cubrid 4662 Nov 15 04:22 db_d31_pl.log
+-rw-rw-r-- 1 cubrid cubrid  333 Nov 15 04:23 db_d31_pl.log.1
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:23 db_d31_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:21 db_d31_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:25 db_d33_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:25 db_d33_pl.err
+-rw-r--r-- 1 cubrid cubrid 1998 Nov 15 04:25 db_d33_pl.log
+-rw-rw-r-- 1 cubrid cubrid  333 Nov 15 04:25 db_d33_pl.log.1
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:25 db_d33_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 15 04:25 db_d33_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:25 db_len_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:25 db_len_pl.err
+-rw-rw-r-- 1 cubrid cubrid  999 Nov 15 04:26 db_len_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 15 04:25 db_len_pl.log.lck
+
+/home/cubrid/CUBRID/log/server:
+total 48
+-rw-rw-r-- 1 cubrid cubrid 650 Nov 15 04:09 db_a31_20261115_0409.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:09 db_a31_20261115_0409.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:09 db_a31_20261115_0409.event
+lrwxrwxrwx 1 cubrid cubrid  58 Nov 15 04:09 db_a31_latest.access -> /home/cubrid/CUBRID/log/server/db_a31_20261115_0409.access
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:09 db_a31_latest.err -> /home/cubrid/CUBRID/log/server/db_a31_20261115_0409.err
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 15 04:09 db_a31_latest.event -> /home/cubrid/CUBRID/log/server/db_a31_20261115_0409.event
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:12 db_a32_20261115_0412.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:12 db_a32_20261115_0412.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:12 db_a32_20261115_0412.event
+lrwxrwxrwx 1 cubrid cubrid  58 Nov 15 04:12 db_a32_latest.access -> /home/cubrid/CUBRID/log/server/db_a32_20261115_0412.access
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:12 db_a32_latest.err -> /home/cubrid/CUBRID/log/server/db_a32_20261115_0412.err
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 15 04:12 db_a32_latest.event -> /home/cubrid/CUBRID/log/server/db_a32_20261115_0412.event
+-rw-rw-r-- 1 cubrid cubrid 654 Nov 15 04:15 db_b_20261115_0415.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:15 db_b_20261115_0415.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:15 db_b_20261115_0415.event
+lrwxrwxrwx 1 cubrid cubrid  56 Nov 15 04:15 db_b_latest.access -> /home/cubrid/CUBRID/log/server/db_b_20261115_0415.access
+lrwxrwxrwx 1 cubrid cubrid  53 Nov 15 04:15 db_b_latest.err -> /home/cubrid/CUBRID/log/server/db_b_20261115_0415.err
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:15 db_b_latest.event -> /home/cubrid/CUBRID/log/server/db_b_20261115_0415.event
+-rw-rw-r-- 1 cubrid cubrid 654 Nov 15 04:19 db_c_20261115_0419.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:19 db_c_20261115_0419.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:19 db_c_20261115_0419.event
+lrwxrwxrwx 1 cubrid cubrid  56 Nov 15 04:19 db_c_latest.access -> /home/cubrid/CUBRID/log/server/db_c_20261115_0419.access
+lrwxrwxrwx 1 cubrid cubrid  53 Nov 15 04:19 db_c_latest.err -> /home/cubrid/CUBRID/log/server/db_c_20261115_0419.err
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:19 db_c_latest.event -> /home/cubrid/CUBRID/log/server/db_c_20261115_0419.event
+-rw-rw-r-- 1 cubrid cubrid 354 Nov 15 04:28 db_cno_20261115_0428.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:28 db_cno_20261115_0428.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:28 db_cno_20261115_0428.event
+lrwxrwxrwx 1 cubrid cubrid  58 Nov 15 04:28 db_cno_latest.access -> /home/cubrid/CUBRID/log/server/db_cno_20261115_0428.access
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:28 db_cno_latest.err -> /home/cubrid/CUBRID/log/server/db_cno_20261115_0428.err
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 15 04:28 db_cno_latest.event -> /home/cubrid/CUBRID/log/server/db_cno_20261115_0428.event
+-rw-rw-r-- 1 cubrid cubrid 654 Nov 15 04:23 db_d31_20261115_0423.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:23 db_d31_20261115_0423.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:23 db_d31_20261115_0423.event
+lrwxrwxrwx 1 cubrid cubrid  58 Nov 15 04:23 db_d31_latest.access -> /home/cubrid/CUBRID/log/server/db_d31_20261115_0423.access
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:23 db_d31_latest.err -> /home/cubrid/CUBRID/log/server/db_d31_20261115_0423.err
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 15 04:23 db_d31_latest.event -> /home/cubrid/CUBRID/log/server/db_d31_20261115_0423.event
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:25 db_d33_20261115_0425.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 15 04:25 db_d33_20261115_0425.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 15 04:25 db_d33_20261115_0425.event
+lrwxrwxrwx 1 cubrid cubrid  58 Nov 15 04:25 db_d33_latest.access -> /home/cubrid/CUBRID/log/server/db_d33_20261115_0425.access
+lrwxrwxrwx 1 cubrid cubrid  55 Nov 15 04:25 db_d33_latest.err -> /home/cubrid/CUBRID/log/server/db_d33_20261115_0425.err
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 15 04:25 db_d33_latest.event -> /home/cubrid/CUBRID/log/server/db_d33_20261115_0425.event
+
+positive control: the same search finds each value in its own password file
+a-len31 found_in_own_file=1
+a-len32 found_in_own_file=1
+b-utf8 found_in_own_file=1
+c-quote-backslash found_in_own_file=1
+d-utf8-len31 found_in_own_file=1
+d-utf8-len33 found_in_own_file=1
+end 2026-11-15T04:30:17Z
