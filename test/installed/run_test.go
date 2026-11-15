@@ -194,19 +194,29 @@ func newFixture(t *testing.T) *fixture {
 	return newConfiguredFixture(t, testConfig(t))
 }
 
+// fixtureGetAfterRead keeps test-only observation logic out of the large
+// shared fixture factory. Default fixture reads are otherwise unchanged.
+func fixtureGetAfterRead(f *fixture) func(context.Context, client.WithWatch,
+	client.ObjectKey, client.Object, ...client.GetOption) error {
+	return func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if err := c.Get(ctx, key, obj, opts...); err != nil {
+			return err
+		}
+		if f.afterRead != nil {
+			f.afterRead(key, obj)
+		}
+		return nil
+	}
+}
+
+const testKubectlVersionArg = "version"
+
 func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fixture {
 	t.Helper()
 	f := &fixture{cfg: cfg}
 	hooks := interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if err := c.Get(ctx, key, obj, opts...); err != nil {
-				return err
-			}
-			if f.afterRead != nil {
-				f.afterRead(key, obj)
-			}
-			return nil
-		},
+		Get: fixtureGetAfterRead(f),
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			switch value := obj.(type) {
 			case *corev1.Namespace:
@@ -385,7 +395,7 @@ func createAll(ctx context.Context, c client.WithWatch, objects ...client.Object
 
 func (f *fixture) answer(t *testing.T, args []string) (string, error) {
 	t.Helper()
-	if len(args) == 3 && args[0] == "version" {
+	if len(args) == 3 && args[0] == testKubectlVersionArg {
 		return testVersionJSON, nil
 	}
 	if len(args) < 8 || args[0] != "-n" || args[1] != f.cfg.Namespace || args[2] != "exec" ||
