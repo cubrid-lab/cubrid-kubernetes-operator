@@ -82,6 +82,9 @@ const (
 	// s04HistoryLimit bounds how long the end of an S04 run that did not
 	// read the clients' histories takes to keep them.
 	s04HistoryLimit = time.Minute
+	// s04ProbeClient is the client ID of the one write S04 sends through the
+	// read-write Service before the fault and reads back.
+	s04ProbeClient = "s04probe"
 )
 
 // vmSettle is how long the cleanup must read a VM running before it trusts
@@ -113,6 +116,9 @@ type s04Record struct {
 	// cordoned for that, and Uncordoned is set once it made it schedulable
 	// again; a node cordoned before the run is left as it was.
 	BrokersMoved []string `json:"brokersMoved,omitempty"`
+	// ReadWriteProbe is the operation written through the read-write Service
+	// after the Brokers moved and read back through it before the fault.
+	ReadWriteProbe string `json:"readWriteProbe,omitempty"`
 	// NodeNotReadyAt is when the node became NotReady, from its Ready
 	// condition, and PowerOnBy when the VM must be powered on for its boot to
 	// end within the member Pod's taint toleration, counted from then.
@@ -398,6 +404,9 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	}
 	if err := h.prepareS04(ctx, &rec); err != nil {
 		return end(evidence.Blocked, "%v", err)
+	}
+	if err := h.probeReadWrite(ctx, &rec); err != nil {
+		return end(evidence.Blocked, "the read-write probe before the fault: %v", err)
 	}
 	offsets, err := h.clockOffsets(ctx)
 	rec.ClockOffsets = offsets
@@ -790,6 +799,58 @@ func (h *haRun) moveBrokers(ctx context.Context, rec *s04Record) error {
 	}
 	rec.Uncordoned = true
 	return nil
+}
+
+// probeReadWrite writes one ledger row through the read-write Service, now
+// served by the Brokers moveBrokers left, and reads it back through that
+// Service with a second client: a path that accepts commits but does not read
+// them back must not be taken later for a failover regression (#884). The
+// write's lines go into the run's history whatever its outcome, so the data
+// check after the fault accounts for its row.
+func (h *haRun) probeReadWrite(ctx context.Context, rec *s04Record) error {
+	out, err := h.clientRun(ctx, "CLIENT_ID="+s04ProbeClient+" OPS=1 ROLLBACK_EVERY=0 workload run 2>/tmp/"+
+		s04ProbeClient+".err")
+	// A line the client did not finish is no event of the history.
+	out = out[:strings.LastIndex(out, "\n")+1]
+	h.history.WriteString(out)
+	if werr := h.write(haHistoryFile, []byte(h.history.String())); werr != nil {
+		return werr
+	}
+	if err != nil {
+		diagnostics, _ := h.clientRun(ctx, "cat /tmp/"+s04ProbeClient+".err")
+		return fmt.Errorf("the write through the read-write Service: %w\n%s", err, diagnostics)
+	}
+	written, err := workload.ReadHistory(strings.NewReader(out))
+	if err != nil {
+		return err
+	}
+	opID := fmt.Sprintf("%s-%06d", s04ProbeClient, 1)
+	op, ok := written.Operations[opID]
+	if !ok || op.Outcome != workload.Acknowledged {
+		return fmt.Errorf("the write %s through the read-write Service was not acknowledged: outcome %q, %s", opID,
+			op.Outcome, op.Error)
+	}
+	dump, err := h.clientRun(ctx, dumps["rw"]+" 2>/tmp/dump.err")
+	if err != nil {
+		diagnostics, _ := h.clientRun(ctx, "cat /tmp/dump.err")
+		return fmt.Errorf("read back %s through the read-write Service: %w\n%s", opID, err, diagnostics)
+	}
+	rows, err := workload.ReadRows(strings.NewReader(dump))
+	if err != nil {
+		return fmt.Errorf("read back %s through the read-write Service: %w", opID, err)
+	}
+	want := workload.Row{OpID: opID, Client: op.Client, Seq: op.Seq, Amount: op.Amount, Note: op.Note}
+	for _, row := range rows {
+		if row.OpID != opID {
+			continue
+		}
+		if row != want {
+			return fmt.Errorf("%s read back through the read-write Service is %+v, sent %+v", opID, row, want)
+		}
+		rec.ReadWriteProbe = opID
+		return nil
+	}
+	return fmt.Errorf("the acknowledged write %s was not read back through the read-write Service", opID)
 }
 
 // endCordon makes the node moveBrokers cordoned schedulable again when
