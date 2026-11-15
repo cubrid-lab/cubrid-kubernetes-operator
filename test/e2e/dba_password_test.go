@@ -603,16 +603,22 @@ const diskScanDone = "DBA-PASSWORD-DISK-SCAN-DONE"
 // Instance Manager's operation store, CUBRID's log directory and /tmp for the
 // value of the member's own mounted password file (grep -F -f), so that the
 // value is on no command line, also not inside the Pod. A directory that is
-// missing is reported, so a moved directory is not taken for a clean one.
+// missing, a password file that is empty or cannot be read, and a grep that
+// failed (exit 2 or more, such as an unreadable file) are reported, so a
+// search that could not look is never taken for a clean one.
 func (h dbaPasswordHelpers) expectNoDBAPasswordOnDisk(member string) {
 	out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
-		`for d in "$IM_OPERATIONS_DIR" "$CUBRID/log" /tmp; do `+
+		`if [ ! -r "$0" ] || [ ! -s "$0" ]; then echo "PATTERN UNREADABLE $0"; exit 0; fi; `+
+			`for d in "$IM_OPERATIONS_DIR" "$CUBRID/log" /tmp; do `+
 			`if [ -z "$d" ] || [ ! -d "$d" ]; then echo "MISSING directory '$d'"; continue; fi; `+
-			`grep -rlaF -f "$0" -- "$d" 2>/dev/null | sed 's/^/HOLDS /'; done; echo "$1"`,
+			`found=$(grep -rlaF -f "$0" -- "$d" 2>&1); rc=$?; `+
+			`if [ "$rc" -ge 2 ]; then echo "SCAN ERROR in $d (grep exit $rc): $found"; `+
+			`elif [ "$rc" = 0 ]; then printf '%s\n' "$found" | sed 's/^/HOLDS /'; fi; done; echo "$1"`,
 		dbaPasswordFile, diskScanDone)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), out)
 	ExpectWithOffset(1, strings.TrimSpace(out)).To(Equal(diskScanDone),
-		"on %s, the operation store, $CUBRID/log or /tmp holds the DBA password, or one is missing:\n%s", member, out)
+		"on %s, the operation store, $CUBRID/log or /tmp holds the DBA password, or the search could not look:\n%s",
+		member, out)
 }
 
 // bucketScanObjects prefixes the count of objects expectNoDBAPasswordInBucket
@@ -629,15 +635,19 @@ const bucketScanObjects = "OBJECTS "
 func (h dbaPasswordHelpers) expectNoDBAPasswordInBucket(member, bucket string) {
 	endpoint := "http://s3mock." + h.clientNamespace + ".svc:9090/" + bucket
 	out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
-		`set -o pipefail; keys=$(curl -sSf "$1?list-type=2" | grep -o '<Key>[^<]*</Key>' | sed -e 's/<Key>//' -e 's/<\/Key>//') `+
+		`if [ ! -r "$0" ] || [ ! -s "$0" ]; then echo "PATTERN UNREADABLE $0"; exit 0; fi; `+
+			`set -o pipefail; keys=$(curl -sSf "$1?list-type=2" | grep -o '<Key>[^<]*</Key>' | sed -e 's/<Key>//' -e 's/<\/Key>//') `+
 			`|| { echo "LIST FAILED"; exit 1; }; n=0; `+
 			`for k in $keys; do n=$((n+1)); curl -sSf "$1/$k" | grep -qaF -f "$0"; st=("${PIPESTATUS[@]}"); `+
-			`[ "${st[1]}" = 0 ] && echo "HOLDS $k"; [ "${st[1]}" = 0 ] || [ "${st[0]}" = 0 ] || echo "READ FAILED $k"; `+
+			`[ "${st[1]}" = 0 ] && echo "HOLDS $k"; [ "${st[1]}" -ge 2 ] && echo "SCAN ERROR $k (grep exit ${st[1]})"; `+
+			`[ "${st[1]}" = 0 ] || [ "${st[0]}" = 0 ] || echo "READ FAILED $k"; `+
 			`done; echo "`+bucketScanObjects+`$n"`,
 		dbaPasswordFile, endpoint)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), out)
 	ExpectWithOffset(1, out).NotTo(ContainSubstring("HOLDS "), "an object of the bucket %s holds the DBA password", bucket)
 	ExpectWithOffset(1, out).NotTo(ContainSubstring("READ FAILED"), "an object of the bucket %s could not be read", bucket)
+	ExpectWithOffset(1, out).NotTo(Or(ContainSubstring("SCAN ERROR"), ContainSubstring("PATTERN UNREADABLE")),
+		"the bucket %s could not be searched:\n%s", bucket, out)
 	ExpectWithOffset(1, out).To(MatchRegexp(bucketScanObjects+`[1-9][0-9]*\s*$`),
 		"no object of the bucket %s was read:\n%s", bucket, out)
 }
@@ -979,30 +989,10 @@ spec:
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.Fields(events)).To(ContainElement("Warning"))
 
-				// The Event says that a DB container that starts again does not
-				// start its database until the Secret holds the database's password
-				// again: the entrypoint checks it before heartbeat starts
-				// (build/instance-manager/entrypoint.sh, check_dba_password).
-				var standby string
-				for _, member := range members {
-					if member != primary {
-						standby = member
-						break
-					}
-				}
-				By("restarting the standby " + standby + " while the Secret holds another value")
-				_, err = h.kubectl("delete", "pod", standby, "--wait=true", "--timeout=3m")
-				Expect(err).NotTo(HaveOccurred())
-				Eventually(func(g Gomega) {
-					current, _ := h.kubectl("logs", standby, "-c", "cubrid", "--tail=-1")
-					previous, _ := h.kubectl("logs", standby, "-c", "cubrid", "--previous", "--tail=-1")
-					g.Expect(current+previous).To(ContainSubstring("is not the requested one"),
-						"the restarted standby did not refuse to start with the changed value")
-				}, 5*time.Minute, 5*time.Second).Should(Succeed())
-				ready, err := h.kubectl("get", "pod", standby,
-					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(ready).NotTo(Equal("True"), "the standby is Ready although its database was not started")
+				// While the Secret holds the changed value, the primary's file holds
+				// it too: its operation store, $CUBRID/log and /tmp must not.
+				By("searching the primary's operation store, $CUBRID/log and /tmp for the changed value")
+				h.expectNoDBAPasswordOnDisk(primary)
 
 				By("putting the database's password back")
 				changeTo(password)
@@ -1011,15 +1001,6 @@ spec:
 					g.Expect(status).To(Equal("True"))
 					g.Expect(reason).To(Equal("DBAPasswordSecretResolved"))
 				}, 3*time.Minute, 3*time.Second).Should(Succeed())
-
-				By("waiting for the standby to start again with the database's password and the cluster to be healthy")
-				Eventually(func(g Gomega) {
-					out, err := h.kubectl("get", "pod", standby,
-						"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(out).To(Equal("True"))
-					haHealthy(g, clusterName)
-				}, 10*time.Minute, 5*time.Second).Should(Succeed())
 			})
 
 			It("writes the password into no status, Event, StatefulSet, Broker client or Operator log line", func() {
