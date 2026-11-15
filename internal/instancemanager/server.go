@@ -1069,6 +1069,17 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			fail("restore refused: " + err.Error())
 			return
 		}
+		// A requested DBA password is read before anything is restored or
+		// taken over, so a file that cannot be used restores and starts
+		// nothing.
+		var password string
+		if s.ha.DBAPasswordFile != "" {
+			var err error
+			if password, err = ReadDBAPassword(s.ha.DBAPasswordFile); err != nil {
+				fail("restore refused: " + err.Error())
+				return
+			}
+		}
 		// Data that a failed attempt of this same request restored is taken
 		// over and started, never restored over.
 		restored, err := s.adoptRestored(id, req.Database)
@@ -1081,16 +1092,16 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				", not of the series of this member's engine " + roots.EngineVersion + "; it is kept and not started (ADR-0011)")
 			return
 		}
+		// Data taken over got its DBA password, or had it confirmed, before
+		// it was recorded as restored. On a standalone member the value
+		// requested now is confirmed again before it is started: the Secret
+		// may have been changed since, and the data is then kept and not
+		// started (#801). An HA member is not checked here: a standalone-mode
+		// open of data that may have run in HA is not shown to leave its HA
+		// state unchanged, and the Operator's rotation check reports a changed
+		// value on an HA cluster.
+		adopted := restored != nil && !haMember
 		if restored == nil {
-			// A requested DBA password is read before anything is restored,
-			// so a file that cannot be used restores nothing.
-			var password string
-			if s.ha.DBAPasswordFile != "" {
-				if password, err = ReadDBAPassword(s.ha.DBAPasswordFile); err != nil {
-					fail("restore refused: " + err.Error())
-					return
-				}
-			}
 			// What an interrupted restore of this manager left is removed first;
 			// anything else in the target is refused by the restore's own guard.
 			if err := s.reclaimIncomplete(req.Database); err != nil {
@@ -1123,7 +1134,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 					ctx, cancel := context.WithTimeout(ctx, dbaPasswordStepTimeout)
 					defer cancel()
 					if req.SeedFromMaster != "" {
-						return confirmDBAPassword(ctx, s.cli, s.log(), req.Database, password)
+						return ConfirmDBAPassword(ctx, s.cli, s.log(), req.Database, password)
 					}
 					return ApplyDBAPassword(ctx, s.cli, s.log(), req.Database, password)
 				}
@@ -1160,6 +1171,11 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		// The restored data is kept when the start fails.
 		storeFailed := false
 		err = s.startRestoredDatabase(ctx, req.Database, haMember, func() error {
+			if adopted && password != "" {
+				if err := s.confirmBeforeStart(ctx, req.Database, password); err != nil {
+					return err
+				}
+			}
 			_, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting })
 			storeFailed = err != nil
 			return err
@@ -1236,6 +1252,42 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 	return nil
 }
 
+// confirmBeforeStart confirms, right before a restored database that was
+// taken over or resumed is started, that its DBA password is password
+// (ConfirmDBAPassword), in standalone mode on the stopped database. A
+// standalone server that already runs is not checked here: csql cannot open
+// its database in standalone mode, and the start that follows finds it
+// running.
+func (s *Server) confirmBeforeStart(ctx context.Context, database, password string) error {
+	if s.standaloneDB != "" {
+		if running, err := ServerRunning(ctx, s.cli, database); err == nil && running {
+			return nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, dbaPasswordStepTimeout)
+	defer cancel()
+	return ConfirmDBAPassword(ctx, s.cli, s.log(), database, password)
+}
+
+// dbaPasswordBeforeResume is what ResumeCompletedRestores runs right before it
+// starts database: nothing without a DBA password file or on an HA member
+// (the restore's own start explains why), and otherwise the confirmation that
+// the database's password is the file's value, so a Secret changed since the
+// restore does not let a standalone member start serving with the old
+// password. A file that cannot be used starts nothing.
+func (s *Server) dbaPasswordBeforeResume(ctx context.Context, database string) func() error {
+	if s.ha.DBAPasswordFile == "" || s.standaloneDB == "" {
+		return nil
+	}
+	return func() error {
+		password, err := ReadDBAPassword(s.ha.DBAPasswordFile)
+		if err != nil {
+			return err
+		}
+		return s.confirmBeforeStart(ctx, database, password)
+	}
+}
+
 // ResumeCompletedRestores runs once when the manager starts. A database whose
 // directory still carries the ownership marker of a restore recorded as
 // Completed is whole, but the entrypoint did not start it because of that
@@ -1292,7 +1344,7 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 			continue
 		}
 		s.log().Info("Starting the database of a completed restore", "operationID", op.ID, "database", database)
-		if err := s.startRestoredDatabase(ctx, database, haMember, nil); err != nil {
+		if err := s.startRestoredDatabase(ctx, database, haMember, s.dbaPasswordBeforeResume(ctx, database)); err != nil {
 			errs = append(errs, fmt.Errorf("start %s of completed restore %s: %w", database, op.ID, err))
 			continue
 		}

@@ -1,0 +1,35 @@
+start 2026-11-15T04:28:52Z
+a-len31 /home/cubrid/CUBRID/databases files_holding_value=0
+a-len31 /home/cubrid/CUBRID/log files_holding_value=0
+a-len31 /tmp files_holding_value=0
+a-len31 /home/cubrid files_holding_value=0
+a-len31 /var/lib files_holding_value=0
+a-len32 /home/cubrid/CUBRID/databases files_holding_value=0
+a-len32 /home/cubrid/CUBRID/log files_holding_value=0
+a-len32 /tmp files_holding_value=0
+a-len32 /home/cubrid files_holding_value=0
+a-len32 /var/lib files_holding_value=0
+b-utf8 /home/cubrid/CUBRID/databases files_holding_value=0
+b-utf8 /home/cubrid/CUBRID/log files_holding_value=0
+b-utf8 /tmp files_holding_value=0
+b-utf8 /home/cubrid files_holding_value=0
+b-utf8 /var/lib files_holding_value=0
+c-quote-backslash /home/cubrid/CUBRID/databases files_holding_value=0
+c-quote-backslash /home/cubrid/CUBRID/log files_holding_value=0
+c-quote-backslash /tmp files_holding_value=0
+c-quote-backslash /home/cubrid files_holding_value=0
+c-quote-backslash /var/lib files_holding_value=0
+d-utf8-len31 /home/cubrid/CUBRID/databases files_holding_value=0
+d-utf8-len31 /home/cubrid/CUBRID/log files_holding_value=0
+d-utf8-len31 /tmp files_holding_value=0
+d-utf8-len31 /home/cubrid files_holding_value=0
+d-utf8-len31 /var/lib files_holding_value=0
+d-utf8-len33 /home/cubrid/CUBRID/databases files_holding_value=0
+d-utf8-len33 /home/cubrid/CUBRID/log files_holding_value=0
+d-utf8-len33 /tmp files_holding_value=0
+d-utf8-len33 /home/cubrid files_holding_value=0
+d-utf8-len33 /var/lib files_holding_value=0
+bash: find: command not found
+files searched under $CUBRID/log: 0
+bash: find: command not found
+end 2026-11-15T04:30:08Z

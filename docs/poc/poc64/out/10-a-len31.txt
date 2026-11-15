@@ -1,0 +1,37 @@
+== a-len31 db=db_a31 no_backslash_escapes=yes expect=set start 2026-11-15T06:04:10Z
+
+createdb rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31 -c SELECT 1","durationMs":3084,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31","durationMs":3279,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31 -c SELECT 1","durationMs":3442,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31 -c SELECT 1","durationMs":7174,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31 -c SELECT 1","durationMs":4231,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"command","command":"csql -u dba -S db_a31 -c SELECT 1","durationMs":6578,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-values","database":"db_a31","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+empty-login-after-apply rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+
+backupdb rc=0
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 15 06:07 db_a31_bk0v000
+backup-search rc=1
+== a-len31 PASS end 2026-11-15T06:07:40Z

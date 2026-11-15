@@ -104,14 +104,18 @@ func (c ExecCLI) run(ctx context.Context, stdin io.Reader, name string, args ...
 	// The output goes to a file, not a pipe: `cubrid server start` and
 	// `cubrid heartbeat start` leave daemons that inherit the command's
 	// output, and reading a pipe would wait for them instead of the command.
+	// The file is unlinked before the command starts and read through its
+	// descriptor, so what a command prints (csql echoes the ALTER USER that
+	// carries the DBA password) never sits under a name that another process,
+	// or a crash of this one, could leave or read (#801).
 	output, err := os.CreateTemp("", "im-cli-*")
 	if err != nil {
 		return "", fmt.Errorf("output file for %s: %w", name, err)
 	}
-	defer func() {
-		_ = output.Close()
-		_ = os.Remove(output.Name())
-	}()
+	defer func() { _ = output.Close() }()
+	if err := os.Remove(output.Name()); err != nil {
+		return "", fmt.Errorf("output file for %s: %w", name, err)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, output, output
 	grouped := filepath.Base(name) == "cubrid" && len(args) > 0 && groupUtilities[args[0]]
@@ -137,7 +141,11 @@ func (c ExecCLI) run(ctx context.Context, stdin io.Reader, name string, args ...
 			runErr = fmt.Errorf("%w: %s %s", ErrProcessLeft, name, args[0])
 		}
 	}
-	out, readErr := os.ReadFile(output.Name())
+	var out []byte
+	_, readErr := output.Seek(0, io.SeekStart)
+	if readErr == nil {
+		out, readErr = io.ReadAll(output)
+	}
 	if readErr != nil {
 		// What the command printed is unknown, whatever its exit status.
 		return "", errors.Join(fmt.Errorf("%w: %s: %w", ErrOutputUnread, name, readErr), runErr)

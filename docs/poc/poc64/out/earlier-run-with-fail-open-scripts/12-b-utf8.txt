@@ -1,0 +1,27 @@
+== b-utf8 db=db_b no_backslash_escapes=yes start 2026-11-15T04:12:31Z
+createdb ok rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+empty-login-after-failing-alters rc=0 (0 = still no password)
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b -c SELECT 1","durationMs":3443,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b","durationMs":3697,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b -c SELECT 1","durationMs":3271,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b -c SELECT 1","durationMs":8101,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b -c SELECT 1","durationMs":4039,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"command","command":"csql -u dba -S db_b -c SELECT 1","durationMs":6992,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-values","database":"db_b","event":"dba_password_already_set"}
+check-dba-password rc=0
+check-dba-password-with-changed-value rc=1 (1 = refused)
+check-dba-password-with-prefix-value rc=1 (1 = refused)
+empty-login-after-apply rc=1 (1 = refused)
+server-start rc=0
+{"state":"Matches"}
+
+client-mode-check curl_rc=0
+manager stopped
+server-stop rc=0
+backupdb rc=0
+backup_files_holding_value=0
+== b-utf8 end 2026-11-15T04:16:03Z

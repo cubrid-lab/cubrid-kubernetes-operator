@@ -267,7 +267,7 @@ var _ = Describe("The DBA password Secret of a standalone or HA cluster (#805, #
 		Entry("when the key holds only a line feed", "dba-newline",
 			map[string][]byte{dbaTestKey: []byte("\n")}, reasonDBAPasswordKeyEmpty, "empty"),
 		Entry("when the value holds a line feed the Instance Manager refuses", "dba-two-lines",
-			map[string][]byte{dbaTestKey: []byte(dbaTestPassword + "\n" + dbaTestPassword)},
+			map[string][]byte{dbaTestKey: []byte(dbaTestPassword + "\nx")},
 			reasonDBAPasswordValueInvalid, "line feed"),
 		Entry("when a control byte would interrupt the terminal password prompt", "dba-control-interrupt",
 			map[string][]byte{dbaTestKey: []byte(dbaTestPassword + "\x03")},
@@ -277,7 +277,12 @@ var _ = Describe("The DBA password Secret of a standalone or HA cluster (#805, #
 			reasonDBAPasswordValueInvalid, "control byte"),
 		Entry("when the value is longer than the Instance Manager accepts", "dba-too-long",
 			map[string][]byte{dbaTestKey: []byte(strings.Repeat(dbaTestPassword, 20))},
-			reasonDBAPasswordValueInvalid, "256 bytes"),
+			reasonDBAPasswordValueInvalid, "31 bytes"),
+		// CUBRID refuses a password of more than 31 bytes (docs/poc/RESULTS.md,
+		// POC-64): 32 is refused here before any database is created.
+		Entry("when the value is one byte longer than CUBRID accepts", "dba-32-bytes",
+			map[string][]byte{dbaTestKey: []byte(strings.Repeat("y", 32))},
+			reasonDBAPasswordValueInvalid, "longer than 31 bytes"),
 	)
 
 	It("reports a Secret it cannot read, retries, and creates no database", func() {

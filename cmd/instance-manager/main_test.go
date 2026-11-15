@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -37,8 +38,25 @@ import (
 type dbaCLI struct {
 	calls []string
 	set   bool
+	// current is the password the database has while set is true.
+	current string
 	// alterErr makes the run fed on stdin fail and set nothing.
 	alterErr error
+	stdins   []string
+}
+
+// RunOnTerminal stands in for a csql login with the password typed at its
+// prompt: accepted only with the password the database has. Without a
+// password csql logs in with the empty one and does not prompt.
+func (c *dbaCLI) RunOnTerminal(_ context.Context, _, input, name string, args ...string) (string, bool, error) {
+	c.calls = append(c.calls, "terminal "+name+" "+strings.Join(args, " "))
+	if !c.set {
+		return "1 row selected.\n", false, nil
+	}
+	if input == c.current {
+		return "\n1 row selected.\n", true, nil
+	}
+	return "\nERROR: Incorrect or missing password.\n", true, errors.New("exit status 1")
 }
 
 func (c *dbaCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -49,12 +67,14 @@ func (c *dbaCLI) Run(_ context.Context, name string, args ...string) (string, er
 	return "1 row selected.\n", nil
 }
 
-func (c *dbaCLI) RunWithStdin(_ context.Context, _, name string, args ...string) (string, error) {
+func (c *dbaCLI) RunWithStdin(_ context.Context, stdin, name string, args ...string) (string, error) {
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
+	c.stdins = append(c.stdins, stdin)
 	if c.alterErr != nil {
 		return "", c.alterErr
 	}
 	c.set = true
+	c.current = strings.TrimSuffix(strings.TrimPrefix(stdin, "ALTER USER dba PASSWORD '"), "';\n")
 	return "Execute OK.\n", nil
 }
 
@@ -86,8 +106,8 @@ func TestApplyDBAPasswordCommand(t *testing.T) {
 		if err := applyDBAPassword(context.Background(), logger, cli); err != nil {
 			t.Fatalf("applyDBAPassword: %v", err)
 		}
-		if !cli.set || len(cli.calls) != 3 {
-			t.Errorf("commands = %q, want the check, the statement and the check", cli.calls)
+		if !cli.set || len(cli.calls) != 4 {
+			t.Errorf("commands = %q, want the check, the statement, the check and a login with the value", cli.calls)
 		}
 	})
 	t.Run("csql failed", func(t *testing.T) {
@@ -119,6 +139,135 @@ func TestApplyDBAPasswordCommand(t *testing.T) {
 			t.Errorf("commands ran: %q", cli.calls)
 		}
 	})
+}
+
+// "instance-manager check-dba-password" only checks: with the file set, a
+// database whose DBA password is the file's value passes, and one with
+// another password or none fails, without any statement fed. The entrypoint
+// runs it before it starts an HA member or a restored database, so a Secret
+// whose value was changed stops the start. Unset, it runs nothing.
+func TestCheckDBAPasswordCommand(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(instancemanager.DBAPasswordFileEnv, "")
+		cli := &dbaCLI{}
+		if err := checkDBAPassword(context.Background(), logger, cli); err != nil {
+			t.Fatalf("checkDBAPassword: %v", err)
+		}
+		if len(cli.calls) != 0 {
+			t.Errorf("commands ran without a password file: %q", cli.calls)
+		}
+	})
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		current string
+		ok      bool
+	}{
+		{name: "the requested password", set: true, current: subcommandPassword, ok: true},
+		{name: "another password", set: true, current: "Another-Password-1"},
+		{name: "no password", set: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "password")
+			if err := os.WriteFile(file, []byte(subcommandPassword+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+			t.Setenv("CUBRID_DB", "appdb")
+			cli := &dbaCLI{set: tc.set, current: tc.current}
+			err := checkDBAPassword(context.Background(), logger, cli)
+			if (err == nil) != tc.ok {
+				t.Fatalf("checkDBAPassword = %v, want ok=%v", err, tc.ok)
+			}
+			// A database whose password is not the file's value, another one or
+			// none, is the mismatch the entrypoint reports as such (exit 3).
+			if !tc.ok && (!errors.Is(err, instancemanager.ErrPasswordNotRequested) || checkExitCode(err) != 3) {
+				t.Errorf("checkDBAPassword = %v (exit %d), want the mismatch, exit 3", err, checkExitCode(err))
+			}
+			if err != nil && strings.Contains(err.Error(), subcommandPassword) {
+				t.Errorf("the error carries the password: %v", err)
+			}
+			if len(cli.stdins) != 0 {
+				t.Errorf("a statement was fed: %q", cli.stdins)
+			}
+			for _, call := range cli.calls {
+				if strings.Contains(call, subcommandPassword) {
+					t.Errorf("an argv carries the password: %q", call)
+				}
+			}
+		})
+	}
+}
+
+// A check that cannot tell (the file is unusable, csql did not answer) is not
+// a mismatch: it exits 1, so the entrypoint says that the password could not
+// be checked rather than that it is another one.
+func TestCheckExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{err: fmt.Errorf("wrapped: %w", instancemanager.ErrPasswordNotRequested), want: 3},
+		{err: errors.New("csql did not prompt for the DBA password on a terminal"), want: 1},
+	} {
+		if got := checkExitCode(tc.err); got != tc.want {
+			t.Errorf("checkExitCode(%v) = %d, want %d", tc.err, got, tc.want)
+		}
+	}
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+	err := checkDBAPassword(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), &dbaCLI{})
+	if err == nil || checkExitCode(err) != 1 {
+		t.Errorf("an empty password file: checkDBAPassword = %v (exit %d), want exit 1", err, checkExitCode(err))
+	}
+}
+
+// A DBA password shorter than 8 bytes is not redacted: replacing every
+// occurrence of a short value, such as one that is also "dba" or the
+// database's name, would garble ordinary lines and show the value by where
+// the placeholder lands. Redaction is a backstop; no path logs the value.
+func TestNewLogger_DoesNotRedactAShortDBAPassword(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, []byte("appdb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+	var buf strings.Builder
+	logger, err := newLogger(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("Started appdb")
+	if !strings.Contains(buf.String(), "Started appdb") {
+		t.Errorf("a short DBA password was redacted from an ordinary line:\n%s", buf.String())
+	}
+}
+
+// The DBA password, read from the file CUBRID_DBA_PASSWORD_FILE names, is one
+// of the values the log never writes, as the token and the object-storage keys
+// are: a line that would carry it, by any path, carries a placeholder (#801).
+func TestNewLogger_RedactsTheDBAPassword(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, []byte(subcommandPassword+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+	var buf strings.Builder
+	logger, err := newLogger(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("A line that holds "+subcommandPassword, "value", subcommandPassword)
+	if strings.Contains(buf.String(), subcommandPassword) {
+		t.Errorf("the log carries the DBA password:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "A line that holds") {
+		t.Errorf("the line was not written:\n%s", buf.String())
+	}
 }
 
 // "instance-manager shutdown" records the stop before it asks the manager.

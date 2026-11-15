@@ -35,12 +35,15 @@ import (
 const DBAPasswordFileEnv = "CUBRID_DBA_PASSWORD_FILE"
 
 // maxDBAPasswordBytes bounds the value read from the password file. It is
-// this manager's own bound, not CUBRID's (which was not measured): it keeps a
-// misplaced large file from being read whole, and keeps the value far below
-// the 4095 bytes a Linux terminal takes on one line, where a later check
-// types it at csql's password prompt (docs/poc/RESULTS.md, POC-61, Q1). A
-// longer value is refused, never cut.
-const maxDBAPasswordBytes = 256
+// CUBRID's own bound: CUBRID 11.4.7 refuses an ALTER USER whose password has
+// more than 31 bytes, counted in bytes, so a 31-byte UTF-8 value of 11
+// characters passes and one of 33 bytes does not (docs/poc/RESULTS.md,
+// POC-64). Refusing a longer value here keeps a database from being created
+// that its password step cannot complete. It also keeps a misplaced large file
+// from being read whole, and the value far below the 4095 bytes a Linux
+// terminal takes on one line, where a later check types it at csql's password
+// prompt (POC-61, Q1). A longer value is refused, never cut.
+const maxDBAPasswordBytes = 31
 
 // HasDBAPasswordControlByte reports bytes that csql's password terminal can
 // interpret as editing, flow control or signals instead of literal password
@@ -140,9 +143,11 @@ const csqlPasswordPrompt = "Enter Password"
 // errNoTerminal is returned when the CLI cannot run a command on a terminal.
 var errNoTerminal = errors.New("the command runner cannot run a command on a terminal")
 
-// errPasswordNotRequested says that a database has a DBA password other than
-// the requested one. It names neither value.
-var errPasswordNotRequested = errors.New("the database's DBA password is not the requested one: " +
+// ErrPasswordNotRequested says that a database's DBA password is not the
+// requested one: another password, or, for a database that is only checked,
+// none. It names neither value. "instance-manager check-dba-password" exits 3
+// on it, so the entrypoint can tell it from a check that could not tell.
+var ErrPasswordNotRequested = errors.New("the database's DBA password is not the requested one: " +
 	"a database keeps the password it was created or backed up with (a restored database keeps its " +
 	"source's), and the Instance Manager does not change a password it does not know")
 
@@ -213,18 +218,21 @@ func confirmRequestedPassword(ctx context.Context, cli CLI, logger *slog.Logger,
 		return fmt.Errorf("check that the DBA password is the requested one: %w", err)
 	}
 	if !accepted {
-		return errPasswordNotRequested
+		return ErrPasswordNotRequested
 	}
 	logger.Info("DBA password is already the requested one; it was not changed", "event", eventDBAPasswordAlreadySet)
 	return nil
 }
 
-// confirmDBAPassword checks that the stopped database's DBA password is
-// password, and never sets one. It is for a slave seeded from its master's
-// backup: the slave carries the master's password, and a password set on the
-// master reaches the slaves by replication (POC-61, Q3), so a slave is never
-// given one of its own. No password, or another one, is an error.
-func confirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, database, password string) error {
+// ConfirmDBAPassword checks that the stopped database's DBA password is
+// password, and never sets one. It is for a database that got its password
+// elsewhere: a slave seeded from its master's backup carries the master's
+// password, and a password set on the master reaches the slaves by
+// replication (POC-61, Q3), so a slave is never given one of its own; an HA
+// member got it from the HA bootstrap or its seed, and a restored database
+// from its restore. No password, or another one, is an error, and no error
+// carries the value.
+func ConfirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, database, password string) error {
 	if !databaseNamePattern.MatchString(database) {
 		return fmt.Errorf("database name %q is not a plain identifier", database)
 	}
@@ -233,8 +241,10 @@ func confirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, datab
 		return fmt.Errorf("check the DBA password: %w", err)
 	}
 	if !refused {
-		return errors.New("the database has no DBA password, but one is requested; " +
-			"a seeded slave is not given one of its own: its master's password reaches it by replication")
+		return fmt.Errorf("the database has no DBA password, but one is requested; "+
+			"this database is only checked, never given one: a seeded slave gets its master's by replication, "+
+			"and an HA member or a restored database got its password when it was created or restored: %w",
+			ErrPasswordNotRequested)
 	}
 	return confirmRequestedPassword(ctx, cli, logger, database, password)
 }
@@ -252,8 +262,9 @@ func confirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, datab
 // terminal, is accepted; another password is an error, since CUBRID does not
 // change a password without the old one. Otherwise the
 // statement runs, and it counts as applied only when csql printed no ERROR
-// line, since csql exits 0 when a statement fed on stdin fails, and a dba
-// login with the empty password is then refused (POC-61, Q1).
+// line, since csql exits 0 when a statement fed on stdin fails, a dba login
+// with the empty password is then refused (POC-61, Q1), and a dba login with
+// password, typed at csql's prompt on a terminal, is accepted.
 func ApplyDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, database, password string) error {
 	// Reject before issuing even the first csql command: direct callers must
 	// not bypass ReadDBAPassword's terminal-safety rule. The value is never
@@ -275,6 +286,11 @@ func ApplyDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, databas
 	if refused {
 		return confirmRequestedPassword(ctx, cli, logger, database, password)
 	}
+	// Doubling single quotes is the only escaping: a backslash stays a plain
+	// character only while no_backslash_escapes=yes, which the entrypoint pins
+	// in cubrid.conf at every start (docs/poc/RESULTS.md, POC-64). With it set
+	// to no, a backslash before a quote leaves the literal open; the login with
+	// the value just set, below, then fails the step.
 	statement := "ALTER USER dba PASSWORD '" + strings.ReplaceAll(password, "'", "''") + "';\n"
 	out, err := stdinCLI.RunWithStdin(ctx, statement, "csql", "-u", "dba", "-S", database)
 	if err != nil {
@@ -291,6 +307,21 @@ func ApplyDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, databas
 	if !refused {
 		return errors.New("csql set the DBA password without an error, " +
 			"but a dba login with the empty password is still accepted")
+	}
+	// A refused empty login shows that some password is set, not that it is
+	// the requested one: the value must also log in, as every later start
+	// and check types it.
+	terminal, ok := cli.(TerminalCLI)
+	if !ok {
+		return fmt.Errorf("check the DBA password after setting it: %w", errNoTerminal)
+	}
+	accepted, err := dbaPasswordAccepted(ctx, terminal, database, password)
+	if err != nil {
+		return fmt.Errorf("check the DBA password after setting it: %w", err)
+	}
+	if !accepted {
+		return errors.New("csql set a DBA password without an error, but a dba login with the value just set " +
+			"was refused for its password: the database now has a password other than the requested one")
 	}
 	logger.Info("Set the DBA password", "event", eventDBAPasswordApplied)
 	return nil

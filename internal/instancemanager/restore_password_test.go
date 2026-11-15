@@ -53,7 +53,7 @@ type restorePasswordCLI struct {
 func (c *restorePasswordCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
-	if name == "csql" {
+	if name == csqlCommand {
 		defer c.mu.Unlock()
 		if c.current != "" {
 			return outRefused, exitStatus1(c.t)
@@ -73,7 +73,7 @@ func (c *restorePasswordCLI) RunWithStdin(_ context.Context, stdin, name string,
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
 	c.stdins = append(c.stdins, stdin)
 	c.current = alterPassword(stdin)
-	return "Execute OK.\n", nil
+	return outAlterOK, nil
 }
 
 func (c *restorePasswordCLI) RunOnTerminal(_ context.Context, _, input, name string, args ...string) (string, bool, error) {

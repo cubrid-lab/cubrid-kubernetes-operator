@@ -31,7 +31,11 @@
 #      container's start (ADR-0003).
 #   7. With CUBRID_DBA_PASSWORD_FILE set, a new standalone database gets the
 #      requested DBA password from "instance-manager apply-dba-password"
-#      before each start of its server, and is not started without it.
+#      before each start of its server, and is not started without it. A
+#      standalone database restored from a backup is only checked, by
+#      "instance-manager check-dba-password", and is not started unless a
+#      login with the requested password is accepted. An HA member's password
+#      is not checked here.
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.
@@ -219,6 +223,35 @@ install_ha_conf() {
   log "HA configuration installed from ${CUBRID_HA_CONF}"
 }
 
+# A standalone database restored from a backup, which the restore gave its
+# password or checked it, is never given one here. With a password requested,
+# its server is started only once a login with that password is accepted
+# ("instance-manager check-dba-password", which checks and never sets): a
+# Secret whose value was changed after the restore does not let it start
+# serving with the old one. A check that could not tell stops the start too
+# (fail closed). Either way the container ends, and the Pod is restarted. The
+# manager exits 3 when the password is another one and 1 when it could not
+# check. An HA member is not checked here: a standalone-mode open of its
+# database before heartbeat starts is not shown to leave its HA log, copy and
+# apply state unchanged, and a changed value on an HA cluster is reported by
+# the Operator's rotation check. Returns 1 when a termination arrived during
+# the check.
+check_dba_password() {
+  [ -n "${CUBRID_DBA_PASSWORD_FILE:-}" ] || return 0
+  log "checking that the DBA password of '${CUBRID_DB}' is the requested one before it starts"
+  local rc=0
+  "${IM_BIN}" check-dba-password || rc=$?
+  if [ "${rc}" = "3" ]; then
+    die "the DBA password of '${CUBRID_DB}' is not the requested one (CUBRID_DBA_PASSWORD_FILE): the server is not started. Put the database's current DBA password back into the Secret"
+  elif [ "${rc}" != "0" ]; then
+    die "the DBA password of '${CUBRID_DB}' could not be checked (exit ${rc}, see dba_password_failed): the server is not started"
+  fi
+  if [ "${terminating}" = "1" ]; then
+    log "termination requested while the DBA password was checked: nothing is started"
+    return 1
+  fi
+}
+
 start_cubrid() {
   case "${CUBRID_COMPONENTS}" in
     SERVER)
@@ -245,8 +278,9 @@ start_cubrid() {
       # A server asked for a password is never started without one: a failure
       # ends the container, and the Pod is restarted. The manager also fails
       # when the database has a password other than the requested one. A
-      # restored database is not touched here: the restore gives it the
-      # requested password, or checks it, before it is first started.
+      # restored database is only checked (check_dba_password): the restore
+      # gives it the requested password, or checks it, before it is first
+      # started.
       if [ "${CUBRID_BOOTSTRAP}" = "new" ] && [ -n "${CUBRID_DBA_PASSWORD_FILE:-}" ]; then
         log "setting the requested DBA password of '${CUBRID_DB}' before the server starts"
         "${IM_BIN}" apply-dba-password \
@@ -256,13 +290,17 @@ start_cubrid() {
           return 0
         fi
       fi
+      if [ "${CUBRID_BOOTSTRAP}" = "recovery" ]; then
+        check_dba_password || return 0
+      fi
       stop_recorded && return 0
       started=1
       cubrid server start "${CUBRID_DB}" ;;
     MASTER|SLAVE|HA)
       # An HA member never creates its database here: the first one is created
       # once, on one member, through the Instance Manager, and the others are
-      # seeded from it (ADR-0010). This only restarts an initialized member.
+      # seeded from it (ADR-0010). This only restarts an initialized member;
+      # its DBA password is not checked here (check_dba_password).
       stop_recorded && return 0
       started=1
       cubrid heartbeat start ;;
@@ -311,9 +349,14 @@ prune_event_logs() {
   fi
 }
 
+# The DBA password is set with an ALTER USER whose string literal doubles
+# single quotes and nothing else, so a backslash in it must stay a plain
+# character: no_backslash_escapes=yes, CUBRID's default, is pinned here so that
+# an image or a person's cubrid.conf cannot change how the value is stored.
 set_cubrid_conf error_log "${cubrid_log_dir}/server/${CUBRID_DB}.err" \
   && set_cubrid_conf error_log_size "${error_log_size}" \
-  || die "could not set the log file settings in CUBRID's cubrid.conf: nothing is started"
+  && set_cubrid_conf no_backslash_escapes yes \
+  || die "could not set the log file and string literal settings in CUBRID's cubrid.conf: nothing is started"
 prune_event_logs
 
 # The member lock comes before anything that creates, starts or recovers a

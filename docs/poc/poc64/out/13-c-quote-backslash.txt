@@ -1,0 +1,37 @@
+== c-quote-backslash db=db_c no_backslash_escapes=yes expect=set start 2026-11-15T06:13:37Z
+
+createdb rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c -c SELECT 1","durationMs":4092,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c","durationMs":3878,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c -c SELECT 1","durationMs":3543,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c -c SELECT 1","durationMs":8142,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c -c SELECT 1","durationMs":4871,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"command","command":"csql -u dba -S db_c -c SELECT 1","durationMs":6999,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-values","database":"db_c","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+empty-login-after-apply rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+
+backupdb rc=0
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 15 06:16 db_c_bk0v000
+backup-search rc=1
+== c-quote-backslash PASS end 2026-11-15T06:16:47Z

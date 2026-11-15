@@ -40,6 +40,10 @@ const (
 	outRefused     = "ERROR: Incorrect or missing password.\n"
 	// outAccepted is what csql prints for a login whose SELECT 1 ran.
 	outAccepted = "1 row selected.\n"
+	// outAlterOK is what csql prints for an ALTER USER fed on stdin that ran.
+	outAlterOK = "Execute OK.\n"
+	// csqlCommand is the name of csql in the stand-ins.
+	csqlCommand = "csql"
 	// msgNoPrompt is part of the error of a login on a terminal that did
 	// not prompt.
 	msgNoPrompt = "did not prompt"
@@ -61,6 +65,9 @@ type passwordCLI struct {
 	alterOut string
 	// alterIgnored makes the ALTER print success without setting anything.
 	alterIgnored bool
+	// alterStores, when set, is the password the engine keeps for the value
+	// an ALTER sets: a value it stores in another form than it was given.
+	alterStores func(string) string
 	// loginOut and loginErr, when loginOut is set, are what every empty
 	// login prints, whatever the password.
 	loginOut string
@@ -130,6 +137,9 @@ func (c *passwordCLI) RunWithStdin(_ context.Context, stdin, name string, args .
 	}
 	if !c.alterIgnored && !strings.Contains(out, "ERROR") {
 		c.set, c.current = true, alterPassword(stdin)
+		if c.alterStores != nil {
+			c.current = c.alterStores(c.current)
+		}
 	}
 	return out, nil
 }
@@ -156,7 +166,7 @@ func TestApplyDBAPassword_FeedsTheStatementOnStdinOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyDBAPassword: %v", err)
 	}
-	want := []string{callEmptyLogin, callSetPass, callEmptyLogin}
+	want := []string{callEmptyLogin, callSetPass, callEmptyLogin, callTerminalLogin}
 	if got := cli.recorded(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("commands = %q\nwant       %q", got, want)
 	}
@@ -225,6 +235,48 @@ func TestApplyDBAPassword_AnErrorLineIsAFailure(t *testing.T) {
 	if strings.Contains(err.Error(), testPassword) || strings.Contains(logs, testPassword) {
 		t.Errorf("csql's output reached the error or the log:\nerr=%v\n%s", err, logs)
 	}
+}
+
+// Once the statement ran and the empty password is refused, a login with the
+// value just set, typed at csql's prompt on a terminal, must be accepted: an
+// empty login that is refused shows that some password is set, not that it is
+// the requested one. An engine that kept the value in another form (a
+// backslash read as an escape, a byte it changed) leaves a database no later
+// start could log in to, so the step fails, says why without the value, and
+// does not report the password as set.
+func TestApplyDBAPassword_ConfirmsALoginWithTheValueJustSet(t *testing.T) {
+	t.Run("accepted", func(t *testing.T) {
+		cli := &passwordCLI{t: t}
+		if _, err := applyForTest(t, cli, testPassword); err != nil {
+			t.Fatalf("ApplyDBAPassword: %v", err)
+		}
+		if got := cli.recorded(); len(got) != 4 || got[3] != callTerminalLogin {
+			t.Fatalf("commands = %q, want a login on a terminal after the empty login is refused", got)
+		}
+		if len(cli.typed) != 1 || cli.typed[0] != testPassword {
+			t.Errorf("typed = %q, want the value just set once", cli.typed)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		cli := &passwordCLI{t: t, alterStores: func(v string) string { return strings.ReplaceAll(v, "-", "") }}
+		logs, err := applyForTest(t, cli, testPassword)
+		if err == nil || !strings.Contains(err.Error(), "value just set") {
+			t.Fatalf("err = %v, want a failure saying a login with the value just set was refused", err)
+		}
+		if strings.Contains(err.Error(), testPassword) || strings.Contains(logs, testPassword) {
+			t.Errorf("the value reached the error or the log:\nerr=%v\n%s", err, logs)
+		}
+		if lines := withEvent(logLines(t, bytes.NewBufferString(logs)), eventDBAPasswordApplied); len(lines) != 0 {
+			t.Errorf("the password was reported as set: %v", lines)
+		}
+	})
+	t.Run("unanswered", func(t *testing.T) {
+		cli := &passwordCLI{t: t, terminal: &terminalAnswer{out: "", prompted: false, err: exitStatus1(t)}}
+		_, err := applyForTest(t, cli, testPassword)
+		if err == nil || !strings.Contains(err.Error(), msgNoPrompt) {
+			t.Fatalf("err = %v, want a failure saying csql did not prompt", err)
+		}
+	})
 }
 
 // csql reported nothing wrong, but an empty-password login is still
@@ -392,9 +444,12 @@ func TestConfirmDBAPassword(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cli := &passwordCLI{t: t, set: tc.set, current: tc.current}
 			var buf bytes.Buffer
-			err := confirmDBAPassword(context.Background(), cli, testLogger(&buf, slog.LevelDebug), dbName, testPassword)
+			err := ConfirmDBAPassword(context.Background(), cli, testLogger(&buf, slog.LevelDebug), dbName, testPassword)
 			if (err == nil) != tc.ok {
-				t.Fatalf("confirmDBAPassword = %v, want ok=%v", err, tc.ok)
+				t.Fatalf("ConfirmDBAPassword = %v, want ok=%v", err, tc.ok)
+			}
+			if !tc.ok && !errors.Is(err, ErrPasswordNotRequested) {
+				t.Errorf("ConfirmDBAPassword = %v, want ErrPasswordNotRequested", err)
 			}
 			if len(cli.stdins) != 0 {
 				t.Errorf("a statement was fed on a seeded slave: %q", cli.stdins)
@@ -468,6 +523,13 @@ func TestReadDBAPassword(t *testing.T) {
 		{name: "terminal flow control", content: testPassword + "\x13", wantErr: wantTerminalControlByte},
 		{name: "terminal erase", content: testPassword + "\x7f", wantErr: wantTerminalControlByte},
 		{name: "over the bound", content: long + "x" + testPassword, wantErr: "longer than"},
+		// CUBRID 11.4.7 refuses an ALTER USER with a password of more than 31
+		// bytes (docs/poc/RESULTS.md, POC-64), counted in bytes, not characters.
+		{name: "31 bytes, CUBRID's longest", content: strings.Repeat("y", 31) + "\n", want: strings.Repeat("y", 31)},
+		{name: "32 bytes", content: strings.Repeat("y", 32), wantErr: "longer than 31 bytes"},
+		{name: "31 bytes of UTF-8", content: strings.Repeat("\ud55c", 10) + "z", want: strings.Repeat("\ud55c", 10) + "z"},
+		{name: "11 characters of 33 bytes", content: strings.Repeat("\ud55c", 11), wantErr: "longer than 31 bytes"},
+		{name: "quotes and backslashes", content: `Qu'o\te\\d''x\'y`, want: `Qu'o\te\\d''x\'y`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -580,8 +642,8 @@ func TestApplyDBAPassword_LeaksTheValueNowhere(t *testing.T) {
 			t.Errorf("the password is in the %s:\n%s", where.name, where.text)
 		}
 	}
-	if strings.Count(read("argv"), "\n") != 5 {
-		t.Errorf("csql ran %d times, want 5 (check, set, check, check, login on a terminal):\n%s",
+	if strings.Count(read("argv"), "\n") != 6 {
+		t.Errorf("csql ran %d times, want 6 (check, set, check, login on a terminal, check, login on a terminal):\n%s",
 			strings.Count(read("argv"), "\n"), read("argv"))
 	}
 	if err != nil {

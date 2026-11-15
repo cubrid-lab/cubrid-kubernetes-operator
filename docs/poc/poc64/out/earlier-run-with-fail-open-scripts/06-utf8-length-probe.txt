@@ -1,0 +1,4 @@
+createdb ok
+utf8-11chars-33bytes bytes=33 csql_rc=0 error=['ERROR: Password string cannot have more than 31 bytes.']
+utf8-10chars-30bytes bytes=30 csql_rc=0 error=[]
+  login with it and reset rc=0

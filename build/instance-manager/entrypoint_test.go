@@ -51,6 +51,8 @@ const (
 	callCreatedb    = "cubrid createdb"
 	// callApplyPassword is followed by the password file it was given.
 	callApplyPassword = "manager apply-dba-password "
+	// callCheckPassword is followed by the password file it was given.
+	callCheckPassword = "manager check-dba-password "
 
 	// cubridStub records its arguments. `createdb` behaves as the real one
 	// does on the pinned image (docs/poc/RESULTS.md, POC-25): it writes its
@@ -105,6 +107,14 @@ fi
 	applyPasswordStub = `if [ "${1:-}" = "apply-dba-password" ]; then
   echo "manager apply-dba-password ${CUBRID_DBA_PASSWORD_FILE:-}" >> "${CALLS}"
   exit "${APPLY_EXIT:-0}"
+fi
+` + checkPasswordStub
+	// checkPasswordStub stands in for "instance-manager check-dba-password":
+	// it records the call and the password file it was given, and exits with
+	// ${CHECK_EXIT} when set.
+	checkPasswordStub = `if [ "${1:-}" = "check-dba-password" ]; then
+  echo "manager check-dba-password ${CUBRID_DBA_PASSWORD_FILE:-}" >> "${CALLS}"
+  exit "${CHECK_EXIT:-0}"
 fi
 `
 	// managerStub exits at once, with ${IM_EXIT} when set.
@@ -391,31 +401,75 @@ func TestEntrypoint_AFailedDBAPasswordStepStartsNothing(t *testing.T) {
 	}
 }
 
-// The step runs only for a new standalone database. An HA member's password is
-// set by the HA bootstrap, on the bootstrap member only, and a restored
-// database keeps its source's password; neither runs it here.
-func TestEntrypoint_DBAPasswordStepIsOnlyForANewStandaloneDatabase(t *testing.T) {
-	t.Run("HA", func(t *testing.T) {
-		f := newFixture(t, managerStub)
-		f.requestDBAPassword()
-		f.env["CUBRID_COMPONENTS"] = componentsHA
-		f.configureHA()
-		f.registerDatabase()
-		if code, out := f.run(); code != 0 {
-			t.Fatalf("exit %d:\n%s", code, out)
-		}
-		wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
-	})
+// The password is set only on a new standalone database. An HA member's
+// password is set by the HA bootstrap, on the bootstrap member only, and a
+// restored database keeps its source's password; neither is ever given one
+// here. A standalone database restored from a backup is checked before its
+// server starts (check-dba-password). An HA member is not checked when it
+// starts again: a standalone-mode open of its database before heartbeat is
+// not shown to leave the HA log, copy and apply state unchanged, and a
+// changed value is reported by the Operator's rotation check instead.
+func TestEntrypoint_DBAPasswordIsSetOnlyForANewStandaloneDatabase(t *testing.T) {
+	for _, components := range haComponents {
+		t.Run(components, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.requestDBAPassword()
+			f.env["CUBRID_COMPONENTS"] = components
+			f.env["CHECK_EXIT"] = "3"
+			f.configureHA()
+			f.registerDatabase()
+			if code, out := f.run(); code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
+		})
+	}
 	t.Run("recovery", func(t *testing.T) {
 		f := newFixture(t, managerStub)
-		f.requestDBAPassword()
+		path := f.requestDBAPassword()
 		f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
 		f.registerDatabase()
 		if code, out := f.run(); code != 0 {
 			t.Fatalf("exit %d:\n%s", code, out)
 		}
-		wantCalls(t, f.recorded(), "cubrid server start "+dbName, callManagerStart)
+		wantCalls(t, f.recorded(), callCheckPassword+path, "cubrid server start "+dbName, callManagerStart)
 	})
+}
+
+// A standalone database restored from a backup is not started when the check
+// fails, whatever the cause: the server is not started and the container
+// ends, so the Pod is restarted (fail closed). The log tells a database whose
+// password is not the Secret's (exit 3) from a check that could not tell
+// (any other exit), which a person handles differently.
+func TestEntrypoint_AFailedDBAPasswordCheckStartsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, exit    string
+		want, notWant string
+	}{
+		{name: "the password is another one", exit: "3",
+			want: "is not the requested one", notWant: "could not be checked"},
+		{name: "the check could not tell", exit: "1",
+			want: "could not be checked (exit 1", notWant: "is not the requested one"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			path := f.requestDBAPassword()
+			f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
+			f.env["CHECK_EXIT"] = tc.exit
+			f.registerDatabase()
+			code, out := f.run()
+			if code == 0 {
+				t.Fatalf("exit 0 after a failed password check:\n%s", out)
+			}
+			wantCalls(t, f.recorded(), callCheckPassword+path)
+			if !strings.Contains(out, tc.want) || strings.Contains(out, tc.notWant) {
+				t.Errorf("log does not say %q (or says %q):\n%s", tc.want, tc.notWant, out)
+			}
+			if tc.exit == "3" && !strings.Contains(out, "back into the Secret") {
+				t.Errorf("the log does not say to put the database's password back into the Secret:\n%s", out)
+			}
+		})
+	}
 }
 
 // Restore startup: no empty database may be created first (ADR-0008).
@@ -1585,6 +1639,50 @@ func TestEntrypoint_BoundsCUBRIDsLogFiles(t *testing.T) {
 				if n != 1 {
 					t.Errorf("cubrid.conf sets %s %d times, want once:\n%s", key, n, conf)
 				}
+			}
+		})
+	}
+}
+
+// A backslash in a string literal is a plain character only while
+// no_backslash_escapes is yes (CUBRID's default). The DBA password is set with
+// an ALTER USER whose literal escapes only single quotes, so the script pins
+// it at every start, once, over whatever the image or an earlier start left:
+// a value with a backslash is then stored as it was given (#801).
+func TestEntrypoint_PinsNoBackslashEscapes(t *testing.T) {
+	for _, components := range []string{componentsServer, componentsHA} {
+		t.Run(components, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.env["CUBRID_COMPONENTS"] = components
+			if components == componentsHA {
+				f.configureHA()
+				f.registerDatabase()
+			}
+			confDir := filepath.Join(f.root, "cubrid", "conf")
+			if err := os.MkdirAll(confDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			image := "[common]\nno_backslash_escapes=no\n  no_backslash_escapes = no\n"
+			if err := os.WriteFile(filepath.Join(confDir, "cubrid.conf"), []byte(image), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if code, out := f.run(); code != 0 {
+					t.Fatalf("exit %d:\n%s", code, out)
+				}
+			}
+			conf := f.readCubridConf()
+			n := 0
+			for line := range strings.SplitSeq(conf, "\n") {
+				if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "no_backslash_escapes" {
+					n++
+					if strings.TrimSpace(v) != "yes" {
+						t.Errorf("cubrid.conf sets no_backslash_escapes=%s, want yes:\n%s", v, conf)
+					}
+				}
+			}
+			if n != 1 {
+				t.Errorf("cubrid.conf sets no_backslash_escapes %d times, want once:\n%s", n, conf)
 			}
 		})
 	}

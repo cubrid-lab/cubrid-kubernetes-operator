@@ -395,8 +395,11 @@ type CubridClusterSpec struct {
 	// The DB container alone mounts the key read-only as a file, and the
 	// operator writes the value into no object, status, Event or log. The
 	// value must not be empty, may end with one line feed, which is not part
-	// of the password, and must otherwise hold no line feed, carriage return
-	// or NUL byte, and at most 256 bytes. A new database gets the password
+	// of the password, and must otherwise hold at most 31 bytes (CUBRID's own
+	// bound, counted in bytes, not characters) and no ASCII
+	// control byte (0x00 to 0x1F, among them NUL, tab, line feed and carriage
+	// return) and no DEL (0x7F). Other bytes, UTF-8 text, single quotes and
+	// backslashes among them, are kept as given. A new database gets the password
 	// before its server first starts; a database restored from a backup keeps
 	// its source's password, so the key must hold that password. The
 	// StatefulSet is not created until the key resolves, and the condition
@@ -407,7 +410,11 @@ type CubridClusterSpec struct {
 	// are seeded from it, so they carry the same password and only check it.
 	//
 	// The reference is fixed when the cluster is created. Changing the value
-	// in the Secret later does not change the database's password.
+	// in the Secret later does not change the database's password: the
+	// condition DBAPasswordSecretResolved reports it, and a standalone DB
+	// container that starts again does not start its server until the key
+	// holds the database's password again. An HA member is not checked when it
+	// starts again.
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name.size() > 0",message="dbaPasswordSecretRef.name is required"
 	// +kubebuilder:validation:XValidation:rule="self.key.size() > 0",message="dbaPasswordSecretRef.key is required"

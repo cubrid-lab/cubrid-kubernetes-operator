@@ -1,0 +1,35 @@
+== c-quote-backslash db=db_cno no_backslash_escapes=no expect=unpinned start 2026-11-15T06:22:27Z
+
+createdb rc=0
+failing-alter=nouser csql_rc=0 error_lines=0 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=0 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"command","command":"csql -u dba -S db_cno -c SELECT 1","durationMs":3613,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"command","command":"csql -u dba -S db_cno","durationMs":3473,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"command","command":"csql -u dba -S db_cno -c SELECT 1","durationMs":4077,"exitCode":0}
+{"level":"ERROR","msg":"Could not set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"dba_password_failed","err":"csql set the DBA password without an error, but a dba login with the empty password is still accepted"}
+apply-dba-password rc=1
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"command","command":"csql -u dba -S db_cno -c SELECT 1","durationMs":4292,"exitCode":0}
+{"level":"ERROR","msg":"Could not confirm the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_cno","event":"dba_password_failed","err":"the database has no DBA password, but one is requested; this database is only checked, never given one: a seeded slave gets its master's by replication, and an HA member or a restored database got its password when it was created or restored: the database's DBA password is not the requested one: a database keeps the password it was created or backed up with (a restored database keeps its source's), and the Instance Manager does not change a password it does not know"}
+check-dba-password rc=3
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+empty-login-after-apply rc=0
+
+server-start rc=0
+client-mode-check answer={"state":"Unknown","reason":"csql did not prompt for the DBA password on a terminal (exit code 0)"}
+
+manager-stop rc=0
+
+server-stop rc=0
+
+backupdb rc=0
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 15 06:25 db_cno_bk0v000
+backup-search rc=1
+== c-quote-backslash PASS end 2026-11-15T06:25:11Z

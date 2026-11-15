@@ -1,0 +1,31 @@
+== d-utf8-len33 db=db_d33 no_backslash_escapes=yes expect=too-long start 2026-11-15T06:20:01Z
+
+createdb rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+{"level":"ERROR","msg":"Could not set the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_d33","event":"dba_password_failed","err":"the DBA password in /etc/cubrid-dba-password/d-utf8-len33 is longer than 31 bytes"}
+apply-dba-password rc=1
+{"level":"ERROR","msg":"Could not confirm the DBA password","component":"instance-manager","member":"poc-dbapw-values","database":"db_d33","event":"dba_password_failed","err":"the DBA password in /etc/cubrid-dba-password/d-utf8-len33 is longer than 31 bytes"}
+check-dba-password rc=1
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+empty-login-after-apply rc=0
+
+server-start rc=0
+client-mode-check answer={"state":"Unknown","reason":"the DBA password in /etc/cubrid-dba-password/d-utf8-len33 is longer than 31 bytes"}
+
+manager-stop rc=0
+
+server-stop rc=0
+
+backupdb rc=0
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 15 06:22 db_d33_bk0v000
+backup-search rc=1
+== d-utf8-len33 PASS end 2026-11-15T06:22:27Z
