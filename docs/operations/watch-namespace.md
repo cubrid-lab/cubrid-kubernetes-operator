@@ -44,7 +44,13 @@ not in that cache either: the Operator reads it from the API server, with the
 `get` it already has on Secrets, and does not watch it. A cluster waiting for
 that Secret checks it again about every 30 seconds ([DBA password](dba-password.md)).
 
-**Cache scope is not API authorization.** Client writes go directly to the API
+**Cache scope is not API authorization.** Neither the label filter nor
+`--watch-namespace` removes any permission: the manager's ClusterRole grants
+what [the generated role](../../config/rbac/role.yaml) lists, in every
+namespace, to whoever holds the manager's ServiceAccount token, however little
+the manager's cache holds. To limit the authorization itself, replace the
+ClusterRoleBinding with namespace-bound RoleBindings, as shown below; the
+cluster-scoped `nodes` read is then unavailable. Client writes go directly to the API
 server; explicitly injected uncached readers/clients and any cluster-scoped
 resources are not restricted by a namespaced cache. Supply a namespace-bound
 `Role` and `RoleBinding` externally instead of applying the default manager
@@ -84,3 +90,51 @@ prerequisite, and the default deployment/RBAC manifests are unchanged.
 
 Do not run overlapping controllers on the same resources: a scoped candidate
 and a cluster-wide Operator must not both watch one namespace.
+
+## What each permission of the manager role is for
+
+The role in `config/rbac/role.yaml` is generated from the `+kubebuilder:rbac`
+markers next to the calls below. `TestGeneratedRoleGrantsOnlyWhatTheManagerCalls`
+in `cmd/cachescope_test.go` fails when a verb is granted that the test does not
+list with its reason, and `TestManagedCacheScope` runs the manager under an
+identity that holds only this role. Every rule was checked against the calls
+of `cmd/` and `internal/controller/` (a call made with `r.Get`/`r.List` on the
+manager's client also needs `list` and `watch`, because the cache starts an
+informer for the kind). No rule has a verb without a caller, so none was
+removed.
+
+| Resource (verbs granted) | Needed by | Decision |
+|---|---|---|
+| `configmaps` (get, list, watch, create, update) | `reconcileChild` from `reconcileBrokerConfig` (broker.go) and `reconcileHAConfig` (haconfig.go); `Owns` watch in `SetupWithManager` | Keep. No `delete`: a ConfigMap is removed by owner-reference garbage collection |
+| `secrets` (get, list, watch, create, update) | `reconcileIMTokenSecret` (cubridcluster_controller.go) creates and updates the token Secret; `reportDeferredRotation` updates it; `dbaPasswordProblem` (dbapassword.go) reads the user's DBA password Secret from the API server; `Owns` watch | Keep. `get` on all Secrets is what the uncached DBA password read needs, so it cannot be narrowed to the managed label by RBAC. No `delete` |
+| `services` (get, list, watch, create, update, delete) | `reconcileChild` from `reconcileMemberServices` (memberservice.go) and `reconcileBrokerService` (broker.go); `reconcileMemberServices` deletes the Services of members that no longer exist | Keep |
+| `pods` (get, list, watch, delete) | the Pod watch in `SetupWithManager` (cubridcluster_controller.go); the target Pod read of `CubridBackupReconciler` (cubridbackup_controller.go); `reconcileRollingUpdate` (update.go) deletes a Pod to replace a member | Keep. No create or update: the StatefulSet makes Pods |
+| `persistentvolumeclaims` (get, list, watch) | `memberStateExists` (placement.go) lists PVCs past the cache; the cache holds the data PVCs for member reads | Keep. Read-only; the manager never deletes a PVC |
+| `nodes` (get) | `outOfServiceFences` (quarantine_fence.go) reads the Node of a silent member for the out-of-service taint | Keep. Only `get` |
+| `events` (create, patch) | the event recorder | Keep |
+| `apps/statefulsets` (get, list, watch, create, update) | `reconcileChild` from `reconcileStatefulSet` (cubridcluster_controller.go); `Owns` watch | Keep. No delete: owner-reference garbage collection removes it |
+| `apps/deployments` (get, list, watch, create, update, delete) | `reconcileBrokerDeployment` (broker.go); `enforceWriteQuarantine` (quarantine.go) updates the replicas; `deleteLegacyBrokerDeployment` (broker.go) deletes the single Deployment of earlier versions | Keep. The `delete` is for upgrades from earlier versions and can be removed once no supported version upgrades from one that created it |
+| `networking.k8s.io/networkpolicies` (get, list, watch, create, update, delete) | `reconcileNetworkPolicies` (networkpolicy.go), which deletes a policy when `spec.networkPolicy` turns it off | Keep |
+| `policy/poddisruptionbudgets` (get, list, watch, create, update) | `reconcileChild` from `reconcileDisruptionBudgets` (disruption.go) | Keep. No delete: owner-reference garbage collection |
+| `discovery.k8s.io/endpointslices` (list) | `enforceWriteQuarantine` (quarantine.go) lists the read-write Service's EndpointSlices past the cache | Keep. Only `list`, no watch |
+| `database.cubrid.io/cubridclusters` (get, list, watch, patch) | `For` watch; `recordMemberSpreadDefault` (placement.go) and `removeReleaseAnnotation` (quarantine_release.go) patch; `CubridBackupReconciler` reads the cluster | Keep. No `update` on the object itself |
+| `cubridclusters/status` (update) | `writeStatus` (cubridcluster_controller.go) | Keep |
+| `cubridclusters/finalizers` (update) | The owner references of the children set `blockOwnerDeletion`, which the API server checks against this subresource | Keep |
+| `cubridbackups` (get, list, watch) | `For` watch of `CubridBackupReconciler` | Keep. Read-only |
+| `cubridbackups/status` (update) | `writeStatus` (cubridbackup_controller.go) | Keep |
+
+## Manager memory, as observed
+
+The memory of the manager has not been measured on a reference deployment, so
+this repository sets no new resource limit for it, and an unmeasured memory
+risk is not an observed out-of-memory kill. The latest successful End-to-End
+run of `main` when this was written (run 43664041252, commit
+`b5cc1a6c24b56b48d878e0b44d76c15df44fa79d`, 2026-11-15 01:38 UTC) uploaded the
+`e2e-evidence` artifact, but its `metrics.txt` files hold only the
+`cubrid_cluster_*` metrics of one CubridCluster, not the manager's
+`process_resident_memory_bytes` or `go_memstats_heap_inuse_bytes`, and no other
+file in it holds a memory series. So there is no memory range to report from
+that run. The End-to-End suite runs on Kind with a few test clusters, which is
+not a reference deployment in any case. Choosing a limit needs the manager's
+process metrics sampled, with the label-filtered cache, at the cluster count
+and object count of a reference deployment.

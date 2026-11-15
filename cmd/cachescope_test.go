@@ -48,6 +48,9 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/controller"
 )
 
+// dbaKey is the key of the external DBA password Secret.
+const dbaKey = "password"
+
 // TestManagedCacheScope runs the manager's cache options, under an identity
 // that holds only config/rbac/role.yaml, against an API server that also holds
 // objects of every namespaced kind the operator does not manage, and a Secret
@@ -71,7 +74,10 @@ func TestManagedCacheScope(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	const namespace, unrelated, managedCluster = "cache-scope", "unrelated", "managed"
+	const (
+		namespace, unrelated, managedCluster = "cache-scope", "unrelated", "managed"
+		externalCluster, externalDBA         = "external", "external-dba"
+	)
 	mustWatch(t, admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}))
 	managed := map[string]string{controller.ManagedByLabel: controller.ManagedByOperator}
 	podSpec := corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "busybox"}}}
@@ -102,12 +108,23 @@ func TestManagedCacheScope(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "collide-im-token", Namespace: namespace},
 		Data:       foreignData,
 	}))
-	for _, name := range []string{managedCluster, "collide"} {
+	// A DBA password Secret a cluster references; it is the user's, so it has
+	// no managed-by label and the cache never holds it.
+	mustWatch(t, admin.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: externalDBA, Namespace: namespace},
+		Data:       map[string][]byte{dbaKey: []byte("a DBA password")},
+	}))
+	for _, name := range []string{managedCluster, "collide", externalCluster} {
 		cluster := &databasev1alpha1.CubridCluster{}
 		data, err := os.ReadFile(filepath.Join("..", "config", "samples", "database_v1alpha1_cubridcluster.yaml"))
 		mustWatch(t, err)
 		mustWatch(t, yaml.Unmarshal(data, cluster))
 		cluster.Name, cluster.Namespace = name, namespace
+		if name == externalCluster {
+			cluster.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: externalDBA}, Key: dbaKey,
+			}
+		}
 		mustWatch(t, admin.Create(ctx, cluster))
 	}
 
@@ -204,6 +221,19 @@ func TestManagedCacheScope(t *testing.T) {
 			return meta.LenList(list) > 0
 		})
 	}
+
+	// A DBA password Secret the cache does not hold is still read, through the
+	// API reader, so the cluster that references it resolves the password.
+	err = cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: externalDBA}, &corev1.Secret{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("cached read of the external DBA password Secret = %v, want NotFound", err)
+	}
+	external := &databasev1alpha1.CubridCluster{}
+	waitWatch(t, ctx, func() bool {
+		mustWatch(t, admin.Get(ctx, client.ObjectKey{Namespace: namespace, Name: externalCluster}, external))
+		resolved := meta.FindStatusCondition(external.Status.Conditions, "DBAPasswordSecretResolved")
+		return resolved != nil && resolved.Status == metav1.ConditionTrue
+	})
 
 	// A token Secret the operator did not write is neither adopted nor
 	// overwritten, and the cluster says why.
