@@ -409,6 +409,19 @@ What the commands print is kept only through the run's redactor.
    `S04/power-off/record.json`. When that step fails, the run makes the node
    schedulable when S04 ends, whatever its result; a failure to do so fails
    a passing S04 and is added to the reason of any other result.
+
+   Ready Deployments do not show that the moved read-write path reads back
+   what it commits, and a pre-fault problem there must not be taken later for
+   a failover regression. So the run then writes one ledger row as client
+   `s04probe` (`workload run` with one operation) through `<cluster>-rw`,
+   and reads it back with a second client connection through the same
+   Service (`workload dump`): the row must be there with the values sent.
+   A write that is not acknowledged, or a row missing or different, blocks
+   S04 before any VM is touched, with a reason that starts with
+   `the read-write probe before the fault:`. The probe's lines go into
+   `LAB01/history.jsonl` whatever their outcome, so the data rules of
+   step 10 account for its row like any other; `readWriteProbe` in
+   `S04/power-off/record.json` names the operation read back.
 3. As in S06, the run reads each node's clock and is blocked on an offset
    over a second, then starts two clients writing through `<cluster>-rw`.
 4. Right before the fault, the starting conditions must be `True`, the master
@@ -4283,14 +4296,14 @@ and S12 variant other than `complete` and `exact` only those under
 - `LAB01/history.jsonl`: the client's history;
 - `LAB01/data-check.json`: the last data-rule report.
 - with `-fault vm-power-off`, `S04/power-off/record.json` (the master, its Pod
-  and node, the clock offsets, when the VM was confirmed off, the promoted
-  member and when it was seen, any reading of `PrimaryResolved` `True` or Pod
+  and node, the clock offsets, the read-write probe's operation, when the VM
+  was confirmed off, the promoted member and when it was seen, any reading of `PrimaryResolved` `True` or Pod
   deletion while the VM was off, when the VM was powered on, its node `Ready`
   and the cluster converged, the final master and the members after),
   `S04/power-off/timeline.jsonl` (the fault flow) and
-  `S04/power-off/data-check.json`. The clients' operations are in
-  `LAB01/history.jsonl` with the rest, or, when S04 ended before it read
-  them, in `S04/power-off/clients/<client>.jsonl` as the clients wrote them.
+  `S04/power-off/data-check.json`. The read-write probe's operation is in
+  `LAB01/history.jsonl`, and so are the clients' operations, or, when S04
+  ended before it read them, in `S04/power-off/clients/<client>.jsonl` as the clients wrote them.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
   started and the status time it wrote, the members before and after),

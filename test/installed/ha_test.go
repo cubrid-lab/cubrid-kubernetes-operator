@@ -864,6 +864,12 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 		return f.backgroundHistory(id), nil
 	case strings.Contains(script, "RO_JDBC_URL") && strings.Contains(script, "workload run"):
 		return roRefusalHistory(f.roRefusal), nil
+	case strings.Contains(script, "CLIENT_ID=s04probe ") && strings.Contains(script, "workload run"):
+		history, row := probeWorkload()
+		f.mu.Lock()
+		f.rows = append(f.rows, row)
+		f.mu.Unlock()
+		return history, nil
 	case strings.Contains(script, "workload run"):
 		if !strings.Contains(script, fmt.Sprintf("OPS=%d", f.cfg.Operations)) {
 			f.t.Fatalf("workload run without the configured operations: %q", script)
