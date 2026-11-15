@@ -225,6 +225,27 @@ func (r *haRun) lastAnswerAcknowledged(ctx context.Context, id string) bool {
 	return err == nil && strings.Contains(last, `"event":"acknowledged"`)
 }
 
+// liveRecovery reads the history of a client that is still running and returns
+// what workload.Recovery finds in it since faultAt: when the client recovered
+// and for how long it has been acknowledged without interruption since. A line
+// the client is still writing is left out. It changes nothing.
+func (r *haRun) liveRecovery(id string, faultAt time.Time) (time.Time, time.Duration, bool) {
+	text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", id))
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
+		text = text[:cut+1]
+	} else {
+		return time.Time{}, 0, false
+	}
+	events, err := workload.ReadEvents(strings.NewReader(text))
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	return workload.Recovery(events, faultAt)
+}
+
 // stopClient stops a client, adds its history to the run's and returns its
 // events and its operations by outcome.
 func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
