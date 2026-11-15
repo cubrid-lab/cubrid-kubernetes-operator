@@ -57,10 +57,13 @@ them as input editing, signals or flow control rather than literal password
 characters.
 
 **On upgrade**, a Secret that holds 32 to 256 bytes, which the earlier bound
-accepted, is reported as `DBAPasswordValueInvalid`, and a DB container that
-starts again with it exits before it starts anything. Such a value never
+accepted, is reported as `DBAPasswordValueInvalid`. Such a value never
 produced a working password: CUBRID refuses it, and the password step left the
-database without one (POC-64).
+database without one (POC-64). A restarted standalone DB container refuses
+the value before starting its server. An initialized HA member does **not**
+recheck the password file before heartbeat starts; the Operator reports the
+invalid value but the HA restart itself does not enforce it. See
+[HA restart verification](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894).
 
 The 31 bytes are CUBRID's own bound: CUBRID 11.4.7.1995 refuses
 `ALTER USER dba PASSWORD` with a longer value (`Password string cannot have
@@ -93,8 +96,10 @@ The password counts as set only when a `dba` login with the empty password is
 refused **and** a login with the value just set, typed at csql's prompt on a
 pseudo-terminal, is accepted. If it cannot set and confirm the password, it
 does not start the server: the container ends and the Pod is started again.
-So a ready member has the password, and `Ready=True` on the cluster implies
-it.
+This confirms the requested password during initial database creation. It is
+**not** a continuous authentication guarantee: the Operator checks a running
+database periodically, and an initialized HA member does not verify the Secret
+again before a subsequent heartbeat restart.
 
 The Operator reads the Secret from the API server only to check that the key
 exists and holds a value the Instance Manager accepts. It writes the value
@@ -161,9 +166,13 @@ deleted or created again. A running member keeps the file it mounted. A DB
 Pod that is started again while the Secret or key is missing cannot mount the
 volume: it stays in `ContainerCreating`, and the kubelet records `FailedMount`
 Events on the Pod, until the Secret is back. With an empty or unusable value,
-the container's password step fails (`dba_password_failed`) and the server is
-not started. Once the StatefulSet exists, the Operator reconciles the cluster
-again at least every 5 minutes, and reads the Secret again each time, so a
+the Operator reports the invalid key. A restarted standalone DB container
+refuses the value (`dba_password_failed`) and does not start its server. An
+already initialized HA member does **not** run that offline check before
+heartbeat, and can continue using the database's existing password; do not
+treat a successful HA restart as proof that the Secret matches. Once the
+StatefulSet exists, the Operator reconciles the cluster again at least every
+5 minutes, and reads the Secret again each time, so a
 removed or unusable Secret is reported within about that time. A changed value
 that is still usable is reported as described under "Changing the password is
 not supported" below. A `True` condition says the Secret was usable when last
@@ -313,7 +322,10 @@ What a start of a DB container does with the password depends on the member:
   healthy member from starting. A changed value on an HA cluster is reported
   by the Operator's rotation check above (`DBAPasswordRotationUnsupported`),
   for as long as it differs; the members go on serving with the database's
-  password.
+  password. This is an intentional safety boundary, not a verification result:
+  [#894](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894)
+  tracks whether a non-mutating HA-member pre-start check can be established
+  without altering HA log, copy or apply state.
 
 When a standalone start is refused, the log says `dba_password_failed`; the
 container ends, and the kubelet starts it again with its usual back-off until
