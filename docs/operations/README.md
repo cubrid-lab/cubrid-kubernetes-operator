@@ -188,7 +188,11 @@ Check whether historical evidence applies to that candidate before reusing it.
 - Restore is a **bootstrap mode of a NEW** `CubridCluster` using
   `spec.bootstrap.recovery.manifestUri`. There is no supported
   in-place restore or unrestricted existing-PVC overwrite in
-  `v1alpha1`; do not restore over an active database.
+  `v1alpha1`; do not restore over an active database. **A
+  `status.bootstrap.phase: Complete` result records restore and member
+  seeding/HA configuration, not an independent SQL dataset or post-restore
+  replication convergence check.** Do not use the phase alone to declare
+  recovery successful.
 - Use the candidate-specific [backup and restore acceptance contract](../testing/scenario-contract.md)
   and [installed HA runner](../testing/installed-ha.md) for exact
   verification and known blocked variants. Preserve failed or unreadable
