@@ -890,6 +890,7 @@ reader can tell what to expect.
     agreement.txt       how the Conditions compared with SQL and the fault
     logs/               Operator, Instance Manager, CUBRID and Broker logs
     data-check.json     result of each data rule, per member and endpoint
+    manager-memory.txt  the Operator manager's memory, read when the scenario was recorded (Kind lane)
 ```
 
 A scenario with variants keeps these files below `<scenario-id>/<variant>/`.
@@ -1137,6 +1138,20 @@ each should mirror. The samples it accepted are kept as `S03/<variant>/metrics.t
   judged. Each disagreement is also listed in `neverEvents`, starting
   with `never:` or `tolerance:`, and the scenario's reason is
   `condition_disagreement`.
+- In the Kind lane, every scenario that ran also records the memory of the
+  Operator manager, read from the same metrics endpoint as the `cubrid_cluster_*`
+  checks when the scenario's result was recorded: `measurements.managerRSSBytes`
+  (`process_resident_memory_bytes`), `managerHeapInuseBytes`
+  (`go_memstats_heap_inuse_bytes`), `managerHeapAllocBytes`
+  (`go_memstats_alloc_bytes`), `managerSysBytes` (`go_memstats_sys_bytes`) and
+  `managerGoroutines` (`go_goroutines`). Only these five series are kept, in
+  `<scenario-id>/manager-memory.txt` with the UTC time of the read, so a reader
+  sees the peak of a run in `summary.json` without opening the artifact. A
+  read that failed, or an answer without a series, leaves that measurement
+  `"unknown"` and says so in the file (`not read: <reason>`); it is never
+  recorded as zero. The values are recorded and judge nothing: no limit applies
+  to them, and a Kind run is not a reference deployment ([Manager memory, as
+  observed](../operations/watch-namespace.md#manager-memory-as-observed)).
 - `faultConfirmed` is left out for a scenario that injects no fault.
 - `notes`, left out when empty, lists what a reader should know of steps
   outside the scenarios: for example, an attempt of the replication-stall step

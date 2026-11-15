@@ -20,9 +20,11 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -96,6 +98,40 @@ func acquireEvidenceDir() error {
 // the run did not acquire the directory, and then no scenario can pass.
 func evidenceDir() string { return acquiredEvidenceDir }
 
+// readManagerMetrics returns one answer of the manager's metrics endpoint for
+// the memory record of each scenario. The suite sets it once the manager is
+// deployed; it is nil outside a suite run, which leaves the memory unknown.
+var readManagerMetrics func(ctx context.Context) (string, error)
+
+// recordManagerMemory adds the manager's memory to a scenario's measurements
+// and, when the answer was read or failed, keeps <scenario>/manager-memory.txt
+// as evidence. A read that failed is recorded as such and measures unknown.
+func recordManagerMemory(s *evidence.Scenario) {
+	if readManagerMetrics == nil {
+		maps.Copy(s.Measurements, evidence.UnreadManagerMemoryMeasurements())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), managerMemoryReadTimeout)
+	defer cancel()
+	at := time.Now().UTC()
+	body, err := readManagerMetrics(ctx)
+	var memory evidence.ManagerMemory
+	if err == nil {
+		memory, err = evidence.ParseManagerMemory(body, at)
+	}
+	text, measurements := memory.Text(), memory.Measurements()
+	if err != nil {
+		text, measurements = evidence.UnreadManagerMemoryText(at, err), evidence.UnreadManagerMemoryMeasurements()
+	}
+	maps.Copy(s.Measurements, measurements)
+	if file := writeScenarioFile(s.Name()+"/manager-memory.txt", []byte(text)); file != "" {
+		s.Evidence = append(s.Evidence, file)
+	}
+}
+
+// managerMemoryReadTimeout bounds one read of the manager's metrics.
+const managerMemoryReadTimeout = 30 * time.Second
+
 // recordScenario adds a scenario's result to the run's summary, in place of
 // the placeholder planRun left for it.
 func recordScenario(s evidence.Scenario) {
@@ -112,6 +148,7 @@ func recordScenario(s evidence.Scenario) {
 		}
 		s.Measurements[lostSessionsMeasurement] = csqlLedger.measure(
 			evidence.Requirement{ID: s.ID, Variant: s.Variant}.Label())
+		recordManagerMemory(&s)
 	}
 	runSummary.Record(s)
 }
