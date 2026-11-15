@@ -138,3 +138,16 @@ that run. The End-to-End suite runs on Kind with a few test clusters, which is
 not a reference deployment in any case. Choosing a limit needs the manager's
 process metrics sampled, with the label-filtered cache, at the cluster count
 and object count of a reference deployment.
+
+Since #282, every scenario of the Kind End-to-End run records the manager's
+memory when its result is recorded. `<scenario>/manager-memory.txt` (for
+example `S03/abrupt/manager-memory.txt`) holds the time of the read and the
+values of `process_resident_memory_bytes`, `go_memstats_heap_inuse_bytes`,
+`go_memstats_alloc_bytes`, `go_memstats_sys_bytes` and `go_goroutines`, and
+`summary.json` carries them as the scenario's `managerRSSBytes`,
+`managerHeapInuseBytes`, `managerHeapAllocBytes`, `managerSysBytes` and
+`managerGoroutines` measurements, `unknown` when the read failed. The range
+observed in a CI run is not stated here yet and will be filled in from the
+`e2e-evidence` artifact of such a run. Even then, no limit is chosen from Kind
+alone: a Kind run has a few clusters and objects, so its values bound nothing
+about a reference deployment.

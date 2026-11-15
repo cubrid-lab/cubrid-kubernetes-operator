@@ -105,6 +105,8 @@ var _ = BeforeSuite(func() {
 	configureKubectlKubeRC()
 	setupCertManager()
 	deployManager()
+	// From here each recorded scenario keeps the manager's memory (#282).
+	readManagerMetrics = readManagerMetricsThroughClient
 })
 
 // The gate judges the scenarios this process recorded, so it assumes one

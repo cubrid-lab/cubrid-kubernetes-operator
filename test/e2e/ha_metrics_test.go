@@ -109,6 +109,15 @@ func scrapeManagerMetrics(ctx context.Context) (string, error) {
 			`https://%s.%s.svc.cluster.local:8443/metrics`, metricsServiceName, namespace)))
 }
 
+// readManagerMetricsThroughClient is scrapeManagerMetrics once the client Pod
+// exists, for the memory record of each scenario.
+func readManagerMetricsThroughClient(ctx context.Context) (string, error) {
+	if err := startHAMetricsClient(); err != nil {
+		return "", fmt.Errorf("starting the Pod that reads the manager's metrics: %w", err)
+	}
+	return scrapeManagerMetrics(ctx)
+}
+
 // clusterGauges are the gauges the comparison knows. instances_ready is not
 // in the status (docs/observability.md), so it is not compared.
 var clusterGauges = []string{
