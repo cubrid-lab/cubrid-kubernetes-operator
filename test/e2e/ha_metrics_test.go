@@ -71,14 +71,15 @@ func startHAMetricsClient() error {
 		// The container only waits; it ignores SIGTERM, so it is ended at
 		// once when the namespace is deleted.
 		if _, err := utils.Run(exec.Command("kubectl", "run", haMetricsPod, "--restart=Never",
-			"--namespace", namespace, "--image=curlimages/curl:latest", "--overrides", fmt.Sprintf(`{
+			"--namespace", namespace, "--image=docker.io/curlimages/curl:8.10.1", "--overrides", fmt.Sprintf(`{
 				"spec": {
 					"terminationGracePeriodSeconds": 0,
 					"automountServiceAccountToken": true,
 					"serviceAccountName": %q,
 					"containers": [{
 						"name": "curl",
-						"image": "curlimages/curl:latest",
+						"image": "docker.io/curlimages/curl:8.10.1",
+						"imagePullPolicy": "Never",
 						"command": ["sleep", "86400"],
 						"securityContext": {
 							"readOnlyRootFilesystem": true,
