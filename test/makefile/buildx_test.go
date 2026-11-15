@@ -25,21 +25,28 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // containerStandIn records each call in $CALLS, fails "buildx build" with exit
-// status 42 when $FAIL_BUILD is set and "buildx use" with 43 when $FAIL_USE is
-// set.
+// status 42 when $FAIL_BUILD is set and "buildx create" with 44 when
+// $FAIL_CREATE is set. With $HANG_BUILD set, "buildx build" creates the file
+// named by that variable and then blocks, so a test can interrupt the run.
 const containerStandIn = `#!/bin/sh
 echo "$*" >> "$CALLS"
 if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$FAIL_BUILD" ]; then
   echo 'SIMULATED BUILD/PUSH FAILURE' >&2
   exit 42
 fi
-if [ "$1" = buildx ] && [ "$2" = use ] && [ -n "$FAIL_USE" ]; then
-  echo 'SIMULATED BUILDX USE FAILURE' >&2
-  exit 43
+if [ "$1" = buildx ] && [ "$2" = build ] && [ -n "$HANG_BUILD" ]; then
+  : > "$HANG_BUILD"
+  exec sleep 30
+fi
+if [ "$1" = buildx ] && [ "$2" = create ] && [ -n "$FAIL_CREATE" ]; then
+  echo 'SIMULATED BUILDER CREATION FAILURE: builder already exists' >&2
+  exit 44
 fi
 exit 0
 `
@@ -83,6 +90,37 @@ func runBuildx(t *testing.T, failEnv string) (code int, out string, calls []stri
 	return code, string(output), strings.Split(strings.TrimSpace(string(data)), "\n"), dir
 }
 
+// assertOneBuilderThroughout checks that the builder this run created is the
+// one it built through and the one it removed, and that the build read the
+// run's own mktemp copy of the Dockerfile, not a shared Dockerfile.cross (#869).
+func assertOneBuilderThroughout(t *testing.T, calls []string) {
+	t.Helper()
+	var created, built, removed, file string
+	for _, c := range calls {
+		f := strings.Fields(c)
+		switch {
+		case strings.HasPrefix(c, "buildx create --name ") && len(f) > 3:
+			created = f[3]
+		case strings.HasPrefix(c, "buildx build --builder ") && len(f) > 3:
+			built = f[3]
+			for i, a := range f {
+				if a == "-f" && i+1 < len(f) {
+					file = f[i+1]
+				}
+			}
+		case strings.HasPrefix(c, "buildx rm ") && len(f) > 2:
+			removed = f[2]
+		}
+	}
+	if created == "" || built != created || removed != created {
+		t.Errorf("created %q, built through %q, removed %q: want one builder throughout\ncalls = %q",
+			created, built, removed, calls)
+	}
+	if !strings.HasPrefix(file, "Dockerfile.cross.") {
+		t.Errorf("the build read %q, want the run's own Dockerfile.cross.XXXXXX copy", file)
+	}
+}
+
 func hasCall(calls []string, prefix string) bool {
 	for _, c := range calls {
 		if strings.HasPrefix(c, prefix) {
@@ -92,9 +130,9 @@ func hasCall(calls []string, prefix string) bool {
 	return false
 }
 
-// A failed "buildx use" or "buildx build --push" fails the target, with the
-// failure in its output, after the builder and Dockerfile.cross have been
-// cleaned up; a build that succeeds leaves the target successful (#461).
+// A failed "buildx build --push" fails the target, with the failure in its
+// output, after the builder this run created and its Dockerfile.cross copy have
+// been cleaned up; a build that succeeds leaves the target successful (#461).
 func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make is not installed")
@@ -109,7 +147,6 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 		build   bool
 	}{
 		{"a failed build and push", "FAIL_BUILD", "SIMULATED BUILD/PUSH FAILURE", true},
-		{"a failed buildx use", "FAIL_USE", "SIMULATED BUILDX USE FAILURE", false},
 		{"a successful build and push", "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,7 +157,7 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			if tc.failEnv == "" && code != 0 {
 				t.Errorf("make docker-buildx exited %d after a successful build and push:\n%s", code, out)
 			}
-			if tc.build && !hasCall(calls, "buildx build --push") {
+			if tc.build && !hasCall(calls, "buildx build --builder") {
 				t.Errorf("calls = %q, want the build", calls)
 			}
 			if !tc.build && hasCall(calls, "buildx build") {
@@ -129,9 +166,121 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			if !hasCall(calls, "buildx rm cubrid-kubernetes-operator-builder") {
 				t.Errorf("calls = %q, want the removal of the builder", calls)
 			}
-			if _, err := os.Stat(filepath.Join(dir, "Dockerfile.cross")); !os.IsNotExist(err) {
-				t.Errorf("Dockerfile.cross was left behind (stat: %v)", err)
+			assertOneBuilderThroughout(t, calls)
+			if hasCall(calls, "buildx use") {
+				t.Errorf("calls = %q, want the user's selected builder left alone", calls)
 			}
+			assertNoDockerfileCross(t, dir)
+		})
+	}
+}
+
+func assertNoDockerfileCross(t *testing.T, dir string) {
+	t.Helper()
+	left, _ := filepath.Glob(filepath.Join(dir, "Dockerfile.cross*"))
+	if len(left) != 0 {
+		t.Errorf("Dockerfile.cross copy left behind: %v", left)
+	}
+}
+
+// If the project's builder cannot be created, for example because a builder of
+// that name already exists, the target fails with that message and neither
+// builds through nor removes any builder: a builder this run did not create
+// must survive it.
+func TestDockerBuildx_FailedCreationLeavesExistingBuildersAlone(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	code, out, calls, dir := runBuildx(t, "FAIL_CREATE")
+	if code == 0 || !strings.Contains(out, "SIMULATED BUILDER CREATION FAILURE") {
+		t.Errorf("make docker-buildx exited %d after a failed builder creation, want a failure that shows it:\n%s", code, out)
+	}
+	for _, forbidden := range []string{"buildx use", "buildx build", "buildx rm"} {
+		if hasCall(calls, forbidden) {
+			t.Errorf("calls = %q, want no %q after a failed creation", calls, forbidden)
+		}
+	}
+	assertNoDockerfileCross(t, dir)
+}
+
+// An interrupted run (SIGINT or SIGTERM to the whole process group, as a
+// terminal or a CI job sends it) fails the target and still removes the builder
+// this run created and its Dockerfile.cross copy, and no other builder.
+func TestDockerBuildx_InterruptionCleansUpOnlyThisRunsResources(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
+		t.Run(sig.String(), func(t *testing.T) {
+			_, here, _, _ := runtime.Caller(0)
+			repo := filepath.Join(filepath.Dir(here), "..", "..")
+			dir := t.TempDir()
+			dockerfile, err := os.ReadFile(filepath.Join(repo, "Dockerfile"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), dockerfile, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			scratch := t.TempDir()
+			tool := filepath.Join(scratch, "container-stand-in")
+			if err := os.WriteFile(tool, []byte(containerStandIn), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			log := filepath.Join(scratch, "calls")
+			started := filepath.Join(scratch, "build-started")
+			cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"), "docker-buildx",
+				"CONTAINER_TOOL="+tool, "IMG=registry.invalid/operator:test")
+			cmd.Env = append(childMakeEnv(), "CALLS="+log, "HANG_BUILD="+started)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			pgid := cmd.Process.Pid
+			t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(started); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the build never started")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := syscall.Kill(-pgid, sig); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Error("make docker-buildx succeeded after being interrupted")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("make docker-buildx did not stop after the interruption")
+			}
+
+			data, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := strings.Split(strings.TrimSpace(string(data)), "\n")
+			var created, removed []string
+			for _, c := range calls {
+				if name, ok := strings.CutPrefix(c, "buildx create --name "); ok {
+					created = append(created, name)
+				}
+				if name, ok := strings.CutPrefix(c, "buildx rm "); ok {
+					removed = append(removed, name)
+				}
+			}
+			if len(created) != 1 || len(removed) != 1 || created[0] != removed[0] {
+				t.Errorf("created %q, removed %q, want exactly this run's builder removed (calls %q)", created, removed, calls)
+			}
+			assertNoDockerfileCross(t, dir)
 		})
 	}
 }

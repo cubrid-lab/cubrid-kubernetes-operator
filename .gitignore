@@ -34,3 +34,6 @@ tmp/
 # Left behind by a test run with a relative staging path
 internal/instancemanager/staging/
 /ha
+
+# The per-run copy make docker-buildx builds from; removed when the run ends (#869)
+Dockerfile.cross*
