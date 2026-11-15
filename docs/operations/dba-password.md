@@ -56,6 +56,12 @@ rejected because the csql terminal used to confirm a DBA login can interpret
 them as input editing, signals or flow control rather than literal password
 characters.
 
+**On upgrade**, a Secret that holds 32 to 256 bytes, which the earlier bound
+accepted, is reported as `DBAPasswordValueInvalid`, and a DB container that
+starts again with it exits before it starts anything. Such a value never
+produced a working password: CUBRID refuses it, and the password step left the
+database without one (POC-64).
+
 The 31 bytes are CUBRID's own bound: CUBRID 11.4.7.1995 refuses
 `ALTER USER dba PASSWORD` with a longer value (`Password string cannot have
 more than 31 bytes.`, docs/poc/RESULTS.md, POC-64). The bound counts bytes,
@@ -92,9 +98,13 @@ it.
 
 The Operator reads the Secret from the API server only to check that the key
 exists and holds a value the Instance Manager accepts. It writes the value
-into no object, status, Event or log line. The Instance Manager registers the
-value it reads at its start among the values its log never writes, as it does
-for its token and the object-storage keys, and keeps what csql prints for the
+into no object, status, Event or log line. No path of the Instance Manager
+logs the value either. As a backstop, it registers the value it reads at its
+start, when it is at least 8 bytes long, among the values its log never
+writes, as it does for its token and the object-storage keys; a shorter value
+is not registered, because replacing every occurrence of, say, `dba` or the
+database's name would garble ordinary lines and show the value by where the
+placeholder lands. It keeps what csql prints for the
 statement in a file that is unlinked before csql runs, so it is never under a
 name in `/tmp`. Anyone who can read Secrets in the namespace, or run commands
 in the DB container, can read the password.
@@ -175,10 +185,9 @@ resolve, so no member runs and the HA bootstrap does not start until it does.
   carry the same password. Their Instance Manager never sets a password; it
   only checks, after the seed restore and before heartbeat starts, that the
   restored database's password is the requested one.
-- **Every later start of a member's container** checks the password before
-  `cubrid heartbeat start` (`instance-manager check-dba-password`, see
-  [Restarting after a changed value](#restarting-after-a-changed-value)), and
-  never sets one.
+- **A later start of a member's container** neither sets nor checks the
+  password before `cubrid heartbeat start`
+  ([Restarting after a changed value](#restarting-after-a-changed-value)).
 - **Replication** with a password set was checked once on the VM lab, on a
   three-member cluster whose password was set by hand on the master
   (2026-11-12 UTC, results on #801): 309 inserts with the password, every row
@@ -199,8 +208,8 @@ master with its server `registered_and_active`. No member is asked while no
 primary is resolved, while two members claim to be the master, or while the
 HA bootstrap has not admitted every member (a member that is still being
 seeded is never asked); the Condition is then left as it is. A slave that
-lags does not stop the check. A member whose container starts again does not
-start heartbeat when the database's password is not the file's value
+lags does not stop the check. A member whose container starts again starts
+heartbeat without checking the password
 ([Restarting after a changed value](#restarting-after-a-changed-value)).
 
 An HA cluster restored from a backup (`spec.bootstrap.recovery`) follows the
@@ -223,12 +232,17 @@ says, and the password step is never skipped:
 
 - data not yet recorded as restored is taken back and restored again, and the
   password step runs again on the new data;
-- data recorded as restored is taken over, not restored again, and its
-  password is confirmed (never set) before it is started. If the Secret's
-  value was changed in between, the retry fails with `the database's DBA
-  password is not the requested one`, and the data is kept, not started;
+- data recorded as restored is taken over, not restored again. On a
+  standalone member its password is confirmed (never set) before it is
+  started; if the Secret's value was changed in between, the retry fails with
+  `the database's DBA password is not the requested one`, and the data is kept,
+  not started;
 - a completed restore whose database the Instance Manager starts when it
-  starts (its ownership marker was left) is confirmed the same way first.
+  starts (its ownership marker was left) is confirmed the same way first on a
+  standalone member;
+- on an HA member neither is checked before heartbeat starts, for the reason
+  under [Restarting after a changed value](#restarting-after-a-changed-value);
+  its password was set or confirmed before the restore was recorded.
 
 These paths are covered by unit tests with a stand-in for csql
 (`internal/instancemanager/restore_password_interrupt_test.go`), not by a kill
@@ -278,30 +292,39 @@ it asks again at its next reconcile and reports the same state.
 
 ### Restarting after a changed value
 
-Every start of a DB container checks the database's password against the file
-before it starts the database, and starts nothing when they differ:
+What a start of a DB container does with the password depends on the member:
 
-- **a new standalone database**: the password step (`apply-dba-password`)
-  finds a password already set and checks that it is the file's value;
-- **an HA member** and **a standalone database restored from a backup**: the
-  entrypoint runs `instance-manager check-dba-password`, which checks and never
-  sets, before `cubrid heartbeat start` or `cubrid server start`;
-- **a restored database the Instance Manager starts itself** (see
-  [Restoring from a backup](#restoring-from-a-backup)) is confirmed before its
-  start.
+- **A new standalone database**: the password step (`apply-dba-password`)
+  finds a password already set and checks that it is the file's value. When it
+  is not, the server is not started.
+- **A standalone database restored from a backup**: the entrypoint runs
+  `instance-manager check-dba-password`, which checks and never sets, before
+  `cubrid server start`. When the password is another one (exit 3), it logs
+  `the DBA password of '<db>' is not the requested one ... Put the database's
+  current DBA password back into the Secret`. When the check cannot tell (exit
+  1: the file cannot be used, csql did not answer, the 5-minute bound passed),
+  it logs `the DBA password of '<db>' could not be checked (exit 1, see
+  dba_password_failed)`. Either way the server is not started (fail closed).
+- **An HA member** is **not checked** when it starts again: the entrypoint
+  starts heartbeat as before. A standalone-mode open of an HA member's
+  database before heartbeat, with its restart recovery, for example on a
+  former master after a failover, is not shown to leave its HA log, copy and
+  apply state unchanged, and a transient failure of the check would keep a
+  healthy member from starting. A changed value on an HA cluster is reported
+  by the Operator's rotation check above (`DBAPasswordRotationUnsupported`),
+  for as long as it differs; the members go on serving with the database's
+  password.
 
-When the database's password is not the file's value, the log says
-`dba_password_failed` and the entrypoint `the DBA password of '<db>' is not
-the requested one`; the container ends, and the kubelet starts it again with
-its usual back-off until the Secret holds the database's password again. The
-member is not Ready meanwhile. On an HA cluster the other members keep
-running; a cluster whose members all restart in that state serves nothing. A
-cluster that reports `DBAPasswordRotationUnsupported` is in that state:
-correct the Secret before any of its DB Pods is started again.
+When a standalone start is refused, the log says `dba_password_failed`; the
+container ends, and the kubelet starts it again with its usual back-off until
+the Secret holds the database's password again (or the check can run). The
+member is not Ready meanwhile. A standalone cluster that reports
+`DBAPasswordRotationUnsupported` is in that state: correct the Secret before
+its DB Pod is started again.
 
-A Kind e2e step restarts a standby of an HA cluster while its Secret holds a
-changed value, expects it not to start, and expects it Ready again once the
-value is put back. It is not yet run on the VM lab.
+A Kind e2e step changes the Secret of an HA cluster after it became Ready,
+expects `DBAPasswordRotationUnsupported`, and `True` again once the value is
+put back; it restarts no member. Nothing here is run on the VM lab yet.
 
 To undo such a change, put the database's current DBA password back in the
 Secret.

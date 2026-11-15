@@ -1271,9 +1271,10 @@ each start of the server. The HA bootstrap member gets it right after its
 `createdb`, before heartbeat starts; the slaves are seeded from a backup of
 that database and so carry it (docs/poc/RESULTS.md, POC-61). A restored database gets it after `restoredb`,
 before its restore is recorded and before the server or heartbeat starts.
-Every later start of an HA member, or of a restored standalone database,
-only checks the password (`instance-manager check-dba-password`) before the
-entrypoint starts heartbeat or the server.
+Every later start of a standalone database restored from a backup only
+checks the password (`instance-manager check-dba-password`) before the
+entrypoint starts the server. An HA member's password is not checked when it
+starts again; a changed value there is reported by `DBAPasswordRotationUnsupported`.
 
 A database that already has a password is not changed: the Instance Manager
 runs `csql -u dba -S <db> -c "SELECT 1"` on a pseudo-terminal, types the
@@ -1292,7 +1293,7 @@ printed on the terminal:
 | `dba_password_applied` | info | | The password was set: csql printed no error, a `dba` login with the empty password is now refused, and a login with the value just set, typed on a terminal, is accepted |
 | `dba_password_already_set` | info | | A `dba` login with the empty password was refused and a login with the requested password, typed on a terminal, was accepted, so nothing was changed (a restart after the step, or a restored database whose source had the requested password) |
 | `dba_password_not_requested` | info | | `instance-manager apply-dba-password` ran without `CUBRID_DBA_PASSWORD_FILE` and changed nothing |
-| `dba_password_failed` | error | `err` | The DBA password step failed: the file is missing, empty, holds a NUL, a carriage return, an inner line feed, another ASCII C0 control byte or DEL, or is longer than 31 bytes, CUBRID's own bound; csql reported an error; an empty-password login is still accepted; a login with the value just set is refused; the database has no password or another one than the requested one; or the login on a terminal did not prompt or failed for another reason. It is also the event of `instance-manager check-dba-password`, which the entrypoint runs before it starts an HA member or a restored standalone database, and which checks and never sets. The entrypoint then logs `could not set the requested DBA password` or `the DBA password of '<db>' is not the requested one`, does not start the server or heartbeat, and the container ends and is started again |
+| `dba_password_failed` | error | `err` | The DBA password step failed: the file is missing, empty, holds a NUL, a carriage return, an inner line feed, another ASCII C0 control byte or DEL, or is longer than 31 bytes, CUBRID's own bound; csql reported an error; an empty-password login is still accepted; a login with the value just set is refused; the database has no password or another one than the requested one; or the login on a terminal did not prompt or failed for another reason. It is also the event of `instance-manager check-dba-password`, which the entrypoint runs before it starts a standalone database restored from a backup, and which checks and never sets; it exits 3 when the password is not the requested one and 1 when it could not tell. The entrypoint then logs `could not set the requested DBA password`, `the DBA password of '<db>' is not the requested one`, or `the DBA password of '<db>' could not be checked (exit N, see dba_password_failed)`, does not start the server, and the container ends and is started again |
 | `dba_password_checked` | info when the answer differs from the last one, debug otherwise | `state`, `reason` | The Operator asked the member of a standalone cluster, or the primary of an HA cluster, `GET /v1/dba-password` whether the file's value is the running database's DBA password. `state` is `Matches` (a `dba` login with it, typed on a terminal in client mode, was accepted), `Differs` (refused for its password) or `Unknown` with `reason` (no file is set, the file cannot be used, the server is not running, an HA member is not reported by heartbeat as the master with its server `registered_and_active`, the member is stopping or restoring, another check is running, the login did not prompt or failed for another reason, or the 20-second bound passed). The login runs `SELECT 1` and changes nothing |
 
 On the HA bootstrap member the same failures end the bootstrap operation
