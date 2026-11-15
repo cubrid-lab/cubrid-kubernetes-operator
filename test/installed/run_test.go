@@ -172,6 +172,9 @@ type fixture struct {
 	store client.WithWatch
 	// afterCluster runs once the cluster and its children exist.
 	afterCluster func(ctx context.Context, c client.WithWatch)
+	// afterRead observes successful runner reads, not direct fake reconciler
+	// writes. Tests can cancel a run precisely after the awaited Pod was seen.
+	afterRead func(key client.ObjectKey, obj client.Object)
 }
 
 // createChildren stores what the simulated reconciliation made, then runs
@@ -195,6 +198,15 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 	t.Helper()
 	f := &fixture{cfg: cfg}
 	hooks := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			if f.afterRead != nil {
+				f.afterRead(key, obj)
+			}
+			return nil
+		},
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			switch value := obj.(type) {
 			case *corev1.Namespace:
