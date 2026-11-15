@@ -100,6 +100,39 @@ else
 	fi
 fi
 
+# Kind tests must not pull these helper images from Docker Hub in each Pod.
+# Pin versions (not :latest) in the fixtures too. Stage once in this Kind
+# cluster, before any scenario starts, including explicitly reused clusters.
+# An initial host pull still needs registry access and may be rate limited;
+# fail before starting the tests if that happens. The EXIT trap preserves
+# owned-cluster cleanup even on a failed pull or load.
+if [ -z "${CONTAINER_TOOL:-}" ]; then
+	echo "error: CONTAINER_TOOL must name Docker or Podman to preload Kind helper images." >&2
+	exit 2
+fi
+preload_helper_image() {
+	local image="$1"
+	if ! "$CONTAINER_TOOL" image inspect "$image" >/dev/null 2>&1; then
+		echo "Fetching Kind test helper image '$image' on the host..."
+		if ! "$CONTAINER_TOOL" pull "$image"; then
+			echo "error: could not fetch Kind test helper '$image' on the host (check registry access/rate limits)." >&2
+			return 1
+		fi
+	fi
+	echo "Loading Kind test helper image '$image' into '$KIND_CLUSTER'..."
+	if ! "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"; then
+		echo "error: could not load Kind test helper '$image' into '$KIND_CLUSTER'." >&2
+		return 1
+	fi
+}
+for helper_image in \
+	docker.io/adobe/s3mock:5.2.3 \
+	docker.io/library/python:3.12-slim \
+	docker.io/curlimages/curl:8.10.1
+do
+	preload_helper_image "$helper_image" || exit 1
+done
+
 # Job control gives the command a process group of its own, which receives
 # SIGINT (a background job without job control ignores it) and which the
 # signal handler addresses as a whole. A signal that arrives before the
