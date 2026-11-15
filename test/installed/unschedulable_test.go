@@ -421,18 +421,40 @@ func TestRunS12WrongTargetNamesTheSchedulerWhenTheFirstClusterCannotForm(t *test
 	requireBlockedByScheduler(t, wrong, err)
 }
 
-// runWithRefusedMember runs LAB00 with its member refused by scheduled.
+// runWithRefusedMember exercises the full LAB00 scheduler verdict only
+// after the runner has *observed* the fake-scheduled Pending Pod. A tiny
+// wall-clock budget for the entire setup (300 ms) raced with CI CPU load,
+// sometimes ending before the Pod read and hiding the scheduler's message.
+// The 5 s guard is only for a broken fixture; the test's actual end is
+// triggered by the specific Pod observation, not by sleeping for the timeout.
 func runWithRefusedMember(t *testing.T, scheduled *corev1.PodCondition) (*fixture, evidence.Scenario, error) {
 	t.Helper()
 	f := newFixture(t)
-	f.cfg.Timeout = 300 * time.Millisecond
+	f.cfg.Timeout = 5 * time.Second
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
 	f.afterCluster = func(ctx context.Context, c client.WithWatch) {
-		key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
 		if err := leavePending(ctx, c, key, scheduled); err != nil {
 			t.Error(err)
 		}
 	}
-	err := f.runner.Run(t.Context(), f.cfg)
+	seenPending := false
+	f.afterRead = func(readKey client.ObjectKey, obj client.Object) {
+		if seenPending || ctx.Err() != nil || readKey != key {
+			return
+		}
+		pod, ok := obj.(*corev1.Pod)
+		if !ok || pod.Status.Phase != corev1.PodPending || podReady(pod) {
+			return
+		}
+		seenPending = true
+		cancel()
+	}
+	err := f.runner.Run(ctx, f.cfg)
+	if !seenPending {
+		t.Fatalf("LAB00 ended before it observed the simulated Pending member: %v", err)
+	}
 	return f, readSummary(t, f.cfg.EvidenceDir).Scenarios[0], err
 }
 
