@@ -6507,3 +6507,83 @@ owned container, network and anonymous volume. No executable reproducer is shipp
 The proposed peer-identity counterexample remains unexecuted, so #894's engine
 qualification and operational decision remain open. This is not a Kind, VM or
 release-qualification result and does not replace POC-61 or POC-62.
+
+## Applier pause mechanism: unavailable local preflight (#291)
+
+One bounded local Docker attempt sought to establish whether the current
+derived image permits a paused applier to remain readable and subsequently
+catch up, before adding backup-selection tests for
+[#291](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/291).
+It ended at the sleep-canary preflight: **exit 2, mechanism unavailable,
+original cleanup unknown**. No engine experiment was completed.
+
+| Input | Pinned identity |
+| --- | --- |
+| Source | `cedd1d52c597b836491f293896d97203968bdd18` |
+| Selected derived image | `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:1e87fafba296c7de935cfff5a23982f2b78dc95927a84261a222964db5a931ab` |
+| Reviewed local adapter SHA-256 | `09217a36548e0233a827f638c2242a7895c828b5ae8b8a7eb9c42a73a2a83908` |
+| Run ID | `p291-20261116t104330z-7b0ef958ee` |
+
+The saved manifest identifies a validated Unix-local Docker context, Linux
+x86_64 and server `29.2.1`; the selected image's revision matched the pinned
+source. The production entrypoint and healthcheck were bypassed for the
+owned `sleep` canary. No HA pair or run-owned network was created, and no
+native CUBRID command, SQL, applier discovery or STOP/CONT signal was reached;
+engine version and behavior were not measured.
+
+| UTC time on 2026-11-16 | Retained event |
+| --- | --- |
+| 10:43:30.846215 | Attempt started |
+| 10:44:13.527766 | Exact-image pull settlement recorded |
+| 10:44:29.982504648 | Canary container reported running start; start-command settlement recorded at 10:44:33.607469 |
+| 10:44:33.683128 to 10:44:42.778296 | Canary removal command exceeded its remaining stage budget |
+| 10:46:41.586948 | Bounded cleanup/late watch ended; unavailable/unknown outcome retained |
+
+Small event/error excerpts below omit the opaque owned container ID:
+
+```text
+{"operation":"remove-canary","finishedUTC":"2026-11-16T10:44:42.778296Z","interrupted":true,"childReaped":true}
+Unavailable: remove-canary timed out; daemon/remote completion is unknown
+Error response from daemon: removal of container <owned-canary-id> is already in progress
+```
+
+The adapter also generated cleanup-discovery filters as
+`--filter cko.poc.run=<run-id>`, missing the required `label=` prefix.
+Those discovery commands returned nonzero. This is a confirmed producer
+defect explaining failed cleanup discovery, **not** the earlier removal
+timeout: the cause of that daemon-side removal delay remains unknown.
+The engine-free tests exercised helpers and synthetic command results but
+neither exercised Docker's filter grammar nor asserted that prefix, so their
+passing results did not establish CLI integration. No script edit, automatic
+retry, host repair or runtime fallback followed the attempt.
+
+A **separate read-only audit**, from `2026-11-16T10:53:59.248290Z` to
+`2026-11-16T10:53:59.575828Z`, inspected each exact saved container/anonymous
+volume ID once. The daemon returned specific `No such container` and
+`no such volume` responses; one correctly formed
+`--filter label=cko.poc.run=<run-id>` listing succeeded with no matches.
+No removal was performed by that audit. Its context-name fingerprint and
+Unix-local/platform/server profile matched the saved profile. The original
+unique daemon ID and socket fingerprint were not retained, so full daemon
+continuity cannot be independently established. Later absence is a distinct
+observation and does not rewrite the original cleanup verdict as passed.
+
+The following investigation files were retained locally, with exact SHA-256
+values; they are not bundled here or guaranteed durable release archives:
+
+| Local evidence path | SHA-256 |
+| --- | --- |
+| `/tmp/cko-issue291-pause-one-authorized-attempt/manifest.json` | `594f1775b1c96987e0eb42577894405233c2f7cff2cafb1f9db8d9462b88194e` |
+| `/tmp/cko-issue291-pause-one-authorized-attempt/events.jsonl` | `c88bc1c4cf63e785f98ffa47c115e400a9f23be51ade385663b577c7cc957d81` |
+| `/tmp/cko-issue291-cleanup-audit-readonly/receipt.json` | `0d1534f190aa664c2c3284fc217349826d48a7e645df07faa4d580aef560ec0d` |
+
+The local adapter at `/tmp/cko-issue291-pause-prep/pause_poc.py` is identified
+by the hash above, but the repository alone does not reproduce this attempt.
+Retain or archive sanitized receipts before retiring those temporary paths.
+Any future reuse requires corrected filters, fresh daemon/endpoint identity,
+independent review of the concrete adapter and a separately bounded attempt;
+revisit the record when those inputs or the image/runtime change.
+
+This supplies no backup target, artifact, sole-candidate exclusion, copy-gap
+ranking, Operator or fencing qualification. The existing long-transaction and
+missing-evidence rules and all backup acceptance under #291 remain unchanged.
