@@ -4,6 +4,7 @@
     ".": {}
   },
   "release-type": "go",
+  "initial-version": "0.1.0",
   "include-v-in-tag": true,
   "include-component-in-tag": false,
   "bump-minor-pre-major": true,
