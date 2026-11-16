@@ -1462,13 +1462,22 @@ in-place restore** in v1alpha1.
 - `manifestUri` (not a `CubridBackup` CR name) is the canonical input so
   cross-namespace / cross-cluster / migration recovery works; restore uses
   the **new** cluster's object-storage credentials only.
-- **Validation gate:** not Ready until manifest trust passes, the DB
-  opens, HA forms, and slaves catch up. A half-restored DB is never
-  reported healthy. As implemented, the recovery is `Complete` once the
-  manifest and its checksums verified, `restoredb` succeeded and the other
-  members are seeded and HA-configured
-  (`internal/controller/bootstrap.go`); no catch-up is checked, and the
-  `Validating` phase of the API is never set.
+- **Implemented bootstrap gate:** the Operator keeps
+  `BootstrapReady=False` while restore, member seeding or HA
+  configuration is incomplete. In
+  [`reconcileRecoverySeeding`](internal/controller/bootstrap.go), recovery
+  becomes `Complete` when the other members have been seeded and marked
+  `HAConfigured`. **That phase does not itself verify SQL rows on every
+  member or independently confirm post-restore replication catch-up.**
+  The API's `Validating` phase is not entered by this path.
+- **Required release qualification (not implied by `Complete` or `Ready`):**
+  independently verify manifest trust, successful database access, a single
+  authoritative HA primary, replication/apply progress, the restored dataset
+  on all required members and convergence of *new acknowledged writes*
+  through the supported access paths. A successful restore bootstrap, native
+  HA formation or green Kubernetes condition alone is insufficient;
+  candidate-specific scenarios under #89, #118 and #126 must provide the
+  evidence before describing recovery as validated.
 - **Safety:** bootstrap recovery only targets an empty/operator-owned
   initial master PVC; a valid/ambiguous existing DB → refused and blocked
   (never dropped/overwritten). The source `clusterUid` is not
