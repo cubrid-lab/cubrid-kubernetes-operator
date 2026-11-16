@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
@@ -36,9 +37,10 @@ import (
 // scenario S14 (#438), or prove that real members remain healthy during rotation.
 func TestPrimaryResolutionDuringTokenOverlap(t *testing.T) {
 	ctx := context.Background()
-	members := []string{"db-0", "db-1", "db-2"}
+	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "ns"}}
+	members := memberNames(cluster, 3)
 	primary := members[1]
-	secret := tokenSecret("db", "ns", previousTok)
+	secret := tokenSecret(cluster.Name, cluster.Namespace, previousTok)
 	reader := fake.NewClientBuilder().WithObjects(secret).Build()
 	held := newHolders(map[string]string{})
 	answers := map[string]instancemanager.HAStatus{}
