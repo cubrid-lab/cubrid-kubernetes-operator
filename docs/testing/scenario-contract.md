@@ -2091,6 +2091,29 @@ it needs more.
   former master comes back is judged by S09 `clean`, which this scenario runs
   as its second half. The suite measures that return against `rejoin_limit`
   inside S03; S09 itself has no test and no result in `summary.json`.
+- **Recovery observations:** a changed Pod UID alone does not show that the
+  deleted container stopped answering. To initially accept the deleted member's
+  name as the recovered master, the harness observes its new, non-deleting,
+  ready Pod and named `cubrid` container before the active-role sweep, then
+  verifies the same ready/running container identity afterward. Another member
+  can establish the candidate without waiting for that replacement. All active
+  claims still participate in the existing confirming two-sweep check, and a
+  later full-role master change still fails while status agreement is pending.
+  This qualification applies to the pinned Kind startup on the same volume;
+  it is not proof of physical fencing or VM-fault safety.
+  `electionObservedWithin` reports the external candidate-observation interval.
+  After accepting that candidate, the first complete status with a nonzero
+  `lastObservedTime` becomes a fixed baseline, including an unresolved status.
+  A later strictly advancing export must name the candidate and report
+  `PrimaryResolved=True`. Its receipt supplies `operatorNoticedWithin`, a
+  conservative external status-agreement upper bound, not the Operator's exact
+  internal detection time or proof that it consumed a particular container's
+  response. Existing waits and limits are unchanged.
+  The optional `S03/<variant>/recovery-observations.json` keeps fixed slots for
+  the first rejected same-name observation, accepted candidate, status baseline
+  and agreement, with filtered identity/readiness fields and bounded counters.
+  It is redacted and limited by the existing per-source evidence cap; missing
+  diagnostics never change a safety verdict or stand in for SQL/data evidence.
 - **Must never happen:** an `acknowledged` operation missing; two masters
   reported as healthy, or two members reporting themselves active masters in
   two consecutive sweeps of all members; the Operator deleting or restarting another member

@@ -496,6 +496,16 @@ func (r *haRun) s03(spec context.Context, variant string) {
 
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var electedAt, noticedAt time.Time
+	check, recoveryState := newS03RecoveryCheck(s03RecoveryProbe{
+		members: r.members,
+		replacement: func(ctx context.Context) (s03ReplacementObservation, error) {
+			return r.readS03Replacement(ctx, master)
+		},
+		activeMasters: r.activeMasters, master: r.master, status: r.status,
+		formationTime:          r.formationTime,
+		lastAnswerAcknowledged: func(ctx context.Context) bool { return r.lastAnswerAcknowledged(ctx, client) },
+		now:                    time.Now,
+	}, master, uid)
 	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
 		Fault:  logs.observeFault(podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful}),
@@ -516,55 +526,16 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			}
 			return nil
 		},
-		Check: func(ctx context.Context) (bool, error) {
-			// The Operator's own view is read by the sampler, and judged after
-			// the run (conditions_test.go): it must never offer the write
-			// endpoint while the primary is not resolved (ADR-0005, section 6).
-			// Two members that are active masters at once must never happen.
-			// One sweep asks the members one after another and can see both
-			// sides of a handover, so a second sweep confirms it.
-			masters := r.activeMasters(ctx)
-			if len(masters) > 1 {
-				if err := faults.CheckOneMaster(masters, r.activeMasters(ctx)); err != nil {
-					return false, err
-				}
-				return false, nil // a handover seen mid-sweep
-			}
-			// CUBRID's election: a member reports itself an active master.
-			// It is another member, or the deleted one in its new Pod: the
-			// fault is confirmed, so the old Pod no longer answers.
-			if newMaster == "" {
-				if len(masters) == 0 {
-					return false, nil
-				}
-				newMaster = masters[0]
-				electedAt = time.Now()
-			}
-			// The Operator noticing it.
-			if noticedAt.IsZero() {
-				primary, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
-				if err != nil || primary != newMaster {
-					return false, nil
-				}
-				noticedAt = time.Now()
-			}
-			// One master and two slaves again. A master other than the
-			// elected one is a second change of role, which must not happen
-			// by itself.
-			now, _, err := r.master(ctx)
-			if err != nil {
-				return false, nil
-			}
-			if now != newMaster {
-				return false, fmt.Errorf("the master changed again, from %s to %s", newMaster, now)
-			}
-			if _, err := r.formationTime(ctx); err != nil {
-				return false, nil // a condition of the starting state is not True yet
-			}
-			// The client recovered: its latest answer is an acknowledgement.
-			return r.lastAnswerAcknowledged(ctx, client), nil
-		},
+		Check: check,
 	})
+	recoverySnapshot, recoveryFile, recoveryNote := finishS03Recovery(outcome, recoveryState, variant,
+		redactor, writeScenarioFile)
+	newMaster, electedAt, noticedAt = recoverySnapshot.newMaster, recoverySnapshot.electedAt, recoverySnapshot.noticedAt
+	addEvidence(&result, recoveryFile)
+	if recoveryNote != "" {
+		_, _ = fmt.Fprintln(GinkgoWriter, "warning: "+recoveryNote)
+		updateSummary(func(s *evidence.Summary) { s.Notes = append(s.Notes, "S03/"+variant+": "+recoveryNote) })
+	}
 	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
@@ -683,7 +654,10 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
+	if recoveryFile != "" {
+		files = append(files, recoveryFile)
+	}
+	since := func(t time.Time) string { return s03ObservedWithin(t, outcome.FaultIssuedAt) }
 	// Writes the client was told are committed while the operator reported
 	// the primary as not resolved: open question Q2 of the contract.
 	acknowledgedWhileUnresolved := 0
