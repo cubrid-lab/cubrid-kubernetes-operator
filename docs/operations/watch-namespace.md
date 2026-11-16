@@ -125,19 +125,21 @@ removed.
 
 ## Manager memory, as observed
 
-The memory of the manager has not been measured on a reference deployment, so
-this repository sets no new resource limit for it, and an unmeasured memory
-risk is not an observed out-of-memory kill. The latest successful End-to-End
-run of `main` when this was written (run 43664041252, commit
+The [2026-11-16 reference-deployment record](../testing/reference-manager-memory.md)
+retains all 121 evaluations of the manager's memory over one hour, with its
+installed source/image identity and contemporaneous cluster and object counts.
+Resident memory ranged from 66.266 to 68.746 MiB at those evaluation points.
+These are sampled observations, not a peak or scaling bound; no new resource
+limit is selected and no out-of-memory kill is inferred.
+
+An earlier End-to-End run of `main` (run 43664041252, commit
 `b5cc1a6c24b56b48d878e0b44d76c15df44fa79d`, 2026-11-15 01:38 UTC) uploaded the
 `e2e-evidence` artifact, but its `metrics.txt` files hold only the
 `cubrid_cluster_*` metrics of one CubridCluster, not the manager's
 `process_resident_memory_bytes` or `go_memstats_heap_inuse_bytes`, and no other
 file in it holds a memory series. So there is no memory range to report from
 that run. The End-to-End suite runs on Kind with a few test clusters, which is
-not a reference deployment in any case. Choosing a limit needs the manager's
-process metrics sampled, with the label-filtered cache, at the cluster count
-and object count of a reference deployment.
+not a reference deployment.
 
 Since #282, every scenario of the Kind End-to-End run records the manager's
 memory when its result is recorded. `<scenario>/manager-memory.txt` (for
@@ -162,5 +164,6 @@ Kind cluster in a GitHub-hosted runner.
 
 These are single reads per scenario, not peaks between reads. No limit is
 chosen from them: a Kind run has a few clusters and objects, so its values
-bound nothing about a reference deployment. Choosing a limit still needs the
-same series read at a reference deployment's cluster and object count.
+bound nothing about a reference deployment. The separate reference snapshot
+above also does not bound peaks or larger workloads; any future limit must
+account for its workload and sampling scope.
