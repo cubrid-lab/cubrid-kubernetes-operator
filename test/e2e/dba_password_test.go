@@ -52,6 +52,7 @@ spec:
   containers:
     - name: client
       image: docker.io/library/python:3.12-slim
+      imagePullPolicy: Never
       env:
         - {name: RW_HOST, value: "%[3]s-rw.%[4]s.svc"}
         - {name: RO_HOST, value: "%[3]s-ro.%[4]s.svc"}

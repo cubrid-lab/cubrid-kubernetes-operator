@@ -38,6 +38,7 @@ created=
 signal=
 starting=
 child=
+preload_child=
 
 delete_cluster() {
 	local status=$?
@@ -58,9 +59,10 @@ delete_cluster() {
 }
 trap delete_cluster EXIT
 
-# on_signal records the first signal and passes every signal on to the
-# command's process group. Before the command starts it ends the run, which
-# deletes what was created so far.
+# on_signal records the first signal and stops the process group currently
+# owned by this run: a test command or a helper-image preload. A TERM during
+# a slow registry pull/load must not keep the owned Kind cluster alive.
+# Before either command starts, it ends the run and deletes the cluster.
 on_signal() {
 	local sig="$1" num="$2"
 	if [ -z "$signal" ]; then
@@ -69,6 +71,9 @@ on_signal() {
 	if [ -n "$child" ]; then
 		echo "Received SIG$sig; stopping the e2e run..." >&2
 		kill -s "$sig" -- "-$child" 2>/dev/null || true
+	elif [ -n "$preload_child" ]; then
+		echo "Received SIG$sig; stopping Kind helper image preload..." >&2
+		kill -s "$sig" -- "-$preload_child" 2>/dev/null || true
 	elif [ -z "$starting" ]; then
 		exit $((128 + num))
 	fi
@@ -99,6 +104,68 @@ else
 		exit "$rc"
 	fi
 fi
+
+# Kind tests must not pull these helper images from Docker Hub in each Pod.
+# Pin versions (not :latest) in the fixtures too. Stage once in this Kind
+# cluster, before any scenario starts, including explicitly reused clusters.
+# An initial host pull still needs registry access and may be rate limited;
+# fail before starting the tests if that happens. The EXIT trap preserves
+# owned-cluster cleanup even on a failed pull or load.
+if [ -z "${CONTAINER_TOOL:-}" ]; then
+	echo "error: CONTAINER_TOOL must name Docker or Podman to preload Kind helper images." >&2
+	exit 2
+fi
+# Like the suite, run every external preload command in a tracked process
+# group. Defer signals during the launch-to-PID handoff, then replay the first
+# signal and reap the helper before the EXIT trap cleans up the owned cluster.
+# This also works for an explicitly reused cluster, which must never be deleted.
+run_preload_command() {
+	local result=0
+	starting=1
+	set -m
+	"$@" &
+	preload_child=$!
+	set +m
+	starting=
+	if [ -n "$signal" ]; then
+		kill -s "$(kill -l "$signal")" -- "-$preload_child" 2>/dev/null || true
+	fi
+	# A trapped signal interrupts wait before the helper has finished stopping.
+	while :; do
+		wait "$preload_child"
+		result=$?
+		if ! kill -0 "$preload_child" 2>/dev/null; then
+			break
+		fi
+	done
+	preload_child=
+	if [ -n "$signal" ]; then
+		exit $((128 + signal))
+	fi
+	return "$result"
+}
+preload_helper_image() {
+	local image="$1"
+	if ! run_preload_command "$CONTAINER_TOOL" image inspect "$image" >/dev/null 2>&1; then
+		echo "Fetching Kind test helper image '$image' on the host..."
+		if ! run_preload_command "$CONTAINER_TOOL" pull "$image"; then
+			echo "error: could not fetch Kind test helper '$image' on the host (check registry access/rate limits)." >&2
+			return 1
+		fi
+	fi
+	echo "Loading Kind test helper image '$image' into '$KIND_CLUSTER'..."
+	if ! run_preload_command "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"; then
+		echo "error: could not load Kind test helper '$image' into '$KIND_CLUSTER'." >&2
+		return 1
+	fi
+}
+for helper_image in \
+	docker.io/adobe/s3mock:5.2.3 \
+	docker.io/library/python:3.12-slim \
+	docker.io/curlimages/curl:8.10.1
+do
+	preload_helper_image "$helper_image" || exit 1
+done
 
 # Job control gives the command a process group of its own, which receives
 # SIGINT (a background job without job control ignores it) and which the

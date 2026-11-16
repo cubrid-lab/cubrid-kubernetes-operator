@@ -51,6 +51,14 @@ case "$1 $2" in
 esac
 `
 
+// The lifecycle tests are not image-pull tests: report that all helper images
+// are already cached on the host. The separate hack/run_e2e_test.go covers
+// successful loading and pull failures, including a registry HTTP 429.
+const cachedHelperImageStandIn = `#!/bin/sh
+if [ "$1" = image ] && [ "$2" = inspect ]; then exit 0; fi
+exit 0
+`
+
 const e2eCluster = "cubrid-kubernetes-operator-test-e2e"
 
 type e2eRun struct {
@@ -87,9 +95,13 @@ func newE2ERun(t *testing.T, existing []string, reuse string, command ...string)
 	if err := os.WriteFile(kind, []byte(kindStandIn), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	containerTool := filepath.Join(dir, "container-tool")
+	if err := os.WriteFile(containerTool, []byte(cachedHelperImageStandIn), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	r.cmd = exec.Command(script, command...)
 	r.cmd.Env = append(os.Environ(), "KIND="+kind, "KIND_CLUSTER="+e2eCluster,
-		"KIND_NODE_IMAGE=kindest/node:test", "E2E_REUSE_CLUSTER="+reuse,
+		"CONTAINER_TOOL="+containerTool, "KIND_NODE_IMAGE=kindest/node:test", "E2E_REUSE_CLUSTER="+reuse,
 		"CLUSTERS="+r.clusters, "CALLS="+r.calls, "MARKER="+r.marker,
 		"DELETING="+r.deleting, "PGID="+r.pgid)
 	// The script, and the kind it runs, get a process group of their own, so
@@ -357,7 +369,8 @@ func TestTestE2E_DeletesItsClusterAfterAFailedSuite(t *testing.T) {
 	// -o keeps make from running vet, checking for Docker or installing kind.
 	cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"),
 		"-o", "vet", "-o", "container-tool", "-o", kind, "test-e2e",
-		"KIND="+kind, "E2E_EVIDENCE_DIR="+filepath.Join(dir, "e2e-evidence"))
+		"KIND="+kind, "CONTAINER_TOOL="+filepath.Join(filepath.Dir(r.clusters), "container-tool"),
+		"E2E_EVIDENCE_DIR="+filepath.Join(dir, "e2e-evidence"))
 	cmd.Env = append(childMakeEnv(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"REAL_GO="+realGo, "CLUSTERS="+r.clusters, "CALLS="+r.calls, "MARKER="+r.marker)
 	out, err := cmd.CombinedOutput()

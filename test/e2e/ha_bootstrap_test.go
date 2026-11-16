@@ -61,6 +61,7 @@ spec:
       containers:
         - name: s3mock
           image: docker.io/adobe/s3mock:5.2.3
+          imagePullPolicy: Never
           env:
             - name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS
               value: %[2]s
@@ -99,6 +100,7 @@ spec:
   containers:
     - name: client
       image: docker.io/library/python:3.12-slim
+      imagePullPolicy: Never
       env:
         - {name: RW_HOST, value: "%[2]s-rw.%[3]s.svc"}
         - {name: RO_HOST, value: "%[2]s-ro.%[3]s.svc"}
