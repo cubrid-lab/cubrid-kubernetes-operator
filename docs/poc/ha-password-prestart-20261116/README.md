@@ -89,32 +89,26 @@ POC-61's existing client-password and restart observations and
 [POC-62's separate replication experiment](../poc62/README.md) are not rerun
 or generalized here.
 
-## Files and reproduction
+## Retained records and future reproduction
 
-`out/commands.json` records every actual command, UTC boundary, output and
-exit/timeout marker. `out/result.json` reports `blocked` and the bounded
-cleanup result. `out/environment.json` contains host observations.
-`out/attempt-source.json` identifies the original harness, which stopped
-before its engine steps.
+`out/commands.json` records the original attempt's commands, UTC boundaries,
+output and exit/timeout markers. Later ownership inspection, cleanup and
+final inventories are recorded separately in `out/late-container-ownership.json`,
+`out/late-container-cleanup.json` and `out/cleanup-verification.json`.
+`out/result.json` reports `blocked` and the final cleanup result.
+`out/environment.json` contains host observations. `out/attempt-source.json`
+identifies the original harness, which stopped before its engine steps.
 
-`run.py` is reduced to the failed container-start precondition. It uses a
-unique run label and names, the same pinned local image, a 512 MiB memory
-limit and half a CPU. It creates no database, requests no registry pull,
-uses no credentials and removes only resources this invocation owns. It
-writes a new directory, preserving this attempt's immutable `out/` files:
+No executable reproducer is shipped. The original attempt failed before
+engine setup, and the later reduced helper's cleanup was not validated.
+Review found that helper could report cleanup as complete after interruption
+or an inspection error and did not recheck the network's run label before
+removal. It was removed instead of extending an unexecuted harness.
 
-```sh
-python3 docs/poc/ha-password-prestart-20261116/run.py
-```
-
-A blocked precondition exits 2. A successful container start is only a
-precondition result, never an authentication or HA pass. The reduced
-reproducer was syntax-checked but was not rerun; its added ownership-label
-cleanup path has not been exercised against Docker. After a timeout it
-refuses to claim cleanup is settled: the daemon can complete a request
-after its CLI has been cancelled, as this attempt demonstrated. The complete proposed
-engine experiment has deliberately not been shipped as an unexecuted
-harness.
+A future experiment needs a separately reviewed harness that proves resource
+ownership before removal and preserves unresolved cleanup after interruption,
+inspection errors or late daemon completion. A successful container start
+would establish only a precondition, never an authentication or HA pass.
 
 For a future authorized experiment, use protected-terminal password entry
 and sanitized output, never `-p` arguments. Do not enable debug logging:
