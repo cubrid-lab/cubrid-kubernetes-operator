@@ -46,9 +46,9 @@ reads rules, after adjusting the `job` name of the scrape.
 |---|---|---|
 | `CubridOperatorDown` | the scrape of the Operator fails for 5 minutes | known: the scrape failed |
 | `CubridOperatorTargetMissing` | no scrape target exists for 10 minutes | unknown |
-| `CubridClusterNotReady` | `Ready` is `False` for 10 minutes | known |
+| `CubridClusterNotReady` | `Ready` is not `True` for 10 minutes | `False` or `Unknown`; inspect the Condition |
 | `CubridClusterReadyUnknown` | the cluster has no `Ready` sample for 10 minutes | unknown |
-| `CubridClusterPrimaryResolvedFalse` | `PrimaryResolved` is not `True` for 5 minutes, and the observation is at most 60 seconds old | known (the metric is 0 for `False` and `Unknown`) |
+| `CubridClusterPrimaryResolvedFalse` | `PrimaryResolved` is not `True` for 5 minutes, and the observation is at most 60 seconds old | `False` or `Unknown`; inspect the Condition |
 | `CubridClusterMultiplePrimariesObserved` | more than one member reports `master` for 2 minutes | known |
 | `CubridClusterReplicationUnhealthy` | `ReplicationHealthy` is `False` for 5 minutes | known |
 | `CubridClusterReplicationNotObserved` | a cluster of more than one member has no `ReplicationHealthy` sample for 10 minutes | unknown |
@@ -64,6 +64,10 @@ come from.
 
 Known limits:
 
+- The Ready and primary-resolution metrics are 0 for both `False` and
+  explicit `Unknown` Conditions. Their zero-value alerts cannot distinguish
+  those states. A missing Ready Condition removes its sample; the separate
+  no-sample alert detects that absence, not an explicit `Unknown` Condition.
 - `CubridClusterReplicationNotObserved` also fires for a multi-member cluster
   without role discovery, which never publishes the sample.
 - A standalone cluster publishes no observation time and no role, so the
