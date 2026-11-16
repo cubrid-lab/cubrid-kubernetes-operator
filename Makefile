@@ -273,11 +273,13 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	# interrupted; the target exits with the failure's status (#461). An interrupt
 	# must reach make's process group (Ctrl-C, a CI job's cancel): a signal sent
 	# to make alone is handled only once the running build returns.
+	# Once EXIT cleanup starts, ignore further cancellation so builder removal
+	# cannot be interrupted before the temporary Dockerfile is removed.
 	# The copy of Dockerfile gets --platform=${BUILDPLATFORM} inserted; the original is preserved.
 	cross="$$(mktemp Dockerfile.cross.XXXXXX)" || exit 1; \
 	builder="cubrid-kubernetes-operator-builder-$${cross##*.}"; \
 	created=; \
-	trap 'if [ -n "$$created" ]; then $(CONTAINER_TOOL) buildx rm "$$builder" || echo "Could not remove the buildx builder $$builder" >&2; fi; rm -f "$$cross"' EXIT; \
+	trap 'trap "" INT TERM HUP; if [ -n "$$created" ]; then $(CONTAINER_TOOL) buildx rm "$$builder" || echo "Could not remove the buildx builder $$builder" >&2; fi; rm -f "$$cross"' EXIT; \
 	trap 'exit 130' INT; trap 'exit 143' TERM; \
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > "$$cross" || exit 1; \
 	$(CONTAINER_TOOL) buildx create --name "$$builder" || { echo "Could not create the buildx builder $$builder; no builder was used or removed" >&2; exit 1; }; \
