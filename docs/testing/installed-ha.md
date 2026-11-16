@@ -2841,8 +2841,15 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
    <copied log of the master> -a` (bounded to 15 s), its applier lock
    `$CUBRID/var/APPLYLOGDB/<db>` (the file, the locks `/proc/locks` lists on
    it, and which `applylogdb` process holds it open), the `applylogdb`
-   processes and the end of their newest error logs, and the member state
-   above; the reason names the status line.
+   processes, separate error tails for `applylogdb` and `copylogdb`, and the
+   member state above; the reason names the status line. Each log class keeps
+   its four newest matching `.err` files and the last 15 lines of each file,
+   independently of the other class. The process component in the filename,
+   rather than a process name occurring in the peer name, selects the class.
+   Missing files, an unavailable directory
+   and listing/tail failures are explicit. These file/line bounds do not bound
+   bytes in an individual line. Diagnostic output never changes the failure
+   caused by a missing acknowledged row.
 8. **The source.** The source's members must still be the Pods and containers
    LAB01 recorded at its end. A member Pod that is gone, has another UID or
    another database container changed and fails S12, Ready or not; the reason
