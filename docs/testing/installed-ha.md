@@ -335,6 +335,58 @@ what the marker shows, a slave that stopped applying.
 - One write through `<cluster>-ro` must be refused by the read-only Broker
   with `-581`. A write that fails for any other reason fails the run.
 
+**Application connection capabilities.** Before a fault, a caller can run
+`workload capabilities` without database environment variables or network access.
+It prints exactly this capability document:
+
+```json
+{"schemaVersion":1,"capabilities":["application-reconnect-stop-after-error-v1","application-connection-diagnostics-v1"],"physicalSessionContinuity":"unverified","driverInternalRetryControl":false}
+```
+
+For a workload run that must stop application reconnects, set
+`APP_RECONNECT_POLICY=stop-after-error` and an explicit writable
+`APP_CONNECTION_DIAGNOSTICS` path, for example:
+
+```sh
+APP_RECONNECT_POLICY=stop-after-error \
+APP_CONNECTION_DIAGNOSTICS=/tmp/application-connection.jsonl workload run
+```
+
+This policy permits at most one application call to
+`DriverManager.getConnection`. The first JDBC `SQLException` returned to the
+application ends the run with exit code 3 after recording the operation's
+existing outcome and attempting to close the Java Connection. A failure before
+insert commit stays `failed`; an insert commit error stays `unknown`; a read
+error stays `failed`. No unknown operation is retried. A returned Connection is
+also closed best effort if configuration fails. A close error cannot replace
+that outcome. Real driver I/O and close calls have no new wall-clock deadline.
+
+The separate JSONL file records application connection attempts, returned Java
+Connections, failures, close attempts, close results and policy stops with UTC
+timestamps and stages. SQL errors in these records and in opted-in history use
+only a five-character uppercase ASCII SQLState (or `unknown`) and vendor code;
+raw exception messages, JDBC URLs, credentials and Connection identities are
+omitted. Derived `read mismatch:` descriptions remain unchanged. A missing or
+unwritable required path rejects the run before JDBC access. A detected write
+or flush failure stops later work with a nonzero exit; it never creates or
+replaces a SQL outcome. Abrupt termination can leave an incomplete final line,
+and absence of a close record proves no closure or remote cleanup.
+
+Unset `APP_RECONNECT_POLICY`, or `reconnect`, preserves the existing application
+reconnect behavior and history error text. Supplying a diagnostic path with
+that default policy enables only the separate lifecycle records. With no path,
+existing commands emit no new diagnostics. Nondefault policy is supported only
+for `run`; unknown values are rejected before JDBC access.
+
+These capabilities describe application calls only. The pinned CUBRID JDBC
+driver can reconnect a Broker socket and retry internally while returning the
+same Java Connection. A returned or closed Java Connection therefore proves
+neither physical-session continuity nor physical termination. The capability
+document explicitly leaves physical continuity unverified and driver-internal
+retry control false. The child-JVM fake JDBC tests check this application
+boundary; they provide no database, quarantine or VM-fault evidence. The
+capabilities do not select an installed scenario or qualify any scenario result.
+
 **Data rules.** The rules of the scenario contract are checked against the
 client's history, on each member read directly with `csql` and through both
 Services. Rows a slave or the read-only Service lacks can mean a slave that

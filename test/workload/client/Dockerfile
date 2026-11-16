@@ -19,7 +19,10 @@ RUN fetch-verified \
         "${JDBC_SHA256}" cubrid-jdbc.jar \
     && chmod 0644 cubrid-jdbc.jar
 COPY test/workload/client/Workload.java .
+COPY test/workload/client/WorkloadApplicationReconnectTest.java .
 RUN javac -Xlint:all -Werror -d classes -cp cubrid-jdbc.jar Workload.java \
+    && javac -Xlint:all -Werror -d test-classes -cp classes:cubrid-jdbc.jar WorkloadApplicationReconnectTest.java \
+    && java -ea -cp test-classes:classes:cubrid-jdbc.jar WorkloadApplicationReconnectTest \
     && printf '#!/bin/sh\nexec java -cp /app/classes:/app/cubrid-jdbc.jar Workload "$@"\n' > workload \
     && chmod 0755 workload
 

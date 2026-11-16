@@ -14,8 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+import java.io.BufferedWriter;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -35,6 +40,7 @@ import java.time.Instant;
  * run                  run OPS operations as client CLIENT_ID and print the history
  * dump                 print every ledger row
  * marker NAME VALUE    write one row of the marker table
+ * capabilities         print application capabilities without opening a database
  * </pre>
  *
  * <p>Settings come from the environment: JDBC_URL (required), DB_USER (default dba), DB_PASSWORD,
@@ -42,7 +48,10 @@ import java.time.Instant;
  * ROLLBACK_EVERY (default 5: every fifth operation is rolled back; 0 for none), READ_EVERY (default
  * 0 for none: with N, every Nth operation reads back the row of the client's last acknowledged
  * insert instead of writing; it takes precedence over ROLLBACK_EVERY), ENDPOINT (default rw, copied
- * into the history).
+ * into the history). APP_RECONNECT_POLICY=stop-after-error requires run and an explicit writable
+ * APP_CONNECTION_DIAGNOSTICS path. It stops application opens after a JDBC error; driver-internal
+ * reconnects and retries remain outside this policy. A diagnostic path also works with default
+ * reconnect behavior, without changing the history channel.
  */
 public final class Workload {
   /** The note of a row that is written and then rolled back. */
@@ -59,6 +68,23 @@ public final class Workload {
   private final String client = env("CLIENT_ID", "c1");
   private final String endpoint = env("ENDPOINT", "rw");
   private Connection connection;
+  private final boolean stopAfterError;
+  private final BufferedWriter diagnostics;
+  private int connectionAttempts;
+  private String stage = "driver_open";
+  private boolean policyStopped;
+  private boolean diagnosticFailure;
+
+  private Workload(boolean stopAfterError) throws IOException {
+    this.stopAfterError = stopAfterError;
+    String path = env("APP_CONNECTION_DIAGNOSTICS", "");
+    diagnostics =
+        path.isEmpty() ? null : Files.newBufferedWriter(Path.of(path), StandardCharsets.UTF_8);
+  }
+
+  private static final class DiagnosticFailure extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+  }
 
   /** The last acknowledged insert of this client: its operation ID, sequence, amount and note. */
   private String lastOpId;
@@ -71,18 +97,60 @@ public final class Workload {
     if (args.length == 0) {
       usage();
     }
-    Workload w = new Workload();
-    switch (args[0]) {
-      case "init" -> w.init();
-      case "run" -> w.run();
-      case "dump" -> w.dump();
-      case "marker" -> {
-        if (args.length != 3) {
-          usage();
+    if (args[0].equals("capabilities")) {
+      OUT.println(
+          "{\"schemaVersion\":1,\"capabilities\":[\"application-reconnect-stop-after-error-v1\","
+              + "\"application-connection-diagnostics-v1\"],\"physicalSessionContinuity\":\"unverified\","
+              + "\"driverInternalRetryControl\":false}");
+      return;
+    }
+    String policy = env("APP_RECONNECT_POLICY", "reconnect");
+    boolean stop = policy.equals("stop-after-error");
+    if ((!stop && !policy.equals("reconnect"))
+        || (stop && (!args[0].equals("run") || env("APP_CONNECTION_DIAGNOSTICS", "").isEmpty()))) {
+      System.err.println("Invalid application reconnect policy or required diagnostics configuration");
+      System.exit(2);
+    }
+    Workload w;
+    try {
+      w = new Workload(stop);
+    } catch (IOException | InvalidPathException e) {
+      System.err.println("Could not open application connection diagnostics");
+      System.exit(1);
+      return;
+    }
+    try {
+      switch (args[0]) {
+        case "init" -> w.init();
+        case "run" -> w.run();
+        case "dump" -> w.dump();
+        case "marker" -> {
+          if (args.length != 3) {
+            usage();
+          }
+          w.marker(args[1], args[2]);
         }
-        w.marker(args[1], args[2]);
+        default -> usage();
       }
-      default -> usage();
+    } catch (DiagnosticFailure e) {
+      w.diagnosticFailure = true;
+    } finally {
+      // Existing commands without diagnostics retain their original connection lifetime.
+      if (w.diagnostics != null) {
+        w.discard();
+        try {
+          w.diagnostics.close();
+        } catch (IOException e) {
+          w.diagnosticFailure = true;
+        }
+      }
+    }
+    if (w.diagnosticFailure) {
+      System.err.println("Application connection diagnostics are incomplete");
+      System.exit(1);
+    }
+    if (w.policyStopped) {
+      System.exit(3);
     }
   }
 
@@ -138,6 +206,9 @@ public final class Workload {
       } else {
         operation(seq, rollback);
       }
+      if (policyStopped || diagnosticFailure) {
+        return;
+      }
       if (interval > 0) {
         Thread.sleep(interval);
       }
@@ -154,6 +225,7 @@ public final class Workload {
     // Until the commit is sent, a failure means that nothing was committed.
     try {
       Connection c = connect();
+      stage = "statement";
       try (PreparedStatement s =
           c.prepareStatement(
               "INSERT INTO ledger (op_id, client_id, seq, amount, note) VALUES (?, ?, ?, ?, ?)")) {
@@ -165,12 +237,13 @@ public final class Workload {
         s.executeUpdate();
       }
       if (rollback) {
+        stage = "rollback";
         c.rollback();
         event(seq, op, opId, "acknowledged", 0, null, null);
         return;
       }
     } catch (SQLException e) {
-      discard();
+      sqlFailure(e);
       event(seq, op, opId, "failed", 0, null, describe(e));
       return;
     }
@@ -178,6 +251,7 @@ public final class Workload {
     // Once the commit is sent, an error leaves the outcome unknown: the server may have
     // committed before the answer was lost.
     try {
+      stage = "commit";
       connection.commit();
       event(seq, op, opId, "acknowledged", 0, null, null);
       lastOpId = opId;
@@ -185,7 +259,7 @@ public final class Workload {
       lastAmount = amount;
       lastNote = note;
     } catch (SQLException e) {
-      discard();
+      sqlFailure(e);
       event(seq, op, opId, "unknown", 0, null, describe(e));
     }
   }
@@ -203,6 +277,7 @@ public final class Workload {
     String mismatch;
     try {
       Connection c = connect();
+      stage = "read";
       try (PreparedStatement s =
           c.prepareStatement("SELECT client_id, seq, amount, note FROM ledger WHERE op_id = ?")) {
         s.setString(1, target);
@@ -218,16 +293,17 @@ public final class Workload {
         }
       }
       try {
+        stage = "commit";
         c.commit();
       } catch (SQLException e) {
         // What the SELECT found stays the evidence, also when ending the read fails.
-        discard();
+        sqlFailure(e);
         String error = mismatch != null ? READ_MISMATCH + " " + mismatch : describe(e);
         event(seq, op, opId, "failed", 0, null, error);
         return;
       }
     } catch (SQLException e) {
-      discard();
+      sqlFailure(e);
       event(seq, op, opId, "failed", 0, null, describe(e));
       return;
     }
@@ -274,25 +350,78 @@ public final class Workload {
     System.err.println("marker " + name + " written");
   }
 
-  /** Returns the open connection, or opens one. A connection that failed is not reused. */
+  /** Returns the Java Connection; driver-internal reconnects and retries are not controlled. */
   private Connection connect() throws SQLException {
     if (connection == null) {
-      Connection c = DriverManager.getConnection(url, user, password);
-      c.setAutoCommit(false);
-      connection = c;
+      if (diagnosticFailure || policyStopped) {
+        throw new DiagnosticFailure();
+      }
+      stage = "driver_open";
+      connectionAttempts++;
+      diagnostic("application_connection_attempted", null);
+      if (diagnosticFailure) {
+        throw new DiagnosticFailure();
+      }
+      connection = DriverManager.getConnection(url, user, password);
+      diagnostic("application_connection_returned", null);
+      if (diagnosticFailure) {
+        throw new DiagnosticFailure();
+      }
+      stage = "configure";
+      connection.setAutoCommit(false);
     }
     return connection;
   }
 
+  private void sqlFailure(SQLException error) {
+    diagnostic("application_connection_failed", error);
+    discard();
+    if (stopAfterError) {
+      policyStopped = true;
+      diagnostic("application_reconnect_policy_stopped", null);
+    }
+  }
+
   private void discard() {
     if (connection != null) {
+      diagnostic("application_connection_close_attempted", null);
       try {
         connection.close();
-      } catch (SQLException ignored) {
-        // The connection is being thrown away because it failed.
+        diagnostic("application_connection_closed", null);
+      } catch (SQLException error) {
+        // A best-effort close must not replace the operation's failed or unknown outcome.
+        diagnostic("application_connection_close_failed", error);
       }
       connection = null;
     }
+  }
+
+  private void diagnostic(String event, SQLException error) {
+    if (diagnostics == null || diagnosticFailure) {
+      return;
+    }
+    StringBuilder line = new StringBuilder(240);
+    line.append("{\"schemaVersion\":1,\"t\":").append(quote(Instant.now().toString()));
+    line.append(",\"client\":").append(quote(client));
+    line.append(",\"applicationConnectionAttempt\":").append(connectionAttempts);
+    line.append(",\"event\":").append(quote(event));
+    line.append(",\"stage\":").append(quote(stage));
+    if (error != null) {
+      line.append(",\"sqlState\":").append(quote(safeSQLState(error)));
+      line.append(",\"vendorCode\":").append(error.getErrorCode());
+    }
+    try {
+      diagnostics.write(line.append('}').toString());
+      diagnostics.newLine();
+      diagnostics.flush();
+    } catch (IOException e) {
+      diagnosticFailure = true;
+    }
+  }
+
+  private static String safeSQLState(SQLException error) {
+    String state = error.getSQLState();
+    return state != null && state.matches("[A-Z0-9]{5}") ? state : "unknown";
   }
 
   private void event(
@@ -330,7 +459,10 @@ public final class Workload {
     OUT.println(line.append('}'));
   }
 
-  private static String describe(SQLException e) {
+  private String describe(SQLException e) {
+    if (stopAfterError) {
+      return "SQLState " + safeSQLState(e) + ", code " + e.getErrorCode();
+    }
     return "code " + e.getErrorCode() + ": " + e.getMessage();
   }
 
