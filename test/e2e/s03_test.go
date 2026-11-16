@@ -215,7 +215,9 @@ func (r *haRun) startClient(id string) {
 // killClient stops a client started with startClient. It is safe to call
 // more than once.
 func (r *haRun) killClient(id string) {
-	_, _ = r.client(context.Background(), fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = r.client(ctx, fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
 }
 
 // lastAnswerAcknowledged reports whether the latest answer a running client
@@ -569,10 +571,39 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
 		result.Result, result.Reason = outcome.Result, outcome.Reason
-		// Keep what the client saw: the scenario ends here.
-		if text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
-			writeScenarioFile("S03/"+variant+"/client-history.jsonl", []byte(text))
+		// Preserve the first failure verdict, but stop the client and attempt
+		// the SQL/member comparison before the namespace is cleaned up.
+		// Even a successful data check cannot turn this failed fault into pass.
+		// Stop further client writes even when the fault did not converge.
+		// The client-only stop/history commands share a bounded context, so a
+		// missing client Pod cannot prevent the failed scenario from ending.
+		collectCtx, collectCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		history, historyErr := collectFailedClient(collectCtx, client, r.client)
+		collectCancel()
+		if historyErr == nil {
+			r.mu.Lock()
+			delete(r.running, client)
+			r.mu.Unlock()
 		}
+		var report workload.Report
+		var dataErr error
+		if historyErr == nil && strings.TrimSpace(history) != "" {
+			r.addHistory(history)
+			if reason := s03DataCheckBlocked(outcome); reason != "" {
+				dataErr = fmt.Errorf("%s", reason)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				report, dataErr = r.dataCheck(ctx)
+				cancel()
+			}
+		} else {
+			if historyErr == nil {
+				historyErr = fmt.Errorf("the client produced no complete history lines")
+			}
+			dataErr = fmt.Errorf("not run: the fault client's history was unavailable")
+		}
+		result.Evidence = append(result.Evidence, s03FailedOutcomeFiles(variant, history, historyErr,
+			report, dataErr, writeScenarioFile)...)
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
@@ -721,4 +752,68 @@ func s03Conditions(variant string, result evidence.Scenario, rounds []conditionR
 	}
 	result.Measurements["conditionAgreement"] = measured
 	return withAgreement(result, agreement), agreement
+}
+
+// s03FailedOutcomeFiles keeps *diagnostic* evidence for a failed or blocked
+// fault. A successful read here does not change the original scenario result,
+// and a read error must not be misrepresented as a zero-loss data check.
+func s03FailedOutcomeFiles(variant, history string, historyErr error, report workload.Report, dataErr error,
+	write func(string, []byte) string) []string {
+	dir := "S03/" + variant
+	var files []string
+	put := func(name string, content []byte) {
+		if file := write(dir+"/"+name, content); file != "" {
+			files = append(files, file)
+		}
+	}
+	if historyErr != nil {
+		put("client-history-error.txt", []byte(historyErr.Error()+"\n"))
+	} else {
+		put("client-history.jsonl", []byte(history))
+	}
+	if dataErr != nil {
+		put("data-check-error.txt", []byte(dataErr.Error()+"\n"))
+	} else if report.Members != nil {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			put("data-check-error.txt", []byte(err.Error()+"\n"))
+		} else {
+			put("data-check.json", append(data, '\n'))
+		}
+	} else {
+		put("data-check-error.txt", []byte("not run: no member data report was produced\n"))
+	}
+	return files
+}
+
+// s03DataCheckBlocked keeps the failure-evidence reader away from a fault
+// whose callback is still running or whose cleanup failed. The client history
+// can be kept, but new SQL/Pod reads cannot safely be started in parallel.
+func s03DataCheckBlocked(outcome faults.Outcome) string {
+	if len(outcome.StillRunning) != 0 {
+		return "not run: fault step still running (" + strings.Join(outcome.StillRunning, ", ") + ")"
+	}
+	if !outcome.FaultIssuedAt.IsZero() && !outcome.CleanupSucceeded {
+		return "not run: fault cleanup did not succeed"
+	}
+	return ""
+}
+
+// collectFailedClient issues only *client Pod* commands: first stop further
+// workload writes, then retain complete client events. Unlike the normal
+// collector it uses the caller's bounded context. In particular, no
+// unbounded kubectl operation is started when the fault has not converged.
+func collectFailedClient(ctx context.Context, id string,
+	client func(context.Context, string) (string, error)) (string, error) {
+	if _, err := client(ctx, fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id)); err != nil {
+		return "", fmt.Errorf("stop workload client: %w", err)
+	}
+	text, err := client(ctx, fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	if err != nil {
+		return "", fmt.Errorf("read workload client history: %w", err)
+	}
+	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
+		return text[:cut+1], nil
+	}
+	return "", nil
 }
