@@ -724,20 +724,23 @@ removed, and no later variant of the same system is started.
 
 These are different things and are never reported as one another:
 
-1. **Removing endpoints from the managed write path (implemented in part,
-   envtest only).** On a write quarantine of ADR-0005 section 8 the Operator
-   scales the read-write Brokers to zero, which removes the `-rw` endpoints so
-   *new* connections through `-rw` fail. On an unresolved primary without
-   a quarantine it only sets `RoutingReady=False` while Brokers and Service
-   endpoints remain (docs/observability.md, "The write quarantine").
-   A scenario must test actual SQL through `-rw`, never infer enforcement
-   from a Condition. A missing/stale observation alone does not prove native
-   CUBRID has entered a two-master state; #113/#115 must establish the
-   accepted availability/safety policy.
-2. **Closing existing connections.** Sessions that were open before the
-   proposed quarantine would have to be ended separately. ADR-0005 does
-   **not** claim the Operator does this: an open session may keep writing.
-   Any future claim must be supported by direct SQL/session evidence.
+1. **Stopping the managed read-write Brokers.** A quarantine of ADR-0005
+   section 8 keeps the read-write Deployment at zero replicas. Record the
+   scale-down, actual Broker Pod termination and empty `-rw` EndpointSlices
+   separately; desired replicas or `RoutingReady=False` alone do not prove
+   enforcement. An unresolved observation outside the accepted triggers
+   starts no new quarantine, so Brokers and endpoints may remain while
+   `RoutingReady=False` reports the incomplete primary observation.
+   A later non-triggering snapshot never releases a quarantine already in
+   force. Test actual SQL through `-rw` independently from Kubernetes state.
+2. **Ending existing managed connections.** Stopping the Brokers is expected
+   to end the sessions they hold, unlike removing endpoints alone. Measure
+   whether and when sessions established before the fault stop acknowledging
+   writes; do not predeclare either survival or termination. Keep their
+   attempted, acknowledged, failed and outcome-unknown operations separate
+   from new connections, including acknowledgements during Broker termination
+   or after reported enforcement. No session-termination claim follows from
+   `enforcedTime`, desired replicas or Conditions without that SQL evidence.
 3. **Fencing the database.** The database process itself is stopped or
    isolated so that it cannot accept writes from anyone. In the current
    design, `/v1/shutdown` is used by the Pod's planned lifecycle preStop
@@ -2350,16 +2353,64 @@ it needs more.
   the *roles* but not reconcile the *data*. The manual describes
   `ha_ping_hosts` as the way a master tells a partition from the loss of its
   slaves; the generated configuration does not set it (see Q3).
-- **The Operator must** (ADR-0005): set `PrimaryResolved` to `False` and
-  `RoutingReady` to `False` when it sees more than one master or cannot
-  observe every member; pick no winner; not shut down, delete or isolate a
-  member to resolve it; require a manual step when two masters were seen.
-- **Expected, new connections:** through the read-write endpoint they stop
-  succeeding within `quarantine_limit` of the ambiguous observation.
-- **Expected, already-open connections:** they may keep writing to the side
-  they are connected to (ADR-0005, "Negative" consequences). Writes they make
-  to an isolated old master are recorded and counted; they are the measured
-  stale-write window, not a failure of this scenario.
+- **The Operator must** (ADR-0005 section 8): keep `PrimaryResolved=False`
+  and `RoutingReady=False` while current primary observations are incomplete
+  or conflicting. It must not choose a winner or stop, delete or isolate a
+  database member to resolve them. Quarantine eligibility is separate from primary
+  resolution: use the ADR's fresh active-master claims, member identities,
+  priority order and last resolved primary, not an unknown role alone.
+- **Trigger and control observations:** apply the ADR's verification
+  predicates and any still-valid manual-release identity exemption. The first
+  three rows describe observations with no quarantine already in force.
+
+  | Current observation | Managed write-path expectation |
+  | --- | --- |
+  | Two or more fresh active-master claims | Persist `WriteQuarantinedMultipleMasters` and stop RW Brokers. Later role convergence does not release it automatically. |
+  | Exactly one active master, with an unverified member not covered by that exemption that outranks it or is a different last resolved primary | Persist `WriteQuarantinedMemberUnverified`, recording that master and affected identities; apply the ADR's verification and confirmed-termination predicates. |
+  | No active master, or only unverified lower-ranked members that were not the last resolved primary, with no quarantine already in force | Start no new quarantine solely for this snapshot. Record whether native SQL succeeds or refuses writes; neither outcome makes incomplete primary/routing Conditions healthy. |
+  | A quarantine already in force under later observations | Keep it enforced until an accepted release. Apply only the ADR's revision, escalation and confirmed-termination/rebase transitions; never downgrade a manual-only quarantine to an automatically releasable one. A non-triggering snapshot is not a release. |
+
+- **Expected, new connections:** when a current observation triggers
+  quarantine, connections through the managed read-write endpoint stop
+  succeeding within `quarantine_limit` of that triggering observation. Record
+  fault time, detection, requested scale-down, actual Broker Pod termination,
+  empty EndpointSlices and SQL interruption separately. The non-triggering
+  controls do not require the Operator to stop new connections merely because
+  a primary observation is incomplete.
+- **Expected, already-open connections:** run independent SQL clients whose
+  sessions were established before the fault. Record attempted, acknowledged,
+  failed and outcome-unknown operations and each session's interruption.
+  Measure the stale-write window and acknowledgements during Broker termination
+  or after reported enforcement; do not exempt continued writes merely
+  because the session predates quarantine. Evaluate the observed enforcement
+  and datasets against ADR-0005, without inferring SQL interruption from a
+  Condition or Kubernetes timestamp alone.
+- **Persistence and release:** keep a persisted quarantine across reconciliation,
+  Operator restart and failed/conflicting writes. Test automatic release only
+  for the accepted member-unverified case: the recorded master must remain
+  the same unique active master and the required complete identity-matched
+  verification passes must be at least 10 seconds apart; intervening
+  uncertainty resets them. Preserve the ADR's confirmed-termination/rebase
+  exception rather than escalating every master change indiscriminately.
+  A quarantine that saw two active masters or escalated to manual-only
+  requires the current one-time approval token and exactly one current active
+  master; stale, consumed or identity/revision-mismatched approvals are inert.
+  Persist the current identities/revision and consume accepted approval before
+  restoring RW replicas; a failed write or annotation-removal conflict must
+  not permit replay. Record the administrator's accepted risk and independent
+  fence/data evidence; manual approval itself proves neither fencing nor data
+  convergence. Apply its identity/process-scoped exemption only while the
+  ADR permits it, including revocation after restart or invalidating changes.
+- **External fence and return:** an authorized out-of-band fence assertion
+  plus the observed out-of-service taint can satisfy the ADR's conditional
+  release path; Node readiness, a Lease, a missing Pod or the taint alone is
+  not process-fence proof. A release may reopen Brokers while primary/HA/routing
+  Conditions remain unresolved. Before removing the taint, observe the
+  persisted return-to-service barrier enforced, then require the returning
+  member's own fresh non-master verification with the recorded master still
+  unique. Preserve that barrier through restart and escalate new active-master
+  claims as the ADR requires. Manual exemptions never turn an unobserved
+  member into an authoritative role answer.
 - **Must never happen:** `PrimaryResolved=True` or `RoutingReady=True` while
   two masters exist or a member is unobserved; the Operator choosing which
   data set survives; the cluster reported healthy after the partition ends
@@ -2368,6 +2419,11 @@ it needs more.
   A difference between members is the expected input for S09 and S10, and
   must be *reported* by the cluster's status, not hidden.
 - **Limits:** `quarantine_limit`, `partition_duration`.
+  Their unset values remain blocked baselines, not passing measurements.
+  Established-session timing is reported independently; this contract invents
+  no numeric bound for it. Missing or unordered measurements remain unknown,
+  never zero. Direct database connections and the interval when the Operator
+  cannot observe or act retain the ADR's stated limits.
 
 ### S08: replication lag followed by repeated failures
 
@@ -2384,6 +2440,16 @@ it needs more.
   read. See Q4.
 - **The Operator must** (ADR-0005, ADR-0006): promote nothing; not report a
   member as caught up from its role alone.
+- **Quarantine through both failures:** evaluate the accepted trigger and
+  intentional non-trigger cases at every observed state. A later
+  non-triggering snapshot does not release an existing quarantine. Record
+  automatic verification, manual escalation and any accepted release
+  separately, including persisted identity/token revisions, restart and
+  conflicting or failed writes. A manual release or settled role does not
+  prove acknowledged data converged. Keep new and pre-existing managed
+  sessions' SQL histories separate and compare every required member after
+  recovery; apply the same external-fence and pre-untaint return barrier as
+  S07 when that path is exercised.
 - **Expected:** either writes resume on a member that holds every
   `acknowledged` operation, or the cluster stays not `Ready` with a status
   that says a manual step is needed. Both are acceptable outcomes; the run
@@ -3089,7 +3155,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `vm_return_limit` | VM powered on until its member has rejoined | unset | unset |
 | `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
 | `operator_resync_limit` | Operator started until status matches fresh observations | Kind on a GitHub-hosted runner: 2 minutes. VM lab: unset | Kind: measured |
-| `quarantine_limit` | Ambiguous observation until new read-write connections stop succeeding | unset | unset |
+| `quarantine_limit` | Quarantine-triggering observation until new managed read-write connections stop succeeding | unset | unset |
 | `partition_duration` | How long the partition is held | unset | unset |
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
