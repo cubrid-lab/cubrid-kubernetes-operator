@@ -591,6 +591,13 @@ func (b *LogBundle) collectFiles(ctx context.Context, set LogPodSet, pod LogPod,
 		b.note(base)
 		return
 	}
+	if listed.Total() > logListingLimit {
+		base.Status = LogUnavailable
+		base.Reason = fmt.Sprintf("the listing of %d bytes is past the read bound of %d, and its retained end "+
+			"cannot identify the newest files", listed.Total(), logListingLimit)
+		b.note(base)
+		return
+	}
 	var allowed []string
 	refused := 0
 	for line := range strings.Lines(string(listed.Bytes())) {
