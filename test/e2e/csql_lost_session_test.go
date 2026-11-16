@@ -210,7 +210,7 @@ func serverGuard(ctx context.Context, namespace, pod, database string, ha bool) 
 	return sqlcheck.Guard{Settle: identitySettle, HA: ha, Identity: func() (string, error) {
 		bounded, cancel := context.WithTimeout(ctx, identityTimeout)
 		defer cancel()
-		return utils.RunQuiet(exec.CommandContext(bounded, "kubectl", "-n", namespace, "exec", pod, "--",
+		return utils.RunQuiet(exec.CommandContext(bounded, "kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
 			"bash", "-c", script, database))
 	}}
 }
