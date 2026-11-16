@@ -421,18 +421,60 @@ func TestRunS12WrongTargetNamesTheSchedulerWhenTheFirstClusterCannotForm(t *test
 	requireBlockedByScheduler(t, wrong, err)
 }
 
-// runWithRefusedMember runs LAB00 with its member refused by scheduled.
+// runWithRefusedMember exercises the full LAB00 scheduler verdict only
+// after the runner has *observed* the fake-scheduled Pending Pod. A tiny
+// wall-clock budget for the entire setup (300 ms) raced with CI CPU load,
+// sometimes ending before the Pod read and hiding the scheduler's message.
+// The 5 s guard is only for a broken fixture; the test's actual end is
+// triggered by the specific Pod observation, not by sleeping for the timeout.
 func runWithRefusedMember(t *testing.T, scheduled *corev1.PodCondition) (*fixture, evidence.Scenario, error) {
+	return runWithRefusedMemberAfterPreflight(t, scheduled, 0)
+}
+
+// A deliberately slow *unrelated* version preflight is a regression control:
+// the runner must still see and classify the scheduler's PodScheduled state.
+// This confirms the result no longer depends on a 300 ms total-run clock.
+func runWithRefusedMemberAfterPreflight(t *testing.T, scheduled *corev1.PodCondition,
+	preflightDelay time.Duration) (*fixture, evidence.Scenario, error) {
 	t.Helper()
 	f := newFixture(t)
-	f.cfg.Timeout = 300 * time.Millisecond
+	f.cfg.Timeout = 5 * time.Second
+	if preflightDelay > 0 {
+		f.commandHook = func(ctx context.Context, args []string) (string, error) {
+			if len(args) != 0 && args[0] == testKubectlVersionArg {
+				select {
+				case <-time.After(preflightDelay):
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			return f.answer(t, args)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
 	f.afterCluster = func(ctx context.Context, c client.WithWatch) {
-		key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
 		if err := leavePending(ctx, c, key, scheduled); err != nil {
 			t.Error(err)
 		}
 	}
-	err := f.runner.Run(t.Context(), f.cfg)
+	seenPending := false
+	f.afterRead = func(readKey client.ObjectKey, obj client.Object) {
+		if seenPending || ctx.Err() != nil || readKey != key {
+			return
+		}
+		pod, ok := obj.(*corev1.Pod)
+		if !ok || pod.Status.Phase != corev1.PodPending || podReady(pod) {
+			return
+		}
+		seenPending = true
+		cancel()
+	}
+	err := f.runner.Run(ctx, f.cfg)
+	if !seenPending {
+		t.Fatalf("LAB00 ended before it observed the simulated Pending member: %v", err)
+	}
 	return f, readSummary(t, f.cfg.EvidenceDir).Scenarios[0], err
 }
 
@@ -454,6 +496,37 @@ func TestRunStaysFailedWhenTheSchedulerRefusesForAnotherReason(t *testing.T) {
 	}
 }
 
+// A slow unrelated environment read used to expire the old whole-run 300 ms
+// context before the scheduler's Pending member was even observed. The fake
+// scheduler verdict is now published and seen before the test cancels the run.
+func TestRunSchedulerRefusalAfterSlowUnrelatedPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		blocked bool
+	}{
+		{name: "anti-affinity is still a failure", message: testOtherRefusals["anti-affinity"]},
+		{name: "capacity is still blocked", message: testNoFit, blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, err := runWithRefusedMemberAfterPreflight(t,
+				testRefusal(tc.message, time.Hour), 350*time.Millisecond)
+			want := evidence.Fail
+			if tc.blocked {
+				want = evidence.Blocked
+			}
+			if err == nil || s.Result != want || !strings.Contains(s.Reason, tc.message) {
+				t.Fatalf("LAB00 = %+v, %v; want %s with scheduler refusal", s, err, want)
+			}
+			got := readRecord(t, f.cfg.EvidenceDir).UnschedulableMembers
+			if len(got) != 1 || got[0].Message != tc.message || got[0].BlocksRun != tc.blocked {
+				t.Fatalf("recorded scheduler evidence = %+v; want %q, blocked=%v",
+					got, tc.message, tc.blocked)
+			}
+		})
+	}
+}
+
 // The scheduler sums up its nodes: some nodes being full is enough, whatever
 // the others refused for.
 func TestRunIsBlockedByARefusalThatAlsoNamesCapacity(t *testing.T) {
@@ -469,6 +542,56 @@ func TestRunIsBlockedByARefusalThatAlsoNamesCapacity(t *testing.T) {
 			got := readRecord(t, f.cfg.EvidenceDir).UnschedulableMembers
 			if len(got) != 1 || !got[0].BlocksRun {
 				t.Fatalf("unschedulable members = %+v, want the refusal recorded as blocking", got)
+			}
+		})
+	}
+}
+
+// An *actual* expired context, not only context.Canceled from the fake
+// observation hook, must retain the exact scheduler reason after a Pending
+// Pod has been observed. This exercises waitCut and blockOnUnschedulable with
+// the deadline error without racing a 300 ms whole-run setup timer (#900).
+func TestSchedulerRefusalIsClassifiedAfterRealContextDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		blocked bool
+	}{
+		{name: "anti-affinity remains failed", message: testOtherRefusals["anti-affinity"]},
+		{name: "capacity remains blocked", message: testNoFit, blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			key := client.ObjectKey{Namespace: cfg.Namespace, Name: clusterName + "-0"}
+			pending := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, UID: "test-pod-uid"},
+				Status: corev1.PodStatus{Phase: corev1.PodPending,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+						*testRefusal(tc.message, time.Hour),
+					}},
+			}
+			f := newConfiguredFixture(t, cfg, pending)
+			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+			defer cancel()
+			<-ctx.Done()
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) || !waitCut(ctx, ctx.Err()) {
+				t.Fatal("the test did not exercise an actual context deadline")
+			}
+			var recorded []unschedulableMember
+			err := f.runner.blockOnUnschedulable(cfg.Namespace, []string{key.Name}, &recorded, ctx.Err())
+			want := evidence.Fail
+			if tc.blocked {
+				want = evidence.Blocked
+			}
+			if got := unfinishedResult(true, true, err); got != want {
+				t.Errorf("deadline verdict = %v, want %v (err %v)", got, want, err)
+			}
+			if len(recorded) != 1 || recorded[0].Message != tc.message || recorded[0].BlocksRun != tc.blocked {
+				t.Errorf("the scheduler refusal was not retained across the deadline: %+v", recorded)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.message) {
+				t.Errorf("deadline error did not preserve scheduler message: %v", err)
 			}
 		})
 	}

@@ -692,7 +692,7 @@ func jsonLines(rows []workload.Row) []string {
 // and the lists of a Kubernetes snapshot of a failed run.
 func testClusterRead(args []string) (string, bool) {
 	switch {
-	case slices.Equal(args, []string{"version", "-o", "json"}):
+	case slices.Equal(args, []string{testKubectlVersionArg, "-o", "json"}):
 		return testVersionJSON, true
 	case len(args) >= 6 && args[2] == "get" && args[4] == "-o" && args[5] == "json":
 		return `{"items":[]}`, true
