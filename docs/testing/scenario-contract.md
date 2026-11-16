@@ -3074,11 +3074,12 @@ because they move the master.
 - **Fault confirmed by:** the node is cordoned and its member Pod was evicted
   or the eviction was refused.
 - **The Operator must:** allow at most one member to be voluntarily disrupted
-  at a time; this is the rule issue
-  [#90](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/90),
-  "feat(lifecycle): enforce placement, retention and voluntary-disruption
-  policy", is to implement. [ADR-0012](../adr/0012-voluntary-disruption.md),
-  still Proposed, states it (see Q5).
+  at a time, as recorded in accepted
+  [ADR-0012](../adr/0012-voluntary-disruption.md) (Q5). Related work is tracked
+  in [#90](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/90)
+  and [#613](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/613);
+  [#614](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/614)
+  owns the real-VM drain and Broker-connection evidence.
 - **Expected:** a drain never takes a second member down while one is already
   unavailable; draining the master's node ends as S03 `graceful`; with no
   spare node the Pod stays `Pending`, the cluster reports that it is degraded,
