@@ -497,11 +497,11 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var electedAt, noticedAt time.Time
 	check, recoveryState := newS03RecoveryCheck(s03RecoveryProbe{
-		activeMasters: r.activeMasters, master: r.master,
-		status: func(ctx context.Context) (statusSnapshot, error) {
-			primary, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
-			return statusSnapshot{primary: primary}, err
+		members: r.members,
+		replacement: func(ctx context.Context) (s03ReplacementObservation, error) {
+			return r.readS03Replacement(ctx, master)
 		},
+		activeMasters: r.activeMasters, master: r.master, status: r.status,
 		formationTime:          r.formationTime,
 		lastAnswerAcknowledged: func(ctx context.Context) bool { return r.lastAnswerAcknowledged(ctx, client) },
 		now:                    time.Now,
@@ -528,9 +528,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		},
 		Check: check,
 	})
-	// A callback that outlives the flow may still mutate all recovery state.
-	if len(outcome.StillRunning) == 0 {
-		newMaster, electedAt, noticedAt = recoveryState.newMaster, recoveryState.electedAt, recoveryState.noticedAt
+	recoverySnapshot, recoveryFile, recoveryNote := finishS03Recovery(outcome, recoveryState, variant,
+		redactor, writeScenarioFile)
+	newMaster, electedAt, noticedAt = recoverySnapshot.newMaster, recoverySnapshot.electedAt, recoverySnapshot.noticedAt
+	addEvidence(&result, recoveryFile)
+	if recoveryNote != "" {
+		_, _ = fmt.Fprintln(GinkgoWriter, "warning: "+recoveryNote)
+		updateSummary(func(s *evidence.Summary) { s.Notes = append(s.Notes, "S03/"+variant+": "+recoveryNote) })
 	}
 	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
@@ -650,7 +654,10 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
+	if recoveryFile != "" {
+		files = append(files, recoveryFile)
+	}
+	since := func(t time.Time) string { return s03ObservedWithin(t, outcome.FaultIssuedAt) }
 	// Writes the client was told are committed while the operator reported
 	// the primary as not resolved: open question Q2 of the contract.
 	acknowledgedWhileUnresolved := 0
