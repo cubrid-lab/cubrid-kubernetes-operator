@@ -1,0 +1,11 @@
+{
+  "observedUTC": "2026-11-16T00:21:14.391328+00:00",
+  "hostKernel": "Linux-5.15.0-203-generic-x86_64-with-glibc2.35",
+  "hostArchitecture": "x86_64",
+  "loadAverage": [
+    25.7587890625,
+    22.1552734375,
+    17.70361328125
+  ],
+  "cpuCount": 6
+}

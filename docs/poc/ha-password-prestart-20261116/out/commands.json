@@ -1,0 +1,34 @@
+[
+  {
+    "label": "image identity",
+    "startUTC": "2026-11-16T00:20:11.298482+00:00",
+    "endUTC": "2026-11-16T00:20:11.429789+00:00",
+    "command": "docker image inspect sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70 --format '{{json .Id}} {{json .RepoDigests}}'",
+    "exit": 0,
+    "output": "\"sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70\" [\"example.com/cubrid-instance-manager@sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70\"]\n"
+  },
+  {
+    "label": "create owned network",
+    "startUTC": "2026-11-16T00:20:11.429997+00:00",
+    "endUTC": "2026-11-16T00:20:16.065994+00:00",
+    "command": "docker network create --label poc=ha-password-prestart prestart-50687c2a20-net",
+    "exit": 0,
+    "output": "827e37cec5aaa8784c89e81e3aff92d40493094736798eeae0a1496496172e80\n"
+  },
+  {
+    "label": "create owned member 0",
+    "startUTC": "2026-11-16T00:20:16.066381+00:00",
+    "endUTC": "2026-11-16T00:21:46.161198+00:00",
+    "command": "docker run -d --init --name prestart-50687c2a20-0 --hostname prestart-50687c2a20-0 --network prestart-50687c2a20-net --label poc=ha-password-prestart --memory 512m --cpus 0.5 --entrypoint sleep sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70 infinity",
+    "exit": 124,
+    "output": "\nHOST COMMAND DEADLINE\n"
+  },
+  {
+    "label": "cleanup owned network",
+    "startUTC": "2026-11-16T00:21:46.162205+00:00",
+    "endUTC": "2026-11-16T00:21:50.081297+00:00",
+    "command": "docker network rm prestart-50687c2a20-net",
+    "exit": 0,
+    "output": "prestart-50687c2a20-net\n"
+  }
+]

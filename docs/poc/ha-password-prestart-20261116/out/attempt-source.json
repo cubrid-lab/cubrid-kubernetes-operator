@@ -1,0 +1,5 @@
+{
+  "executedHarnessSHA256": "b0ae4ef57d98193de30e8d51fe10b3f70217583ecefb43fc89c9a82907cde8d0",
+  "scope": "Original harness stopped at its first Docker run precondition; no engine or authentication code executed. No executable reproducer is retained; the later reduced helper was unexecuted and removed after cleanup review.",
+  "repositoryBase": "67b771267a60b5af584faae9c10c6a7d8de90d73"
+}

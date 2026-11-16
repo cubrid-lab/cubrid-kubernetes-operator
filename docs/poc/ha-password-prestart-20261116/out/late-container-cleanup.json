@@ -1,0 +1,13 @@
+{
+  "observedUTC": "2026-11-16T00:25:11.446022+00:00",
+  "command": [
+    "docker",
+    "rm",
+    "-f",
+    "-v",
+    "81509edcad027ec8865e287b177eb13452f8411c09e56f32a474b26d42adf56c"
+  ],
+  "hostTimeoutSeconds": 30,
+  "dockerExit": "unobserved",
+  "output": "No output before host deadline; subsequent inventory shows owned container Dead, anonymous volume still present. Cleanup is pending."
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "observedUTC": "2026-11-16T00:27:17.504481+00:00",
+    "command": [
+      "docker",
+      "ps",
+      "-a",
+      "--filter",
+      "name=prestart-50687c2a20",
+      "--format",
+      "{{.ID}} {{.Names}} {{.Status}}"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "observedUTC": "2026-11-16T00:27:17.514709+00:00",
+    "command": [
+      "docker",
+      "network",
+      "ls",
+      "--filter",
+      "name=prestart-50687c2a20",
+      "--format",
+      "{{.ID}} {{.Name}}"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "observedUTC": "2026-11-16T00:27:17.525928+00:00",
+    "command": [
+      "docker",
+      "volume",
+      "ls",
+      "--filter",
+      "name=9694e3bc8a9d0bd7f2385ea29763af71b13a5c233498322038e1a4b7f639ef3d",
+      "--format",
+      "{{.Name}}"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

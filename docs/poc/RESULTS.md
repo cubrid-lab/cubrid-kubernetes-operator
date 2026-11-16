@@ -6487,3 +6487,23 @@ One session as soon as a graceful restart returned, **no shim loaded**:
 
 **Consequences.**
 - **#801:** both validators refuse values over 31 bytes; the entrypoint pins `no_backslash_escapes=yes`; the password step also logs in with the value it just set.
+
+## HA password verification before startup: pinned source findings and a blocked disposable attempt (#894)
+
+The [source review and retained records](ha-password-prestart-20261116/README.md)
+separate static evidence from an engine experiment that did not start. In CUBRID
+`v11.4.6.1963`, standalone registration enters engine startup and `log_initialize`
+before later authentication: even clean startup updates and flushes the log header,
+while unclean startup can invoke recovery. The `-r` client option does not remove
+that startup path. These pinned source findings do not justify treating `csql -S`
+as a non-mutating HA password guard; they do not establish that every standalone
+open damages replication or that no other safe interface exists.
+
+On 2026-11-16 UTC, the first owned `docker run` reached its host-command deadline
+before its container started. No database, password, HA process, authentication or
+restart was observed. A container appeared after the initial timeout; the record
+preserves the incomplete initial cleanup claim and later empty inventories for the
+owned container, network and anonymous volume. No executable reproducer is shipped.
+The proposed peer-identity counterexample remains unexecuted, so #894's engine
+qualification and operational decision remain open. This is not a Kind, VM or
+release-qualification result and does not replace POC-61 or POC-62.
