@@ -278,15 +278,26 @@ func writeScenarioFile(rel string, data []byte) string {
 var kindLane = evidence.Lane{Name: "kind", Required: kindRequired()}
 
 func kindRequired() []evidence.Requirement {
-	required := []evidence.Requirement{{ID: "S00"}, {ID: "S01"}, {ID: "S02"}, {ID: "S14"}}
-	for _, scenario := range []struct {
-		id       string
-		variants []string
-	}{{"S03", s03Variants}, {"S05", s05Variants}, {"S06", s06Variants}, {"S13", s13Variants},
-		{"S14", s14TokenVariants}} {
-		for _, v := range scenario.variants {
-			required = append(required, evidence.Requirement{ID: scenario.id, Variant: v})
-		}
+	required, err := evidence.RequirementsForKeys("kind", evidence.LevelKind,
+		"standalone-database-sql",
+		"ha-broker-access",
+		"ha-replication",
+		"instance-manager-access-and-secret-protection",
+		"ha-primary-pod-recovery-abrupt-first-member",
+		"ha-primary-pod-recovery-abrupt-later-master",
+		"ha-primary-pod-recovery-graceful",
+		"broker-failure-recovery-process",
+		"broker-failure-recovery-one-pod",
+		"broker-failure-recovery-all-rw-pods",
+		"operator-failure-recovery-restart",
+		"operator-failure-recovery-absent-during-failover",
+		"cluster-deletion-retention-retain",
+		"cluster-deletion-retention-delete",
+		"ha-token-rotation",
+		"ha-legacy-token-migration",
+	)
+	if err != nil {
+		panic(fmt.Errorf("declare required Kind scenarios: %w", err))
 	}
 	return required
 }

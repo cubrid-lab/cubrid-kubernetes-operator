@@ -642,3 +642,65 @@ func (r scenarioRegistry) validateLanes() []string {
 	}
 	return problems
 }
+
+// RequirementsForKeys constructs the complete requirements of a registered lane
+// from explicit result keys, preserving their order. It returns legacy IDs and
+// variants for existing planners, gates and writers; filtered subsets are not
+// supported. Each result must have exactly one unambiguous legacy alias.
+func RequirementsForKeys(lane, level string, keys ...string) ([]Requirement, error) {
+	return registry.requirementsForKeys(lane, level, keys...)
+}
+
+func (r scenarioRegistry) requirementsForKeys(lane, level string, keys ...string) ([]Requirement, error) {
+	if err := r.checkLaneLevel(lane, level); err != nil {
+		return nil, err
+	}
+	registered, ok := r.lane(lane)
+	if !ok {
+		return nil, fmt.Errorf("lane %s is not registered", lane)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("lane %s: requires nothing", lane)
+	}
+	requirements := make([]Requirement, 0, len(keys))
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate scenario key %s", key)
+		}
+		seen[key] = true
+		entry, err := r.resolveKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Level != level {
+			return nil, fmt.Errorf("key %s has level %s, not %s", key, entry.Level, level)
+		}
+		if !slices.Contains(registered.Keys, key) {
+			return nil, fmt.Errorf("key %s is not registered for lane %s", key, lane)
+		}
+		if len(entry.Aliases) != 1 {
+			return nil, fmt.Errorf("key %s needs exactly one legacy alias, got %d", key, len(entry.Aliases))
+		}
+		alias := entry.Aliases[0]
+		if !scenarioAlias.MatchString(alias) {
+			return nil, fmt.Errorf("key %s has malformed legacy alias %q", key, alias)
+		}
+		if _, exists := r.family(entry.Family); !exists {
+			return nil, fmt.Errorf("key %s has unknown family %s", key, entry.Family)
+		}
+		id, variant, _ := strings.Cut(alias, "/")
+		resolved, err := r.resolveResult(lane, level, Scenario{ID: id, Variant: variant})
+		if err != nil {
+			return nil, err
+		}
+		if resolved.Key != key {
+			return nil, fmt.Errorf("legacy alias %s resolves to %s, not %s", alias, resolved.Key, key)
+		}
+		requirements = append(requirements, Requirement{ID: id, Variant: variant})
+	}
+	if problems := r.laneProblems(Lane{Name: lane, Required: requirements}, level); len(problems) != 0 {
+		return nil, fmt.Errorf("invalid requirements: %s", strings.Join(problems, "; "))
+	}
+	return requirements, nil
+}
