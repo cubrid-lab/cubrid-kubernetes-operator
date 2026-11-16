@@ -560,6 +560,7 @@ func registeredNames(t *testing.T, r scenarioRegistry, lane RequiredLane) []stri
 
 // The lane table of the contract is normative, so every lane of the registry
 // must be a row of it with the same requirements, and every row a lane.
+// This comment-only fixture exercises source-file validation from a fork PR.
 func TestRegistryMatchesTheContractsLanes(t *testing.T) {
 	data, err := os.ReadFile(contractPath)
 	if err != nil {
