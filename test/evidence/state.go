@@ -517,7 +517,6 @@ func (b *StateBundle) store(list StateList, items []stateItem, room int64, sourc
 	file := stateFile{Source: list.Source, Checkpoint: b.checkpoint().Name, CollectedAt: time.Now().UTC(),
 		Clock: ClockRunner}
 	lines, kept := b.encode(items, room-fileOverhead(file))
-	source.Stored = kept
 	var clean []byte
 	if kept > 0 {
 		var err error
@@ -535,6 +534,7 @@ func (b *StateBundle) store(list StateList, items []stateItem, room int64, sourc
 			return
 		}
 		source.File = rel
+		source.Stored = kept
 		b.stored += int64(len(clean)) + 1
 		b.budget.spendBytes(int64(len(clean)) + 1)
 		// Only now is an Event stored, so a later checkpoint may count it as
