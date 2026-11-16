@@ -8,11 +8,10 @@ decided by the maintainers in PR #793 (2026-11-12 and 2026-11-13 UTC):
 the out-of-service taint counts as an external fence while it is present,
 and a fenced member's return to service is a manual maintenance step with a
 durable write barrier. Accepting the policy is not evidence that it works:
-the Operator enforces only part of it (#113: detection, enforcement and the
-automatic release; not the manual release, the out-of-service taint or the
-return to service; see [ROADMAP.md](../../ROADMAP.md)), and its SQL behavior
-on real faults is unmeasured (#115). Until both are done, no release claims
-managed write isolation.
+[ROADMAP.md](../../ROADMAP.md) owns implementation and validation status.
+Before a release claims managed write isolation, #115 must provide real-fault
+SQL evidence for the managed paths, including new and existing sessions;
+Kubernetes enforcement records alone do not establish that qualification.
 
 ## Context
 
@@ -50,9 +49,8 @@ Grounded in CUBRID 11.4 + prior ADRs:
 > creates, chooses, or fences a primary automatically during ambiguous
 > evidence; it delegates role transitions to CUBRID native HA and reports
 > unresolved or conflicting observations. The accepted design **requires**
-> managed write-path quarantine under the policy of section 8, to be
-> implemented in #113 and validated in #115; the current code does not
-> enforce it. Split-brain and unverified old-primary
+> managed write-path quarantine under the policy of section 8, with
+> real-fault SQL validation under #115. Split-brain and unverified old-primary
 > states require manual investigation rather than guessed role changes.
 
 ### 1. Responsibility split
@@ -67,8 +65,8 @@ identities; observing roles via `/v1/role` (as implemented, the operator
 does not call `/v1/ha/status`); aggregating
 `status`/Conditions/Events/metrics; reconciling Kubernetes/broker
 resources around observed HA state; detecting unresolved/incomplete/
-conflicting primaries; **planned** managed write-path quarantine in the
-states section 8 names (#113; not enforced today); failed-instance recovery,
+conflicting primaries; managed write-path quarantine in the
+states section 8 names; failed-instance recovery,
 old-primary verification, rejoin,
 rebuild, and manual failback; planned lifecycle shutdown via
 `/v1/shutdown`.
@@ -83,7 +81,7 @@ reachability as database liveness.
 CUBRID owns native failover.
 Operator does NOT perform automatic emergency DB fencing.
 Operator may perform planned lifecycle fencing via /v1/shutdown.
-Operator reports ambiguous primary today; managed RW quarantine is planned.
+Operator reports ambiguous primary and quarantines the managed RW path in the states below.
 Manual intervention is required for confirmed/suspected split-brain.
 ```
 
@@ -96,13 +94,16 @@ Manual intervention is required for confirmed/suspected split-brain.
   last resolved primary, is unverified), scale the RW Brokers to zero and set `RoutingReady=False`.
   An incomplete or ambiguous observation outside those states is reported,
   not quarantined. This is **not** DB fencing; it stops writes through the
-  managed path without picking a winner. As implemented, only
-  `RoutingReady=False` is set: the RW
-  Brokers keep running and the `-rw` Service keeps its endpoints, so the
-  quarantine is reported and not enforced (S03 on Kind saw writes
-  acknowledged through `-rw` meanwhile; #113, ROADMAP.md). The operator
-  does not call `/v1/shutdown`; a Pod's preStop hook stops its member, and
-  no step sets `FencingRequired`.
+  managed path without picking a winner. The
+  [controller](../../internal/controller/quarantine.go) enforces a persisted
+  quarantine before other reconciliation, including after its own restart,
+  and records `enforcedTime` only once no read-write Broker Pod exists and
+  the `-rw` EndpointSlices are empty. Historical S03 Kind observations cited
+  in #113 recorded writes acknowledged through `-rw` while quarantine was
+  reported without enforcement; a `RoutingReady=False` Condition alone
+  therefore does not prove managed SQL isolation. The operator does not call
+  `/v1/shutdown`; a Pod's preStop hook stops its member, and no step sets
+  `FencingRequired`.
 - **Manual break-glass** — the operator surfaces enough status/Events for
   an admin to fence manually; automatic execution is out of v1alpha1
   scope.
@@ -685,9 +686,10 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
   unverified old primary need manual intervention in v1alpha1.
 - **Direct connections are not covered.** Scaling the read-write Brokers to
   zero does not affect direct database connections. That it ends
-  already-open Broker sessions is expected, not verified. **Neither the
-  quarantine nor its effect on sessions is enforced by the current
-  Operator.** The exposure must be measured through each actual SQL path
+  already-open Broker sessions requires independent SQL evidence;
+  the controller's enforcement check observes Broker Pods and EndpointSlices,
+  not client acknowledgements. The exposure must be measured through each
+  actual SQL path
   (#115), not inferred from `RoutingReady=False` or from a Docker-only
   direct-client experiment.
 
@@ -781,10 +783,12 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 random quarantine generation ID with a one-time approval token bound to the
 member set, and the S04 contract change to three separate intervals.
 **Still open, and not needed for v0.1:** an emergency release with no active
-master (the path stays closed), and an automatic return handshake. The exact
-status and annotation schema is #113's to propose in its PR. None of this is
-shown by a docs-only passing workflow: #115 must keep the raw SQL and fault
-evidence, including rejected attempts, and not infer safety from Conditions.
+master (the path stays closed), and an automatic return handshake. The
+[API types](../../api/v1alpha1/cubridcluster_types.go) define quarantine and
+release records; the [release controller](../../internal/controller/quarantine_release.go)
+checks the one-time annotation token against the stored member-set revision.
+None of this is shown by a docs-only passing workflow: #115 must keep the raw
+SQL and fault evidence, including rejected attempts, and not infer safety from Conditions.
 
 ## Revisit When
 

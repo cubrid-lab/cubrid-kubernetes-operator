@@ -141,13 +141,23 @@ to steer Services: Kubernetes selects Broker Pods; **CUBRID RW Brokers**
 use native HA information to locate a writable server.
 
 When `PrimaryResolved` is incomplete or conflicting, the Operator does
-not choose/promote/demote a member. A `RoutingReady=False` Condition alone
-does **not** prove that the managed write path is closed. Check the selected
-candidate's implementation against the
-[accepted quarantine policy](../adr/0005-failover-split-brain.md#8-write-path-quarantine-policy-113),
-then observe the actual RW Broker Pods, Service endpoints and new/existing
-SQL sessions. Report unavailable observations as unknown; a change to a
-Condition or desired replica count is not enforcement evidence.
+not choose/promote/demote a member. The managed
+[write quarantine](../observability.md#the-write-quarantine) records two or
+more active masters, or one active master beside an unverified higher-ranked
+member or last resolved primary, and keeps the read-write Broker Deployment
+at zero across Operator restarts. A `RoutingReady=False` Condition alone
+is **not** enforcement evidence: inspect `status.writeQuarantine.enforcedTime`,
+which is set only when no read-write Broker Pod exists and the `-rw`
+EndpointSlices are empty, then verify actual new and existing SQL sessions.
+Report unavailable observations as unknown. Releases are persisted before
+Brokers restart; automatic release requires the documented stable-master and
+member verification or fence checks. A
+[manual release](../observability.md#manual-release) requires the current
+one-time token and exactly one observed active master; its exemptions for
+unverified identities end after an Operator restart or leader change.
+Follow the [accepted quarantine policy](../adr/0005-failover-split-brain.md#8-write-path-quarantine-policy-113)
+and collect the real-fault SQL evidence required by #115; these Kubernetes
+observations alone do not qualify managed write isolation.
 On suspect split brain, record role observations on each side and independent
 SQL evidence;
 preserve all PVCs/logs; isolate or rebuild nothing automatically.

@@ -1038,8 +1038,9 @@ Hard invariant:
 
 **Accepted responsibility boundary (POC-gated safety behavior).** For
 v1alpha1 the Operator is an **HA observer and reconciler, not a failover
-authority**. The status/detection rules are implemented; the managed
-write-path quarantine and related SQL validation remain open (#113/#115):
+authority**. It observes HA roles and enforces the managed write-path
+quarantine described below; real-fault SQL qualification remains required
+under #115:
 
 - **CUBRID native HA owns** role election, automatic failover, promotion
   priority, heartbeat coordination and replication. **Native split brain is
@@ -1049,13 +1050,34 @@ write-path quarantine and related SQL validation remain open (#113/#115):
 - **The operator only** observes roles (Instance Manager `/v1/role`; the
   Operator does not call `/v1/ha/status`), aggregates status/conditions, reconciles
   Kubernetes/broker resources, and recovers failed members.
-- **No automatic emergency DB fencing.** The planned lifecycle shutdown
-  uses `/v1/shutdown` through the Pod's preStop hook (the Operator controller
-  does not call it). **Managed write-path quarantine** is a required, *not
-  yet implemented* policy: setting `RoutingReady=False` does **not** withhold
-  the RW endpoint or close existing sessions today
-  ([docs/observability.md](docs/observability.md#what-routingreadyfalse-does-not-do), #113). Pod delete / scale-down / cordon / NetworkPolicy isolation
-  are **rejected** as automatic split-brain resolution.
+- **No automatic emergency DB fencing.** Lifecycle shutdown uses
+  `/v1/shutdown` through the Pod's preStop hook; the Operator controller
+  does not call it. Deleting or scaling down database members, cordoning
+  Nodes or applying NetworkPolicy isolation are **rejected** as automatic
+  split-brain resolution.
+- **Managed write-path quarantine:** two or more fresh active-master claims,
+  or one active master beside an unverified higher-ranked member or last
+  resolved primary, start a persisted `status.writeQuarantine`. The
+  Operator keeps the managed read-write Broker Deployment at zero replicas
+  on every reconciliation, including after its own restart. It records
+  `enforcedTime` only when no read-write Broker Pod exists and the `-rw`
+  EndpointSlices hold no endpoint. Database members and read-only Brokers
+  are untouched ([enforcement](internal/controller/quarantine.go)).
+- **Release:** an unverified-member quarantine can release after two
+  qualifying observations at least 10 seconds apart, with one stable active
+  master and the other members verified or fenced under the accepted policy.
+  An administrator's out-of-service taint counts only as the fence assertion
+  described in [observability](docs/observability.md#release-on-an-out-of-service-taint);
+  the Operator never adds it or treats Node readiness as a process fence.
+  Returning a fenced member requires the durable
+  [return-to-service barrier](docs/observability.md#return-to-service) before
+  removing the taint. Multiple-master and master-changed quarantines require
+  [manual release](docs/observability.md#manual-release): the annotation must
+  name the current one-time token for the recorded member identities, and
+  exactly one active master must be observed. Revised identities rotate the
+  token. The release is persisted before Brokers restart on a later pass;
+  a manual release's identity exemptions end after an Operator restart or
+  leader change, so still-unverified members can quarantine again.
 - **Detection:** `PrimaryResolved=True` only when **all** promotable
   members are freshly, authoritatively observed and exactly one is
   master; otherwise `NoPrimaryObserved` / `MultiplePrimariesObserved` /
@@ -1072,11 +1094,16 @@ write-path quarantine and related SQL validation remain open (#113/#115):
 
 The Operator never promotes/picks/fences a primary on ambiguous evidence
 and never auto-failbacks. Its absence does not replace CUBRID's role decisions
-or remove the risk of native split brain; `RoutingReady=False` is a reported
-observation, **not a SQL safety gate** until #113 is implemented. Suspected
-split brain or an unverified former master requires investigation and an
-explicit recovery decision, not an Operator-selected winner. See ADR-0005
-for the full per-scenario table, hard NEVER rules, and POC/E2E checklist.
+or remove the risk of native split brain. `RoutingReady=False` alone is
+**not proof that SQL sessions stopped**: inspect the quarantine's enforcement
+record and actual managed SQL paths. Direct database connections and
+unmanaged Brokers bypass quarantine, and writes acknowledged before
+quarantine enforcement can still be lost. New and existing session behavior
+and the detection window require real-fault SQL evidence under #115.
+Suspected split brain or an unverified former master requires investigation
+and an explicit recovery decision, not an Operator-selected winner. See
+ADR-0005 for the full per-scenario table, hard NEVER rules, and POC/E2E
+checklist; [ROADMAP.md](ROADMAP.md) owns implementation and validation status.
 
 ---
 
