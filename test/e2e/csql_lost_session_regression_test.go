@@ -453,6 +453,90 @@ func TestHAMembersReadTheirMode(t *testing.T) {
 	}
 }
 
+// The retained HA output includes kubectl's default-container warning. Feed
+// that warning through the real command adapter, not an injected Guard, so a
+// valid server identity cannot be made unreadable by implicit selection.
+func TestServerGuardSelectsDatabaseContainer(t *testing.T) {
+	const before = "cub_server 77 100\nha_mode active\n"
+	for name, tc := range map[string]struct {
+		after string
+		want  sqlcheck.IdentityResult
+	}{
+		"unchanged server":  {before, sqlcheck.IdentityUnchanged},
+		"changed process":   {"cub_server 91 160\nha_mode active\n", sqlcheck.IdentityChanged},
+		"changed HA mode":   {"cub_server 77 100\nha_mode standby\n", sqlcheck.IdentityModeChanged},
+		"unreadable output": {"unexpected server output\n", sqlcheck.IdentityUnreadable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useContainerSelectingKubectl(t, before, tc.after)
+			guard := serverGuard(context.Background(), "ns", "hab-0", "appdb", true)
+			guard.Settle = 0
+			if got := guard.Before().Compare(); got != tc.want {
+				t.Fatalf("server identity = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// SQL and identity reads must select the same database container. An implicit
+// selection adds kubectl stderr to CombinedOutput even when SQL succeeds.
+func TestCSQLRunnerSelectsDatabaseContainer(t *testing.T) {
+	useContainerSelectingKubectl(t, "", "")
+	t.Setenv("CSQL_TEST_OUTPUT", cleanRead)
+	member := memberCSQL(context.Background(), "ns", "hab-0", "appdb", true)
+	var lost []*lostSessionRecord
+	out, err := runSQL(member.runner(&lost), sqlcheck.ReadRowQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != cleanRead {
+		t.Fatalf("SQL output includes an unexpected container-selection diagnostic: %q", out)
+	}
+	if err := sqlcheck.RowCheck(s00TestMarker)(out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func useContainerSelectingKubectl(t *testing.T, before, after string) {
+	t.Helper()
+	dir := t.TempDir()
+	// Only emulate kubectl's observed container-selection behavior. No script
+	// from a command argument is executed, and no database process is started.
+	const script = `#!/bin/sh
+selected=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -c) selected="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+if [ -z "$selected" ]; then
+  echo 'Defaulted container "cubrid" out of: cubrid, wait-for-peer (init)' >&2
+elif [ "$selected" != cubrid ]; then
+  echo 'requested container not found' >&2
+  exit 1
+fi
+case "$*" in
+  *'csql -u dba'*) printf '%s' "$CSQL_TEST_OUTPUT" ;;
+  *)
+    if [ -e "$CSQL_TEST_IDENTITY_READ" ]; then
+      printf '%s' "$CSQL_TEST_IDENTITY_AFTER"
+    else
+      : > "$CSQL_TEST_IDENTITY_READ"
+      printf '%s' "$CSQL_TEST_IDENTITY_BEFORE"
+    fi ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CSQL_TEST_IDENTITY_READ", filepath.Join(dir, "identity-read"))
+	t.Setenv("CSQL_TEST_IDENTITY_BEFORE", before)
+	t.Setenv("CSQL_TEST_IDENTITY_AFTER", after)
+}
+
 // The check of the starting state before S00 deletes the Pod reads the marker
 // row once more when csql printed -199 and -111 beside it, as the smoke reads
 // do, and passes only on an unchanged server whose second read shows the row
