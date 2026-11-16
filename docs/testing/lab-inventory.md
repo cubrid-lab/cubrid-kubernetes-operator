@@ -163,3 +163,95 @@ Relative to #80, the 2026-10-15 record has these gaps:
 - Off-node evidence retention and a kubecontext/cluster-identity fault guard
   were not evidenced by the 2026-10-15 record. Delivery and validation status
   is tracked in ROADMAP.md under #80/#122.
+
+## Read-only snapshot on 2026-11-16 UTC
+
+This separate Kubernetes API snapshot was collected from
+`2026-11-16T04:22:38.137959Z` to `2026-11-16T04:22:38.357778Z`.
+The October tables and gaps above retain their original measurement date.
+Node aliases below replace private hostnames; no SSH, Pod exec, provisioning,
+VM action or resource change was used for this snapshot.
+
+All four nodes reported `Ready=True`, with `MemoryPressure`, `DiskPressure`
+and `PIDPressure` all `False`. All reported amd64, Ubuntu 24.04.5 LTS,
+k3s `v1.36.5+k3s1` and containerd `2.3.4-k3s1.36`.
+
+| Node alias | Allocatable CPU | Allocatable memory | Memory in GiB | Kernel |
+| --- | ---: | ---: | ---: | --- |
+| control-plane | 2 | 4,009,860 KiB | 3.824100 | `6.8.0-142-generic` |
+| first-worker | 2 | 8,132,488 KiB | 7.755745 | `6.8.0-142-generic` |
+| second-worker | 2 | 8,132,484 KiB | 7.755741 | `6.8.0-142-generic` |
+| third-worker | 2 | 8,132,476 KiB | 7.755733 | `6.8.0-149-generic` |
+
+GiB is the reported `Ki` value divided by `2**20`. Allocatable is not
+available memory or unused CPU. Every node reported allocatable ephemeral
+storage of `38459745250` bytes; that is not a disk-free measurement. The
+control plane carried `node-role.kubernetes.io/control-plane:NoSchedule`;
+the three workers were uncordoned and had no taints at this read. These
+observations neither establish workload headroom nor replace the capacity
+and disk-free preflight for a selected campaign.
+
+The only StorageClass returned was `local-path`, with provisioner
+`rancher.io/local-path`, reclaim policy `Delete` and binding mode
+`WaitForFirstConsumer`. It is not CSI qualification. This API read did not
+verify the provisioner binary version, filesystem usage or reclaim behavior.
+
+Twenty managed-label Pod objects were returned, including these seven
+StatefulSet-owned database-member Pods, all in `cubrid-test` and `Running`:
+
+| Member Pod | Node alias | Memory request | CPU request | Container restarts |
+| --- | --- | --- | --- | ---: |
+| `demo-0` | second-worker | `512Mi` | absent | 0 |
+| `ha-0` | third-worker | `512Mi` | absent | 2 |
+| `ha-1` | second-worker | `512Mi` | absent | 0 |
+| `ha-2` | first-worker | `512Mi` | absent | 0 |
+| `logsize-0` | first-worker | `512Mi` | absent | 0 |
+| `logsize-1` | second-worker | `512Mi` | absent | 0 |
+| `logsize-2` | third-worker | `512Mi` | absent | 2 |
+
+Each of the two three-member groups occupied three distinct node aliases at
+this instant. This is observed placement, not proof of physical-host/zone
+isolation, continuous placement or the enforcement of a particular policy.
+The seven requests total `3584Mi`; that is not their measured consumption or
+the lab's full workload budget. They are existing Pods, not a fresh harness
+run with its `640Mi`/`150m` requests.
+
+Observed `cubrid` container image IDs were:
+
+- `demo-0` and `ha-0` through `ha-2`:
+  `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:372ad8c48e63dd03e67c1b724c8d54d5cc4f0d6bb3917f7a03146c0b4fb41966`.
+- `logsize-0` through `logsize-2`:
+  `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:648dc7657e85289be64b230acaeebcad6400edcc5d65dc4890f89ff1e4ba8a89`.
+
+A separate manager Deployment read at `2026-11-16T04:25:04.604766Z`
+recorded generation `15` and the configured `--instance-manager-image`:
+`ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:2c3013ba9df919499135dc5fa5d1d43ea2b2641dba1828e8d9baa49009e61a89`.
+That argument is not evidence that the member Pods ran that image. These
+reads are not atomic; no common source, engine build, supported image pairing
+or rollout verdict is inferred from the three different references.
+The manager requested `64Mi`/`10m`, with existing limits `128Mi`/`500m`.
+
+The manager image in that Deployment read was
+`ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager@sha256:ecfc49254a66c95c604831b90549e502ed036fa6ed758c9c0bd82c25a4256587`.
+[Package version 1555947530](https://github.com/orgs/cubrid-lab/packages/container/cubrid-kubernetes-operator%2Fmanager/1555947530),
+its OCI revision label and successful
+[Development Images run 43394488205](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43394488205)
+identify source `e1316da55d3017be85fe64aedec2e4c6211233d8`, before quarantine.
+The separate `2026-11-16T02:58:40.650834Z` preflight identified marker
+`vm-lab` and `kube-system` UID
+`ddc0876e-c844-47ab-82c5-0f11d3985707`; it is not a fresh reservation,
+continuous health check or qualification of another candidate.
+
+Fault-control history has also advanced since the October inventory:
+[#110's recorded runs](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/110#issuecomment-6875079147)
+actually stopped and restarted a worker VM on 2026-11-13 UTC, on Operator
+`00b8de8`. Both runs failed their data-convergence rules. Successful power
+control is not successful SQL recovery, a diagnosed cause or current authority
+to repeat a disruptive action; the October statement remains historical.
+
+This snapshot does not establish independent environment recreation, provider
+quota accounting, a complete workload/storage budget or the required CSI
+environment. New campaigns still need their named target, applicable fault
+authority, reservation, continuously held Lease, observed capacity/placement,
+bounded cleanup and candidate-specific SQL evidence under #80/#122. No
+release or scenario acceptance is inferred from these read-only observations.
