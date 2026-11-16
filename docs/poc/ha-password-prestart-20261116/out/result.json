@@ -1,0 +1,12 @@
+{
+  "result": "blocked",
+  "reason": "create owned member 0 failed with exit 124",
+  "endUTC": "2026-11-16T00:21:50.081823+00:00",
+  "elapsedSeconds": 98.783,
+  "image": "sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70",
+  "runPrefix": "prestart-50687c2a20",
+  "cleanupSucceeded": true,
+  "initialCleanupClaimWasIncomplete": true,
+  "lateCleanupPending": false,
+  "finalCleanupVerifiedUTC": "2026-11-16T00:27:17.525928+00:00"
+}

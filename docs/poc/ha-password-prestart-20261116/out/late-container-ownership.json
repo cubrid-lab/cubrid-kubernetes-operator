@@ -1,0 +1,44 @@
+{
+  "Id": "81509edcad027ec8865e287b177eb13452f8411c09e56f32a474b26d42adf56c",
+  "Name": "/prestart-50687c2a20-0",
+  "Created": "2026-11-16T00:20:16.14705135Z",
+  "State": {
+    "Status": "created",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "0001-01-01T00:00:00Z",
+    "FinishedAt": "0001-01-01T00:00:00Z"
+  },
+  "Config": {
+    "Hostname": "prestart-50687c2a20-0",
+    "Image": "sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70",
+    "Labels": {
+      "poc": "ha-password-prestart"
+    },
+    "Entrypoint": [
+      "sleep"
+    ],
+    "Cmd": [
+      "infinity"
+    ]
+  },
+  "Mounts": [
+    {
+      "Type": "volume",
+      "Name": "9694e3bc8a9d0bd7f2385ea29763af71b13a5c233498322038e1a4b7f639ef3d",
+      "Source": "/data/docker/volumes/9694e3bc8a9d0bd7f2385ea29763af71b13a5c233498322038e1a4b7f639ef3d/_data",
+      "Destination": "/home/cubrid/CUBRID/databases",
+      "Driver": "local",
+      "Mode": "",
+      "RW": true,
+      "Propagation": ""
+    }
+  ],
+  "observedUTC": "2026-11-16T00:24:11.984270+00:00"
+}
