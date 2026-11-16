@@ -236,6 +236,21 @@ func (c Config) smokeLane() (string, string) {
 	return laneName, ""
 }
 
+// smokeRequirements declares a complete smoke lane independently of the run's
+// reported evidence level, returning its existing legacy result identity.
+func (c Config) smokeRequirements() ([]evidence.Requirement, error) {
+	lane, _ := c.smokeLane()
+	key := "installed-standalone-sql-smoke"
+	if c.NamespaceMode == PreallocatedNamespace {
+		key = "installed-preallocated-standalone-smoke"
+	}
+	requirements, err := evidence.RequirementsForKeys(lane, evidence.LevelVMLab, key)
+	if err != nil {
+		return nil, fmt.Errorf("declare installed smoke requirements: %w", err)
+	}
+	return requirements, nil
+}
+
 func (c Config) validateBudgets() error {
 	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
 		return errors.New("run, cleanup and poll durations must be positive")
@@ -279,7 +294,8 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	if cfg.NamespaceMode == "" {
 		cfg.NamespaceMode = FreshNamespace
 	}
-	if err := cfg.validate(); err != nil {
+	requirements, declarationErr := cfg.smokeRequirements()
+	if err := errors.Join(declarationErr, cfg.validate()); err != nil {
 		return err
 	}
 	if r.Client == nil || r.Command == nil {
@@ -312,7 +328,6 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 		summary.Notes = append(summary.Notes, "Component SQL/owned-workload cleanup only; retained PVCs and ownership epoch "+
 			"require separate fixture reset evidence")
 	}
-	requirements := []evidence.Requirement{{ID: scenarioID, Variant: variant}}
 	summary.Plan(requirements, "connection smoke has not started")
 	scenario := evidence.Scenario{ID: scenarioID, Variant: variant, Result: evidence.Blocked, NeverEvents: []string{}}
 	var owned *corev1.Namespace

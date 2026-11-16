@@ -84,8 +84,13 @@ func TestInstalledLanesMatchTheRegistry(t *testing.T) {
 	}
 
 	for _, mode := range []NamespaceMode{FreshNamespace, PreallocatedNamespace} {
-		lane, variant := Config{NamespaceMode: mode}.smokeLane()
-		check(string(mode), lane, []evidence.Requirement{{ID: scenarioID, Variant: variant}})
+		cfg := Config{NamespaceMode: mode}
+		lane, _ := cfg.smokeLane()
+		requirements, err := cfg.smokeRequirements()
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(string(mode), lane, requirements)
 	}
 	checkHA("no option", testHAConfig(t))
 	for _, fault := range []string{FaultVMPowerOff, FaultOperatorRestart} {
@@ -131,5 +136,61 @@ func TestInstalledLanesMatchTheRegistry(t *testing.T) {
 	}
 	if lanes := evidence.RegisteredLanes(evidence.LevelVMLab); len(lanes) == 0 || slices.Contains(lanes, "kind") {
 		t.Errorf("registered lab lanes = %q", lanes)
+	}
+}
+
+// Independent controls pin the two smoke lanes without deriving their required
+// identities from the registry or from the declaration under test.
+const legacySmokeID = "LAB00"
+const legacySmokeRecord = "LAB00/record.json"
+const smokeUnitLevel = "unit"
+
+func smokeDeclarationCases() []struct {
+	mode               NamespaceMode
+	lane, key, variant string
+} {
+	const (
+		freshKey            = "installed-standalone-sql-smoke"
+		preallocatedKey     = "installed-preallocated-standalone-smoke"
+		preallocatedVariant = "preallocated"
+	)
+	return []struct {
+		mode               NamespaceMode
+		lane, key, variant string
+	}{
+		{FreshNamespace, "lab-installed-smoke", freshKey, ""},
+		{PreallocatedNamespace, "lab-preallocated-component-smoke", preallocatedKey, preallocatedVariant},
+	}
+}
+
+func TestSmokeRequirementsKeepLegacyDeclarations(t *testing.T) {
+	for _, tc := range smokeDeclarationCases() {
+		for _, level := range []string{smokeUnitLevel, evidence.LevelKind, evidence.LevelVMLab} {
+			t.Run(string(tc.mode)+"/"+level, func(t *testing.T) {
+				cfg := Config{NamespaceMode: tc.mode, Level: level}
+				got, err := cfg.smokeRequirements()
+				if err != nil {
+					t.Fatalf("complete smoke declaration returned an error: %v", err)
+				}
+				want := []evidence.Requirement{{ID: legacySmokeID, Variant: tc.variant}}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("requirements=%#v, want independent legacy control %#v", got, want)
+				}
+				lane, variant := cfg.smokeLane()
+				if lane != tc.lane || variant != tc.variant || cfg.Level != level {
+					t.Fatal("smoke selection or reporting level changed")
+				}
+				resolved, err := evidence.ResolveAlias(lane, evidence.LevelVMLab,
+					(evidence.Scenario{ID: got[0].ID, Variant: got[0].Variant}).Name())
+				if err != nil || resolved.Key != tc.key {
+					t.Fatalf("wrong declared result key %q: %v", resolved.Key, err)
+				}
+			})
+		}
+	}
+	cfg := Config{}
+	got, err := cfg.smokeRequirements()
+	if err != nil || !reflect.DeepEqual(got, []evidence.Requirement{{ID: legacySmokeID}}) {
+		t.Fatalf("default namespace declaration=%#v err=%v", got, err)
 	}
 }

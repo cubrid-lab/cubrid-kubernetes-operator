@@ -17,12 +17,14 @@ limitations under the License.
 package installed
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -834,5 +836,110 @@ func TestInstalledRequirementsHaveReadableNames(t *testing.T) {
 	}
 	for at := range stopPlacements {
 		check(s12ID, gracefulStopVariantOf(at))
+	}
+}
+
+func TestSmokeDeclarationsPreserveRunnerOutputs(t *testing.T) {
+	for _, tc := range smokeDeclarationCases() {
+		for _, level := range []string{smokeUnitLevel, evidence.LevelKind, evidence.LevelVMLab} {
+			t.Run(string(tc.mode)+"/"+level, func(t *testing.T) {
+				f := newFixture(t)
+				if tc.mode == PreallocatedNamespace {
+					f = preallocatedFixture(t)
+				}
+				f.cfg.Level = level
+				if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+					t.Fatal(err)
+				}
+				summary := readSummary(t, f.cfg.EvidenceDir)
+				if !summary.Passed || summary.SchemaVersion != "2" || summary.Lane != tc.lane ||
+					summary.Environment.Level != level || f.cfg.Level != level || len(summary.Scenarios) != 1 {
+					t.Fatalf("smoke declaration changed run identity/level/verdict: %+v", summary)
+				}
+				clean := true
+				expected := evidence.Scenario{ID: legacySmokeID, Variant: tc.variant, Result: evidence.Pass,
+					CleanupSucceeded: &clean,
+					Evidence:         []string{legacySmokeRecord}, NeverEvents: []string{}}
+				if !reflect.DeepEqual(summary.Scenarios[0], expected) {
+					t.Fatalf("record=%+v, want legacy record %+v", summary.Scenarios[0], expected)
+				}
+				if f.deletes != 1 || f.marker == "" {
+					t.Fatal("SQL or cleanup behavior changed")
+				}
+				writes := "namespace,cluster"
+				if tc.mode == PreallocatedNamespace {
+					writes = testClusterAction
+				}
+				if strings.Join(f.writes, ",") != writes {
+					t.Fatalf("ownership writes=%q, want %q", f.writes, writes)
+				}
+				checkSmokeOutputCompatibility(t, summary, expected, f.cfg.EvidenceDir)
+			})
+		}
+	}
+}
+
+func checkSmokeOutputCompatibility(t *testing.T, summary evidence.Summary,
+	expected evidence.Scenario, recordDir string) {
+	t.Helper()
+	// Compare real writer outputs with fixed run metadata and an independent
+	// legacy control; the original temporary runner record is copied intact.
+	summary.RunID = "smoke-declaration-compatibility"
+	summary.StartedAt = time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	summary.FinishedAt = summary.StartedAt.Add(time.Minute)
+	control := summary
+	control.Scenarios = []evidence.Scenario{expected}
+	dirs := []string{t.TempDir(), t.TempDir()}
+	record, err := os.ReadFile(filepath.Join(recordDir, legacySmokeRecord))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, output := range []evidence.Summary{summary, control} {
+		if err := os.MkdirAll(filepath.Join(dirs[i], legacySmokeID), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dirs[i], legacySmokeRecord), record, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := output.Write(dirs[i], evidence.NewRedactor()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"summary.json", "junit.xml", legacySmokeRecord} {
+		actual, err := os.ReadFile(filepath.Join(dirs[0], name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := os.ReadFile(filepath.Join(dirs[1], name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, legacy) {
+			t.Fatalf("%s differs from independent legacy control", name)
+		}
+	}
+	actual, err := evidence.ReadRun(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := evidence.ReadRun(dirs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	qualified := summary.Environment.Level == evidence.LevelVMLab
+	if actual.Validated() != qualified || legacy.Validated() != qualified ||
+		evidence.CompareRuns(legacy, actual).Matches() != qualified {
+		t.Fatalf("reporting level %s changed qualification: actual=%q legacy=%q",
+			summary.Environment.Level, actual.Problems, legacy.Problems)
+	}
+	if err := summary.Checkpoint(dirs[0], evidence.NewRedactor(), summary.Lane, summary.FinishedAt); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := evidence.ReadRun(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpoint.Provisional || checkpoint.Validated() || checkpoint.Summary.Passed {
+		t.Fatal("checkpoint became a passing run")
 	}
 }
