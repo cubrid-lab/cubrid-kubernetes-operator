@@ -514,7 +514,10 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		Notes: []string{"Three-member HA cluster against an installed Operator; no fault and no S00-S15 qualification",
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"Namespace cleanup does not certify deletion of retained backend volumes or of the seed backups"}}
-	lane, requirements := planHARun(cfg, &summary)
+	lane, requirements, declarationErr := planHARun(cfg, &summary)
+	if declarationErr != nil {
+		return fmt.Errorf("declare installed HA requirements: %w", declarationErr)
+	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
 	var owned *corev1.Namespace
@@ -622,8 +625,9 @@ func (h *haRun) observeTarget(ctx context.Context, observed *record, env *eviden
 }
 
 // planHARun returns the lane of the run and its requirements, and says what
-// the run does in the summary's notes.
-func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requirement) {
+// the run does in the summary's notes. The plain lane uses an explicit key;
+// compound lanes retain their independently assembled legacy requirements.
+func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requirement, error) {
 	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
 	switch {
 	case cfg.Fault != "":
@@ -689,8 +693,11 @@ func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requ
 		lane, requirements = planS11Overlapping(cfg, lane, requirements, summary)
 		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, summary)
 		lane, requirements = planS11GracefulStop(cfg, lane, requirements, summary)
+	default:
+		required, err := evidence.RequirementsForKeys(haLane, evidence.LevelVMLab, "installed-ha-sql-smoke")
+		return lane, required, err
 	}
-	return lane, requirements
+	return lane, requirements, nil
 }
 
 // faultLane returns the lane, the requirement and the summary's first note

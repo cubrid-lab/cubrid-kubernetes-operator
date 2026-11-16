@@ -109,9 +109,13 @@ type plannedHA struct {
 	notes        []string
 }
 
-func planOf(cfg HAConfig) plannedHA {
+func planOf(t *testing.T, cfg HAConfig) plannedHA {
+	t.Helper()
 	summary := evidence.Summary{Notes: []string{""}}
-	lane, requirements := planHARun(cfg, &summary)
+	lane, requirements, err := planHARun(cfg, &summary)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return plannedHA{lane, requirements, summary.Notes}
 }
 
@@ -146,7 +150,7 @@ func TestEveryInstalledKeySelectsWhatItsLegacyOptionsSelect(t *testing.T) {
 				t.Errorf("-check %s selects a configuration other than its legacy options':\n got %+v\nwant %+v",
 					key, got, want)
 			}
-			gotPlan, wantPlan := planOf(got), planOf(want)
+			gotPlan, wantPlan := planOf(t, got), planOf(t, want)
 			if !reflect.DeepEqual(gotPlan, wantPlan) {
 				t.Errorf("-check %s plans %+v, its legacy options %+v", key, gotPlan, wantPlan)
 			}
