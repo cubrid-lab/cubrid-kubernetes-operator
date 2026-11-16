@@ -1028,9 +1028,12 @@ const applyinfoScript = `PATH="${CUBRID}/bin:${PATH}"; ` +
 // appliersScript prints a member's applier lock, the database's file under
 // $CUBRID/var/APPLYLOGDB that one log applier holds at a time (POC-16, POC-17,
 // POC-21), the applylogdb processes that run with whether each holds that file
-// open, the locks /proc/locks lists on it, and the end of their newest error
-// logs: whether the applier of the master's copied log or another one
-// holds the lock (#416). Each part says when there is nothing.
+// open, the locks /proc/locks lists on it, and separate tails of the newest
+// applier and copier error logs (#416). Each class keeps at most four files
+// and fifteen lines per file; these are not byte bounds. Missing or unreadable
+// output is explicit, and one class cannot crowd out the other. The native
+// localhost applier prefix takes precedence over a terminal process suffix,
+// because its source peer may itself be named copylogdb.
 const appliersScript = `L="${CUBRID}/var/APPLYLOGDB/` + databaseName + `"; echo "== applier lock $L"; i=; ` +
 	`if [ -f "$L" ]; then ls -l --time-style=full-iso "$L"; i=$(stat -L -c %i "$L" 2>/dev/null); fi; ` +
 	`if [ -z "$i" ]; then echo "(none)"; else echo "locks on inode $i:"; ` +
@@ -1039,15 +1042,23 @@ const appliersScript = `L="${CUBRID}/var/APPLYLOGDB/` + databaseName + `"; echo 
 	`for p in /proc/[0-9]*; do c=$( { tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null); case "$c" in "cub_admin applylogdb"*) ` +
 	`h=no; for fd in "$p"/fd/*; do [ -n "$i" ] && [ "$(stat -L -c %i "$fd" 2>/dev/null)" = "$i" ] && h=yes; done; ` +
 	`echo "${p#/proc/} holds=$h $c"; n=$((n+1));; esac; done; [ "$n" -eq 0 ] && echo "(none)"; ` +
-	`echo "== applylogdb logs"; set -- $(ls -t "${CUBRID}"/log/*applylogdb*.err 2>/dev/null | head -n 4); ` +
-	`[ $# -eq 0 ] && echo "(none)"; for f; do echo "== $f"; tail -n 15 "$f"; done`
+	`D="${CUBRID}/log"; shopt -s nullglob; for kind in applylogdb copylogdb; do echo "== $kind logs"; ` +
+	`if [ ! -d "$D" ]; then echo "(log directory unavailable)"; continue; fi; ` +
+	`if [ ! -r "$D" ] || [ ! -x "$D" ]; then echo "(could not read log directory)"; continue; fi; ` +
+	`files=(); for f in "$D"/*.err; do [ -f "$f" ] || continue; case "${f##*/}" in ` +
+	`*@localhost_applylogdb_*.err|*_applylogdb.err) class=applylogdb;; *_copylogdb.err) class=copylogdb;; ` +
+	`*) continue;; esac; [ "$class" = "$kind" ] && files+=("$f"); done; ` +
+	`if [ "${#files[@]}" -eq 0 ]; then echo "(none)"; continue; fi; ` +
+	`listed=$(ls -1dt -- "${files[@]}" 2>/dev/null); [ "$?" -ne 0 ] && echo "(could not list all logs)"; ` +
+	`n=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ "$n" -ge 4 ] && break; n=$((n+1)); ` +
+	`echo "== $f"; if ! tail -n 15 -- "$f" 2>&1; then echo "(could not read log file)"; fi; done <<< "$listed"; done`
 
 // replicationState describes a member that lacks a row written through its
 // cluster (#416): its replication as the cluster's status reports it, the
 // ReplicationHealthy condition, the member's own applyinfo for the master's
-// log, its applier lock and appliers, and memberState. It returns a one-line
-// summary of the status and the whole description. What cannot be read is
-// said so.
+// log, its applier lock and appliers, applier/copier error tails, and
+// memberState. It returns a one-line status summary and the whole description.
+// Unreadable observations are stated explicitly.
 func (h *haRun) replicationState(ctx context.Context, cluster, pod, master string) (string, string) {
 	summary := "replication in status of " + pod + ": unknown"
 	current := &databasev1alpha1.CubridCluster{}

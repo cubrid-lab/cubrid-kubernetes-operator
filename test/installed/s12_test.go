@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -48,6 +49,8 @@ const (
 	testThirdOpID     = "c1-000003"
 	testRestoreSecret = "object-storage-restore"
 	testRestarted     = "containerd://restarted"
+	testApplyLogClass = "applylogdb"
+	testCopyLogClass  = "copylogdb"
 )
 
 func testS12Config(t *testing.T) HAConfig {
@@ -1161,6 +1164,228 @@ func TestRunS12ExactIsBlockedWhenTheReadIsLostTwice(t *testing.T) {
 	}
 	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Again != "the session was lost again" {
 		t.Fatalf("lost sessions = %+v, want one read made twice", rec.LostSessions)
+	}
+}
+
+// runReplicationDiagnosticScript executes the production shell collector on
+// owned log files, including the existing read-only /proc scan. No database,
+// container or cluster command is run.
+func runReplicationDiagnosticScript(t *testing.T, cubrid string, environment ...string) string {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bash, "-c", appliersScript)
+	cmd.Env = append(os.Environ(), append([]string{"CUBRID=" + cubrid}, environment...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("replication diagnostic shell failed: %v", err)
+	}
+	return string(out)
+}
+
+func replicationDiagnosticLog(t *testing.T, cubrid, name, content string) string {
+	t.Helper()
+	dir := filepath.Join(cubrid, "log")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, name)
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func TestS12ReplicationDiagnosticsKeepApplierLogs(t *testing.T) {
+	cubrid := t.TempDir()
+	const marker = "applier fixture retained"
+	replicationDiagnosticLog(t, cubrid, "appdb_applylogdb.err", marker+"\n")
+	if out := runReplicationDiagnosticScript(t, cubrid); !strings.Contains(out, marker) {
+		t.Fatal("production shell collector omitted the applier error tail")
+	}
+}
+
+func TestS12ReplicationDiagnosticsKeepCopierLogs(t *testing.T) {
+	cubrid := t.TempDir()
+	const marker = "copier fixture retained"
+	replicationDiagnosticLog(t, cubrid, "appdb_copylogdb.err", marker+"\n")
+	if out := runReplicationDiagnosticScript(t, cubrid); !strings.Contains(out, marker) {
+		t.Fatal("production shell collector omitted the copier error tail")
+	}
+}
+
+func TestS12ReplicationDiagnosticsBoundEachLogClassIndependently(t *testing.T) {
+	cubrid := filepath.Join(t.TempDir(), "member logs")
+	for _, kind := range []string{testApplyLogClass, testCopyLogClass} {
+		for file := range 6 {
+			var content strings.Builder
+			for line := range 20 {
+				fmt.Fprintf(&content, "%s-file-%d-line-%02d\n", kind, file, line)
+			}
+			name := fmt.Sprintf("appdb@hab-%d_%s.err", file, kind)
+			log := replicationDiagnosticLog(t, cubrid, name, content.String())
+			at := time.Unix(int64(1000+file), 0)
+			if err := os.Chtimes(log, at, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	const ignored = "non-error file must not be collected"
+	replicationDiagnosticLog(t, cubrid, "appdb_copylogdb.log", ignored)
+	out := runReplicationDiagnosticScript(t, cubrid)
+	for _, kind := range []string{testApplyLogClass, testCopyLogClass} {
+		for file := range 6 {
+			for line := range 20 {
+				marker := fmt.Sprintf("%s-file-%d-line-%02d\n", kind, file, line)
+				want := file >= 2 && line >= 5
+				if strings.Contains(out, marker) != want {
+					t.Fatalf("tail contains %q = %t, want %t", marker, !want, want)
+				}
+			}
+		}
+	}
+	if strings.Contains(out, ignored) {
+		t.Fatal("collector included a file outside the error-log pattern")
+	}
+}
+
+func TestS12ReplicationDiagnosticsDoNotClassifyLogsByPeerNames(t *testing.T) {
+	cases := []struct {
+		name, wanted, other, retained, colliding string
+		files                                    int
+	}{
+		{"copiers whose peers mention appliers", testApplyLogClass, testCopyLogClass,
+			"appdb@hab-0_applylogdb.err", "appdb@applylogdb-%d_copylogdb.err", 6},
+		{"appliers whose peers mention copiers", testCopyLogClass, testApplyLogClass,
+			"appdb@hab-0_copylogdb.err", "appdb@localhost_applylogdb_appdb_copylogdb-%d.err", 6},
+		{"native applier suffix takes precedence over a peer named copylogdb", testCopyLogClass, testApplyLogClass,
+			"appdb@hab-0_copylogdb.err", "appdb@localhost_applylogdb_appdb_copylogdb.err", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cubrid := t.TempDir()
+			const retained = "retained log from the intended process"
+			file := replicationDiagnosticLog(t, cubrid, tc.retained, retained+"\n")
+			old := time.Unix(1000, 0)
+			if err := os.Chtimes(file, old, old); err != nil {
+				t.Fatal(err)
+			}
+			const collision = "log from the other process"
+			for i := range tc.files {
+				name := tc.colliding
+				if strings.Contains(name, "%d") {
+					name = fmt.Sprintf(name, i)
+				}
+				file := replicationDiagnosticLog(t, cubrid, name, collision+"\n")
+				at := time.Unix(int64(2000+i), 0)
+				if err := os.Chtimes(file, at, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := runReplicationDiagnosticScript(t, cubrid)
+			parts := strings.SplitN(out, "== "+tc.wanted+" logs\n", 2)
+			if len(parts) != 2 {
+				t.Fatal("collector omitted the intended process section")
+			}
+			section := strings.SplitN(parts[1], "== "+tc.other+" logs\n", 2)[0]
+			if !strings.Contains(out, collision) {
+				t.Fatal("collector lost the other process tail instead of classifying it separately")
+			}
+			if !strings.Contains(section, retained) || strings.Contains(section, collision) {
+				t.Fatal("peer name diverted another process's logs into the intended process budget")
+			}
+		})
+	}
+}
+
+func TestS12ReplicationDiagnosticsStateMissingLogsExplicitly(t *testing.T) {
+	for _, directoryExists := range []bool{false, true} {
+		t.Run(fmt.Sprint(directoryExists), func(t *testing.T) {
+			cubrid := t.TempDir()
+			want := "(log directory unavailable)"
+			if directoryExists {
+				if err := os.Mkdir(filepath.Join(cubrid, "log"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				want = "(none)"
+			}
+			out := runReplicationDiagnosticScript(t, cubrid)
+			for _, kind := range []string{testApplyLogClass, testCopyLogClass} {
+				if !strings.Contains(out, "== "+kind+" logs\n"+want+"\n") {
+					t.Fatalf("%s section did not explicitly report %q", kind, want)
+				}
+			}
+		})
+	}
+}
+
+func TestS12ReplicationDiagnosticsKeepOtherTailsWhenOneReadFails(t *testing.T) {
+	cubrid := t.TempDir()
+	const retained = "readable applier tail retained"
+	replicationDiagnosticLog(t, cubrid, "appdb_applylogdb.err", retained+"\n")
+	unreadable := replicationDiagnosticLog(t, cubrid, "appdb_copylogdb.err", "unread copier contents\n")
+	tail, err := exec.LookPath("tail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubs := stubCommand(t, "tail", `for last; do :; done
+if [ "$last" = "$S12_DIAGNOSTIC_FAILED_LOG" ]; then echo "fixture tail read failed" >&2; exit 1; fi
+exec "$S12_DIAGNOSTIC_REAL_TAIL" "$@"`)
+	out := runReplicationDiagnosticScript(t, cubrid, "PATH="+stubs+":"+os.Getenv("PATH"),
+		"S12_DIAGNOSTIC_FAILED_LOG="+unreadable, "S12_DIAGNOSTIC_REAL_TAIL="+tail)
+	for _, want := range []string{retained, "fixture tail read failed", "(could not read log file)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("partial diagnostic did not retain %q", want)
+		}
+	}
+}
+
+func TestS12ReplicationDiagnosticsStateListingFailuresExplicitly(t *testing.T) {
+	cubrid := t.TempDir()
+	replicationDiagnosticLog(t, cubrid, "appdb_applylogdb.err", "applier contents\n")
+	replicationDiagnosticLog(t, cubrid, "appdb_copylogdb.err", "copier contents\n")
+	stubs := stubCommand(t, "ls", "echo 'fixture listing failed' >&2; exit 1")
+	out := runReplicationDiagnosticScript(t, cubrid, "PATH="+stubs+":"+os.Getenv("PATH"))
+	if strings.Count(out, "(could not list all logs)") != 2 {
+		t.Fatal("each log class must state its failed listing rather than claim no files")
+	}
+}
+
+func TestRunS12MissingNormalWriteFailsRegardlessOfDiagnosticOutcome(t *testing.T) {
+	for _, diagnosticFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(diagnosticFails), func(t *testing.T) {
+			cfg := testS12Config(t)
+			f := newS12Fixture(t, cfg)
+			f.dropNormalOn = testRestoreSlave
+			const copierTail = "== copylogdb logs\ncopier diagnostics retained\n"
+			f.memberHook = func(_ context.Context, _, script string) (string, error, bool) {
+				if !strings.Contains(script, "== applier lock") {
+					return "", nil, false
+				}
+				if diagnosticFails {
+					return "", errors.New("fixture member diagnostic unavailable"), true
+				}
+				return copierTail, nil, true
+			}
+			result, err := s12Of(t, f, t.Context())
+			if err == nil || result.Result != evidence.Fail || !strings.Contains(result.Reason, "is not on restored member") {
+				t.Fatalf("result = %+v, err = %v; missing acknowledged row must remain a failure", result, err)
+			}
+			rec := readS12Record(t, cfg.EvidenceDir)
+			state := rec.NormalWrite.MissingState[testRestoreSlave]
+			want := copierTail
+			if diagnosticFails {
+				want = "fixture member diagnostic unavailable"
+			}
+			if !rec.NormalWrite.Acknowledged || !slices.Contains(rec.NormalWrite.MissingOn, testRestoreSlave) ||
+				!strings.Contains(state, want) {
+				t.Fatal("diagnostic outcome replaced the missing-write evidence")
+			}
+		})
 	}
 }
 
