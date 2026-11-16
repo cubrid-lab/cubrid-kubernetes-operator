@@ -62,10 +62,11 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "CubridCluster {{ $labels.namespace }}/{{ $labels.cluster }} has Ready=False."
+            summary: "CubridCluster {{ $labels.namespace }}/{{ $labels.cluster }} does not report Ready=True."
             description: >-
-              The Ready Condition has been False for 10 minutes. The reason is
-              in the Condition (kubectl describe cubridcluster).
+              The Ready Condition has not been True for 10 minutes. The metric
+              is 0 for both False and Unknown; inspect the Condition and its
+              reason (kubectl describe cubridcluster).
         - alert: CubridClusterReadyUnknown
           expr: cubrid_cluster_instances unless on (namespace, cluster) cubrid_cluster_ready
           for: 10m
