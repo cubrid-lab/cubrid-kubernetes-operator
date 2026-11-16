@@ -17,6 +17,13 @@ limitations under the License.
 package installed
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -79,7 +86,10 @@ func TestInstalledLanesMatchTheRegistry(t *testing.T) {
 	}
 	checkHA := func(what string, cfg HAConfig) {
 		t.Helper()
-		lane, requirements := planHARun(cfg, &evidence.Summary{Notes: []string{""}})
+		lane, requirements, err := planHARun(cfg, &evidence.Summary{Notes: []string{""}})
+		if err != nil {
+			t.Fatal(err)
+		}
 		check(what, lane, requirements)
 	}
 
@@ -192,5 +202,203 @@ func TestSmokeRequirementsKeepLegacyDeclarations(t *testing.T) {
 	got, err := cfg.smokeRequirements()
 	if err != nil || !reflect.DeepEqual(got, []evidence.Requirement{{ID: legacySmokeID}}) {
 		t.Fatalf("default namespace declaration=%#v err=%v", got, err)
+	}
+}
+
+const plainHALegacyID = "LAB01"
+const plainHALane = "lab-installed-ha"
+const plainHASummaryFile = "summary.json"
+const plainHAJUnitFile = "junit.xml"
+
+// The inputs are the existing hand-written legacy option controls, not a
+// registry-generated list. The frozen digest below protects every lane's
+// requirement order and notes while only the plain lane changes declaration.
+func TestHALaneDeclarationsPreserveExistingPlans(t *testing.T) {
+	type snapshot struct {
+		Lane     string
+		Required []evidence.Requirement
+		Notes    []string
+	}
+	plans := make(map[string]snapshot, len(legacyHAOptions))
+	for key, legacy := range legacyHAOptions {
+		cfg := testHAConfig(t)
+		if legacy.backup {
+			cfg.BackupBucket = testBackupBucket
+		}
+		legacy.set(&cfg)
+		summary := evidence.Summary{Notes: []string{""}}
+		lane, required, err := planHARun(cfg, &summary)
+		if err != nil {
+			t.Fatalf("complete HA declaration returned an error: %v", err)
+		}
+		plans[key] = snapshot{lane, required, summary.Notes}
+	}
+	if len(plans) != 24 {
+		t.Fatalf("planned %d HA lanes, want the existing 24", len(plans))
+	}
+	data, err := json.Marshal(plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Captured before production edits at 1b75f11 on 2026-11-16 UTC.
+	const baseline = "d7b794e4c24831d70c368cfddad36168c60ec7282c939b73e3ddf3c63da0c63b"
+	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != baseline {
+		t.Fatalf("HA requirements or notes changed from the 24-lane legacy baseline: %s\n%s", got, data)
+	}
+}
+
+func TestPlainHADeclarationKeepsLegacyRequirements(t *testing.T) {
+	for _, mode := range []NamespaceMode{"", FreshNamespace} {
+		for _, level := range []string{smokeUnitLevel, evidence.LevelKind, evidence.LevelVMLab} {
+			cfg := testHAConfig(t)
+			cfg.NamespaceMode = mode
+			cfg.Level = level
+			summary := evidence.Summary{Notes: []string{"original note"}}
+			lane, required, err := planHARun(cfg, &summary)
+			if err != nil {
+				t.Fatalf("complete HA declaration returned an error: %v", err)
+			}
+			if lane != plainHALane || !reflect.DeepEqual(required, []evidence.Requirement{{ID: plainHALegacyID}}) ||
+				!slices.Equal(summary.Notes, []string{"original note"}) ||
+				cfg.Level != level || cfg.NamespaceMode != mode {
+				t.Fatalf("plain plan changed legacy identity/notes/config: lane=%s required=%#v notes=%q",
+					lane, required, summary.Notes)
+			}
+		}
+	}
+}
+
+func TestPlainHADeclarationPreservesRunnerOutputs(t *testing.T) {
+	for _, mode := range []NamespaceMode{"", FreshNamespace} {
+		for _, level := range []string{smokeUnitLevel, evidence.LevelKind, evidence.LevelVMLab} {
+			t.Run(string(mode)+"/"+level, func(t *testing.T) {
+				cfg := testHAConfig(t)
+				cfg.NamespaceMode = mode
+				cfg.Level = level
+				fixture := newHAFixture(t, cfg)
+				if err := fixture.runner.RunHA(t.Context(), cfg); err != nil {
+					t.Fatal(err)
+				}
+				summary := readSummary(t, cfg.EvidenceDir)
+				scenario := onlyScenario(t, summary)
+				if !summary.Passed || summary.Lane != plainHALane || summary.SchemaVersion != "2" ||
+					summary.Environment.Level != level || scenario.ID != plainHALegacyID || scenario.Variant != "" ||
+					scenario.Result != evidence.Pass {
+					t.Fatalf("plain HA output identity/level/verdict changed: %+v", summary)
+				}
+				requireHARecordAndDataCheck(t, cfg, scenario)
+				requireHAObjects(t, fixture, cfg)
+				requireNamespaceGone(t, fixture)
+				requireNoSecretInEvidence(t, cfg.EvidenceDir)
+				if strings.Join(fixture.writes, ",") != "namespace,secret,cluster,client" {
+					t.Fatalf("plain HA ownership writes changed: %q", fixture.writes)
+				}
+				if !slices.Equal(scenario.Evidence, []string{"LAB01/record.json", "LAB01/history.jsonl", "LAB01/data-check.json"}) {
+					t.Fatalf("plain HA legacy evidence order changed: %q", scenario.Evidence)
+				}
+				data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, plainHAJUnitFile))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Use the actual XML attribute names, retaining the historical case identity.
+				var wire struct {
+					Cases []struct {
+						Name  string `xml:"name,attr"`
+						Class string `xml:"classname,attr"`
+					} `xml:"testcase"`
+				}
+				if err := xml.Unmarshal(data, &wire); err != nil {
+					t.Fatal(err)
+				}
+				if len(wire.Cases) != 1 || wire.Cases[0].Name != plainHALegacyID || wire.Cases[0].Class != "scenario" {
+					t.Fatalf("JUnit identity changed: %s", data)
+				}
+				run, err := evidence.ReadRun(cfg.EvidenceDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if run.Validated() != (level == evidence.LevelVMLab) {
+					t.Fatalf("reporting level %s changed qualification: %q", level, run.Problems)
+				}
+				checkPlainHAOutputCompatibility(t, cfg, summary, scenario)
+			})
+		}
+	}
+}
+
+func checkPlainHAOutputCompatibility(t *testing.T, cfg HAConfig, recorded evidence.Summary,
+	scenario evidence.Scenario) {
+	t.Helper()
+	planned := evidence.Summary{Notes: []string{""}}
+	lane, required, err := planHARun(cfg, &planned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded.RunID = "plain-ha-declaration-compatibility"
+	recorded.StartedAt = time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	recorded.FinishedAt = recorded.StartedAt.Add(time.Minute)
+	recorded.Scenarios = nil
+	current, legacy := recorded, recorded
+	const notStarted = "not started"
+	current.Plan(required, notStarted)
+	legacy.Plan([]evidence.Requirement{{ID: plainHALegacyID}}, notStarted)
+	current.Record(scenario)
+	control := scenario
+	control.ID, control.Variant = plainHALegacyID, ""
+	legacy.Record(control)
+	dirs := []string{t.TempDir(), t.TempDir()}
+	for i, summary := range []evidence.Summary{current, legacy} {
+		for _, file := range scenario.Evidence {
+			data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dirs[i], file)
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := summary.Write(dirs[i], evidence.NewRedactor()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{plainHASummaryFile, plainHAJUnitFile} {
+		actual, err := os.ReadFile(filepath.Join(dirs[0], file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		control, err := os.ReadFile(filepath.Join(dirs[1], file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, control) {
+			t.Fatalf("%s changed from the independent legacy requirement control", file)
+		}
+	}
+	actual, err := evidence.ReadRun(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlRun, err := evidence.ReadRun(dirs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	qualified := cfg.Level == evidence.LevelVMLab
+	if actual.Validated() != qualified || controlRun.Validated() != qualified ||
+		evidence.CompareRuns(controlRun, actual).Matches() != qualified {
+		t.Fatalf("reporting-level qualification changed: actual=%q legacy=%q", actual.Problems, controlRun.Problems)
+	}
+	if err := current.Checkpoint(dirs[0], evidence.NewRedactor(), lane, current.FinishedAt); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := evidence.ReadRun(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpoint.Provisional || checkpoint.Validated() || checkpoint.Summary.Passed {
+		t.Fatal("plain HA checkpoint passed")
 	}
 }
