@@ -141,10 +141,13 @@ labelled with its ID, and a variant also with `<ID>-<variant>`). The real-image
 groups run on linux/amd64 only and are skipped elsewhere. A failure in one
 group does not stop the others. A skipped, filtered-out or blocked scenario
 is recorded as `not_run` or `blocked` with the reason, never as a pass. S00
-covers one standalone member. No e2e test creates a CubridBackup or a
-recovery bootstrap (S11 and S12 have no test), so a Kind run does not
-establish backup or restore, and Kind never establishes behavior on real VM
-failures.
+covers one standalone member. The HA long-transaction check creates a
+`CubridBackup` with Full/StandbyOnly and requires a slave target recorded
+before the client session ends. Its ending phase is recorded without requiring
+Completed; the test does not retain or verify backup objects from its
+throwaway S3 mock. This selection check
+does not establish backup artifact or restored-data acceptance (scenarios S11
+and S12), and Kind never establishes behavior on real VM failures.
 
 Each scenario step also carries the descriptive key of its check from
 `test/evidence/registry.go` (for example `ha-replication` beside `S02`, and
