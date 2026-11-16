@@ -204,24 +204,48 @@ func observeS02MarkerMember(ctx context.Context, member, marker string, probe s0
 // tolerate a failed command or change the shared SQL reader/re-read policy.
 var s02SelectedRows = regexp.MustCompile(`(?m)^[ \t]*([0-9]+) rows? selected\.(?:[ \t]*\([^\r\n()]*\))?` +
 	`(?:[ \t]+Committed\.(?:[ \t]*\([^\r\n()]*\))?)?[ \t]*\r?$`)
-var s02EmptyRows = regexp.MustCompile(`(?m)^[ \t]*There are no results\.[ \t]*\r?$`)
+var s02MarkerRow = regexp.MustCompile(`^'(?:[^']|'')*'$`)
+var s02MarkerSeparator = regexp.MustCompile(`^={2,}$`)
+var s02MarkerCommit = regexp.MustCompile(`^Committed\.(?:[ \t]*\([^\r\n()]*\))?[ \t]*$`)
 
 func completeS02MarkerValues(out string) ([]string, error) {
+	invalid := fmt.Errorf("marker SELECT is not one complete one-column response")
+	var lines []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > 0 && lines[0] == "=== <Result of SELECT Command in Line 1> ===" {
+		lines = lines[1:]
+	}
+	if len(lines) > 0 && lines[0] == "There are no results." {
+		if len(lines) == 1 || len(lines) == 2 && s02MarkerCommit.MatchString(lines[1]) {
+			return []string{}, nil
+		}
+		return nil, invalid
+	}
+	if len(lines) < 3 || !strings.EqualFold(lines[0], "v") || !s02MarkerSeparator.MatchString(lines[1]) {
+		return nil, invalid
+	}
+	countLine := s02SelectedRows.FindStringSubmatch(lines[len(lines)-1])
+	if countLine == nil {
+		return nil, invalid
+	}
+	for _, line := range lines[2 : len(lines)-1] {
+		if !s02MarkerRow.MatchString(line) {
+			return nil, invalid
+		}
+	}
 	values, err := sqlcheck.Values(out)
 	if err != nil {
 		return nil, err
 	}
-	counts, empty := s02SelectedRows.FindAllStringSubmatch(out, -1), s02EmptyRows.FindAllString(out, -1)
-	if len(empty) == 1 && len(counts) == 0 && len(values) == 0 {
-		return values, nil
+	count, err := strconv.Atoi(countLine[1])
+	if err != nil || count != len(values) || count != len(lines)-3 {
+		return nil, invalid
 	}
-	if len(empty) == 0 && len(counts) == 1 {
-		count, err := strconv.Atoi(counts[0][1])
-		if err == nil && count == len(values) {
-			return values, nil
-		}
-	}
-	return nil, fmt.Errorf("marker SELECT response has no single complete row count matching its parsed values")
+	return values, nil
 }
 
 func storeS02MarkerReceipt(receipt s02MarkerReceipt, probe s02MarkerProbe) (string, string) {

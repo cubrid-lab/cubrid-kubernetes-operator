@@ -448,7 +448,7 @@ func s01AndS02Steps(r *haRun) {
 		}, within(formationLimit, formation))
 	})
 
-	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", s02Labels, func() {
+	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", s02Labels, func(ctx SpecContext) {
 		r.enter(nil)
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.
@@ -485,7 +485,7 @@ func s01AndS02Steps(r *haRun) {
 		Expect(wantRows).To(HaveLen(1), "the ledger row count on the master")
 		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
 		committed := time.Now()
-		_, receiptFile, receiptNote, err := r.writeS02Marker(context.Background(), master, marker, committed)
+		_, receiptFile, receiptNote, err := r.writeS02Marker(ctx, master, marker, committed)
 		addEvidence(&result, receiptFile)
 		noteS02MarkerReceipt(receiptNote)
 		Expect(err).NotTo(HaveOccurred())

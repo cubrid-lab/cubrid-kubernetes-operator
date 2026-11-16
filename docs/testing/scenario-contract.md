@@ -2045,8 +2045,9 @@ it needs more.
   its original output/error and one bounded direct-member SELECT plus an
   after-only server-identity command receipt per known member, with separate
   query intervals. Unreadable or cancelled observations remain unknown;
-  returned values require an explicit native empty result or a complete matching
-  selected-row count, and describe only those individual reads. They do not establish
+  returned values require one complete one-column response with an explicit
+  native empty result or a matching selected-row count; extra or partial result
+  payload stays unavailable. Values describe only those individual reads. They do not establish
   commit, durability, pre-write identity or continuous identity, and the
   identity receipt is not atomically bound to its SELECT. Diagnostic failure
   never replays or tolerates the write, changes its original failure, or

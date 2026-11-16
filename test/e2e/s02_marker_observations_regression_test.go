@@ -441,18 +441,128 @@ func TestS02MarkerCompleteEmptyResultIsKnown(t *testing.T) {
 
 func TestS02MarkerCompleteNativeReadFooterIsRetained(t *testing.T) {
 	probe := s02MarkerTestProbe()
-	// This existing one-column native SELECT receipt includes an autocommit
-	// suffix (POC-56, samples/e2e-image/setup/b-row-before-backup.txt). It says
-	// nothing about the separate failed marker write or this run's engine.
+	// Reuse POC-56's native footer (samples/e2e-image/setup/b-row-before-backup.txt)
+	// with only the column heading adapted to the diagnostic SELECT v query.
+	// This says nothing about the separate failed write or this run's engine.
 	const native = "\n=== <Result of SELECT Command in Line 1> ===\n\n  'row='||origin      \n==========" +
 		"============\n  'row=cluster-b-only'\n\n1 row selected. (0.000000 sec) Committed. (" +
 		"0.000000 sec) \n"
-	probe.selectSQL = func(context.Context, string, string) (string, error) { return native, nil }
+	probe.selectSQL = func(context.Context, string, string) (string, error) {
+		return strings.Replace(native, "'row='||origin", "v", 1), nil
+	}
 	receipt, _, _ := runFailedS02Marker(t, probe)
 	for _, member := range receipt.Members {
 		if member.Select.Status != s02Answered || member.ValueCount == nil || *member.ValueCount != 1 ||
 			!reflect.DeepEqual(member.Values, []string{"row=cluster-b-only"}) {
 			t.Fatalf("complete native SELECT was lost: %+v", member)
 		}
+	}
+}
+
+func TestS02MarkerExtraOrUnfinishedPayloadStaysUnavailable(t *testing.T) {
+	for name, out := range map[string]string{
+		"empty table followed by partial table":           "\n v\n=====\n0 rows selected.\n\n v\n=====\n 'part",
+		"one row followed by partial table":               s02MarkerRows("marker") + "\n v\n=====\n 'part",
+		"unfinished value before empty footer":            "\n v\n=====\n 'part\n0 rows selected.\n",
+		"native empty response followed by partial table": "There are no results.\n\n v\n=====\n 'part",
+		"two columns in one row":                          "\n v\n=====\n 'a' 'b'\n1 row selected.\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			probe := s02MarkerTestProbe()
+			probe.selectSQL = func(context.Context, string, string) (string, error) { return out, nil }
+			receipt, _, _ := runFailedS02Marker(t, probe)
+			for _, member := range receipt.Members {
+				if member.Select.Status != s02Unavailable || member.MarkerObservation != evidence.Unknown ||
+					member.ValueCount != nil || member.Select.Output != out || member.Select.StartedAt == nil {
+					t.Fatalf("extra or unfinished payload became definite: %+v", member)
+				}
+			}
+		})
+	}
+}
+
+func TestS02MarkerProductionAdapterStopsOnCallerCancellation(t *testing.T) {
+	freshLedger(t)
+	dir := t.TempDir()
+	useEvidenceDir(t, filepath.Join(dir, "evidence"))
+	writeOutput := filepath.Join(dir, "write")
+	if err := os.WriteFile(writeOutput, []byte(failedS02MarkerOutput), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls, started := filepath.Join(dir, "calls"), filepath.Join(dir, "read-started")
+	t.Setenv("S02_DIAGNOSTIC_CALLS", calls)
+	t.Setenv("S02_DIAGNOSTIC_WRITE", writeOutput)
+	t.Setenv("S02_DIAGNOSTIC_STARTED", started)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$S02_DIAGNOSTIC_CALLS"
+case "$*" in
+ *"INSERT INTO s02_marker"*) cat "$S02_DIAGNOSTIC_WRITE" ;;
+ *"SELECT v FROM s02_marker"*) : > "$S02_DIAGNOSTIC_STARTED"; exec sleep 30 ;;
+ *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	run := newHARun("marker-ns", "client-ns", "ha", "appdb",
+		[]string{markerFirstMember, markerSecondMember, markerThirdMember})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type answer struct {
+		out, file string
+		err       error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		out, file, _, err := run.writeS02Marker(ctx, markerFirstMember, "marker", time.Now())
+		done <- answer{out, file, err}
+	}()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			cancel()
+			t.Fatal("diagnostic SELECT did not start")
+		}
+	}
+	cancel()
+	var result answer
+	select {
+	case result = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("production adapter outlived caller cancellation")
+	}
+	var statement *sqlcheck.StatementError
+	if result.out != failedS02MarkerOutput || !errors.As(result.err, &statement) || result.file == "" {
+		t.Fatalf("cancellation replaced original write failure: %+v", result)
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "INSERT INTO s02_marker") ||
+		!strings.Contains(lines[1], s02MarkerSelect) {
+		t.Fatalf("commands continued or write replayed: %q", lines)
+	}
+	data, err = os.ReadFile(filepath.Join(dir, "evidence", result.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt s02MarkerReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Members[0].Select.Status != s02Unavailable || receipt.Members[0].Identity.Status != s02NotObserved ||
+		receipt.Members[1].Select.Status != s02NotObserved {
+		t.Fatal("cancelled production commands gained observations")
 	}
 }
