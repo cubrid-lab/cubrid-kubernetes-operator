@@ -28,10 +28,12 @@ import (
 	"time"
 )
 
+const windowsGOOS = "windows"
+
 // Stub Kind and the container tool: no real cluster or image is changed.
 // A failed helper-image pull must not start E2E and must clean up this run's cluster.
 func TestRunE2EPreloadsHelperImagesAndKeepsCleanup(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsGOOS {
 		t.Skip("the Kind run wrapper is a bash script")
 	}
 	if _, err := exec.LookPath("bash"); err != nil {
@@ -145,7 +147,7 @@ exit 0
 // still stop and reap the loader before cluster cleanup. The earlier pull
 // regression sends TERM after startup and cannot exercise this handoff.
 func TestRunE2ESignalDuringPreloadLaunchStopsHelperBeforeCleanup(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsGOOS {
 		t.Skip("requires Unix process signals")
 	}
 	for _, reuse := range []bool{false, true} {
@@ -268,7 +270,7 @@ fi' DEBUG
 // deletes the Kind cluster that it created. This catches a Bash foreground
 // command whose TERM trap would only run after the pull had finished.
 func TestRunE2ETermDuringImagePullDeletesOwnedCluster(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsGOOS {
 		t.Skip("requires Unix process signals")
 	}
 	dir := t.TempDir()
