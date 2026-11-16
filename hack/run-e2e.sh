@@ -74,7 +74,6 @@ on_signal() {
 	elif [ -n "$preload_child" ]; then
 		echo "Received SIG$sig; stopping Kind helper image preload..." >&2
 		kill -s "$sig" -- "-$preload_child" 2>/dev/null || true
-		exit $((128 + num))
 	elif [ -z "$starting" ]; then
 		exit $((128 + num))
 	fi
@@ -117,17 +116,32 @@ if [ -z "${CONTAINER_TOOL:-}" ]; then
 	exit 2
 fi
 # Like the suite, run every external preload command in a tracked process
-# group. A trapped signal interrupts the wait builtin immediately, kills that
-# group in on_signal, and then lets the EXIT trap clean up the owned cluster.
+# group. Defer signals during the launch-to-PID handoff, then replay the first
+# signal and reap the helper before the EXIT trap cleans up the owned cluster.
 # This also works for an explicitly reused cluster, which must never be deleted.
 run_preload_command() {
 	local result=0
+	starting=1
 	set -m
 	"$@" &
 	preload_child=$!
 	set +m
-	wait "$preload_child" || result=$?
+	starting=
+	if [ -n "$signal" ]; then
+		kill -s "$(kill -l "$signal")" -- "-$preload_child" 2>/dev/null || true
+	fi
+	# A trapped signal interrupts wait before the helper has finished stopping.
+	while :; do
+		wait "$preload_child"
+		result=$?
+		if ! kill -0 "$preload_child" 2>/dev/null; then
+			break
+		fi
+	done
 	preload_child=
+	if [ -n "$signal" ]; then
+		exit $((128 + signal))
+	fi
 	return "$result"
 }
 preload_helper_image() {
