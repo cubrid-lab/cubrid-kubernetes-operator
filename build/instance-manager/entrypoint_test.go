@@ -436,6 +436,44 @@ func TestEntrypoint_DBAPasswordIsSetOnlyForANewStandaloneDatabase(t *testing.T) 
 	})
 }
 
+// An initialized HA member does not run a standalone-mode DBA password check
+// before heartbeat, even when the requested file exists. That check is not
+// known to preserve HA logs and replication state (#894). Pin this existing
+// safety boundary for both startup modes and all HA component roles; a failed
+// check here must not accidentally turn into a restart crash loop. The
+// Operator's separate, running-primary rotation check owns mismatch reporting.
+func TestEntrypoint_HARestartSkipsUnsafeOfflineDBAPasswordCheck(t *testing.T) {
+	for _, components := range haComponents {
+		for _, bootstrap := range []string{bootstrapNew, bootstrapRecovery} {
+			for _, checkExit := range []string{"0", "1", "3"} {
+				t.Run(fmt.Sprintf("%s/%s/checkExit=%s", components, bootstrap, checkExit), func(t *testing.T) {
+					f := newFixture(t, managerStub)
+					path := f.requestDBAPassword()
+					const secretValue = "synthetic-ha-password"
+					if err := os.WriteFile(path, []byte(secretValue+"\n"), 0o400); err != nil {
+						t.Fatal(err)
+					}
+					f.env["CUBRID_COMPONENTS"] = components
+					f.env["CUBRID_BOOTSTRAP"] = bootstrap
+					// If the offline checker were called, its return value
+					// could be success, an unknown result or a mismatch.
+					f.env["CHECK_EXIT"] = checkExit
+					f.configureHA()
+					f.registerDatabase()
+					code, out := f.run()
+					if code != 0 {
+						t.Fatalf("HA member restart exited %d:\n%s", code, out)
+					}
+					wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
+					if strings.Contains(out, secretValue) {
+						t.Errorf("entrypoint output leaked the mounted DBA password")
+					}
+				})
+			}
+		}
+	}
+}
+
 // A standalone database restored from a backup is not started when the check
 // fails, whatever the cause: the server is not started and the container
 // ends, so the Pod is restarted (fail closed). The log tells a database whose
