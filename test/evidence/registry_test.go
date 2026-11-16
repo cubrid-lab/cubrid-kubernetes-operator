@@ -638,6 +638,56 @@ func TestInventoryNamesEveryKey(t *testing.T) {
 	}
 }
 
+func sourceIdent(expr ast.Expr, name string) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+func sourceSelector(expr ast.Expr, pkg, name string) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	return ok && sourceIdent(sel.X, pkg) && sel.Sel.Name == name
+}
+
+func sourceString(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(lit.Value)
+	return value, err == nil
+}
+
+// kindRequiredErrorCheck accepts only the initialization panic that preserves
+// the constructor error, before the declaration can return any requirements.
+func kindRequiredErrorCheck(stmt ast.Stmt) bool {
+	check, ok := stmt.(*ast.IfStmt)
+	if !ok || check.Init != nil || check.Else != nil || len(check.Body.List) != 1 {
+		return false
+	}
+	condition, ok := check.Cond.(*ast.BinaryExpr)
+	if !ok || condition.Op != token.NEQ || !sourceIdent(condition.X, "err") || !sourceIdent(condition.Y, "nil") {
+		return false
+	}
+	statement, ok := check.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	stop, ok := statement.X.(*ast.CallExpr)
+	if !ok || !sourceIdent(stop.Fun, "panic") || len(stop.Args) != 1 || stop.Ellipsis.IsValid() {
+		return false
+	}
+	context, ok := stop.Args[0].(*ast.CallExpr)
+	if !ok || !sourceSelector(context.Fun, "fmt", "Errorf") || len(context.Args) != 2 || context.Ellipsis.IsValid() ||
+		!sourceIdent(context.Args[1], "err") {
+		return false
+	}
+	message, ok := sourceString(context.Args[0])
+	if !ok || !strings.Contains(message, "%w") || !strings.Contains(message, "Kind") {
+		return false
+	}
+	return true
+}
+
 // kindRequiredKeys reads only the supported declaration: one constructor call,
 // a contextual panic on error, and an unchanged return. It is deliberately not
 // a general interpreter of Go expressions or registry-derived lists.
@@ -646,35 +696,23 @@ func kindRequiredKeys(fn *ast.FuncDecl) ([]string, error) {
 	if fn.Body == nil || len(fn.Body.List) != 3 {
 		return bad()
 	}
-	ident := func(expr ast.Expr, name string) bool { id, ok := expr.(*ast.Ident); return ok && id.Name == name }
-	selector := func(expr ast.Expr, pkg, name string) bool {
-		sel, ok := expr.(*ast.SelectorExpr)
-		return ok && ident(sel.X, pkg) && sel.Sel.Name == name
-	}
-	literal := func(expr ast.Expr) (string, bool) {
-		lit, ok := expr.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return "", false
-		}
-		value, err := strconv.Unquote(lit.Value)
-		return value, err == nil
-	}
 	assignment, ok := fn.Body.List[0].(*ast.AssignStmt)
 	if !ok || assignment.Tok != token.DEFINE || len(assignment.Lhs) != 2 || len(assignment.Rhs) != 1 ||
-		!ident(assignment.Lhs[0], "required") || !ident(assignment.Lhs[1], "err") {
+		!sourceIdent(assignment.Lhs[0], "required") || !sourceIdent(assignment.Lhs[1], "err") {
 		return bad()
 	}
 	call, ok := assignment.Rhs[0].(*ast.CallExpr)
-	if !ok || !selector(call.Fun, "evidence", "RequirementsForKeys") || call.Ellipsis.IsValid() || len(call.Args) != 18 {
+	if !ok || !sourceSelector(call.Fun, "evidence", "RequirementsForKeys") ||
+		call.Ellipsis.IsValid() || len(call.Args) != 18 {
 		return bad()
 	}
-	lane, ok := literal(call.Args[0])
-	if !ok || lane != "kind" || !selector(call.Args[1], "evidence", "LevelKind") {
+	lane, ok := sourceString(call.Args[0])
+	if !ok || lane != testKindLane || !sourceSelector(call.Args[1], "evidence", "LevelKind") {
 		return bad()
 	}
 	keys := make([]string, 0, 16)
 	for _, arg := range call.Args[2:] {
-		key, ok := literal(arg)
+		key, ok := sourceString(arg)
 		if !ok {
 			return bad()
 		}
@@ -683,32 +721,11 @@ func kindRequiredKeys(fn *ast.FuncDecl) ([]string, error) {
 	if !slices.Equal(keys, requiredKindKeys()) {
 		return nil, fmt.Errorf("kindRequired must list the exact ordered 16 Kind keys, got %q", keys)
 	}
-	check, ok := fn.Body.List[1].(*ast.IfStmt)
-	if !ok || check.Init != nil || check.Else != nil || len(check.Body.List) != 1 {
-		return bad()
-	}
-	condition, ok := check.Cond.(*ast.BinaryExpr)
-	if !ok || condition.Op != token.NEQ || !ident(condition.X, "err") || !ident(condition.Y, "nil") {
-		return bad()
-	}
-	statement, ok := check.Body.List[0].(*ast.ExprStmt)
-	if !ok {
-		return bad()
-	}
-	stop, ok := statement.X.(*ast.CallExpr)
-	if !ok || !ident(stop.Fun, "panic") || len(stop.Args) != 1 || stop.Ellipsis.IsValid() {
-		return bad()
-	}
-	context, ok := stop.Args[0].(*ast.CallExpr)
-	if !ok || !selector(context.Fun, "fmt", "Errorf") || len(context.Args) != 2 || context.Ellipsis.IsValid() || !ident(context.Args[1], "err") {
-		return bad()
-	}
-	message, ok := literal(context.Args[0])
-	if !ok || !strings.Contains(message, "%w") || !strings.Contains(message, "Kind") {
+	if !kindRequiredErrorCheck(fn.Body.List[1]) {
 		return bad()
 	}
 	returned, ok := fn.Body.List[2].(*ast.ReturnStmt)
-	if !ok || len(returned.Results) != 1 || !ident(returned.Results[0], "required") {
+	if !ok || len(returned.Results) != 1 || !sourceIdent(returned.Results[0], "required") {
 		return bad()
 	}
 	return keys, nil
@@ -735,14 +752,14 @@ func kindRequiredInSource(t *testing.T) []string {
 
 func TestRegistryMatchesKindRequired(t *testing.T) {
 	keys := kindRequiredInSource(t)
-	got, err := RequirementsForKeys("kind", LevelKind, keys...)
+	got, err := RequirementsForKeys(testKindLane, LevelKind, keys...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, legacyKindRequirements()) {
 		t.Fatalf("source resolved to unexpected legacy requirements: %#v", got)
 	}
-	if problems := (Lane{Name: "kind", Required: got}).RegistryProblems(LevelKind); len(problems) != 0 {
+	if problems := (Lane{Name: testKindLane, Required: got}).RegistryProblems(LevelKind); len(problems) != 0 {
 		t.Fatal(problems)
 	}
 }
@@ -753,21 +770,25 @@ func TestKindRequiredSourceGuardRejectsUnsupportedDeclarations(t *testing.T) {
 		args = append(args, strconv.Quote(key))
 	}
 	call := "evidence.RequirementsForKeys(\"kind\", evidence.LevelKind, " + strings.Join(args, ", ") + ")"
-	body := "required, err := " + call + "; if err != nil { panic(fmt.Errorf(\"declare Kind requirements: %w\", err)) }; return required"
+	errorCheck := "if err != nil { panic(fmt.Errorf(\"declare Kind requirements: %w\", err)) }; "
+	body := "required, err := " + call + "; " + errorCheck + "return required"
 	tests := map[string]string{
-		"valid":                      body,
-		"omitted key":                strings.Replace(body, ", "+args[15], "", 1),
-		"duplicate key":              strings.Replace(body, args[15], args[14], 1),
-		"registry derived arguments": "required, err := evidence.RequirementsForKeys(\"kind\", evidence.LevelKind, evidence.RegisteredKeys(evidence.LevelKind)...); if err != nil { panic(err) }; return required",
-		"dynamic key":                strings.Replace(body, args[0], "key", 1),
-		"changed lane":               strings.Replace(body, "\"kind\"", "\"kind-filtered\"", 1),
-		"changed level":              strings.Replace(body, "evidence.LevelKind", "evidence.LevelVMLab", 1),
-		"second constructor call":    strings.Replace(body, "return required", "_, _ = "+call+"; return required", 1),
-		"appended requirement":       strings.Replace(body, "return required", "required = append(required, evidence.Requirement{}); return required", 1),
-		"ignored error":              strings.Replace(body, "if err != nil { panic(fmt.Errorf(\"declare Kind requirements: %w\", err)) }; ", "", 1),
-		"wrong error condition":      strings.Replace(body, "err != nil", "err == nil", 1),
-		"return on error":            strings.Replace(body, "panic(fmt.Errorf(\"declare Kind requirements: %w\", err))", "return required", 1),
-		"unrelated return":           strings.Replace(body, "return required", "return other", 1),
+		"valid":         body,
+		"omitted key":   strings.Replace(body, ", "+args[15], "", 1),
+		"duplicate key": strings.Replace(body, args[15], args[14], 1),
+		"registry derived arguments": "required, err := evidence.RequirementsForKeys(\"kind\", evidence.LevelKind, " +
+			"evidence.RegisteredKeys(evidence.LevelKind)...); " + errorCheck + "return required",
+		"dynamic key":             strings.Replace(body, args[0], "key", 1),
+		"changed lane":            strings.Replace(body, "\"kind\"", "\"kind-filtered\"", 1),
+		"changed level":           strings.Replace(body, "evidence.LevelKind", "evidence.LevelVMLab", 1),
+		"second constructor call": strings.Replace(body, "return required", "_, _ = "+call+"; return required", 1),
+		"appended requirement": strings.Replace(body, "return required",
+			"required = append(required, evidence.Requirement{}); return required", 1),
+		"ignored error":         strings.Replace(body, errorCheck, "", 1),
+		"wrong error condition": strings.Replace(body, "err != nil", "err == nil", 1),
+		"return on error": strings.Replace(body,
+			"panic(fmt.Errorf(\"declare Kind requirements: %w\", err))", "return required", 1),
+		"unrelated return": strings.Replace(body, "return required", "return other", 1),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -787,8 +808,9 @@ func TestKindRequiredSourceGuardRejectsUnsupportedDeclarations(t *testing.T) {
 // These independent declarations pin both the readable source and the legacy
 // runtime identities; registry iteration must not define the expected set.
 func requiredKindKeys() []string {
+	const replicationKey = "ha-replication"
 	return []string{
-		"standalone-database-sql", "ha-broker-access", "ha-replication",
+		"standalone-database-sql", "ha-broker-access", replicationKey,
 		"instance-manager-access-and-secret-protection",
 		"ha-primary-pod-recovery-abrupt-first-member", "ha-primary-pod-recovery-abrupt-later-master",
 		"ha-primary-pod-recovery-graceful", "broker-failure-recovery-process",
@@ -800,18 +822,24 @@ func requiredKindKeys() []string {
 }
 
 func legacyKindRequirements() []Requirement {
+	const (
+		brokerFamily   = "S05"
+		deletionFamily = "S13"
+		smokeFamily    = "S01"
+	)
 	return []Requirement{
-		{ID: "S00"}, {ID: "S01"}, {ID: "S02"}, {ID: "S14"},
-		{ID: "S03", Variant: "abrupt-first-member"}, {ID: "S03", Variant: "abrupt"}, {ID: "S03", Variant: "graceful"},
-		{ID: "S05", Variant: "broker-process"}, {ID: "S05", Variant: "one-broker-pod"}, {ID: "S05", Variant: "all-rw-brokers"},
-		{ID: "S06", Variant: "restart"}, {ID: "S06", Variant: "absent-during-failover"},
-		{ID: "S13", Variant: "retain"}, {ID: "S13", Variant: "delete"},
-		{ID: "S14", Variant: "token-rotation"}, {ID: "S14", Variant: "token-migration"},
+		{ID: s00}, {ID: smokeFamily}, {ID: s02Label}, {ID: s14},
+		{ID: s03, Variant: "abrupt-first-member"}, {ID: s03, Variant: "abrupt"}, {ID: s03, Variant: "graceful"},
+		{ID: brokerFamily, Variant: "broker-process"}, {ID: brokerFamily, Variant: "one-broker-pod"},
+		{ID: brokerFamily, Variant: "all-rw-brokers"},
+		{ID: s06, Variant: "restart"}, {ID: s06, Variant: "absent-during-failover"},
+		{ID: deletionFamily, Variant: "retain"}, {ID: deletionFamily, Variant: "delete"},
+		{ID: s14, Variant: "token-rotation"}, {ID: s14, Variant: "token-migration"},
 	}
 }
 
 func TestRequirementsForKeysKeepsLegacyKindRequirements(t *testing.T) {
-	got, err := RequirementsForKeys("kind", LevelKind, requiredKindKeys()...)
+	got, err := RequirementsForKeys(testKindLane, LevelKind, requiredKindKeys()...)
 	if err != nil {
 		t.Fatalf("complete explicit Kind keys returned an error: %v", err)
 	}
@@ -826,7 +854,7 @@ func TestRequirementsForKeysPreservesCallerOrderAndInputs(t *testing.T) {
 	slices.Reverse(want)
 	beforeKeys, beforeRegistry := slices.Clone(keys), fmt.Sprintf("%#v", registry)
 	for range 2 {
-		got, err := RequirementsForKeys("kind", LevelKind, keys...)
+		got, err := RequirementsForKeys(testKindLane, LevelKind, keys...)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("reordered requirements = %#v, %v", got, err)
 		}
@@ -843,7 +871,7 @@ func TestRequirementsForKeysRejectsInvalidDeclarations(t *testing.T) {
 		keys        []string
 		want        string
 	}{
-		"empty":                            {keys: []string{}, want: "requires nothing"},
+		"no keys":                          {keys: []string{}, want: "requires nothing"},
 		"partial":                          {keys: []string{testBaseKey}, want: "has no requirement"},
 		"duplicate":                        {keys: []string{testBaseKey, testKindKey, testKindKey}, want: "duplicate"},
 		"unknown key after valid key":      {keys: []string{testBaseKey, "unknown"}, want: "unknown scenario key"},
@@ -852,16 +880,40 @@ func TestRequirementsForKeysRejectsInvalidDeclarations(t *testing.T) {
 		"unknown lane":                     {lane: "unknown", want: "not registered"},
 		"filtered lane":                    {lane: "kind-filtered", want: "not registered"},
 		"wrong level":                      {level: LevelVMLab, want: "is judged at level"},
-		"empty level":                      {level: "empty", want: "is judged at level"},
+		"empty level":                      {level: "empty-level", want: "is judged at level"},
 		"installed key":                    {keys: []string{testBaseKey, testLabKey}, want: "has level"},
-		"key outside lane":                 {change: func(r *scenarioRegistry) { r.lanes[0].Keys = []string{testBaseKey} }, want: "not registered for lane"},
-		"ambiguous key":                    {change: func(r *scenarioRegistry) { r.entries = append(r.entries, r.entries[1]) }, want: "names 2 results"},
-		"missing alias":                    {change: func(r *scenarioRegistry) { r.entries[1].Aliases = nil }, want: "exactly one"},
-		"multiple aliases":                 {change: func(r *scenarioRegistry) { r.entries[1].Aliases = []string{testAlias, "S06/later"} }, want: "exactly one"},
-		"colliding alias":                  {change: func(r *scenarioRegistry) { r.entries[0].Aliases = []string{testAlias} }, want: "names 2"},
-		"alias belongs to another family":  {change: func(r *scenarioRegistry) { r.entries[1].Family = testBaseAlias }, want: "not S01"},
-		"malformed alias":                  {change: func(r *scenarioRegistry) { r.entries[1].Aliases = []string{"S06/Bad_variant"} }, want: "malformed legacy alias"},
-		"missing referenced family":        {change: func(r *scenarioRegistry) { r.families = r.families[:1] }, want: "unknown family"},
+		"key outside lane": {
+			change: func(r *scenarioRegistry) { r.lanes[0].Keys = []string{testBaseKey} },
+			want:   "not registered for lane",
+		},
+		"ambiguous key": {
+			change: func(r *scenarioRegistry) { r.entries = append(r.entries, r.entries[1]) },
+			want:   "names 2 results",
+		},
+		"missing alias": {
+			change: func(r *scenarioRegistry) { r.entries[1].Aliases = nil },
+			want:   "exactly one",
+		},
+		"multiple aliases": {
+			change: func(r *scenarioRegistry) { r.entries[1].Aliases = []string{testAlias, "S06/later"} },
+			want:   "exactly one",
+		},
+		"colliding alias": {
+			change: func(r *scenarioRegistry) { r.entries[0].Aliases = []string{testAlias} },
+			want:   "names 2",
+		},
+		"alias belongs to another family": {
+			change: func(r *scenarioRegistry) { r.entries[1].Family = testBaseAlias },
+			want:   "not S01",
+		},
+		"malformed alias": {
+			change: func(r *scenarioRegistry) { r.entries[1].Aliases = []string{"S06/Bad_variant"} },
+			want:   "malformed legacy alias",
+		},
+		"missing referenced family": {
+			change: func(r *scenarioRegistry) { r.families = r.families[:1] },
+			want:   "unknown family",
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -876,7 +928,7 @@ func TestRequirementsForKeysRejectsInvalidDeclarations(t *testing.T) {
 			if level == "" {
 				level = LevelKind
 			}
-			if level == "empty" {
+			if level == "empty-level" {
 				level = ""
 			}
 			if keys == nil {
@@ -903,7 +955,7 @@ func TestRequirementsForKeysRejectsInvalidDeclarations(t *testing.T) {
 }
 
 func TestRequirementsForKeysKeepsLegacyLifecycle(t *testing.T) {
-	required, err := RequirementsForKeys("kind", LevelKind, requiredKindKeys()...)
+	required, err := RequirementsForKeys(testKindLane, LevelKind, requiredKindKeys()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,15 +990,16 @@ func TestRequirementsForKeysKeepsLegacyLifecycle(t *testing.T) {
 }
 
 func TestRequirementsForKeysKeepsLegacyGateFailures(t *testing.T) {
-	required, err := RequirementsForKeys("kind", LevelKind, requiredKindKeys()...)
+	required, err := RequirementsForKeys(testKindLane, LevelKind, requiredKindKeys()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := runDir(t, s00Record)
 	passing := func() []Scenario {
-		var scenarios []Scenario
+		scenarios := make([]Scenario, 0, 16)
 		for _, req := range legacyKindRequirements() {
-			scenarios = append(scenarios, Scenario{ID: req.ID, Variant: req.Variant, Result: Pass, Evidence: []string{s00Record}})
+			scenarios = append(scenarios, Scenario{ID: req.ID, Variant: req.Variant,
+				Result: Pass, Evidence: []string{s00Record}})
 		}
 		return scenarios
 	}
@@ -955,16 +1008,21 @@ func TestRequirementsForKeysKeepsLegacyGateFailures(t *testing.T) {
 		passes bool
 	}{
 		"all pass":                         {passes: true},
-		"missing":                          {change: func(s *Summary) { s.Scenarios = s.Scenarios[1:] }},
-		"failed":                           {change: func(s *Summary) { s.Scenarios[0].Result = Fail }},
-		"blocked":                          {change: func(s *Summary) { s.Scenarios[0].Result = Blocked }},
-		"not run":                          {change: func(s *Summary) { s.Scenarios[0].Result = NotRun }},
+		"missing result":                   {change: func(s *Summary) { s.Scenarios = s.Scenarios[1:] }},
+		"failed result":                    {change: func(s *Summary) { s.Scenarios[0].Result = Fail }},
+		"blocked result":                   {change: func(s *Summary) { s.Scenarios[0].Result = Blocked }},
+		"unstarted result":                 {change: func(s *Summary) { s.Scenarios[0].Result = NotRun }},
 		"not applicable without exemption": {change: func(s *Summary) { s.Scenarios[0].Result = NotApplicable }},
 		"pass without evidence":            {change: func(s *Summary) { s.Scenarios[0].Evidence = nil }},
 		"missing evidence file":            {change: func(s *Summary) { s.Scenarios[0].Evidence = []string{"missing.txt"} }},
-		"pass and blocked duplicate":       {change: func(s *Summary) { sc := s.Scenarios[0]; sc.Result = Blocked; s.Scenarios = append(s.Scenarios, sc) }},
-		"duplicate passes":                 {change: func(s *Summary) { s.Scenarios = append(s.Scenarios, s.Scenarios[0]) }, passes: true},
-		"key used as legacy ID":            {change: func(s *Summary) { s.Scenarios[0].ID = requiredKindKeys()[0] }},
+		"pass and blocked duplicate": {
+			change: func(s *Summary) { sc := s.Scenarios[0]; sc.Result = Blocked; s.Scenarios = append(s.Scenarios, sc) },
+		},
+		"duplicate passes": {
+			change: func(s *Summary) { s.Scenarios = append(s.Scenarios, s.Scenarios[0]) },
+			passes: true,
+		},
+		"key used as legacy ID": {change: func(s *Summary) { s.Scenarios[0].ID = requiredKindKeys()[0] }},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -972,8 +1030,8 @@ func TestRequirementsForKeysKeepsLegacyGateFailures(t *testing.T) {
 			if tc.change != nil {
 				tc.change(&summary)
 			}
-			modern := Lane{Name: "kind", Required: required}.Gate(summary, dir)
-			control := Lane{Name: "kind", Required: legacyKindRequirements()}.Gate(summary, dir)
+			modern := Lane{Name: testKindLane, Required: required}.Gate(summary, dir)
+			control := Lane{Name: testKindLane, Required: legacyKindRequirements()}.Gate(summary, dir)
 			if !slices.Equal(modern, control) || (len(modern) == 0) != tc.passes {
 				t.Fatalf("gate = %q; legacy = %q; want pass %t", modern, control, tc.passes)
 			}
@@ -982,7 +1040,7 @@ func TestRequirementsForKeysKeepsLegacyGateFailures(t *testing.T) {
 	// Wrong lane/level combinations remain unresolvable at the registry boundary.
 	for _, level := range []string{"", LevelVMLab} {
 		summary := Summary{Environment: Environment{Level: level}, Scenarios: passing()}
-		for _, lane := range []string{"kind", realLabLane} {
+		for _, lane := range []string{testKindLane, realLabLane} {
 			modern := Lane{Name: lane, Required: required}.Gate(summary, dir)
 			control := Lane{Name: lane, Required: legacyKindRequirements()}.Gate(summary, dir)
 			if !slices.Equal(modern, control) {
@@ -993,20 +1051,22 @@ func TestRequirementsForKeysKeepsLegacyGateFailures(t *testing.T) {
 }
 
 func TestRequirementsForKeysKeepsSerializedOutputsAndReadback(t *testing.T) {
-	required, err := RequirementsForKeys("kind", LevelKind, requiredKindKeys()...)
+	required, err := RequirementsForKeys(testKindLane, LevelKind, requiredKindKeys()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
-	var runs []RecordedRun
-	var payloads []map[string]string
+	runs := make([]RecordedRun, 0, 2)
+	payloads := make([]map[string]string, 0, 2)
 	for _, requirements := range [][]Requirement{legacyKindRequirements(), required} {
 		dir := runDir(t, s00Record)
-		lane := Lane{Name: "kind", Required: requirements}
-		summary := Summary{RunID: "requirement-compatibility", StartedAt: at, FinishedAt: at.Add(time.Minute), Environment: Environment{Level: LevelKind}}
+		lane := Lane{Name: testKindLane, Required: requirements}
+		summary := Summary{RunID: "requirement-compatibility", StartedAt: at,
+			FinishedAt: at.Add(time.Minute), Environment: Environment{Level: LevelKind}}
 		summary.Plan(requirements, "no step started")
 		for _, req := range legacyKindRequirements() {
-			summary.Record(Scenario{ID: req.ID, Variant: req.Variant, Result: Pass, Evidence: []string{s00Record}, Measurements: map[string]any{"observed": Unknown, "count": 7}, Limits: map[string]string{"count": "10"}})
+			summary.Record(Scenario{ID: req.ID, Variant: req.Variant, Result: Pass, Evidence: []string{s00Record},
+				Measurements: map[string]any{"observed": Unknown, "count": 7}, Limits: map[string]string{"count": "10"}})
 		}
 		if err := summary.Conclude(dir, NewRedactor(), lane); err != nil {
 			t.Fatal(err)
@@ -1029,7 +1089,9 @@ func TestRequirementsForKeysKeepsSerializedOutputsAndReadback(t *testing.T) {
 		}
 		for i, result := range run.Results {
 			legacy := legacyKindRequirements()[i]
-			if result.Scenario.ID != legacy.ID || result.Scenario.Variant != legacy.Variant || result.Key != requiredKindKeys()[i] || result.Judged != Pass || !slices.Equal(result.Scenario.Evidence, []string{s00Record}) {
+			if result.Scenario.ID != legacy.ID || result.Scenario.Variant != legacy.Variant ||
+				result.Key != requiredKindKeys()[i] || result.Judged != Pass ||
+				!slices.Equal(result.Scenario.Evidence, []string{s00Record}) {
 				t.Fatalf("readback changed identity, verdict or evidence: %+v", result)
 			}
 		}
