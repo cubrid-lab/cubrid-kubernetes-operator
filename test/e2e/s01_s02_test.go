@@ -485,8 +485,9 @@ func s01AndS02Steps(r *haRun) {
 		Expect(wantRows).To(HaveLen(1), "the ledger row count on the master")
 		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
 		committed := time.Now()
-		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
-			"INSERT INTO s02_marker VALUES (1, '"+marker+"'); COMMIT;")
+		_, receiptFile, receiptNote, err := r.writeS02Marker(context.Background(), master, marker, committed)
+		addEvidence(&result, receiptFile)
+		noteS02MarkerReceipt(receiptNote)
 		Expect(err).NotTo(HaveOccurred())
 		visibleCtx, cancelVisible := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancelVisible()

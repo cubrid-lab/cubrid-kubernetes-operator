@@ -2040,6 +2040,19 @@ it needs more.
   since the marker's commit is recorded as `fullCheckPassedWithin`.
   The replaced slave returns as a slave, the master does not change, and the
   replaced slave holds the rows written before and after its replacement.
+- **Failed marker write observations:** the marker INSERT/COMMIT remains one
+  strict write. If it fails, optional `S02/marker-write-failure.json` records
+  its original output/error and one bounded direct-member SELECT plus an
+  after-only server-identity command receipt per known member, with separate
+  query intervals. Unreadable or cancelled observations remain unknown;
+  returned values require an explicit native empty result or a complete matching
+  selected-row count, and describe only those individual reads. They do not establish
+  commit, durability, pre-write identity or continuous identity, and the
+  identity receipt is not atomically bound to its SELECT. Diagnostic failure
+  never replays or tolerates the write, changes its original failure, or
+  amends its lost-session ledger identity. The redacted receipt uses existing
+  collection deadlines and source-size limits; clipped text is explicit and
+  retains member status/timing metadata. Only a stored receipt is linked.
 - **Must never happen:** a member reported as a healthy slave whose applier
   has a non-zero fail count or that lacks rows the master holds after
   `replication_limit` (POC-15 and POC-16 show that role and server state
