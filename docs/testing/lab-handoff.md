@@ -93,7 +93,7 @@ SQL/data checks, omitting cleanup or reducing the 24-hour soak.
 An optional preparation command may eventually validate input formats and
 generate a proposed command and evidence manifest **without contacting the
 lab**. A later reviewed dispatcher may use the existing private runner only
-with explicit approval, reservation, Lease and scenario-specific safeguards.
+with explicit approval, the campaign Lease and scenario-specific safeguards.
 Neither step exists merely because this document was merged. Track actual
 implementation and measured outcomes in [#946](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/946);
 #122 owns lab integration and #126 owns candidate qualification.
