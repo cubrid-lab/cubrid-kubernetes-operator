@@ -928,19 +928,30 @@ time out, is a hypothesis that no run has tested.
 
 **Moving the master.** For `higher-rank-isolated` with the master on the
 first member, before any client starts and before anything is cut, the run
-deletes the master's Pod with its UID as a precondition and its own grace
-period, so that the Pod's preStop stops heartbeat and CUBRID promotes
-another member, as POC-51 did on Kind; the run promotes nothing. Within
-10 minutes it waits until another member is the active master, the deleted
-member is back in a new Pod as a slave, every member Pod is Ready, the
-starting conditions hold, no write quarantine is in force, and
-`status.currentPrimary` and `status.lastResolvedPrimary` name the new
-master. A quarantine that the move itself started (as #938 saw after a
+checks that its run namespace is still its own and that the master's Pod is
+controlled by the run's HA StatefulSet, then deletes the Pod with its UID as
+a precondition and its own grace period, so that the Pod's preStop stops
+heartbeat and CUBRID promotes another member, as POC-51 did on Kind; the
+run promotes nothing. Within 10 minutes it waits until another member is the
+active master, the deleted member is back in a new Pod as a slave, every
+member Pod is Ready, the starting conditions hold, no write quarantine is in
+force, and `status.currentPrimary` and `status.lastResolvedPrimary` name the
+new master. A quarantine that the move itself starts (as #938 saw after a
 graceful master Pod deletion on Kind) must therefore be released within that
-time. Otherwise S07 is blocked and nothing is cut. The move is recorded under `masterMove` in
-`record.json`: the master and Pod UID it started from, when the Pod was
-deleted, the new master, when every check held, and the last check that did
-not. Whether the member that returned has applied every row of the new
+time; one that only a person may release (`WriteQuarantinedMultipleMasters`
+or `WriteQuarantinedMasterChanged`) blocks at once. Any refusal, a deletion
+the API server refuses, the bound passing or the run's context ending blocks
+S07 before any client starts or anything is cut; it never fails it. With the
+master already off the first member, nothing is deleted.
+
+The move is recorded under `masterMove` in `record.json`: the master and Pod
+UID it started from, when the Pod was deleted, the new master, when every
+check held, the last check that did not, the member Pods after the move
+(`membersAfterMove`; LAB01's stay in `membersBefore`), and the first write
+quarantine seen during the move with its reason, generation, when it was
+first seen and when it was seen released (`quarantine`), so one released
+before the move settled is kept; later generations are listed too. Each is
+also in `observed`. Whether the member that returned has applied every row of the new
 master when the cut starts is not checked; POC-50 and POC-51 tied differing
 rows to a cut member that was behind, and the data check after the cut
 reports such rows.
@@ -1009,15 +1020,20 @@ when it is there:
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
   ...the LAB01 inputs above... -level vm-lab \
-  -fault partition-higher-rank-isolated [-partition-hold 2m] \
+  -fault partition-higher-rank-isolated -timeout 45m [-partition-hold 2m] \
   [-quarantine-limit <duration>] [-partition-duration <duration>]'
 ```
 
 A longer hold of the master's cut, to test the hypothesis above, is the
 same `master-isolated` command with a hold past POC-40's 948 seconds, for
 example `-partition-hold 20m -timeout 60m`: the run's `-timeout` (default
-30 minutes) covers LAB01, the hold and the settle after it. The move of the
-master in `higher-rank-isolated` takes up to 10 minutes of it too.
+30 minutes) covers LAB01, the hold and the settle after it. For
+`higher-rank-isolated` the run refuses to start unless `-timeout` is longer
+than the bounds of the variant's own steps: the 10-minute move, 4 minutes to
+prepare and confirm the cut, `-partition-hold`, 2 minutes of confirmation
+slack, 2 minutes to remove the cut, 5 minutes to settle and
+`-data-check-within`; 27 minutes with the defaults. LAB01 needs its own time
+on top, so give that variant `-timeout 45m` or more.
 
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check

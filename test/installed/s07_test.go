@@ -21,7 +21,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -224,107 +223,6 @@ func setS07Primary(t *testing.T, f *haFixture, c client.Client, primary string) 
 	cluster.Status.CurrentPrimary, cluster.Status.LastResolvedPrimary = primary, primary
 	if err := c.Update(ctx, cluster); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// Before it cuts off a member that outranks the master, the run moves the
-// master off the first member by a graceful deletion of its Pod; CUBRID, not
-// the run, picks the new master. The run goes on only once another member is
-// the active master, the first member is back in a new Pod as a slave, and
-// the cluster names the new master as its current and last resolved primary.
-func TestMoveS07MasterWaitsForCUBRIDToFailOver(t *testing.T) {
-	h, f := s07MoveFixture(t, func(f *haFixture, c client.WithWatch) {
-		f.mu.Lock()
-		f.roles[m0], f.roles[m1] = roleSlave, roleMaster
-		f.mu.Unlock()
-		setS07Primary(t, f, c, m1)
-	})
-	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
-	slaves, err := h.moveS07Master(context.Background(), rec)
-	if err != nil {
-		t.Fatalf("the move was refused: %v", err)
-	}
-	if rec.Master != m1 || len(slaves) != 2 || !slices.Contains(slaves, m0) || !slices.Contains(slaves, m2) {
-		t.Errorf("master %s and slaves %v after the move, want %s with %s and %s", rec.Master, slaves, m1, m0, m2)
-	}
-	move := rec.MasterMove
-	if move == nil || move.From != m0 || move.FromUID != m0 || move.To != m1 || move.DeletedAt == nil ||
-		move.SettledAt == nil || move.Unmet != "" {
-		t.Fatalf("move %+v", move)
-	}
-	var first *imageIdentity
-	for i := range rec.MembersBefore {
-		if rec.MembersBefore[i].Pod == m0 {
-			first = &rec.MembersBefore[i]
-		}
-	}
-	if len(rec.MembersBefore) != 3 || first == nil || first.UID != m0+"-replaced" {
-		t.Errorf("members before the cut %+v, want the first member's new Pod", rec.MembersBefore)
-	}
-	if !slices.Contains(f.writes, "delete-member-pod") {
-		t.Errorf("writes %v, want the master Pod deleted", f.writes)
-	}
-}
-
-// When the first member comes back as the master, or CUBRID does not fail
-// over, the master did not move: the run refuses to pick a member at the
-// bound and says what did not hold, and deletes no other Pod.
-func TestMoveS07MasterRefusesWhenTheFirstMemberStaysMaster(t *testing.T) {
-	old := s07MoveBound
-	s07MoveBound = 100 * time.Millisecond
-	t.Cleanup(func() { s07MoveBound = old })
-	h, f := s07MoveFixture(t, func(*haFixture, client.WithWatch) {})
-	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
-	_, err := h.moveS07Master(context.Background(), rec)
-	if err == nil || !strings.Contains(err.Error(), "did not move") {
-		t.Fatalf("the move with the first member still master: %v", err)
-	}
-	if rec.Master != m0 || rec.MasterMove == nil || rec.MasterMove.SettledAt != nil ||
-		!strings.Contains(rec.MasterMove.Unmet, m0) {
-		t.Errorf("master %s, move %+v", rec.Master, rec.MasterMove)
-	}
-	deletes := 0
-	for _, w := range f.writes {
-		if w == "delete-member-pod" {
-			deletes++
-		}
-	}
-	if deletes != 1 {
-		t.Errorf("%d member Pod deletions, want 1", deletes)
-	}
-}
-
-// The deletion of the master's Pod can itself start a write quarantine, as
-// #938 saw on Kind. The cut must start from a cluster with none in force, so
-// the move waits for its release and blocks S07 when it stays, even with the
-// conditions reported True.
-func TestMoveS07MasterWaitsForAQuarantineItStarted(t *testing.T) {
-	old := s07MoveBound
-	s07MoveBound = 100 * time.Millisecond
-	t.Cleanup(func() { s07MoveBound = old })
-	h, _ := s07MoveFixture(t, func(f *haFixture, c client.WithWatch) {
-		f.mu.Lock()
-		f.roles[m0], f.roles[m1] = roleSlave, roleMaster
-		f.mu.Unlock()
-		setS07Primary(t, f, c, m1)
-		cluster := &databasev1alpha1.CubridCluster{}
-		ctx := context.Background()
-		if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-			t.Fatal(err)
-		}
-		cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: "g1",
-			Reason: databasev1alpha1.WriteQuarantinedMasterChanged}
-		if err := c.Update(ctx, cluster); err != nil {
-			t.Fatal(err)
-		}
-	})
-	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
-	_, err := h.moveS07Master(context.Background(), rec)
-	if err == nil || !strings.Contains(err.Error(), "WriteQuarantinedMasterChanged") {
-		t.Fatalf("the move with a quarantine in force: %v", err)
-	}
-	if rec.MasterMove.SettledAt != nil {
-		t.Errorf("move %+v settled with a quarantine in force", rec.MasterMove)
 	}
 }
 

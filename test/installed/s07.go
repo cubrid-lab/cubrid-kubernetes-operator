@@ -170,7 +170,19 @@ func (c HAConfig) validateS07() error {
 	if c.PartitionHold <= 0 || c.PartitionHold < c.PartitionDuration {
 		return errors.New("S07 needs a positive partition hold, at least partition_duration")
 	}
+	if least := c.s07StepBounds(); c.Fault == FaultPartitionHigherRankIsolated && c.Timeout <= least {
+		return fmt.Errorf("S07 higher-rank-isolated needs a -timeout longer than %s, the bounds of its own steps "+
+			"(moving the master, preparing, holding, removing and settling the cut, and the data check), "+
+			"plus the time LAB01 takes", least)
+	}
 	return nil
+}
+
+// s07StepBounds is the longest S07 higher-rank-isolated may take after LAB01
+// by the bounds of its own steps.
+func (c HAConfig) s07StepBounds() time.Duration {
+	return s07MoveBound + s07PrepareBound + c.PartitionHold + s07ConfirmSlack + s07CleanupBound + s07SettleBound +
+		c.DataCheckWithin
 }
 
 // s07Sweep is one reading of every member's role through kubectl exec,
@@ -414,13 +426,29 @@ type s07Record struct {
 // s07MasterMove records how the run moved the master off the first member:
 // the master and its Pod UID before, when the Pod was deleted, the new master
 // and when every check held; Unmet is the last check that did not hold.
+// Members are the member Pods once it settled; LAB01's stay in the record's
+// membersBefore. Quarantine is the first write quarantine seen during the
+// move, and LaterGenerations the generations of any seen after it.
 type s07MasterMove struct {
-	From      string     `json:"from"`
-	FromUID   string     `json:"fromPodUID"`
-	DeletedAt *time.Time `json:"podDeletedAt,omitempty"`
-	To        string     `json:"to,omitempty"`
-	SettledAt *time.Time `json:"settledAt,omitempty"`
-	Unmet     string     `json:"unmet,omitempty"`
+	From             string             `json:"from"`
+	FromUID          string             `json:"fromPodUID"`
+	DeletedAt        *time.Time         `json:"podDeletedAt,omitempty"`
+	To               string             `json:"to,omitempty"`
+	SettledAt        *time.Time         `json:"settledAt,omitempty"`
+	Unmet            string             `json:"unmet,omitempty"`
+	Members          []imageIdentity    `json:"membersAfterMove,omitempty"`
+	Quarantine       *s07MoveQuarantine `json:"quarantine,omitempty"`
+	LaterGenerations []string           `json:"laterQuarantineGenerations,omitempty"`
+}
+
+// s07MoveQuarantine is a write quarantine seen while the master was moved:
+// its reason and generation, when the run first saw it, and when the run
+// first saw no quarantine after it, on the run's clock.
+type s07MoveQuarantine struct {
+	Reason       string     `json:"reason"`
+	GenerationID string     `json:"generationID"`
+	SeenAt       time.Time  `json:"firstSeenAt"`
+	ReleasedAt   *time.Time `json:"releasedSeenAt,omitempty"`
 }
 
 func (rec *s07Record) note(kind, detail string) {
@@ -942,12 +970,13 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 // higher-rank-isolated with the master on the first member, the master is
 // moved first.
 func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Partition, error) {
-	slaves := h.rec.StartingState.Slaves
+	slaves, identities := h.rec.StartingState.Slaves, rec.MembersBefore
 	if _, err := s07PickTarget(rec.Variant, rec.Master, slaves, rec.Master); errors.Is(err,
-		errS07MasterOnFirstMember) {
+		errS07MasterOnFirstMember) && memberOrdinal(rec.Master) == 0 {
 		if slaves, err = h.moveS07Master(ctx, rec); err != nil {
 			return nil, err
 		}
+		identities = rec.MasterMove.Members
 	}
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
@@ -958,7 +987,7 @@ func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Parti
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range rec.MembersBefore {
+	for _, m := range identities {
 		if m.Pod == target {
 			rec.Target = m
 		}
@@ -1999,12 +2028,23 @@ var _ faults.Fault = (*netfault.Partition)(nil)
 // the starting conditions hold and status names the new master as current
 // and last resolved primary. It returns the slaves then; otherwise an error
 // that names what did not hold, which blocks S07 before anything is cut.
+//
+// It deletes nothing unless the master is the first member, the run's
+// namespace guard passes, and the Pod is controlled by the run's HA
+// StatefulSet. A write quarantine seen during the move is recorded; one that
+// only a person may release blocks at once.
 func (h *haRun) moveS07Master(ctx context.Context, rec *s07Record) ([]string, error) {
 	move := &s07MasterMove{From: rec.Master}
 	rec.MasterMove = move
-	pod := &corev1.Pod{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: move.From}, pod); err != nil {
-		return nil, fmt.Errorf("read the master Pod %s: %w", move.From, err)
+	if memberOrdinal(move.From) != 0 {
+		return nil, fmt.Errorf("the master %s is not the first member: there is no master to move", move.From)
+	}
+	if err := h.guard(ctx); err != nil {
+		return nil, fmt.Errorf("check the run namespace before deleting the master Pod %s: %w", move.From, err)
+	}
+	pod, err := h.s07RunMember(ctx, move.From)
+	if err != nil {
+		return nil, err
 	}
 	uid := pod.UID
 	move.FromUID = string(uid)
@@ -2016,14 +2056,14 @@ func (h *haRun) moveS07Master(ctx context.Context, rec *s07Record) ([]string, er
 	rec.note("master_pod_deleted", move.From)
 	deadline := time.Now().Add(s07MoveBound)
 	for {
-		state, members, unmet, err := h.s07MoveUnmet(ctx, move)
+		state, members, unmet, err := h.s07MoveUnmet(ctx, rec)
 		if err != nil {
 			return nil, err
 		}
 		if unmet == "" {
 			settled := time.Now().UTC()
-			move.To, move.SettledAt, move.Unmet = state.Master, &settled, ""
-			rec.Master, rec.MembersBefore = state.Master, members
+			move.To, move.SettledAt, move.Unmet, move.Members = state.Master, &settled, "", members
+			rec.Master = state.Master
 			rec.note("master_moved", move.From+" -> "+state.Master)
 			return state.Slaves, nil
 		}
@@ -2039,10 +2079,70 @@ func (h *haRun) moveS07Master(ctx context.Context, rec *s07Record) ([]string, er
 	}
 }
 
-// s07MoveUnmet reads whether the master has moved off move.From: what does
-// not hold yet, or the roles and the members' identities once all does.
-func (h *haRun) s07MoveUnmet(ctx context.Context, move *s07MasterMove) (*startingState, []imageIdentity, string,
+// s07RunMember reads a member Pod and refuses one that the run's HA
+// StatefulSet, itself controlled by the run's HA cluster, does not control.
+func (h *haRun) s07RunMember(ctx context.Context, name string) (*corev1.Pod, error) {
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		return nil, fmt.Errorf("read the HA cluster: %w", err)
+	}
+	sts := &appsv1.StatefulSet{}
+	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(cluster), sts); err != nil {
+		return nil, fmt.Errorf("read the HA StatefulSet: %w", err)
+	}
+	if !controllerOwner(sts, "CubridCluster", cluster.UID) {
+		return nil, errors.New("the database StatefulSet does not belong to the HA cluster")
+	}
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, pod); err != nil {
+		return nil, fmt.Errorf("read the master Pod %s: %w", name, err)
+	}
+	if !controllerOwner(pod, "StatefulSet", sts.UID) {
+		return nil, fmt.Errorf("pod %s does not belong to the HA StatefulSet: it is not deleted", name)
+	}
+	return pod, nil
+}
+
+// noteS07MoveQuarantine records the first write quarantine seen during the
+// move of the master, and its release, so that one released before the move
+// settles is kept; a later one of another generation is noted. One that only
+// a person may release is returned as an error: the move cannot settle.
+func noteS07MoveQuarantine(rec *s07Record, q *databasev1alpha1.WriteQuarantine, now time.Time) error {
+	move := rec.MasterMove
+	switch {
+	case q != nil && move.Quarantine == nil:
+		move.Quarantine = &s07MoveQuarantine{Reason: string(q.Reason), GenerationID: q.GenerationID, SeenAt: now}
+		rec.note("master_move_quarantine_seen", string(q.Reason)+" "+q.GenerationID)
+	case q != nil && q.GenerationID != move.Quarantine.GenerationID &&
+		!slices.Contains(move.LaterGenerations, q.GenerationID):
+		move.LaterGenerations = append(move.LaterGenerations, q.GenerationID)
+		rec.note("master_move_quarantine_seen", string(q.Reason)+" "+q.GenerationID)
+	case q == nil && move.Quarantine != nil && move.Quarantine.ReleasedAt == nil:
+		move.Quarantine.ReleasedAt = &now
+		rec.note("master_move_quarantine_released", move.Quarantine.GenerationID)
+	}
+	if q != nil && manualOnly(string(q.Reason)) {
+		return fmt.Errorf("moving the master off %s started a %s quarantine, which only a person may release",
+			move.From, q.Reason)
+	}
+	return nil
+}
+
+// s07MoveUnmet reads whether the master has moved off the first member: what
+// does not hold yet, or the roles and the members' identities once all does.
+func (h *haRun) s07MoveUnmet(ctx context.Context, rec *s07Record) (*startingState, []imageIdentity, string,
 	error) {
+	move := rec.MasterMove
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		if retryable(err) {
+			return nil, nil, "the HA cluster" + unread + err.Error(), nil
+		}
+		return nil, nil, "", err
+	}
+	if err := noteS07MoveQuarantine(rec, cluster.Status.WriteQuarantine, time.Now().UTC()); err != nil {
+		return nil, nil, "", err
+	}
 	pod := &corev1.Pod{}
 	err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: move.From}, pod)
 	switch {
@@ -2054,13 +2154,6 @@ func (h *haRun) s07MoveUnmet(ctx context.Context, move *s07MasterMove) (*startin
 		return nil, nil, "", err
 	case string(pod.UID) == move.FromUID:
 		return nil, nil, move.From + " still has the Pod that was deleted", nil
-	}
-	cluster := &databasev1alpha1.CubridCluster{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		if retryable(err) {
-			return nil, nil, "the HA cluster" + unread + err.Error(), nil
-		}
-		return nil, nil, "", err
 	}
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if err != nil || unmet != "" {
