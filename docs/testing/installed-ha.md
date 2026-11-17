@@ -1035,6 +1035,34 @@ slack, 2 minutes to remove the cut, 5 minutes to settle and
 `-data-check-within`; 27 minutes with the defaults. LAB01 needs its own time
 on top, so give that variant `-timeout 45m` or more.
 
+Two opt-in options, off by default, follow what happens after the heal
+when CUBRID leaves the higher-ranked member as heartbeat master with its
+server `registered_and_to_be_active` and the Operator holds the write path
+with `WriteQuarantinedMasterChanged`, as on the VM lab on 2026-11-17 UTC
+([#115](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115),
+[#702](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/702)):
+
+- `-partition-settle <duration>` replaces the 5-minute settle wait (step 5
+  below), so the run can wait longer for that member's server to become
+  active. `0`, the default, keeps 5 minutes.
+- `-partition-manual-release` makes the run release that quarantine itself
+  after the settle wait, first with a stale token and then with the current
+  one, and measure the return to service (step 8 below). Only this flag ever
+  makes the run release a quarantine.
+
+With either option, any variant refuses to start unless `-timeout` is longer
+than its steps' bounds: the settle wait is `-partition-settle`, and the
+release adds 9.5 minutes (two 2-minute reads of every member's rows, the
+30-second watch of the stale token and the 5-minute wait for the release and
+the path's return). The lab command for a 20-minute settle and the release,
+51.5 minutes of the variant's own bounds with the other defaults, plus LAB01:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated -partition-settle 20m -partition-manual-release -timeout 75m'
+```
+
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
 installed-ha-network-partition-higher-rank-isolated` select the same runs.
@@ -1083,10 +1111,17 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
      change and when it first saw the Deployment at zero, no Broker Pod, and
      no endpoint;
    - records each change of `Ready`, `PrimaryResolved` and `RoutingReady`.
-5. The run removes the cut, then waits up to five minutes for the cluster to
+5. The run removes the cut, then waits up to `-partition-settle` (default
+   five minutes) for the cluster to
    settle: every member answers, CUBRID reports one master and two slaves, and
    any quarantine left is one only a person may release
    (`WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`).
+   From the first sweep after the heal, the run records each change of which
+   members' servers answer `registered_and_active`
+   (`activeServerChangesAfterHeal`) and the first sweep in which one does
+   (`firstActiveServerAfterHeal`, with the members, and the measurements
+   `serverActiveAfterHealWithin`, from the heal, and
+   `serverActiveAfterHealMembers`); `unknown` when no server became active.
    When the wait ends without that, the reason names each member's raw
    state (for example `ha-0: to-be-master (server
    registered_and_to_be_active)`), and `settleWaitExpired` keeps what the
@@ -1142,6 +1177,67 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    never-event judged above still fails the run. The variant's `-timeout`
    check counts these two minutes in place of `-data-check-within` when they
    are longer.
+8. With `-partition-manual-release` only, after the settle wait (settled or
+   not) and before step 6, the run releases the quarantine itself when one
+   only a person may release is in force, it is a generation the run saw,
+   and it is on the run's own cluster: the namespace guard passes, the
+   cluster's UID is the one LAB01 recorded (and the quarantine's
+   `clusterUID`), and the annotation patch names that UID, so the API server
+   refuses it for another cluster of the same name. Otherwise nothing is
+   annotated and `manualRelease.notMade` says why. The steps, recorded in
+   `manualRelease` in `record.json`:
+   1. It reads every member's rows as in step 7, against the run's history
+      with what both S07 clients have written so far, into
+      `rows-before-release.json` (`rowsBeforeRelease`).
+   2. It sets a stale token on `database.cubrid.io/release-write-quarantine`:
+      the newest earlier token of the quarantine, replaced when a later
+      observation revised it (as at the escalation to
+      `WriteQuarantinedMasterChanged`), or else the current token with its
+      last character changed (`staleToken.kind`). For 30 seconds it reads the
+      cluster and the read-write path on every poll. The Operator must ignore
+      that token (`WriteQuarantineReleaseIgnored`): the quarantine stays in
+      force and the read-write Brokers stay at zero
+      (`quarantineHeldThroughout`, `rwBrokersHeldAtZeroThroughout`). A release
+      of the quarantine in that window, or a Broker above zero while it is in
+      force, is a never-event, and the run sets no other token.
+   3. It reads the current `status.writeQuarantine.releaseToken` again,
+      makes a sweep and records which member answered as the active master
+      and each member's raw state (`activeMasterWhenSet`, `statesWhenSet`),
+      then sets that token. Setting it while no member is an active master is
+      recorded, not prevented: the Operator then refuses the release, and each
+      refusal in `status.writeQuarantine.releaseRefusal` is kept
+      (`releaseRefusals`).
+   4. For up to 5 minutes it observes as in step 4, and records the release
+      in `status.lastWriteQuarantineRelease` (`releaseSeenAt`, the
+      Operator's `releaseTime` and `releasedObservedMaster`), the
+      annotation's removal, and then the read-write Brokers' desired
+      replicas above zero, a Ready Broker Pod and a ready `-rw` endpoint
+      (`rwScaledUpAt`, `rwPodsReadyAt`, `rwEndpointsReadyAt`). It goes on 30
+      seconds after the endpoint is ready, so that a write through a new
+      connection can be acknowledged. `unmet` names what had not happened
+      when the 5 minutes ended. The acknowledged writes the released master
+      lacked in `rowsBeforeRelease` are listed as accepted as lost
+      (`acknowledgedWritesAcceptedAsLost`).
+   5. It reads every member's rows again into `rows-after-release.json`
+      (`rowsAfterRelease`) and lists the Operator's Events about the
+      annotation (`events`). After the clients stop, the first write through
+      a new connection that started after the current token was set and was
+      acknowledged is recorded (`firstAcknowledgedWriteAfterSet`).
+
+   The release changes none of the rules below: whether the cluster settled
+   is what step 5 saw, so a run that did not settle stays blocked whatever
+   the release did, and an unset limit stays a baseline through
+   `faults.Judge`. A release never makes a run pass. The one difference is
+   in the data check of a settled run: acknowledged writes that the released
+   master lacked before the release, and the rows of them other members hold,
+   are reported as accepted as lost (`masterMissingAcceptedAsLost`,
+   `conflictingAcceptedAsLostByMember`) and not counted against a cluster
+   that reports itself healthy, because the release is the decision to
+   accept that loss (see
+   [Manual release](../observability.md#manual-release)). Any other
+   conflicting row, or an acknowledged write the release did not accept as
+   lost, is judged as before. The reason of a passing or blocked run names
+   the release.
 
 On every sweep the run also reads the manager Pod the cut names. Once it is
 gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
@@ -1164,8 +1260,11 @@ What it judges, in this order:
    quarantine released by anything but a person; the cluster reporting
    `HAReady` and `ReplicationHealthy` `True` with no quarantine in the health
    window while a member holds conflicting rows or the final master lacks an
-   acknowledged write; and an endpoint the faults would enter that is not
-   the run's own.
+   acknowledged write (except the writes the run's own manual release
+   accepted as lost, step 8); with `-partition-manual-release`, the
+   quarantine released, or a read-write Broker above zero while it is in
+   force, while only the stale token was set; and an endpoint the faults
+   would enter that is not the run's own.
 2. **Broken expectations fail S07:** the fault not seen removed; a trigger
    seen in two consecutive sweeps and no `status.writeQuarantine`; a
    quarantine recorded while the run never saw every read-write Broker Pod
@@ -1233,7 +1332,14 @@ resolved); and for `s07open`
 established session is reported, not judged: the contract sets no bound on
 it, and the pinned JDBC driver can reconnect internally under one Java
 connection, so an open connection is not proof of one physical session. A
-time that was not seen is `unknown`.
+time that was not seen is `unknown`. With `-partition-manual-release`, from
+setting the current token: `manualReleaseSeenWithin`,
+`rwScaledUpAfterReleaseWithin`, `rwPodsReadyAfterReleaseWithin`,
+`rwEndpointsReadyAfterReleaseWithin` and
+`firstAcknowledgedWriteAfterReleaseWithin`; and `manualRelease` (`accepted`,
+`not accepted` or `not made`), `activeMasterWhenReleaseSet`,
+`releasedMaster`, `acknowledgedWritesAcceptedAsLost` and
+`staleTokenIgnored`.
 
 Evidence, under `S07/<variant>/`:
 
@@ -1252,13 +1358,16 @@ Evidence, under `S07/<variant>/`:
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
   instead of `data-check.json` when the cluster did not settle;
+  `rows-before-release.json` and `rows-after-release.json` with
+  `-partition-manual-release` when the run set a token;
 - `clients/<client>.jsonl` when S07 ended before it read the clients.
 
 Beyond LAB01's, the account needs in the run namespace `update` on
 `pods/ephemeralcontainers` and `create` on `pods/exec` (for the faults), and
 `list` on EndpointSlices; and `get` on the manager Pod in the Operator's
 namespace. `higher-rank-isolated` also needs `delete` on Pods in the run
-namespace, to move the master.
+namespace, to move the master. `-partition-manual-release` also needs
+`patch` on `cubridclusters` and `list` on Events in the run namespace.
 
 ### First lab runs
 

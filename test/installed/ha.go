@@ -142,6 +142,15 @@ type HAConfig struct {
 	// which makes the run a baseline. PartitionHold is how long the run holds
 	// the confirmed partition: the run's own choice, not the contract's.
 	QuarantineLimit, PartitionDuration, PartitionHold time.Duration
+	// PartitionSettle bounds S07's wait for the cluster to settle after the
+	// cut was removed; zero waits the lane's default of five minutes.
+	// PartitionManualRelease makes S07, once that wait ends with a quarantine
+	// in force that only a person may release, release it itself on the
+	// run's own cluster: first with a stale token, which must be ignored,
+	// then with the current one. Both are the run's own choices, off by
+	// default.
+	PartitionSettle        time.Duration
+	PartitionManualRelease bool
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12

@@ -167,10 +167,17 @@ func noteS07SettleExpired(ctx context.Context, rec *s07Record, now time.Time) {
 // the time of the members read after it, and time a member does not use
 // passes to the next.
 func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
+	rec.UnsettledRows, _ = h.readS07Rows(ctx, h.history.String(), s07File(rec.Variant, "unsettled-rows.json"))
+}
+
+// readS07Rows reads every member's rows as snapshotS07Rows does, applies the
+// data rules of historyText to each member on its own, and writes the full
+// report to file. It returns the snapshot, and the report when the history
+// could be read.
+func (h *haRun) readS07Rows(ctx context.Context, historyText, file string) (*s07RowSnapshot, *workload.Report) {
 	ctx, cancel := context.WithTimeout(ctx, s07SnapshotBound)
 	defer cancel()
 	s := &s07RowSnapshot{At: time.Now().UTC(), Members: map[string]s07MemberRows{}}
-	rec.UnsettledRows = s
 	rows := map[string][]workload.Row{}
 	deadline, _ := ctx.Deadline()
 	for i, pod := range h.members {
@@ -183,14 +190,14 @@ func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
 		}
 		rows[pod] = read[pod]
 	}
-	history, err := workload.ReadHistory(strings.NewReader(h.history.String()))
+	history, err := workload.ReadHistory(strings.NewReader(historyText))
 	if err != nil {
 		s.Error = "read the run's history: " + err.Error()
 		for pod, r := range rows {
 			n := len(r)
 			s.Members[pod] = s07MemberRows{Read: true, Rows: &n}
 		}
-		return
+		return s, nil
 	}
 	report := workload.Check(history, rows)
 	for pod, check := range report.Members {
@@ -209,12 +216,12 @@ func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
 		d := len(report.Diverged)
 		s.Diverged = &d
 	}
-	file := s07File(rec.Variant, "unsettled-rows.json")
 	if err := h.writeJSON(file, report); err != nil {
 		s.Error = "write " + file + ": " + err.Error()
-		return
+		return s, &report
 	}
 	s.File = file
+	return s, &report
 }
 
 // s07SnapshotNote reports the snapshot of the members' rows for the reason
