@@ -1,0 +1,376 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package netfault
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+// The tests in this file cover how the network partition lane shortens TCP
+// keepalive in the members' network namespaces before the cut (#982): the
+// values are written through a privileged ephemeral container and read back,
+// and the cut-off member's connection to the master's port is reset so that
+// CUBRID makes it again under the new values. A socket keeps the keepalive
+// schedule it was armed with, so a value set after a connection was made
+// would not reach it.
+
+// fakeSocket is one established TCP connection in a fake namespace.
+type fakeSocket struct {
+	local, peer string
+	// keepalive is what ss prints inside timer:(keepalive,...), empty for a
+	// socket without SO_KEEPALIVE.
+	keepalive string
+}
+
+// fakeSysctlNS is the keepalive state of one Pod's network namespace.
+type fakeSysctlNS struct {
+	ip                    string
+	time, intvl, probes   int
+	sockets               []fakeSocket
+	nextPort              int
+	reconnectIn           int // reads of the sockets until a reset connection is made again; -1 never
+	pendingReconnect      []string
+	pendingSinceReset     int
+	keepaliveOnReconnect  bool
+	readOnly, ignoreWrite bool
+	ignoreDestroy         bool
+}
+
+// fakeSysctl answers the keepalive container's commands.
+type fakeSysctl struct {
+	mu      sync.Mutex
+	podIP   map[string]string
+	execIn  map[string]string
+	ns      map[string]*fakeSysctlNS // by IP
+	scripts []string
+}
+
+func newFakeSysctl() *fakeSysctl {
+	s := &fakeSysctl{podIP: testPods, execIn: map[string]string{}, ns: map[string]*fakeSysctlNS{}}
+	for _, ip := range testPods {
+		s.ns[ip] = &fakeSysctlNS{ip: ip, time: 7200, intvl: 75, probes: 9, nextPort: 50000,
+			keepaliveOnReconnect: true, reconnectIn: 1}
+	}
+	// The cut-off member copies the master's log over a connection made
+	// before the run changed anything, armed with the 2-hour default; and
+	// another member's log over a second one.
+	s.ns[testPods[target]].sockets = []fakeSocket{
+		{local: testPods[target] + ":48794", peer: testPods[slave1] + ":1523", keepalive: "105min"},
+		{local: testPods[target] + ":48800", peer: testPods[slave2] + ":1523", keepalive: "104min"},
+	}
+	return s
+}
+
+var (
+	keepaliveWriteArg = regexp.MustCompile(`^: netfault keepalive-write (\d+) (\d+) (\d+)`)
+	socketsResetArg   = regexp.MustCompile(`^: netfault sockets-reset (\S+) (\d+)`)
+)
+
+func (s *fakeSysctl) kubectl(ctx context.Context, args ...string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if len(args) != 10 || args[2] != "exec" || args[5] != KeepaliveContainer {
+		return "", fmt.Errorf("unexpected kubectl call %q", args)
+	}
+	pod, script := args[3], args[9]
+	first, _, _ := strings.Cut(script, "\n")
+	op := strings.Fields(first)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scripts = append(s.scripts, pod+": "+first)
+	ip := s.podIP[pod]
+	if in, ok := s.execIn[pod]; ok {
+		ip = in
+	}
+	ns := s.ns[ip]
+	switch op[2] {
+	case "addr":
+		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\n", ns.ip), nil
+	case "keepalive-read":
+		return fmt.Sprintf("%d\n%d\n%d\n", ns.time, ns.intvl, ns.probes), nil
+	case "keepalive-write":
+		if ns.readOnly {
+			return "sh: can't create /proc/sys/net/ipv4/tcp_keepalive_time: Read-only file system",
+				errors.New("command terminated with exit code 1")
+		}
+		m := keepaliveWriteArg.FindStringSubmatch(first)
+		if !ns.ignoreWrite {
+			ns.time, _ = strconv.Atoi(m[1])
+			ns.intvl, _ = strconv.Atoi(m[2])
+			ns.probes, _ = strconv.Atoi(m[3])
+		}
+		return "", nil
+	case "sockets":
+		if len(ns.pendingReconnect) > 0 && ns.reconnectIn >= 0 {
+			ns.pendingSinceReset++
+			if ns.pendingSinceReset >= ns.reconnectIn {
+				for _, peer := range ns.pendingReconnect {
+					ns.nextPort++
+					sock := fakeSocket{local: ns.ip + ":" + strconv.Itoa(ns.nextPort), peer: peer}
+					if ns.keepaliveOnReconnect {
+						sock.keepalive = strconv.Itoa(ns.time-1) + "sec"
+					}
+					ns.sockets = append(ns.sockets, sock)
+				}
+				ns.pendingReconnect = nil
+			}
+		}
+		return ns.ss(""), nil
+	case "sockets-reset":
+		m := socketsResetArg.FindStringSubmatch(first)
+		peer := m[1] + ":" + m[2]
+		out := ns.ss(peer)
+		if !ns.ignoreDestroy {
+			ns.sockets = slices.DeleteFunc(ns.sockets, func(sk fakeSocket) bool {
+				if sk.peer == peer {
+					ns.pendingReconnect, ns.pendingSinceReset = append(ns.pendingReconnect, peer), 0
+					return true
+				}
+				return false
+			})
+		}
+		return out, nil
+	}
+	return "", fmt.Errorf("unexpected script %q", script)
+}
+
+// ss prints the sockets as `ss -tnoH state established` does, only those to
+// peer when it is set.
+func (ns *fakeSysctlNS) ss(peer string) string {
+	var b strings.Builder
+	for _, sk := range ns.sockets {
+		if peer != "" && sk.peer != peer {
+			continue
+		}
+		fmt.Fprintf(&b, "0      0      %s %s", sk.local, sk.peer)
+		if sk.keepalive != "" {
+			fmt.Fprintf(&b, " timer:(keepalive,%s,0)", sk.keepalive)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+var testKeepalive = Keepalive{Time: 30 * time.Second, Interval: 10 * time.Second, Probes: 3}
+
+// keepaliveEnv is an Env whose ephemeral containers start at once, and
+// whose kubectl answers the keepalive container's commands.
+func keepaliveEnv(t *testing.T, s *fakeSysctl) Env {
+	t.Helper()
+	env := testEnv(t, newFakeNet(testPods))
+	env.Kubectl = s.kubectl
+	return env
+}
+
+func shorten(t *testing.T, s *fakeSysctl, wait time.Duration) (KeepaliveRecord, error) {
+	t.Helper()
+	env := keepaliveEnv(t, s)
+	members := []Endpoint{member(target), member(slave1), member(slave2)}
+	return ShortenKeepalive(context.Background(), env, testKeepalive, members, member(target), member(slave1),
+		wait)
+}
+
+// Every member's namespace gets the new values, read back afterwards; the
+// cut-off member's connection to the master is reset, and the connection
+// CUBRID makes again carries a keepalive timer within the new time. The
+// connection to the other member is left alone.
+func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *testing.T) {
+	s := newFakeSysctl()
+	rec, err := shorten(t, s, time.Second)
+	if err != nil {
+		t.Fatalf("ShortenKeepalive: %v", err)
+	}
+	want := KeepaliveValues{Time: 30, Interval: 10, Probes: 3}
+	if rec.Requested != want || rec.Container != KeepaliveContainer {
+		t.Errorf("requested %+v in %q", rec.Requested, rec.Container)
+	}
+	if len(rec.Members) != 3 {
+		t.Fatalf("members %+v", rec.Members)
+	}
+	for _, m := range rec.Members {
+		if m.Before == nil || *m.Before != (KeepaliveValues{Time: 7200, Interval: 75, Probes: 9}) ||
+			m.After == nil || *m.After != want || m.SetAt == nil || m.Error != "" || m.UID != "uid-"+m.Name {
+			t.Errorf("member %+v", m)
+		}
+	}
+	if rec.Target != target || rec.Master != slave1 {
+		t.Errorf("target %q, master %q", rec.Target, rec.Master)
+	}
+	if len(rec.SocketsBefore) != 2 || len(rec.Reset) != 1 || rec.Reset[0].Local != testPods[target]+":48794" ||
+		rec.Reset[0].KeepaliveLeftSeconds != 105*60 || rec.ResetAt == nil {
+		t.Errorf("sockets before %+v, reset %+v at %v", rec.SocketsBefore, rec.Reset, rec.ResetAt)
+	}
+	got := rec.Reconnected
+	if got == nil || got.Peer != testPods[slave1]+":1523" || got.Local == rec.Reset[0].Local ||
+		got.KeepaliveLeftSeconds <= 0 || got.KeepaliveLeftSeconds > 30 || rec.ReconnectedAt == nil || rec.Unmet != "" {
+		t.Errorf("reconnected %+v at %v, unmet %q", got, rec.ReconnectedAt, rec.Unmet)
+	}
+	if ns := s.ns[testPods[target]]; !slices.ContainsFunc(ns.sockets, func(sk fakeSocket) bool {
+		return sk.local == testPods[target]+":48800"
+	}) {
+		t.Errorf("the connection to the other member was reset: %+v", ns.sockets)
+	}
+}
+
+// The values are written through a privileged container of its own: the
+// faults' container, with NET_ADMIN only, sees /proc/sys read-only, and the
+// container runtime mounts it writable only for a privileged container. It
+// is added to each member's Pod once.
+func TestKeepaliveContainerIsPrivileged(t *testing.T) {
+	s := newFakeSysctl()
+	env := keepaliveEnv(t, s)
+	members := []Endpoint{member(target), member(slave1), member(slave2)}
+	for range 2 {
+		if _, err := ShortenKeepalive(context.Background(), env, testKeepalive, members, member(target),
+			member(slave1), time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{target, slave1, slave2} {
+		pod := &corev1.Pod{}
+		if err := env.Client.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: name},
+			pod); err != nil {
+			t.Fatal(err)
+		}
+		var found []corev1.EphemeralContainer
+		for _, c := range pod.Spec.EphemeralContainers {
+			if c.Name == KeepaliveContainer {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 || found[0].SecurityContext == nil || found[0].SecurityContext.Privileged == nil ||
+			!*found[0].SecurityContext.Privileged || found[0].Image != Image {
+			t.Errorf("%s: keepalive containers %+v", name, found)
+		}
+	}
+}
+
+// Each way the setting can fail ends with an error that says why, never a
+// run that goes on as if the values were set.
+func TestShortenKeepaliveFailures(t *testing.T) {
+	cases := []struct {
+		name  string
+		set   func(*fakeSysctl)
+		want  string
+		reset bool // the target's connection was reset before the failure
+	}{
+		{"/proc/sys is read-only", func(s *fakeSysctl) { s.ns[testPods[slave2]].readOnly = true },
+			"Read-only file system", false},
+		{"the write does not hold", func(s *fakeSysctl) { s.ns[testPods[slave1]].ignoreWrite = true },
+			"read back", false},
+		{"the container is in another Pod's namespace", func(s *fakeSysctl) { s.execIn[slave1] = testPods[slave2] },
+			"wrong target", false},
+		{"the kernel does not reset the connection", func(s *fakeSysctl) {
+			s.ns[testPods[target]].ignoreDestroy = true
+		}, "still open after the reset", false},
+		{"CUBRID does not connect again", func(s *fakeSysctl) { s.ns[testPods[target]].reconnectIn = -1 },
+			"no new connection", true},
+		{"the new connection has no keepalive timer", func(s *fakeSysctl) {
+			s.ns[testPods[target]].keepaliveOnReconnect = false
+		}, "no keepalive timer", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeSysctl()
+			tc.set(s)
+			rec, err := shorten(t, s, 50*time.Millisecond)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %v, want %q", err, tc.want)
+			}
+			if rec.Unmet == "" || !strings.Contains(rec.Unmet, tc.want) {
+				t.Errorf("unmet %q, want %q", rec.Unmet, tc.want)
+			}
+			if (rec.ResetAt != nil) != (tc.reset || tc.want == "still open after the reset") {
+				t.Errorf("reset at %v", rec.ResetAt)
+			}
+			if rec.Reconnected != nil {
+				t.Errorf("reconnected %+v after a failure", rec.Reconnected)
+			}
+		})
+	}
+	// A member whose write failed is recorded with what it had and why.
+	s := newFakeSysctl()
+	s.ns[testPods[slave2]].readOnly = true
+	rec, _ := shorten(t, s, 50*time.Millisecond)
+	i := slices.IndexFunc(rec.Members, func(m KeepaliveMember) bool { return m.Name == slave2 })
+	if i < 0 || rec.Members[i].Before == nil || rec.Members[i].After != nil || rec.Members[i].SetAt != nil ||
+		!strings.Contains(rec.Members[i].Error, "Read-only") {
+		t.Errorf("members %+v", rec.Members)
+	}
+	if slices.ContainsFunc(s.scripts, func(sc string) bool { return strings.Contains(sc, "sockets-reset") }) {
+		t.Errorf("a connection was reset although a member's values were not set: %v", s.scripts)
+	}
+}
+
+// Values the kernel would refuse or that are not shorter than its default
+// are refused before anything is written.
+func TestKeepaliveValidate(t *testing.T) {
+	for _, k := range []Keepalive{
+		{}, {Time: 1500 * time.Millisecond, Interval: time.Second, Probes: 1},
+		{Time: 2 * time.Hour, Interval: time.Second, Probes: 1}, {Time: time.Minute, Interval: 0, Probes: 1},
+		{Time: time.Minute, Interval: time.Second, Probes: 0},
+	} {
+		if err := k.Validate(); err == nil {
+			t.Errorf("%+v was accepted", k)
+		}
+	}
+	if err := testKeepalive.Validate(); err != nil {
+		t.Errorf("%+v: %v", testKeepalive, err)
+	}
+}
+
+// ss prints a timer's time left in minutes, seconds and milliseconds.
+func TestParseSockets(t *testing.T) {
+	out := "0      0      10.42.3.189:48794 10.42.2.52:1523 timer:(keepalive,105min,0)\n" +
+		"0      0      10.42.3.189:48795 10.42.2.52:1523 timer:(keepalive,1min29sec,0)\n" +
+		"0      0      10.42.3.189:48796 10.42.2.52:1523 timer:(keepalive,5.123ms,0)\n" +
+		"0      0      10.42.3.189:48797 10.42.2.52:1523 timer:(keepalive,123ms,1)\n" +
+		"0      0      10.42.3.189:48798 10.42.2.52:1523 timer:(on,200ms,0)\n" +
+		"0      0      10.42.3.189:48799 10.42.2.52:1523\n"
+	sockets, err := parseSockets(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []float64{105 * 60, 89, 5.123, 0.123, 0, 0}
+	if len(sockets) != len(want) {
+		t.Fatalf("sockets %+v", sockets)
+	}
+	for i, sk := range sockets {
+		if sk.KeepaliveLeftSeconds != want[i] || sk.Peer != "10.42.2.52:1523" {
+			t.Errorf("socket %d: %+v, want %v seconds left", i, sk, want[i])
+		}
+	}
+	if sockets[4].Keepalive != "" || sockets[5].Keepalive != "" || sockets[0].Keepalive != "105min" {
+		t.Errorf("timers %+v", sockets)
+	}
+	if _, err := parseSockets("garbage\n"); err == nil {
+		t.Error("a line that is not a socket was accepted")
+	}
+}

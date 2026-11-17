@@ -157,20 +157,26 @@ func (e Endpoint) Entered() bool { return e.Pod != "" && !e.NoEnter }
 // Pod Security level must be privileged; restricted and baseline refuse it
 // (POC-39).
 func Attach(ctx context.Context, env Env, e Endpoint) error {
+	return attach(ctx, env, e, debugContainer(env.image()))
+}
+
+// attach adds the ephemeral container c to the endpoint's Pod, unless one of
+// its name is there, and waits until it runs.
+func attach(ctx context.Context, env Env, e Endpoint, c corev1.EphemeralContainer) error {
 	pod, err := currentPod(ctx, env, e)
 	if err != nil {
 		return err
 	}
-	if i := slices.IndexFunc(pod.Spec.EphemeralContainers, func(c corev1.EphemeralContainer) bool {
-		return c.Name == Container
+	if i := slices.IndexFunc(pod.Spec.EphemeralContainers, func(have corev1.EphemeralContainer) bool {
+		return have.Name == c.Name
 	}); i >= 0 {
-		if image := pod.Spec.EphemeralContainers[i].Image; image != env.image() {
-			return fmt.Errorf("%s: its %s container runs %s, not %s", e.Name, Container, image, env.image())
+		if image := pod.Spec.EphemeralContainers[i].Image; image != c.Image {
+			return fmt.Errorf("%s: its %s container runs %s, not %s", e.Name, c.Name, image, c.Image)
 		}
 	} else {
-		pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, debugContainer(env.image()))
+		pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, c)
 		if err := env.Client.SubResource("ephemeralcontainers").Update(ctx, pod); err != nil {
-			return fmt.Errorf("%s: add the %s container: %w", e.Name, Container, err)
+			return fmt.Errorf("%s: add the %s container: %w", e.Name, c.Name, err)
 		}
 	}
 	for {
@@ -181,16 +187,16 @@ func Attach(ctx context.Context, env Env, e Endpoint) error {
 		}
 		for _, s := range pod.Status.EphemeralContainerStatuses {
 			switch {
-			case s.Name != Container:
+			case s.Name != c.Name:
 			case s.State.Running != nil:
 				return nil
 			case s.State.Terminated != nil:
-				return fmt.Errorf("%s: the %s container ended: %s (exit code %d)", e.Name, Container,
+				return fmt.Errorf("%s: the %s container ended: %s (exit code %d)", e.Name, c.Name,
 					s.State.Terminated.Reason, s.State.Terminated.ExitCode)
 			}
 		}
 		if err := env.pause(ctx, time.Since(start)); err != nil {
-			return fmt.Errorf("%s: the %s container did not start: %w", e.Name, Container, err)
+			return fmt.Errorf("%s: the %s container did not start: %w", e.Name, c.Name, err)
 		}
 	}
 }
@@ -253,7 +259,12 @@ func currentPod(ctx context.Context, env Env, e Endpoint) (*corev1.Pod, error) {
 
 // shell runs a script in the endpoint's ephemeral container.
 func shell(ctx context.Context, env Env, e Endpoint, script string) (string, error) {
-	out, err := env.Kubectl(ctx, "-n", e.Namespace, "exec", e.Pod, "-c", Container, "--", "sh", "-c", script)
+	return shellIn(ctx, env, e, Container, script)
+}
+
+// shellIn runs a script in the endpoint's ephemeral container of that name.
+func shellIn(ctx context.Context, env Env, e Endpoint, container, script string) (string, error) {
+	out, err := env.Kubectl(ctx, "-n", e.Namespace, "exec", e.Pod, "-c", container, "--", "sh", "-c", script)
 	if err != nil {
 		return out, fmt.Errorf("%s: %w", e.Name, err)
 	}
@@ -266,10 +277,16 @@ var inetAddr = regexp.MustCompile(`\binet ([0-9.]+)/`)
 // and the ephemeral container's network namespace holds the Pod's IP. A rule
 // installed anywhere else would cut another Pod's traffic, or none.
 func checkNamespace(ctx context.Context, env Env, e Endpoint) error {
+	return checkNamespaceIn(ctx, env, e, Container)
+}
+
+// checkNamespaceIn is checkNamespace through the ephemeral container of that
+// name.
+func checkNamespaceIn(ctx context.Context, env Env, e Endpoint, container string) error {
 	if _, err := currentPod(ctx, env, e); err != nil {
 		return err
 	}
-	out, err := shell(ctx, env, e, ": netfault addr\nip -o -4 addr show dev eth0")
+	out, err := shellIn(ctx, env, e, container, ": netfault addr\nip -o -4 addr show dev eth0")
 	if err != nil {
 		return err
 	}
@@ -279,7 +296,7 @@ func checkNamespace(ctx context.Context, env Env, e Endpoint) error {
 	}
 	if !slices.Contains(found, e.IP) {
 		return fmt.Errorf("%s: the %s container's network namespace has %v, not the Pod's IP %s: wrong target",
-			e.Name, Container, found, e.IP)
+			e.Name, container, found, e.IP)
 	}
 	return nil
 }

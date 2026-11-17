@@ -597,7 +597,7 @@ func testPod(namespace, name, ip string) *corev1.Pod {
 }
 
 // testEnv returns an Env over a fake client holding the members' Pods and
-// the manager's, and over fakeNet. Adding the ephemeral container starts it
+// the manager's, and over fakeNet. Adding an ephemeral container starts it
 // at once.
 func testEnv(t *testing.T, n *fakeNet) Env {
 	t.Helper()
@@ -630,9 +630,15 @@ func testEnv(t *testing.T, n *fakeNet) Env {
 			if err := c.Update(ctx, stored); err != nil {
 				return err
 			}
-			stored.Status.EphemeralContainerStatuses = append(stored.Status.EphemeralContainerStatuses,
-				corev1.ContainerStatus{Name: Container, State: corev1.ContainerState{
-					Running: &corev1.ContainerStateRunning{}}})
+			for _, added := range pod.Spec.EphemeralContainers {
+				if !slices.ContainsFunc(stored.Status.EphemeralContainerStatuses, func(s corev1.ContainerStatus) bool {
+					return s.Name == added.Name
+				}) {
+					stored.Status.EphemeralContainerStatuses = append(stored.Status.EphemeralContainerStatuses,
+						corev1.ContainerStatus{Name: added.Name, State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{}}})
+				}
+			}
 			return c.Status().Update(ctx, stored)
 		}}).Build()
 	return Env{Client: c, Kubectl: n.kubectl, Poll: 5 * time.Millisecond, Reserve: 300 * time.Millisecond}

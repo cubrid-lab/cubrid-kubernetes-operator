@@ -1071,6 +1071,77 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   -fault partition-higher-rank-isolated -partition-settle 20m -partition-manual-release -timeout 75m'
 ```
 
+**Shorter TCP keepalive before the cut.** A third opt-in option,
+`-partition-keepalive <duration>`, tests the hypothesis of
+[#982](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/982):
+on the VM lab on 2026-11-17 UTC the higher-ranked member's log copy
+process (`copylogdb`) waited on a TCP connection to the old master's
+server that the other side no longer had, with the kernel's keepalive
+timer at 105 minutes
+([#716](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/716)).
+With the option, after the master was moved and before the clients start
+and anything is cut, the run:
+
+1. adds an ephemeral container named `netsysctl` to each member Pod and,
+   from it, writes `net.ipv4.tcp_keepalive_time` (the option, whole
+   seconds under 2 hours), `tcp_keepalive_intvl` (10 seconds) and
+   `tcp_keepalive_probes` (3) under `/proc/sys/net/ipv4`, then reads the
+   three values back. They are per network namespace, which every container
+   of the Pod shares, so CUBRID's connections in that Pod get them; the
+   node and other Pods are not touched;
+2. on the member it will cut off, resets the established TCP connections
+   to the master's port 1523 (`ss -K`), which the log copy uses, and waits
+   up to three minutes for CUBRID to connect again with a keepalive timer
+   no longer than the option.
+
+The `netsysctl` container is privileged because the container runtime
+mounts `/proc/sys` read-only in every other container: the `netfault`
+container, with `NET_ADMIN` and `NET_RAW` only, gets `Read-only file
+system` for the same write. The run namespace already enforces Pod
+Security `privileged` for the partition, and adding an ephemeral container
+needs no permission beyond the partition's own. The Pod sysctls of the
+member Pods are not an option for this test: the Operator's StatefulSet
+owns that spec, and changing it would restart the members.
+
+The reset in step 2 is needed, and it is why the values are set after the
+move rather than before it. Linux arms a connection's keepalive timer with
+the namespace's values when the connection is made, and reads them again
+only when that timer fires; a connection made before the write keeps its
+old schedule, up to 2 hours, until then. The cut-off member's log copy
+connects to the master as soon as its Pod starts, which, after the move,
+is the first member's new Pod with a new network namespace: no value
+written before the move reaches it, and none can be written before that
+connection is made. So the run makes that connection again. The reset
+itself is a change before the cut: CUBRID's log copy sees its connection
+end and connects again, as after a short network failure. The connections
+to the other member, and the other members' own connections, keep the
+schedule they were made with.
+
+The values go away with the Pods' network namespaces when the run
+namespace is deleted; the `netsysctl` container, like `netfault`, stays in
+each member Pod and only sleeps. `partitionKeepalive` in `record.json`
+keeps the values asked for, each member's values before and after with the
+time they were seen set, the cut-off member's connections to the members'
+port before the reset, those reset (`targetSocketsReset`, with each
+keepalive timer as `ss` printed it), and the connection made again
+(`targetReconnectedSocket`). When a value cannot be written or read back,
+the kernel does not reset the connection, or CUBRID does not connect
+again with the new keepalive within the wait, S07 is blocked before
+anything is cut, and the reason says which.
+
+The option is refused without a partition fault and with
+`partition-master-isolated`, where the cut-off member is the master. It
+adds 7 minutes to the steps' bounds in the `-timeout` check: 4 to add the
+container, which may pull its image, and 3 for the connection. With the
+10-minute move, a 10-minute settle and the other defaults, the variant's own
+bounds are 41 minutes, plus LAB01:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated -partition-keepalive 30s -partition-settle 10m -timeout 60m'
+```
+
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
 installed-ha-network-partition-higher-rank-isolated` select the same runs.
@@ -1448,7 +1519,8 @@ Evidence, under `S07/<variant>/`:
   every new-connection write with its UTC start and end on the run's clock,
   its exit code and outcome, the established session, the settle (with
   `settleWaitExpired` when it did not), the data check or, when the cluster
-  did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`), and the run's
+  did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`),
+  the keepalive set with `-partition-keepalive` (`partitionKeepalive`), and the run's
   observations in time order (`observed`);
 - `cut.json`: the cut's state alone, written before the injection and at
   its removal;

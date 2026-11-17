@@ -161,6 +161,9 @@ func (c HAConfig) validateS07() error {
 	if c.PartitionSettle < 0 {
 		return errors.New("-partition-settle must not be negative (0 waits the lane's default)")
 	}
+	if err := c.validateS07Keepalive(); err != nil {
+		return err
+	}
 	if !c.partitionFault() {
 		// -partition-settle, like -partition-hold, has no effect without a
 		// partition fault; a release asked for with none is refused.
@@ -178,10 +181,12 @@ func (c HAConfig) validateS07() error {
 	if c.PartitionHold <= 0 || c.PartitionHold < c.PartitionDuration {
 		return errors.New("S07 needs a positive partition hold, at least partition_duration")
 	}
-	checked := c.Fault == FaultPartitionHigherRankIsolated || c.PartitionSettle > 0 || c.PartitionManualRelease
+	checked := c.Fault == FaultPartitionHigherRankIsolated || c.PartitionSettle > 0 || c.PartitionManualRelease ||
+		c.PartitionKeepalive > 0
 	if least := c.s07StepBounds(); checked && c.Timeout <= least {
 		return fmt.Errorf("S07 %s needs a -timeout longer than %s, the bounds of its own steps "+
-			"(moving the master for higher-rank-isolated, preparing, holding, removing and settling the cut, "+
+			"(moving the master for higher-rank-isolated, shortening TCP keepalive when asked for, preparing, "+
+			"holding, removing and settling the cut, "+
 			"the manual release when asked for, and the data check or, when the cluster does not settle, the "+
 			"rows and engine logs read before cleanup), plus the time LAB01 takes",
 			s07Variant(c.Fault), least)
@@ -191,14 +196,17 @@ func (c HAConfig) validateS07() error {
 
 // s07StepBounds is the longest S07 may take after LAB01 by the bounds of its
 // own steps: the move of the master for higher-rank-isolated only, the
-// settle wait of -partition-settle, and the release's steps with
-// -partition-manual-release. When the cluster does not settle, the rows
+// shortened keepalive of -partition-keepalive, the settle wait of
+// -partition-settle, and the release's steps with -partition-manual-release. When the cluster does not settle, the rows
 // snapshot and the engine log capture take the data check's place.
 func (c HAConfig) s07StepBounds() time.Duration {
 	bounds := s07PrepareBound + c.PartitionHold + s07ConfirmSlack + s07CleanupBound + c.s07Settle() +
 		max(c.DataCheckWithin, s07SnapshotBound+s07EngineLogCaptureBound()) + c.s07ReleaseBounds()
 	if c.Fault == FaultPartitionHigherRankIsolated {
 		bounds += s07MoveBound
+	}
+	if c.PartitionKeepalive > 0 {
+		bounds += s07KeepaliveBound
 	}
 	return bounds
 }
@@ -476,6 +484,10 @@ type s07Record struct {
 	ClientsRead     bool               `json:"clientsRead"`
 	ClientHistories []s04ClientHistory `json:"clientHistories,omitempty"`
 	Partition       *netfault.Record   `json:"partition,omitempty"`
+	// Keepalive is what -partition-keepalive set before the cut: each
+	// member's keepalive values before and after, and the cut-off member's
+	// connection to the master made again under them.
+	Keepalive *netfault.KeepaliveRecord `json:"partitionKeepalive,omitempty"`
 	// mu serializes the observations and the record's writes, which the run's
 	// end can make while a step of the fault is still running; cut is the
 	// state in cut.json. tokens are the release tokens of the run's
@@ -1065,7 +1077,8 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 // member cut both ways from every other member and from the manager Pod,
 // the other members still reaching each other. Nothing is cut yet; for
 // higher-rank-isolated with the master on the first member, the master is
-// moved first.
+// moved first. With -partition-keepalive, the members' TCP keepalive is
+// shortened last, after any move.
 func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Partition, error) {
 	slaves, identities := h.rec.StartingState.Slaves, rec.MembersBefore
 	if _, err := s07PickTarget(rec.Variant, rec.Master, slaves, rec.Master); errors.Is(err,
@@ -1124,7 +1137,15 @@ func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Parti
 	if rec.ForeignTargets = h.s07Foreign(p); len(rec.ForeignTargets) > 0 {
 		return nil, fmt.Errorf("the partition would enter Pods that are not the run's own: %v", rec.ForeignTargets)
 	}
-	return p, p.Validate()
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
+	if h.cfg.PartitionKeepalive > 0 {
+		if err := h.shortenS07Keepalive(ctx, rec, p); err != nil {
+			return p, fmt.Errorf("shorten TCP keepalive before the cut (-partition-keepalive): %w", err)
+		}
+	}
+	return p, nil
 }
 
 // beforeS07 verifies the state the cut starts from: the starting conditions,

@@ -152,6 +152,12 @@ type HAConfig struct {
 	// default.
 	PartitionSettle        time.Duration
 	PartitionManualRelease bool
+	// PartitionKeepalive, when set, makes S07 set the TCP keepalive time of
+	// every member's network namespace to it before the cut, with a 10-second
+	// interval and 3 probes, and make the cut-off member's connection to the
+	// master again under those values (#982). Zero, the default, leaves the
+	// kernel's values.
+	PartitionKeepalive time.Duration
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12
