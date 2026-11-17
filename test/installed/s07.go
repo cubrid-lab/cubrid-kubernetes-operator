@@ -196,7 +196,7 @@ func (c HAConfig) validateS07() error {
 // snapshot and the engine log capture take the data check's place.
 func (c HAConfig) s07StepBounds() time.Duration {
 	bounds := s07PrepareBound + c.PartitionHold + s07ConfirmSlack + s07CleanupBound + c.s07Settle() +
-		max(c.DataCheckWithin, s07SnapshotBound+s07EngineLogBound) + c.s07ReleaseBounds()
+		max(c.DataCheckWithin, s07SnapshotBound+s07EngineLogCaptureBound()) + c.s07ReleaseBounds()
 	if c.Fault == FaultPartitionHigherRankIsolated {
 		bounds += s07MoveBound
 	}
