@@ -416,6 +416,34 @@ order on every pass:
    - The second is a cut-off former master, of any rank, that may go on
      accepting writes from Brokers or open sessions that still reach it
      (POC-52, POC-58).
+   - *Proposed by #931, pending maintainer review:* when no quarantine is in
+     force and every member this rule names is *pending*, the quarantine
+     does not start in this pass. A pending member gave a fresh,
+     authenticated, non-master answer in this pass and lacks only an answer
+     at least 2 s after its first one. It is not the last resolved primary,
+     and it has no recorded answers or recorded ones from the same Pod and
+     container start. No recorded answers is the case after an Operator
+     upgrade from a build that kept none, after an Operator absence longer
+     than the 30-second answer gap, and also after a pass in which the
+     member gave no usable answer while no quarantine started (for example
+     with no active master). Passes come 3 s apart while a member is
+     pending; the first pass whose answer from it is not a non-master answer
+     from the same Pod starts the quarantine. A member stays pending for at
+     most 15 s (the 3 s interval, the 2 s gap and two 5 s probe timeouts),
+     counted in the Operator's memory, so the bound holds when the status
+     that would record its answers cannot be written; after that it is
+     named as any unverified member. A member in another Pod or container
+     start than its recorded answers, the last resolved primary (a former
+     master's single slave answer is the transitional reading two probes
+     guard against), and a member that gave no usable answer are not
+     pending and start the quarantine at once. A quarantine that starts for
+     another member names the pending members with it, and a return to
+     service waits while the rule is deferred.
+     On the VM lab on 2026-11-17 UTC, the first pass after an Operator
+     upgrade closed a healthy cluster's write path for 24 s because its
+     first member, a slave beside master `ha-1`, had only one answer
+     (#931). That contradicts "a missing Operator observation is not, on its
+     own, a reason to quarantine" under *Negative* below.
 3. **Otherwise no quarantine starts.** That leaves the state reported, as
    today, through `PrimaryResolved`, `RoutingReady`, and `Ready` after
    60 s. It covers two cases:

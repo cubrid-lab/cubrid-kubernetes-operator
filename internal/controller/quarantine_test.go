@@ -84,6 +84,9 @@ type quarantineScenario struct {
 	memberFences []databasev1alpha1.MemberFence
 	// returnRequest is the member the return-to-service annotation names.
 	returnRequest string
+	// pendingSince is what the Operator process keeps in memory between
+	// passes.
+	pendingSince map[string]pendingMark
 }
 
 func newQuarantineScenario(t *testing.T, lastResolved string) *quarantineScenario {
@@ -103,6 +106,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
 		LastRelease: s.lastRelease.DeepCopy(), ExemptionOwned: !s.exemptionNotOwned,
 		Nodes: s.nodes, Fences: s.fences, MemberFences: s.memberFences, ReturnRequest: s.returnRequest,
+		PendingSince: s.pendingSince,
 		Nonce: func() (string, error) {
 			s.nonces++
 			return fmt.Sprintf("nonce-%d", s.nonces), nil
@@ -117,6 +121,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 		s.lastRelease = d.Released
 	}
 	s.unstable, s.identitiesUnknown = nil, false
+	s.pendingSince = d.PendingSince
 	return d
 }
 
@@ -516,7 +521,8 @@ func TestQuarantineNonce(t *testing.T) {
 // pass that waited 5 s for a member, and another 5 s probe in the next one.
 // Two non-master answers that far apart still verify a member; answers 40 s
 // apart, as across a stop of the Operator, are not uninterrupted and start
-// over.
+// over. The member is then pending, not named: its answer after the gap is a
+// non-master one, and the next pass verifies it (#931).
 func TestQuarantineVerificationGapStartsOver(t *testing.T) {
 	obs := func(now time.Time) map[string]RoleObservation {
 		return map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: noAnswerAt(now)}
@@ -532,8 +538,14 @@ func TestQuarantineVerificationGapStartsOver(t *testing.T) {
 	s.pass(testNow, obs(testNow))
 	later := testNow.Add(40 * time.Second)
 	d := s.pass(later, obs(later))
-	if !slices.Contains(d.Unverified, q0) || d.Quarantine == nil {
+	if !slices.Contains(d.Unverified, q0) {
 		t.Fatalf("an answer %s after the one before verified %s: %+v", later.Sub(testNow), q0, d)
+	}
+	if !slices.Contains(d.Pending, q0) {
+		t.Fatalf("%s answered as a slave after the gap but is not pending: %+v", q0, d)
+	}
+	if d.Quarantine != nil {
+		t.Fatalf("a pending member started a quarantine after the gap: %+v", d.Quarantine)
 	}
 	next := later.Add(quarantineVerifyGap + time.Second)
 	if d = s.pass(next, obs(next)); slices.Contains(d.Unverified, q0) {
@@ -1043,5 +1055,173 @@ func TestWithHeldDepartureKeepsTheFirstDeadline(t *testing.T) {
 	other.GenerationID = "h"
 	if got := withHeldDeparture(stored, other); got.ObservedMasterHoldUntil != nil {
 		t.Errorf("a hold of another quarantine was taken: %+v", got)
+	}
+}
+
+// tokenRefusedAt is a member that refused the role probe's token.
+func tokenRefusedAt(at time.Time) RoleObservation {
+	return RoleObservation{Reachable: true, TokenRefused: true, ObservedAt: at}
+}
+
+// After the Operator did not observe a healthy cluster, as across an upgrade
+// or a restart longer than quarantineAnswerGap, the first pass has a single
+// non-master answer from each slave. A slave that outranks the active master
+// and answers as one gets its second probe before rule 2 can name it, so the
+// write path of a healthy cluster stays open (#931; seen on the VM lab on
+// 2026-11-17, when ha-0 beside master ha-1 closed it for 24 s).
+func TestQuarantineOperatorAbsenceStartsNoQuarantineOnAnsweringSlaves(t *testing.T) {
+	healthy := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}
+	}
+	t.Run("no recorded verifications", func(t *testing.T) {
+		s := newQuarantineScenario(t, q1)
+		d := s.pass(testNow, healthy(testNow))
+		if d.Quarantine != nil {
+			t.Fatalf("the first pass over a healthy cluster started a quarantine: %+v", d.Quarantine)
+		}
+		if !slices.Equal(d.Pending, []string{q0, q2}) {
+			t.Errorf("pending %v, want [%s %s]", d.Pending, q0, q2)
+		}
+		next := testNow.Add(unverifiedResyncInterval)
+		if d = s.pass(next, healthy(next)); d.Quarantine != nil || len(d.Unverified) != 0 {
+			t.Fatalf("the second pass did not verify the slaves: unverified %v, quarantine %+v", d.Unverified, d.Quarantine)
+		}
+	})
+	t.Run("verifications older than the answer gap", func(t *testing.T) {
+		s := newQuarantineScenario(t, q1)
+		s.verifiedAll(q0, q2)
+		later := testNow.Add(40 * time.Second)
+		if d := s.pass(later, healthy(later)); d.Quarantine != nil {
+			t.Fatalf("the first pass after a 40 s absence started a quarantine: %+v", d.Quarantine)
+		}
+	})
+}
+
+// The deferral covers only the missing second probe: when the next pass does
+// not give a non-master answer from the same member, rule 2 or rule 1 starts
+// the quarantine on that pass.
+func TestQuarantinePendingMemberWithoutSecondAnswerIsNamed(t *testing.T) {
+	cases := map[string]func(time.Time) RoleObservation{
+		"no answer":      noAnswerAt,
+		"token refused":  tokenRefusedAt,
+		"master claimed": activeMasterAt,
+	}
+	for name, second := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newQuarantineScenario(t, q1)
+			s.verifiedAll(q2)
+			if d := s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow),
+				q2: slaveAt(testNow)}); d.Quarantine != nil {
+				t.Fatalf("the first answer started a quarantine: %+v", d.Quarantine)
+			}
+			next := testNow.Add(unverifiedResyncInterval)
+			d := s.pass(next, map[string]RoleObservation{q0: second(next), q1: activeMasterAt(next), q2: slaveAt(next)})
+			if d.Quarantine == nil || d.Change != quarantineStarted {
+				t.Fatalf("no quarantine started after %s: %+v", name, d)
+			}
+			want := databasev1alpha1.WriteQuarantinedMemberUnverified
+			if name == "master claimed" {
+				want = databasev1alpha1.WriteQuarantinedMultipleMasters
+			}
+			if d.Quarantine.Reason != want || !slices.Contains(memberNamesOf(d.Quarantine.Members), q0) {
+				t.Errorf("quarantine %s with %v, want %s naming %s", d.Quarantine.Reason,
+					memberNamesOf(d.Quarantine.Members), want, q0)
+			}
+		})
+	}
+}
+
+// A member whose Pod changed between the reads around its probe gave no
+// usable answer, so the deferral does not apply to it.
+func TestQuarantineUnstableMemberIsNotPending(t *testing.T) {
+	s := newQuarantineScenario(t, q1)
+	s.unstable = map[string]bool{q0: true}
+	d := s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine == nil || slices.Contains(d.Pending, q0) {
+		t.Fatalf("decision = %+v, want %s named at once", d, q0)
+	}
+}
+
+// A first answer that is no usable non-master answer makes no member
+// pending: rule 2 starts the quarantine on that pass.
+func TestQuarantineUnusableFirstAnswerIsNotPending(t *testing.T) {
+	cases := map[string]RoleObservation{
+		"an unreadable answer":                     {Reachable: true, Role: databasev1alpha1.RoleSlave, Unreadable: true, ObservedAt: testNow},
+		"a conflicting answer":                     {Reachable: true, Role: databasev1alpha1.RoleSlave, Conflicting: true, ObservedAt: testNow},
+		"an answer without a role":                 {Reachable: true, ObservedAt: testNow},
+		"an answer older than the observation TTL": slaveAt(testNow.Add(-time.Hour)),
+	}
+	for name, first := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newQuarantineScenario(t, q1)
+			d := s.pass(testNow, map[string]RoleObservation{q0: first, q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+			if d.Quarantine == nil || slices.Contains(d.Pending, q0) {
+				t.Fatalf("decision = %+v, want %s named at once", d, q0)
+			}
+		})
+	}
+}
+
+// The last resolved primary is never pending: after a role move, one slave
+// answer from the former master is the transitional reading that section 8
+// asks two probes for, and rule 2 names it at once.
+func TestQuarantineFormerPrimaryIsNotPending(t *testing.T) {
+	s := newQuarantineScenario(t, q0)
+	s.verifiedAll(q1, q2)
+	if d := s.pass(testNow, map[string]RoleObservation{q0: activeMasterAt(testNow), q1: slaveAt(testNow),
+		q2: slaveAt(testNow)}); d.Quarantine != nil {
+		t.Fatalf("a healthy cluster started a quarantine: %+v", d.Quarantine)
+	}
+	now := testNow.Add(3 * time.Second)
+	d := s.pass(now, map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: slaveAt(now)})
+	if d.Quarantine == nil || !slices.Equal(memberNamesOf(d.Quarantine.Members), []string{q0}) ||
+		slices.Contains(d.Pending, q0) {
+		t.Fatalf("decision = %+v, want the former primary %s named at once", d, q0)
+	}
+}
+
+// A quarantine that starts for a member that is not pending names the
+// pending ones with it.
+func TestQuarantineStartedForAnotherMemberNamesPendingOnes(t *testing.T) {
+	s := newQuarantineScenario(t, q2)
+	d := s.pass(testNow, map[string]RoleObservation{q0: noAnswerAt(testNow), q1: slaveAt(testNow), q2: activeMasterAt(testNow)})
+	if d.Quarantine == nil || !slices.Equal(memberNamesOf(d.Quarantine.Members), []string{q0, q1}) {
+		t.Fatalf("quarantine = %+v, want %s and the pending %s", d.Quarantine, q0, q1)
+	}
+}
+
+// When the status that would record a pending member's answers cannot be
+// written, each pass finds no recorded answer; the mark kept in memory still
+// ends the deferral after quarantinePendingLimit.
+func TestQuarantinePendingIsBoundedWithoutStatusWrites(t *testing.T) {
+	healthy := func(now time.Time) map[string]RoleObservation {
+		return map[string]RoleObservation{q0: slaveAt(now), q1: activeMasterAt(now), q2: slaveAt(now)}
+	}
+	s := newQuarantineScenario(t, q1)
+	var d quarantineDecision
+	for now := testNow; !now.After(testNow.Add(quarantinePendingLimit + unverifiedResyncInterval)); now = now.Add(unverifiedResyncInterval) {
+		s.verifications = nil // the status write failed
+		d = s.pass(now, healthy(now))
+		if d.Quarantine != nil {
+			break
+		}
+	}
+	if d.Quarantine == nil || !slices.Contains(memberNamesOf(d.Quarantine.Members), q0) {
+		t.Fatalf("the deferral did not end within %s: %+v", quarantinePendingLimit, d)
+	}
+	if got := d.Quarantine.StartTime.Sub(testNow); got > quarantinePendingLimit+unverifiedResyncInterval {
+		t.Errorf("quarantine started %s after the first pending pass, want at most %s", got,
+			quarantinePendingLimit+unverifiedResyncInterval)
+	}
+}
+
+// A return-to-service request is not taken up in a pass that defers rule 2.
+func TestQuarantineReturnWaitsForPendingMember(t *testing.T) {
+	s := newQuarantineScenario(t, q1)
+	s.verifiedAll(q2)
+	s.returnRequest = q2
+	d := s.pass(testNow, map[string]RoleObservation{q0: slaveAt(testNow), q1: activeMasterAt(testNow), q2: slaveAt(testNow)})
+	if d.Quarantine != nil || d.ReturnWaiting == "" {
+		t.Fatalf("decision = %+v, want no quarantine and a waiting return", d)
 	}
 }
