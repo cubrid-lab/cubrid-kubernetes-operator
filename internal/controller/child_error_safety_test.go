@@ -68,6 +68,8 @@ type childRejections struct {
 	brokers bool
 	// statefulSetRead refuses each read of a StatefulSet.
 	statefulSetRead bool
+	// statefulSetUpdate refuses updates while reads still succeed.
+	statefulSetUpdate error
 }
 
 // A write of one of the cluster's own child objects, such as its
@@ -114,6 +116,9 @@ var _ = Describe("Write quarantine while a child object write keeps failing (#94
 				return c.Create(ctx, obj, opts...)
 			},
 			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*appsv1.StatefulSet); ok && rejections.statefulSetUpdate != nil {
+					return rejections.statefulSetUpdate
+				}
 				if err := reject(obj); err != nil {
 					return err
 				}
@@ -249,6 +254,29 @@ var _ = Describe("Write quarantine while a child object write keeps failing (#94
 		Expect(q).NotTo(BeNil())
 		Expect(q.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberUnverified))
 		Expect(q.ObservedMaster).To(Equal(f.key.Name + "-1"))
+		Expect(rwReplicas(f.key)).To(Equal(int32(0)))
+	})
+
+	It("quarantines two active masters when admission rejects an update to the owned StatefulSet", func() {
+		f := running("child-fails-sts-admission")
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, f.key, sts)).To(Succeed())
+		Expect(metav1.IsControlledBy(sts, stored(f.key))).To(BeTrue())
+		sts.Spec.Replicas = new(int32(1))
+		Expect(k8sClient.Update(ctx, sts)).To(Succeed())
+		f.rejections.statefulSetUpdate = apierrors.NewForbidden(
+			schema.GroupResource{Group: appsv1.GroupName, Resource: "statefulsets"}, sts.Name, errAdmissionRejected)
+		f.answers.set(roleReports(f.key.Name, [3]string{wqMaster, wqMaster, wqSlave}))
+
+		err := pass(f)
+		Expect(err).To(MatchError(f.rejections.statefulSetUpdate))
+		Expect(k8sClient.Get(ctx, f.key, sts)).To(Succeed())
+		Expect(sts.Spec.Replicas).To(HaveValue(Equal(int32(1))))
+		c := stored(f.key)
+		Expect(meta.FindStatusCondition(c.Status.Conditions, conditionReady).Reason).
+			To(Equal("StatefulSetReconcileFailed"))
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMultipleMasters))
 		Expect(rwReplicas(f.key)).To(Equal(int32(0)))
 	})
 
