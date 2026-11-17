@@ -6508,11 +6508,17 @@ The proposed peer-identity counterexample remains unexecuted, so #894's engine
 qualification and operational decision remain open. This is not a Kind, VM or
 release-qualification result and does not replace POC-61 or POC-62.
 
-## POC-65 — whether a standalone-mode login on a stopped HA slave changes its files, in Docker on 11.4.7.1995 (#894) — **observation: yes; with the slave's heartbeat stopped and no change in 30 s with nothing run, a `csql -S` login refused for a wrong password, a read-only `csql -S -r` login and a `csql -S` login with the right password each changed the SHA-256 of the slave's data volume and active log, and moved log positions in the active log's first page; the copied logs of the master did not change; after a native restart the slave rejoined as a standby and later held every row, with no applier failure, but the new row took 13.5 min against 2.5 min after a control restart, in one trial on a busy host, so that delay is not attributed to the logins**
+## POC-65 — whether a standalone-mode login on a stopped HA slave changes its files, in Docker on 11.4.7.1995 (#894) — **observation: yes; with the slave's heartbeat stopped and no change in 30 s with nothing run, a `csql -S` login refused for a wrong password, a read-only `csql -S -r` login and a `csql -S` login with the right password each changed the SHA-256 of the slave's data volume and active log, and moved log positions in the active log's first page; the copied logs of the master did not change; after a native restart the slave rejoined as a standby and later held every row, with an applier failure count of 0, but the new row was first seen after at most 812 s against at most 152 s after a control restart, and the slave's logs recorded unexplained replication errors after that restart; with one trial on a busy host and a 4-minute stop against a 10-second one, neither is attributed to the logins**
 
 Local Docker, the pinned image of `build/instance-manager/Dockerfile`
 (`cubrid/cubrid:11.4@sha256:a8c8792f…`, CUBRID 11.4.7.1995), synthetic passwords, one trial.
-Scripts, outputs and limits: [poc65/README.md](poc65/README.md). A standalone-mode open is
+Scripts, outputs and limits: [poc65/README.md](poc65/README.md). After the restart that
+followed the logins, the slave's logs recorded five `Time out in receiving data` (-1122) errors
+from the master's copylogdb (02:32:04 to 02:35:54 UTC), an applier that took about 4 min 37 s
+to reach `recovering` (43 s after the control restart), and at 02:40:28 to 02:40:35 UTC its
+copylogdb marking the master `dead`, a reconnect refused with -171 and a successful reconnect;
+these are observed and not explained, and the record keeps too little of the control restart's
+logs to compare. A standalone-mode open is
 therefore not a non-mutating password check for a stopped HA member, and the Instance Manager
 keeps not checking an initialized HA member before `cubrid heartbeat start`
 ([DBA password](../operations/dba-password.md#restarting-after-a-changed-value)). A former
