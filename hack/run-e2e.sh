@@ -6,12 +6,12 @@
 #   start instead of reusing, and later deleting, a cluster it did not create.
 #   With E2E_REUSE_CLUSTER=1 an existing cluster is used and kept; without one,
 #   the run creates and deletes its cluster as usual.
-# - The cluster this run created is deleted when the command ends, whether it
-#   passed, failed or timed out, and on SIGINT, SIGTERM or SIGHUP. Signals are
-#   passed on to the command's process group, so Ginkgo can clean up (a second
-#   Ctrl-C makes it stop at once), and the cluster is deleted after the command
-#   has ended. Signals that arrive while the cluster is being deleted are
-#   ignored, so the deletion is not cut short.
+# - A successful create establishes ownership. The owned cluster is deleted
+#   when the command passes, fails, times out or receives SIGINT, SIGTERM or
+#   SIGHUP. The wrapper signals the command's process group so Ginkgo can
+#   clean up. A second Ctrl-C makes the command stop at once. The wrapper
+#   deletes the cluster after the command ends and ignores signals during
+#   deletion so cleanup can finish.
 # - A run whose cluster could not be deleted fails.
 #
 # Environment: KIND (the kind binary), KIND_CLUSTER, KIND_NODE_IMAGE,
@@ -60,9 +60,9 @@ delete_cluster() {
 trap delete_cluster EXIT
 
 # on_signal records the first signal and stops the process group currently
-# owned by this run: a test command or a helper-image preload. A TERM during
-# a slow registry pull/load must not keep the owned Kind cluster alive.
-# Before either command starts, it ends the run and deletes the cluster.
+# owned by this run: a test command or a helper-image preload. During
+# foreground creation the run must first read Kind's exit status to establish
+# ownership. At other times it ends the run and cleans up confirmed ownership.
 on_signal() {
 	local sig="$1" num="$2"
 	if [ -z "$signal" ]; then
@@ -90,16 +90,20 @@ if grep -Fqx -- "$KIND_CLUSTER" <<<"$clusters"; then
 	echo "Using the existing Kind cluster '$KIND_CLUSTER' (E2E_REUSE_CLUSTER=1); it is kept."
 else
 	echo "Creating Kind cluster '$KIND_CLUSTER'..."
-	# Marked before creating, so a creation that a signal interrupts is
-	# cleaned up: the signal's trap runs, and ends the run, before the status
-	# below is looked at. A creation that fails by itself is not this run's to
-	# delete: kind removes what it created, and the failure may be that another
-	# run created a cluster with this name in the meantime.
-	created=1
+	# Another process may have claimed this name since the inventory check.
+	# Defer a pending signal until Kind's exit status establishes whether
+	# this run may safely delete the cluster.
+	starting=1
 	"$KIND" create cluster --name "$KIND_CLUSTER" --image "$KIND_NODE_IMAGE"
 	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		created=1
+	fi
+	starting=
+	if [ -n "$signal" ]; then
+		exit $((128 + signal))
+	fi
 	if [ "$rc" -ne 0 ]; then
-		created=
 		echo "error: could not create Kind cluster '$KIND_CLUSTER'." >&2
 		exit "$rc"
 	fi
