@@ -212,7 +212,7 @@ func (c Config) validate() error {
 		return errors.New("the selected commit must be a full lowercase Git SHA")
 	}
 	for _, image := range []string{c.OperatorImage, c.InstanceManagerImage} {
-		if !validPinnedImage(image, c.Commit) {
+		if !evidence.ValidPinnedImage(image, c.Commit) {
 			return errors.New("expected images must be pinned by digest or tagged main-<selected commit>")
 		}
 	}
@@ -262,30 +262,6 @@ func (c Config) validateBudgets() error {
 		return errors.New("the memory and CPU requests of a member must be positive")
 	}
 	return nil
-}
-
-// validPinnedImage validates the repository as well as the pin so malformed
-// references, including embedded credentials, cannot enter the evidence record.
-func validPinnedImage(image, commit string) bool {
-	var repository string
-	if before, digest, pinned := strings.Cut(image, "@sha256:"); pinned {
-		if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(digest) {
-			return false
-		}
-		repository = before
-	} else {
-		var pinned bool
-		repository, pinned = strings.CutSuffix(image, ":main-"+commit)
-		if !pinned {
-			return false
-		}
-	}
-	// A registry may include a numeric port. Repository path components follow
-	// Docker's lowercase naming convention and never contain colons or @ signs.
-	component := `[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*`
-	repositoryPattern := `^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?` +
-		component + `(?:/` + component + `)*$`
-	return regexp.MustCompile(repositoryPattern).MatchString(repository)
 }
 
 // Run uses the installed manager as read-only infrastructure. The only

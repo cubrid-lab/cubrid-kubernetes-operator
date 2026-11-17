@@ -88,12 +88,43 @@ available** lab window; do not count time without fault authority as idle
 capacity. Never optimize by shortening mandatory observations, weakening
 SQL/data checks, omitting cleanup or reducing the 24-hour soak.
 
-## Incremental automation boundary
+## Check a plan off-lab
 
-An optional preparation command may eventually validate input formats and
-generate a proposed command and evidence manifest **without contacting the
-lab**. A later reviewed dispatcher may use the existing private runner only
-with explicit approval, the campaign Lease and scenario-specific safeguards.
-Neither step exists merely because this document was merged. Track actual
-implementation and measured outcomes in [#946](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/946);
+From the selected Git checkout, run the optional preparation check:
+
+```sh
+go run ./test/lab/cmd/prepare -plan /path/to/local-plan.json
+```
+
+Supply the full checkout commit, the VM-lab lane, its complete set of
+registered result keys, the SHA-256-pinned image references, and an existing
+empty local directory for evidence. This example selects the installed
+Operator restart lane. Replace the placeholders with the candidate's
+actual values:
+
+```json
+{
+  "commit": "<full Git SHA>",
+  "lane": "lab-installed-ha-s06",
+  "scenarioKeys": [
+    "installed-ha-sql-smoke",
+    "installed-operator-failure-recovery-restart"
+  ],
+  "operatorImage": "registry.example/team/operator@sha256:<digest>",
+  "instanceManagerImage": "registry.example/team/member@sha256:<digest>",
+  "clientImage": "registry.example/team/client@sha256:<digest>",
+  "evidenceDirectory": "/path/to/empty-local-directory"
+}
+```
+
+The check reads the plan, local Git HEAD and directory entries. It checks
+image reference syntax and omits the image names and directory from output.
+Keep the plan local and pass credentials through the existing lab entry
+point. Image availability, evidence storage capacity, checkout cleanliness
+and the live cluster prerequisites still need their respective checks.
+Authorization and the campaign Lease are required for dispatch.
+
+A later reviewed dispatcher may use the private runner with explicit
+approval, the Lease and scenario-specific safeguards. Track preparation and
+measured outcomes in [#946](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/946).
 #122 owns lab integration and #126 owns candidate qualification.

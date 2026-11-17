@@ -735,12 +735,15 @@ func TestPinnedImageReferencesExcludeCredentials(t *testing.T) {
 		"repo:tag@sha256:" + digest,
 		"repo:dev",
 	} {
-		if validPinnedImage(image, commit) {
+		if evidence.ValidPinnedImage(image, commit) {
 			t.Errorf("unsupported or credential-bearing image was accepted: %s", image)
 		}
 	}
-	if !validPinnedImage("registry.example:5000/team/manager@sha256:"+digest, commit) {
+	if !evidence.ValidPinnedImage("registry.example:5000/team/manager@sha256:"+digest, commit) {
 		t.Fatal("valid digest-pinned image with a registry port was refused")
+	}
+	if !evidence.ValidPinnedImage("registry.example:5000/team/manager:main-"+commit, commit) {
+		t.Fatal("development image tagged with the selected commit was refused")
 	}
 }
 
