@@ -76,8 +76,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after LAB01: empty for none, operator-restart for S06 restart (deletes the manager Pod), "+
 			"vm-power-off for S04 power-off (powers off the VM of the master's node; vm-lab only), "+
 			"drain-slave-node or drain-master-node for S15 (cordons that member's node and evicts the run's Pods "+
-			"on it; vm-lab only), or partition-master-isolated or partition-slave-isolated for S07 (cuts the "+
-			"master, or a slave ranked below it, off the other members and the manager Pod; vm-lab only)")
+			"on it; vm-lab only), or partition-master-isolated, partition-slave-isolated or "+
+			"partition-higher-rank-isolated for S07 (cuts the master, a slave ranked below it, or a slave ranked "+
+			"above it, off the other members and the manager Pod; the last first moves the master off the first "+
+			"member by deleting its Pod when it is there; vm-lab only)")
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
 		"S04, S06 and S15: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.StringVar(&cfg.VMStopCommand, "vm-stop-command", "",

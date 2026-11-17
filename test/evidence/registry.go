@@ -224,6 +224,8 @@ var registry = scenarioRegistry{
 			partitionText+" - master cut off from the other members and the Operator"),
 		labResult("installed-ha-network-partition-slave-isolated", "S07/slave-isolated",
 			partitionText+" - lower-ranked slave cut off, a case that must not quarantine"),
+		labResult("installed-ha-network-partition-higher-rank-isolated", "S07/higher-rank-isolated",
+			partitionText+" - slave ranked above the master cut off from the other members and the Operator"),
 
 		labResult(backupCompleteKey, "S11/complete", backupText+" - complete"),
 		labResult("installed-backup-missing-destination", "S11/missing-destination",
@@ -280,6 +282,7 @@ var registry = scenarioRegistry{
 		labLane("lab-installed-ha-s15-drain-master-node", "installed-node-drain-master-node"),
 		labLane("lab-installed-ha-s07-master-isolated", "installed-ha-network-partition-master-isolated"),
 		labLane("lab-installed-ha-s07-slave-isolated", "installed-ha-network-partition-slave-isolated"),
+		labLane("lab-installed-ha-s07-higher-rank-isolated", "installed-ha-network-partition-higher-rank-isolated"),
 		backupLane("lab-installed-ha-s11"),
 		backupLane("lab-installed-ha-s11-missing-destination", "installed-backup-missing-destination"),
 		backupLane("lab-installed-ha-s11-denied-credentials", "installed-backup-denied-credentials"),

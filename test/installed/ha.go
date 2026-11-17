@@ -113,8 +113,9 @@ type HAConfig struct {
 	// the VM of the master's node, FaultDrainSlaveNode or
 	// FaultDrainMasterNode for S15, which cordons the node of a slave or of
 	// the master and evicts the run's Pods on it, or
-	// FaultPartitionMasterIsolated or FaultPartitionSlaveIsolated for S07,
-	// which cut the master, or a lower-ranked slave, off the network.
+	// FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated or
+	// FaultPartitionHigherRankIsolated for S07, which cut the master, a
+	// lower-ranked slave, or a slave that outranks the master off the network.
 	Fault string
 	// VMStopCommand, VMStartCommand and VMStatusCommand are the lab's own
 	// controls of a node's VM, for S04: each runs with sh -c on the run's
@@ -333,8 +334,9 @@ func (c HAConfig) validate() error {
 	}
 	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff && !c.drainFault() &&
 		!c.partitionFault() {
-		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s or %s", FaultOperatorRestart, FaultVMPowerOff,
-			FaultDrainSlaveNode, FaultDrainMasterNode, FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated)
+		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s, %s or %s", FaultOperatorRestart,
+			FaultVMPowerOff, FaultDrainSlaveNode, FaultDrainMasterNode, FaultPartitionMasterIsolated,
+			FaultPartitionSlaveIsolated, FaultPartitionHigherRankIsolated)
 	}
 	if err := c.validateS04(); err != nil {
 		return err
@@ -744,10 +746,12 @@ func faultLane(fault string) (string, evidence.Requirement, string) {
 			"member and Broker Pods on it are evicted, with every member's volume bound to its node (no spare " +
 			"node); no other S00-S15 qualification"
 	}
-	if fault == FaultPartitionMasterIsolated || fault == FaultPartitionSlaveIsolated {
+	if (HAConfig{Fault: fault}).partitionFault() {
 		variant := s07Variant(fault)
 		member := map[string]string{s07MasterIsolated: "the master",
-			s07SlaveIsolated: "a slave ranked below the master that is not the last resolved primary"}[variant]
+			s07SlaveIsolated: "a slave ranked below the master that is not the last resolved primary",
+			s07HigherRankIsolated: "a slave ranked above the master, once the master was moved off the first " +
+				"member if it was there,"}[variant]
 		return s07LanePrefix + variant, evidence.Requirement{ID: s07ID, Variant: variant}, "Three-member HA " +
 			"cluster against an installed Operator, then S07 " + variant + ": " + member + " is cut off both ways " +
 			"from the other members and the manager Pod by network faults in the members' Pods, and the write " +

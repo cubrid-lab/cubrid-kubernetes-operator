@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,14 @@ func TestS07PickTarget(t *testing.T) {
 		{s07SlaveIsolated, m1, []string{m0, m2}, m1, m2, ""},
 		{s07SlaveIsolated, m2, []string{m0, m1}, m2, "", "control case cannot run"},
 		{s07SlaveIsolated, m1, []string{m0, m2}, m2, "", "control case cannot run"},
+		// A member that outranks the master is cut off, the highest-ranked
+		// one when two do, so that ADR-0005 section 8's rule for an
+		// unverified member of higher rank applies; the master must be the
+		// last resolved primary, so the rank alone makes the trigger.
+		{s07HigherRankIsolated, m1, []string{m0, m2}, m1, m0, ""},
+		{s07HigherRankIsolated, m2, []string{m1, m0}, m2, m0, ""},
+		{s07HigherRankIsolated, m1, []string{m0, m2}, m0, "", "not the master"},
+		{s07HigherRankIsolated, m0, []string{m1, m2}, m0, "", "no slave outranks the master"},
 	}
 	for _, tc := range tests {
 		got, err := s07PickTarget(tc.variant, tc.master, tc.slaves, tc.lrp)
@@ -123,6 +132,199 @@ func TestS07PickTarget(t *testing.T) {
 			t.Errorf("%s with master %s, slaves %v, last resolved %q: %q, %v; want %q, %q", tc.variant, tc.master,
 				tc.slaves, tc.lrp, got, err, tc.want, tc.err)
 		}
+	}
+}
+
+// When the master is the first member no slave outranks it, and the run must
+// move the master before it can pick a member to cut off; any other refusal
+// blocks the variant.
+func TestS07PickTargetAsksToMoveTheMasterOffTheFirstMember(t *testing.T) {
+	_, err := s07PickTarget(s07HigherRankIsolated, m0, []string{m1, m2}, m0)
+	if !errors.Is(err, errS07MasterOnFirstMember) {
+		t.Errorf("master on the first member: %v, want errS07MasterOnFirstMember", err)
+	}
+	_, err = s07PickTarget(s07HigherRankIsolated, m1, []string{m0, m2}, m0)
+	if err == nil || errors.Is(err, errS07MasterOnFirstMember) {
+		t.Errorf("last resolved primary not the master: %v, want a refusal that moves nothing", err)
+	}
+}
+
+// The cut of a member that outranks the master is its own fault, variant and
+// lane, and it is not the control: a trigger is expected.
+func TestS07HigherRankIsolatedIsATriggerVariant(t *testing.T) {
+	cfg := HAConfig{Fault: FaultPartitionHigherRankIsolated}
+	if !cfg.partitionFault() || s07Variant(cfg.Fault) != s07HigherRankIsolated {
+		t.Fatalf("partition %v, variant %q", cfg.partitionFault(), s07Variant(cfg.Fault))
+	}
+	lane, requirement, _ := faultLane(cfg.Fault)
+	if lane != "lab-installed-ha-s07-higher-rank-isolated" || requirement.Variant != s07HigherRankIsolated {
+		t.Errorf("lane %q, requirement %+v", lane, requirement)
+	}
+	for _, fault := range []string{FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated} {
+		if got := s07Variant(fault); got == s07HigherRankIsolated {
+			t.Errorf("%s now records under %s", fault, got)
+		}
+	}
+}
+
+// s07MoveFixture is a formed cluster whose master is the first member. When
+// the run deletes a member Pod the fake API server checks the deletion's UID
+// precondition and that it is graceful, replaces the Pod with a new UID, and
+// calls failover, which plays what CUBRID and the Operator then do.
+func s07MoveFixture(t *testing.T, failover func(f *haFixture, c client.WithWatch)) (*haRun, *haFixture) {
+	t.Helper()
+	cfg := testHAConfig(t)
+	cfg.Poll = 5 * time.Millisecond
+	f := newHAFixture(t, cfg)
+	f.primary = m0
+	f.roles = map[string]string{m0: roleMaster, m1: roleSlave, m2: roleSlave}
+	f.podDeleted = func(ctx context.Context, c client.WithWatch, pod *corev1.Pod, opts ...client.DeleteOption) error {
+		current := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+			return err
+		}
+		options := (&client.DeleteOptions{}).ApplyOptions(opts)
+		if options.Preconditions == nil || options.Preconditions.UID == nil ||
+			*options.Preconditions.UID != current.UID {
+			t.Errorf("the master Pod %s was deleted without its UID precondition", pod.Name)
+		}
+		if options.GracePeriodSeconds != nil {
+			t.Errorf("the master Pod %s was deleted with a grace period of %d s, not gracefully", pod.Name,
+				*options.GracePeriodSeconds)
+		}
+		if err := c.Delete(ctx, current); err != nil {
+			return err
+		}
+		replacement := current.DeepCopy()
+		replacement.ResourceVersion, replacement.UID = "", current.UID+"-replaced"
+		if err := c.Create(ctx, replacement); err != nil {
+			return err
+		}
+		failover(f, c)
+		return nil
+	}
+	h := &haRun{Runner: &f.runner, cfg: cfg, members: testS07Members,
+		guard: func(context.Context) error { return nil }}
+	if _, err := h.createCluster(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	setS07Primary(t, f, f.store, m0)
+	return h, f
+}
+
+// setS07Primary writes status.currentPrimary and lastResolvedPrimary as the
+// Operator would once it resolved primary.
+func setS07Primary(t *testing.T, f *haFixture, c client.Client, primary string) {
+	t.Helper()
+	cluster := &databasev1alpha1.CubridCluster{}
+	ctx := context.Background()
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Status.CurrentPrimary, cluster.Status.LastResolvedPrimary = primary, primary
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Before it cuts off a member that outranks the master, the run moves the
+// master off the first member by a graceful deletion of its Pod; CUBRID, not
+// the run, picks the new master. The run goes on only once another member is
+// the active master, the first member is back in a new Pod as a slave, and
+// the cluster names the new master as its current and last resolved primary.
+func TestMoveS07MasterWaitsForCUBRIDToFailOver(t *testing.T) {
+	h, f := s07MoveFixture(t, func(f *haFixture, c client.WithWatch) {
+		f.mu.Lock()
+		f.roles[m0], f.roles[m1] = roleSlave, roleMaster
+		f.mu.Unlock()
+		setS07Primary(t, f, c, m1)
+	})
+	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
+	slaves, err := h.moveS07Master(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("the move was refused: %v", err)
+	}
+	if rec.Master != m1 || len(slaves) != 2 || !slices.Contains(slaves, m0) || !slices.Contains(slaves, m2) {
+		t.Errorf("master %s and slaves %v after the move, want %s with %s and %s", rec.Master, slaves, m1, m0, m2)
+	}
+	move := rec.MasterMove
+	if move == nil || move.From != m0 || move.FromUID != m0 || move.To != m1 || move.DeletedAt == nil ||
+		move.SettledAt == nil || move.Unmet != "" {
+		t.Fatalf("move %+v", move)
+	}
+	var first *imageIdentity
+	for i := range rec.MembersBefore {
+		if rec.MembersBefore[i].Pod == m0 {
+			first = &rec.MembersBefore[i]
+		}
+	}
+	if len(rec.MembersBefore) != 3 || first == nil || first.UID != m0+"-replaced" {
+		t.Errorf("members before the cut %+v, want the first member's new Pod", rec.MembersBefore)
+	}
+	if !slices.Contains(f.writes, "delete-member-pod") {
+		t.Errorf("writes %v, want the master Pod deleted", f.writes)
+	}
+}
+
+// When the first member comes back as the master, or CUBRID does not fail
+// over, the master did not move: the run refuses to pick a member at the
+// bound and says what did not hold, and deletes no other Pod.
+func TestMoveS07MasterRefusesWhenTheFirstMemberStaysMaster(t *testing.T) {
+	old := s07MoveBound
+	s07MoveBound = 100 * time.Millisecond
+	t.Cleanup(func() { s07MoveBound = old })
+	h, f := s07MoveFixture(t, func(*haFixture, client.WithWatch) {})
+	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
+	_, err := h.moveS07Master(context.Background(), rec)
+	if err == nil || !strings.Contains(err.Error(), "did not move") {
+		t.Fatalf("the move with the first member still master: %v", err)
+	}
+	if rec.Master != m0 || rec.MasterMove == nil || rec.MasterMove.SettledAt != nil ||
+		!strings.Contains(rec.MasterMove.Unmet, m0) {
+		t.Errorf("master %s, move %+v", rec.Master, rec.MasterMove)
+	}
+	deletes := 0
+	for _, w := range f.writes {
+		if w == "delete-member-pod" {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Errorf("%d member Pod deletions, want 1", deletes)
+	}
+}
+
+// The deletion of the master's Pod can itself start a write quarantine, as
+// #938 saw on Kind. The cut must start from a cluster with none in force, so
+// the move waits for its release and blocks S07 when it stays, even with the
+// conditions reported True.
+func TestMoveS07MasterWaitsForAQuarantineItStarted(t *testing.T) {
+	old := s07MoveBound
+	s07MoveBound = 100 * time.Millisecond
+	t.Cleanup(func() { s07MoveBound = old })
+	h, _ := s07MoveFixture(t, func(f *haFixture, c client.WithWatch) {
+		f.mu.Lock()
+		f.roles[m0], f.roles[m1] = roleSlave, roleMaster
+		f.mu.Unlock()
+		setS07Primary(t, f, c, m1)
+		cluster := &databasev1alpha1.CubridCluster{}
+		ctx := context.Background()
+		if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+			t.Fatal(err)
+		}
+		cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: "g1",
+			Reason: databasev1alpha1.WriteQuarantinedMasterChanged}
+		if err := c.Update(ctx, cluster); err != nil {
+			t.Fatal(err)
+		}
+	})
+	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m0}
+	_, err := h.moveS07Master(context.Background(), rec)
+	if err == nil || !strings.Contains(err.Error(), "WriteQuarantinedMasterChanged") {
+		t.Fatalf("the move with a quarantine in force: %v", err)
+	}
+	if rec.MasterMove.SettledAt != nil {
+		t.Errorf("move %+v settled with a quarantine in force", rec.MasterMove)
 	}
 }
 

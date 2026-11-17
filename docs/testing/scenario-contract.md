@@ -215,6 +215,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s15-drain-master-node` | The installed-Operator HA command with `-fault drain-master-node`, at the `vm-lab` level only ([details](installed-ha.md#s15-node-drain)) | LAB01, then S15 (`drain-master-node`) on the same cluster, as `drain-slave-node` with the master's node, which must also end as a graceful deletion of the master's Pod does | none |
 | `lab-installed-ha-s07-master-isolated` | The installed-Operator HA command with `-fault partition-master-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`master-isolated`) on the same cluster: the master is cut off both ways from the other members and the manager Pod by network faults in the members' Pods, the write quarantine, SQL through new and already-open connections to the read-write Service, the release and every member's rows are recorded, and the fault is removed | none |
 | `lab-installed-ha-s07-slave-isolated` | The installed-Operator HA command with `-fault partition-slave-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`slave-isolated`) on the same cluster, as `master-isolated` with a slave that ranks below the master and is not the last resolved primary: the intentional non-trigger, which must start no quarantine | none |
+| `lab-installed-ha-s07-higher-rank-isolated` | The installed-Operator HA command with `-fault partition-higher-rank-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`higher-rank-isolated`) on the same cluster, as `master-isolated` with a slave that ranks above the master, the master being the last resolved primary; when the master is the first member, the run first moves it off by a graceful deletion of its Pod and lets CUBRID fail over | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
@@ -2384,8 +2385,9 @@ it needs more.
 - **Level:** VM lab for the verdict. A Kind run is allowed as an earlier
   signal and is reported at its own level.
 - **Variants:** `master-isolated` (the master cannot reach either slave or the
-  Operator), `slave-isolated`, and `asymmetric` (traffic is dropped in one
-  direction only).
+  Operator), `slave-isolated`, `higher-rank-isolated` (a slave that ranks
+  above the master cannot reach the other members or the Operator), and
+  `asymmetric` (traffic is dropped in one direction only).
 - **Fault confirmed by:** a probe sent across the partition is dropped, in
   each direction the variant names, and the paths the variant leaves open
   are probed open ([network faults](network-faults.md)).
@@ -2465,10 +2467,16 @@ it needs more.
   no numeric bound for it. Missing or unordered measurements remain unknown,
   never zero. Direct database connections and the interval when the Operator
   cannot observe or act retain the ADR's stated limits.
-- **VM-lab lane:** the installed HA command runs `master-isolated` and the
-  `slave-isolated` control on the lab (`lab-installed-ha-s07-master-isolated`
-  and `lab-installed-ha-s07-slave-isolated`,
-  [details](installed-ha.md#s07-network-partition)). It cuts the member off
+- **VM-lab lane:** the installed HA command runs `master-isolated`, the
+  `slave-isolated` control and `higher-rank-isolated` on the lab
+  (`lab-installed-ha-s07-master-isolated`,
+  `lab-installed-ha-s07-slave-isolated` and
+  `lab-installed-ha-s07-higher-rank-isolated`,
+  [details](installed-ha.md#s07-network-partition)). `higher-rank-isolated`
+  cuts off a slave that outranks the master, the row "an unverified member
+  that outranks it" above; when the master is the first member, the run
+  first moves it by a graceful deletion of its Pod and lets CUBRID fail over.
+  It cuts the member off
   with the faults of [network faults](network-faults.md), reads every
   member's role itself to decide whether the rows above require a
   quarantine, records detection, the Broker scale-down, the Broker Pods'
@@ -2481,6 +2489,8 @@ it needs more.
   ([first lab runs](installed-ha.md#first-lab-runs)): the control started no
   quarantine, and a 2-minute symmetric cut of the master produced no second
   active master, so the quarantine triggers still need another fault shape.
+  `higher-rank-isolated` was added for that, from POC-50 and POC-51, and has
+  not run on the lab yet.
 
 ### S08: replication lag followed by repeated failures
 

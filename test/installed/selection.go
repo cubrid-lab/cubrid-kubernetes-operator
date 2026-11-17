@@ -37,6 +37,7 @@ var haChecks = map[string]func(*HAConfig){
 	"S15/drain-master-node":                    func(c *HAConfig) { c.Fault = FaultDrainMasterNode },
 	"S07/master-isolated":                      func(c *HAConfig) { c.Fault = FaultPartitionMasterIsolated },
 	"S07/slave-isolated":                       func(c *HAConfig) { c.Fault = FaultPartitionSlaveIsolated },
+	"S07/higher-rank-isolated":                 func(c *HAConfig) { c.Fault = FaultPartitionHigherRankIsolated },
 	"S11/complete":                             func(*HAConfig) {},
 	"S11/missing-destination":                  func(c *HAConfig) { c.BackupMissingDestination = true },
 	"S11/denied-credentials":                   func(c *HAConfig) { c.BackupDeniedCredentials = true },

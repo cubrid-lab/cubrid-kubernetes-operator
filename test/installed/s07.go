@@ -51,13 +51,21 @@ const (
 	// section 8 expects to quarantine the read-write path once another member
 	// is an active master; the second cuts off a slave that ranks below the
 	// master and is not the last resolved primary, which must not.
-	FaultPartitionMasterIsolated = "partition-master-isolated"
-	FaultPartitionSlaveIsolated  = "partition-slave-isolated"
-	s07ID                        = "S07"
-	s07LanePrefix                = "lab-installed-ha-s07-"
+	// FaultPartitionHigherRankIsolated cuts off, the same way, a slave that
+	// ranks above the master (a lower ordinal, earlier in ha_node_list),
+	// which ADR-0005 section 8 expects to quarantine while the master stays
+	// the one active master the Operator can reach. When the master is the
+	// first member no slave outranks it, so the run first moves the master
+	// off it by deleting its Pod and letting CUBRID fail over.
+	FaultPartitionMasterIsolated     = "partition-master-isolated"
+	FaultPartitionSlaveIsolated      = "partition-slave-isolated"
+	FaultPartitionHigherRankIsolated = "partition-higher-rank-isolated"
+	s07ID                            = "S07"
+	s07LanePrefix                    = "lab-installed-ha-s07-"
 	// The contract's variants the faults are recorded under.
-	s07MasterIsolated = "master-isolated"
-	s07SlaveIsolated  = "slave-isolated"
+	s07MasterIsolated     = "master-isolated"
+	s07SlaveIsolated      = "slave-isolated"
+	s07HigherRankIsolated = "higher-rank-isolated"
 	// quarantineLimitName and partitionDurationName are the contract's
 	// limits of S07.
 	quarantineLimitName   = "quarantine_limit"
@@ -119,17 +127,29 @@ var (
 	// s07HealthWindow is how long, after the data check, the run reads
 	// whether the cluster reports Ready with no quarantine.
 	s07HealthWindow = 30 * time.Second
+	// s07MoveBound bounds the move of the master off the first member before
+	// higher-rank-isolated: the graceful stop of the deleted Pod, CUBRID's
+	// failover, the new Pod's start and its return as a slave.
+	s07MoveBound = 10 * time.Minute
 )
+
+// errS07MasterOnFirstMember is why higher-rank-isolated cannot pick a member
+// to cut off yet: the master is the first member, so no slave outranks it.
+var errS07MasterOnFirstMember = errors.New("no slave outranks the master")
 
 // partitionFault reports whether the run's fault is an S07 partition.
 func (c HAConfig) partitionFault() bool {
-	return c.Fault == FaultPartitionMasterIsolated || c.Fault == FaultPartitionSlaveIsolated
+	return c.Fault == FaultPartitionMasterIsolated || c.Fault == FaultPartitionSlaveIsolated ||
+		c.Fault == FaultPartitionHigherRankIsolated
 }
 
 // s07Variant is the contract's variant of an S07 fault.
 func s07Variant(fault string) string {
-	if fault == FaultPartitionSlaveIsolated {
+	switch fault {
+	case FaultPartitionSlaveIsolated:
 		return s07SlaveIsolated
+	case FaultPartitionHigherRankIsolated:
+		return s07HigherRankIsolated
 	}
 	return s07MasterIsolated
 }
@@ -274,6 +294,9 @@ type s07Record struct {
 	OperatorUID   string          `json:"operatorPodUID"`
 	OperatorIP    string          `json:"operatorPodIP"`
 	MembersBefore []imageIdentity `json:"membersBefore"`
+	// MasterMove is the move of the master off the first member that
+	// higher-rank-isolated made before it picked the member to cut off.
+	MasterMove *s07MasterMove `json:"masterMove,omitempty"`
 	// OperatorChangedAt is when the run first saw the manager Pod replaced,
 	// gone or with another IP, and OperatorChange how; from then on no
 	// trigger is counted.
@@ -388,6 +411,18 @@ type s07Record struct {
 	cut *s07CutFile
 }
 
+// s07MasterMove records how the run moved the master off the first member:
+// the master and its Pod UID before, when the Pod was deleted, the new master
+// and when every check held; Unmet is the last check that did not hold.
+type s07MasterMove struct {
+	From      string     `json:"from"`
+	FromUID   string     `json:"fromPodUID"`
+	DeletedAt *time.Time `json:"podDeletedAt,omitempty"`
+	To        string     `json:"to,omitempty"`
+	SettledAt *time.Time `json:"settledAt,omitempty"`
+	Unmet     string     `json:"unmet,omitempty"`
+}
+
 func (rec *s07Record) note(kind, detail string) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -453,15 +488,32 @@ func s07Trigger(roles map[string]string, members, unreachable []string, lastReso
 // s07PickTarget picks the member to cut off: the master for
 // master-isolated, which must be the last resolved primary; for
 // slave-isolated a slave that ranks below the master and is not the last
-// resolved primary, the intentional non-trigger. An error says why the
-// variant cannot run on this cluster.
+// resolved primary, the intentional non-trigger; for higher-rank-isolated
+// the highest-ranked slave that outranks the master, which must be the last
+// resolved primary so that the rank alone makes the trigger. An error says
+// why the variant cannot run on this cluster; errS07MasterOnFirstMember says
+// that higher-rank-isolated can once the master has moved.
 func s07PickTarget(variant, master string, slaves []string, lastResolved string) (string, error) {
-	if variant == s07MasterIsolated {
+	switch variant {
+	case s07MasterIsolated:
 		if lastResolved != master {
 			return "", fmt.Errorf("status.lastResolvedPrimary is %q, not the master %s: the cut would not be of the "+
 				"last resolved primary", lastResolved, master)
 		}
 		return master, nil
+	case s07HigherRankIsolated:
+		if lastResolved != master {
+			return "", fmt.Errorf("status.lastResolvedPrimary is %q, not the master %s: a trigger could come from "+
+				"the last resolved primary and not from the rank alone", lastResolved, master)
+		}
+		for _, s := range slices.SortedFunc(slices.Values(slaves), func(a, b string) int {
+			return memberOrdinal(a) - memberOrdinal(b)
+		}) {
+			if memberOrdinal(s) >= 0 && memberOrdinal(s) < memberOrdinal(master) {
+				return s, nil
+			}
+		}
+		return "", fmt.Errorf("%w %s among %v", errS07MasterOnFirstMember, master, slaves)
 	}
 	for _, s := range slices.Sorted(slices.Values(slaves)) {
 		if s != lastResolved && memberOrdinal(s) > memberOrdinal(master) && memberOrdinal(master) >= 0 {
@@ -886,14 +938,23 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 
 // prepareS07 picks the member to cut off and builds the partition: that
 // member cut both ways from every other member and from the manager Pod,
-// the other members still reaching each other. Nothing is changed yet.
+// the other members still reaching each other. Nothing is cut yet; for
+// higher-rank-isolated with the master on the first member, the master is
+// moved first.
 func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Partition, error) {
+	slaves := h.rec.StartingState.Slaves
+	if _, err := s07PickTarget(rec.Variant, rec.Master, slaves, rec.Master); errors.Is(err,
+		errS07MasterOnFirstMember) {
+		if slaves, err = h.moveS07Master(ctx, rec); err != nil {
+			return nil, err
+		}
+	}
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
 		return nil, err
 	}
 	rec.LastResolvedPrimary = cluster.Status.LastResolvedPrimary
-	target, err := s07PickTarget(rec.Variant, rec.Master, h.rec.StartingState.Slaves, rec.LastResolvedPrimary)
+	target, err := s07PickTarget(rec.Variant, rec.Master, slaves, rec.LastResolvedPrimary)
 	if err != nil {
 		return nil, err
 	}
@@ -1928,3 +1989,99 @@ func errString(err error) string {
 }
 
 var _ faults.Fault = (*netfault.Partition)(nil)
+
+// moveS07Master moves the master off the first member before
+// higher-rank-isolated, as POC-51 did on Kind: it deletes the master's Pod
+// gracefully, with its UID as a precondition, so that its preStop stops
+// heartbeat and CUBRID, not the run, promotes another member. Within
+// s07MoveBound it waits until another member is the active master, the
+// deleted member is back in a new Pod as a slave, every member Pod is Ready,
+// the starting conditions hold and status names the new master as current
+// and last resolved primary. It returns the slaves then; otherwise an error
+// that names what did not hold, which blocks S07 before anything is cut.
+func (h *haRun) moveS07Master(ctx context.Context, rec *s07Record) ([]string, error) {
+	move := &s07MasterMove{From: rec.Master}
+	rec.MasterMove = move
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: move.From}, pod); err != nil {
+		return nil, fmt.Errorf("read the master Pod %s: %w", move.From, err)
+	}
+	uid := pod.UID
+	move.FromUID = string(uid)
+	if err := h.Client.Delete(ctx, pod, client.Preconditions{UID: &uid}); err != nil {
+		return nil, fmt.Errorf("delete the master Pod %s to move the master off it: %w", move.From, err)
+	}
+	deleted := time.Now().UTC()
+	move.DeletedAt = &deleted
+	rec.note("master_pod_deleted", move.From)
+	deadline := time.Now().Add(s07MoveBound)
+	for {
+		state, members, unmet, err := h.s07MoveUnmet(ctx, move)
+		if err != nil {
+			return nil, err
+		}
+		if unmet == "" {
+			settled := time.Now().UTC()
+			move.To, move.SettledAt, move.Unmet = state.Master, &settled, ""
+			rec.Master, rec.MembersBefore = state.Master, members
+			rec.note("master_moved", move.From+" -> "+state.Master)
+			return state.Slaves, nil
+		}
+		move.Unmet = unmet
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("the master did not move off %s within %s: %s", move.From, s07MoveBound, unmet)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+}
+
+// s07MoveUnmet reads whether the master has moved off move.From: what does
+// not hold yet, or the roles and the members' identities once all does.
+func (h *haRun) s07MoveUnmet(ctx context.Context, move *s07MasterMove) (*startingState, []imageIdentity, string,
+	error) {
+	pod := &corev1.Pod{}
+	err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: move.From}, pod)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, nil, move.From + " has no Pod yet", nil
+	case err != nil && retryable(err):
+		return nil, nil, move.From + unread + err.Error(), nil
+	case err != nil:
+		return nil, nil, "", err
+	case string(pod.UID) == move.FromUID:
+		return nil, nil, move.From + " still has the Pod that was deleted", nil
+	}
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		if retryable(err) {
+			return nil, nil, "the HA cluster" + unread + err.Error(), nil
+		}
+		return nil, nil, "", err
+	}
+	members, unmet, err := h.memberIdentities(ctx, cluster)
+	if err != nil || unmet != "" {
+		return nil, nil, unmet, err
+	}
+	state, unmet, err := h.roles(ctx)
+	switch {
+	case err != nil || unmet != "":
+		return nil, nil, unmet, err
+	case state.Master == move.From:
+		return nil, nil, "CUBRID reports " + move.From + " as the master again", nil
+	}
+	if unmet, err := clusterReady(cluster); err != nil || unmet != "" {
+		return nil, nil, unmet, err
+	}
+	if q := cluster.Status.WriteQuarantine; q != nil {
+		return nil, nil, fmt.Sprintf("a write quarantine (%s) is in force", q.Reason), nil
+	}
+	if s := cluster.Status; s.CurrentPrimary != state.Master || s.LastResolvedPrimary != state.Master {
+		return nil, nil, fmt.Sprintf("CUBRID reports the master %s, status.currentPrimary %q and "+
+			"lastResolvedPrimary %q", state.Master, s.CurrentPrimary, s.LastResolvedPrimary), nil
+	}
+	return state, members, "", nil
+}

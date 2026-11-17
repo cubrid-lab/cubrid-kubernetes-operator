@@ -12,8 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S15
-`drain-slave-node` and `drain-master-node`, S07 `master-isolated` and
-`slave-isolated`, S11 `complete`,
+`drain-slave-node` and `drain-master-node`, S07 `master-isolated`,
+`slave-isolated` and `higher-rank-isolated`, S11 `complete`,
 `missing-destination`, `denied-credentials`, `signature-mismatch`,
 `interrupted-upload`, `operator-restart`, `instance-manager-restart` and
 `overlapping`, and S12
@@ -859,14 +859,15 @@ status.
 
 ## S07 network partition
 
-With `-fault partition-master-isolated` or `-fault partition-slave-isolated`
-the run goes on after LAB01 passed, on the same cluster, with S07 of the
-scenario contract: one member is cut off, both ways, from the other two
-members and from the manager Pod, and the run records what the Operator's
-write quarantine (ADR-0005 section 8) does with real SQL. The lane is then
-`lab-installed-ha-s07-master-isolated` or
-`lab-installed-ha-s07-slave-isolated`, and it requires both LAB01 and S07
-with that variant. It runs on the `vm-lab` level only.
+With `-fault partition-master-isolated`, `-fault partition-slave-isolated`
+or `-fault partition-higher-rank-isolated` the run goes on after LAB01
+passed, on the same cluster, with S07 of the scenario contract: one member is
+cut off, both ways, from the other two members and from the manager Pod, and
+the run records what the Operator's write quarantine (ADR-0005 section 8)
+does with real SQL. The lane is then `lab-installed-ha-s07-master-isolated`,
+`lab-installed-ha-s07-slave-isolated` or
+`lab-installed-ha-s07-higher-rank-isolated`, and it requires both LAB01 and
+S07 with that variant. It runs on the `vm-lab` level only.
 
 - `master-isolated` cuts off the master, which is the last resolved primary.
   Once another member is an active master that the Operator can reach, the
@@ -878,11 +879,71 @@ with that variant. It runs on the `vm-lab` level only.
   not `status.lastResolvedPrimary`. While the master stays the one active
   master the Operator can reach, no quarantine may start. A cluster with no
   such slave, as when the master is the last member, blocks the variant.
+- `higher-rank-isolated` cuts off a slave that ranks above the master (a
+  lower ordinal, earlier in `ha_node_list`), the highest-ranked one when two
+  do; the master must be `status.lastResolvedPrimary`. While the master stays
+  the one active master the Operator can reach, the cut-off member is an
+  unverified member that outranks it, and the ADR requires a
+  `WriteQuarantinedMemberUnverified` quarantine. When the master is the first
+  member, no slave outranks it, so the run first moves the master, as
+  described below.
 
-The lane does not cover the contract's `asymmetric` variant, a cut-off member
-of higher rank than the master, the replication lag of S08, or the
-persistence, Operator-restart, release-token, out-of-service-taint and
-return-to-service checks of S07. It makes no manual release.
+The lane does not cover the contract's `asymmetric` variant, the replication
+lag of S08, or the persistence, Operator-restart, release-token,
+out-of-service-taint and return-to-service checks of S07. It makes no manual
+release.
+
+**Why `higher-rank-isolated`.** The first `master-isolated` run on the lab
+(below) produced no quarantine trigger, and the POCs explain why a cut of a
+master that is also the first member is unlikely to produce one:
+
+- In POC-40 the VM lab cut the first member, as master, symmetrically for up
+  to 948 seconds and, in two runs, in one direction only (the master's
+  packets to the slaves dropped). In all eight runs `ha-1` called itself
+  master but its server stayed `registered_and_to_be_active`, the old master
+  stayed the one active server, and the Brokers stayed on it. POC-41 saw the
+  same with only the heartbeat port cut. So a longer hold or a one-way cut of
+  that master was already tried, without a second active master. POC-40 also
+  set `ha_ping_hosts` by hand, and the isolated master did not demote.
+- In POC-50 (Docker), when the cut member ranked above the active master,
+  the cut member promoted itself in every trial in which all its packets were
+  dropped (10 of 10, 10 to 60 seconds), and both members acknowledged writes
+  in 3 of those 10. In POC-51 (Kind, with the Operator and Brokers), one of
+  three such cuts, of the heartbeat port only, left the cut member an active
+  master for 59 seconds, and the conditions named two masters; in the two
+  cuts of every packet the cut member, far behind the master, stayed
+  `registered_and_to_be_active`.
+
+So the variant cuts off a member that outranks the master. ADR-0005's rule
+for an unverified member of higher rank applies as soon as the Operator
+cannot reach that member, whatever CUBRID then does; whether the cut member
+also becomes a second active server on the VM lab is not known and is
+recorded (`targetClaimedActiveMasterAt`, `twoActiveMasterClaimsAt`). Docker
+and Kind are no evidence of VM behavior.
+
+A longer hold of `master-isolated` stays possible with `-partition-hold`.
+Whether a hold longer than POC-40's 948 seconds lets the promoted member's
+server become active, for example once the old master's TCP connections
+time out, is a hypothesis that no run has tested.
+
+**Moving the master.** For `higher-rank-isolated` with the master on the
+first member, before any client starts and before anything is cut, the run
+deletes the master's Pod with its UID as a precondition and its own grace
+period, so that the Pod's preStop stops heartbeat and CUBRID promotes
+another member, as POC-51 did on Kind; the run promotes nothing. Within
+10 minutes it waits until another member is the active master, the deleted
+member is back in a new Pod as a slave, every member Pod is Ready, the
+starting conditions hold, no write quarantine is in force, and
+`status.currentPrimary` and `status.lastResolvedPrimary` name the new
+master. A quarantine that the move itself started (as #938 saw after a
+graceful master Pod deletion on Kind) must therefore be released within that
+time. Otherwise S07 is blocked and nothing is cut. The move is recorded under `masterMove` in
+`record.json`: the master and Pod UID it started from, when the Pod was
+deleted, the new master, when every check held, and the last check that did
+not. Whether the member that returned has applied every row of the new
+master when the cut starts is not checked; POC-50 and POC-51 tied differing
+rows to a cut member that was behind, and the data check after the cut
+reports such rows.
 
 **The cut.** The run uses the partition of
 [network faults](network-faults.md) as `bin/netfault -variants isolate` does:
@@ -941,12 +1002,31 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   [-quarantine-limit <duration>] [-partition-duration <duration>]'
 ```
 
-Use `-fault partition-slave-isolated` for the control. `-check
-installed-ha-network-partition-master-isolated` and `-check
-installed-ha-network-partition-slave-isolated` select the same runs.
+Use `-fault partition-slave-isolated` for the control. The cut of a member
+that outranks the master, with the master moved off the first member first
+when it is there:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated [-partition-hold 2m] \
+  [-quarantine-limit <duration>] [-partition-duration <duration>]'
+```
+
+A longer hold of the master's cut, to test the hypothesis above, is the
+same `master-isolated` command with a hold past POC-40's 948 seconds, for
+example `-partition-hold 20m -timeout 60m`: the run's `-timeout` (default
+30 minutes) covers LAB01, the hold and the settle after it. The move of the
+master in `higher-rank-isolated` takes up to 10 minutes of it too.
+
+`-check installed-ha-network-partition-master-isolated`, `-check
+installed-ha-network-partition-slave-isolated` and `-check
+installed-ha-network-partition-higher-rank-isolated` select the same runs.
 
 1. The run reads `status.lastResolvedPrimary` and picks the member to cut
-   off as above. It reads each node's clock as S04 does, starts one client,
+   off as above; for `higher-rank-isolated` it first moves the master off
+   the first member when it is there (above). It reads each node's clock as
+   S04 does, starts one client,
    `s07open`, that holds a single application connection to `<cluster>-rw`
    and stops at its first error (`APP_RECONNECT_POLICY=stop-after-error`),
    and waits for its first ten acknowledgements. It then starts writes
@@ -1042,8 +1122,9 @@ What it judges, in this order:
    answered as an active master before it was seen.
 3. **Blocked, never passed:** a step of the fault flow still running after
    its limit (nothing more is observed); the cut not confirmed or not held;
-   the manager Pod changed; for `master-isolated`, no trigger seen while the
-   cut held (the run cannot say a quarantine was required, and records
+   the manager Pod changed; for `higher-rank-isolated`, a master that did not
+   move off the first member (nothing is cut then); for `master-isolated` and
+   `higher-rank-isolated`, no trigger seen while the cut held (the run cannot say a quarantine was required, and records
    whether one started); any other quarantine in the control, which may be
    legitimate and is recorded with why it was not counted, such as two
    masters after the heal (`WriteQuarantinedMultipleMasters`), a quarantine
@@ -1101,7 +1182,8 @@ time that was not seen is `unknown`.
 
 Evidence, under `S07/<variant>/`:
 
-- `record.json`: the member cut off and why, the manager Pod, the clock
+- `record.json`: the member cut off and why, the move of the master before
+  it (`masterMove`, `higher-rank-isolated` only), the manager Pod, the clock
   offsets, every sweep with each member's role, the members the Operator
   could not reach and the trigger, the quarantine's reasons and revisions,
   the release, each change of the conditions and of the read-write path,
@@ -1118,7 +1200,8 @@ Evidence, under `S07/<variant>/`:
 Beyond LAB01's, the account needs in the run namespace `update` on
 `pods/ephemeralcontainers` and `create` on `pods/exec` (for the faults), and
 `list` on EndpointSlices; and `get` on the manager Pod in the Operator's
-namespace.
+namespace. `higher-rank-isolated` also needs `delete` on Pods in the run
+namespace, to move the master.
 
 ### First lab runs
 
@@ -1138,10 +1221,9 @@ on the lab runner, in `partition-slave-isolated-76ae5e2-20261117T062313` and
 - `master-isolated`: blocked, no trigger seen. In the 2-minute symmetric cut
   of the master no second member became an active master: `ha-0` stayed the
   active master, and no acknowledged row was missing afterwards. Rules 1 and
-  2 of the quarantine were therefore not exercised on this lab. They need
-  another fault shape, such as a longer hold, an asymmetric cut, or cutting
-  off a member of higher rank than the master when the master is not the
-  first member; the lane does not implement one yet.
+  2 of the quarantine were therefore not exercised on this lab. The
+  `higher-rank-isolated` variant was added for that, with the reasons above;
+  it has not run on the lab yet.
 
 Beyond these runs, the unit tests use fake clients and a model of the
 members' network namespaces; they are no evidence of CUBRID's or the
@@ -4863,7 +4945,8 @@ and S12 variant other than `complete` and `exact` only those under
   `LAB01/history.jsonl`, and so are the clients' operations, or, when S04
   ended before it read them, in `S04/power-off/clients/<client>.jsonl` as the
   clients wrote them.
-- with `-fault partition-master-isolated` or `-fault partition-slave-isolated`,
+- with `-fault partition-master-isolated`, `partition-slave-isolated` or
+  `partition-higher-rank-isolated`,
   `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` and
   `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
   lists them. The clients' and the new-connection writes' operations are in
