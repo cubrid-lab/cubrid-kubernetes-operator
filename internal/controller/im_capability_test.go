@@ -202,6 +202,16 @@ var _ = Describe("A seed step for an Instance Manager that does not report the c
 		Expect(msg).To(And(ContainSubstring("cap-peer-1"), ContainSubstring("expected-cluster-uid"),
 			Not(ContainSubstring("seed-from-master,"))))
 
+		By("a peer of a build that does not compare the member a restore names is held for that check")
+		prober.reports["cap-peer-1"] = []string{instancemanager.CapabilityExpectedClusterUID, instancemanager.CapabilitySeedFromMaster,
+			instancemanager.CapabilitySeedUpload, instancemanager.CapabilityBackupSourceRole}
+		r.reconcileSeeding(ctx, c, status, "cap-peer-0")
+		Expect(seed.backupOn).To(BeEmpty())
+		Expect(seed.restoreOn).To(BeEmpty(), "a seed restore that names its member was sent to a manager that would not compare it")
+		reason, msg = condition(c)
+		Expect(reason).To(Equal("InstanceManagerCapabilityMissing"))
+		Expect(msg).To(And(ContainSubstring("cap-peer-1"), ContainSubstring("expected-member")))
+
 		By("a peer that cannot be asked waits as an unavailable Instance Manager")
 		prober.unreachable = map[string]bool{"cap-peer-1": true}
 		r.reconcileSeeding(ctx, c, status, "cap-peer-0")
@@ -225,6 +235,7 @@ var _ = Describe("A seed step for an Instance Manager that does not report the c
 		Expect(seed.restoreOn).To(Equal([]string{"cap-peer-1"}))
 		Expect(seed.restoreReq.SeedFromMaster).To(Equal("cap-peer-0"))
 		Expect(seed.restoreReq.ExpectedClusterUID).To(Equal(string(c.UID)))
+		Expect(seed.restoreReq.ExpectedMember).To(Equal("cap-peer-1"))
 		Expect(status.BootstrapAttempts).To(BeZero())
 	})
 
@@ -516,7 +527,8 @@ func TestProbeRole_ReadsTheChecksTheInstanceManagerReports(t *testing.T) {
 		t.Fatalf("the member did not answer: %+v", o)
 	}
 	for _, c := range []string{instancemanager.CapabilitySeedUpload, instancemanager.CapabilityBackupSourceRole,
-		instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID} {
+		instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID,
+		instancemanager.CapabilityExpectedMember} {
 		if !slices.Contains(o.Capabilities, c) {
 			t.Errorf("capabilities = %v, want %q among them", o.Capabilities, c)
 		}

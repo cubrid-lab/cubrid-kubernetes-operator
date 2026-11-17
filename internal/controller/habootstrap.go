@@ -942,6 +942,9 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		SeedFromMaster: source,
 		// The member refuses a backup that was not taken in this cluster.
 		ExpectedClusterUID: uid,
+		// The member refuses a restore meant for another member, so the
+		// copy never fills storage that was not named (#117).
+		ExpectedMember: peer,
 	}
 	var restore instancemanager.Operation
 	var err error
@@ -1226,7 +1229,8 @@ func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, clust
 
 // seedRestoreChecks are the Instance Manager checks a seed restore relies on
 // (ADR-0013).
-var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID}
+var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID,
+	instancemanager.CapabilityExpectedMember}
 
 // seedBackup takes the seed backup of artifact on source, for peer, and
 // reports whether it has completed. sourceAnswer is the answer of source to

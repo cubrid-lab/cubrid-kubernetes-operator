@@ -238,11 +238,12 @@ The checks, and the requests that rely on them:
 | `backup-source-role` | the manifest records the role the member itself reports, and a backup that names the member master, or a seed backup, is refused or not uploaded unless the member reports that role before and after `backupdb` (#756) | the seed backup, and a `CubridBackup` whose selected target is the master (`backupCapabilityHold`, `internal/controller/cubridbackup_controller.go`) |
 | `seed-from-master` | `seedFromMaster`: the artifact must have been taken on that member, as master, and the member is restored as its slave | the seed restore on the member being seeded (`seedMember`) |
 | `expected-cluster-uid` | `expectedClusterUID` with `seedFromMaster`: the artifact must have been taken in this cluster | the seed restore |
+| `expected-member` | `expectedMember`: the restore is refused with 409 `WrongMember`, before anything is recorded or staged, unless it names the member it reached, as that member's host name says (#117) | the seed restore, which names the member being seeded |
 
 Other requests rely on no such field. The HA bootstrap sends a database name
 only. A recovery restore sends `expectedCubridVersion`, which every manager
-with `/v1/restore/prepare` enforces (`2b13489`, #68), and sends neither
-`seedFromMaster` nor `expectedClusterUID`. A `CubridBackup` on a standby
+with `/v1/restore/prepare` enforces (`2b13489`, #68), and sends none of
+`seedFromMaster`, `expectedClusterUID` and `expectedMember`. A `CubridBackup` on a standby
 names the role `slave`, which an older manager also records, and for which
 a role change after `backupdb` is logged rather than refused (#756): it
 relies on no check an older manager lacks.

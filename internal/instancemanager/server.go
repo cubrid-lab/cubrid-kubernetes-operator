@@ -977,6 +977,12 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
 		return
 	}
+	// A restore that reached another member than the one it names is
+	// refused before it is recorded: the storage it would fill was not named.
+	if err := checkRestoreMember(req, s.restoreRoots.Member); err != nil {
+		writeError(w, http.StatusConflict, CodeWrongMember, err.Error())
+		return
+	}
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
