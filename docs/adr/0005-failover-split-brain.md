@@ -432,7 +432,32 @@ order on every pass:
      most 15 s (the 3 s interval, the 2 s gap and two 5 s probe timeouts),
      counted in the Operator's memory, so the bound holds when the status
      that would record its answers cannot be written; after that it is
-     named as any unverified member. A member in another Pod or container
+     named as any unverified member. The 15 s bound is per Operator
+     process: a restart or a change of leader forgets it. When the status
+     was written, the next process reads the member's recorded first
+     answer and verifies or names it on its next pass, so nothing is
+     granted again. When the status cannot be written either, each new
+     process may defer once more for up to 15 s; an Operator that restarts
+     faster than that while it cannot write the status may defer rule 2
+     for as long as that lasts. Before #931 such an Operator started the
+     quarantine in memory and scaled the read-write Brokers to zero
+     without the status.
+     - **Exposure the deferral adds.** While a member is pending, the
+       read-write Brokers stay up beside the one active master M, and M
+       keeps acknowledging writes, as it did before the Operator's gap.
+       A pending member that becomes an active master before its second
+       probe is caught by rule 1 (two active masters) on that probe, at
+       most one pass (3 s plus a 5 s probe timeout) after it starts
+       claiming; until then a write can reach either master, as during any
+       pass interval. A pending member that stops answering is named by
+       rule 2 on that pass. Writes acknowledged by M in the deferral are
+       lost only if a later failover discards M's history, the case rule 2
+       exists to limit; the deferral lengthens that window by at most the
+       pending time. These are bounds from the code, not measurements: a
+       promotion or a partition between the two probes, with new and open
+       sessions through `-rw`, and an Operator restart while a member is
+       pending, are to be measured on the VM lab under #115 before the
+       amendment is accepted as verified. A member in another Pod or container
      start than its recorded answers, the last resolved primary (a former
      master's single slave answer is the transitional reading two probes
      guard against), and a member that gave no usable answer are not
