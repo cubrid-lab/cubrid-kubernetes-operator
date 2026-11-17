@@ -34,12 +34,26 @@ import (
 // then, in the bounds of the variant's steps.
 var s07SnapshotBound = 2 * time.Minute
 
-// s07StateLength is the longest text kept of an answer that names no state.
+// Why the settle wait ended without the cluster settling: its own bound was
+// reached, or the run's context ended (a signal, the run's timeout or a lost
+// Lease) before it.
+const (
+	s07SettleBoundReached = "settle bound reached"
+	s07SettleRunEnded     = "run ended"
+)
+
+// s07StateLength is the longest text, in characters, kept of an answer that
+// names no state.
 const s07StateLength = 160
 
-// heartbeatServerState finds the server process's state in cubrid heartbeat
-// status, as in "Server appdb (pid 72, state registered_and_active)".
-var heartbeatServerState = regexp.MustCompile(`(?m)^\s*Server \S+ \(pid \d+, state ([^)\s]+)\)`)
+var (
+	// heartbeatNodeState finds each node's own line in cubrid heartbeat
+	// status, as in "HA-Node Info (current ha-0, state to-be-master)".
+	heartbeatNodeState = regexp.MustCompile(`current (\S+), state ([^)\s]+)\)`)
+	// heartbeatServerState finds each server process's state, as in
+	// "Server appdb (pid 72, state registered_and_active)".
+	heartbeatServerState = regexp.MustCompile(`(?m)^\s*Server \S+ \(pid \d+, state ([^)\s]+)\)`)
+)
 
 // s07SettleExpiry is what the run last saw when the wait for the cluster to
 // settle after the heal ended without it: each member's role and raw state,
@@ -47,6 +61,7 @@ var heartbeatServerState = regexp.MustCompile(`(?m)^\s*Server \S+ \(pid \d+, sta
 // quarantine in force.
 type s07SettleExpiry struct {
 	At         time.Time         `json:"at"`
+	Cause      string            `json:"cause"`
 	Roles      map[string]string `json:"roles"`
 	States     map[string]string `json:"states,omitempty"`
 	Conditions map[string]string `json:"conditions,omitempty"`
@@ -66,9 +81,9 @@ type s07RowSnapshot struct {
 }
 
 // s07MemberRows is one member in the snapshot: the rows it holds, the
-// acknowledged writes it lacks, and the rows that contradict the run's
-// history (a failed or rolled-back write present, unknown to any client,
-// applied twice or with other values). A member that could not be read has
+// acknowledged writes it lacks, and the operations whose rows contradict the
+// run's history (a failed or rolled-back write present, unknown to any
+// client, applied twice or with other values), each counted once. A member that could not be read has
 // Read false, the error, and no count: unreadable, never zero.
 type s07MemberRows struct {
 	Read                bool   `json:"read"`
@@ -80,24 +95,34 @@ type s07MemberRows struct {
 
 // heartbeatState is a member's own state in cubrid heartbeat status, in
 // CUBRID's words: the node state of "current <pod>, state <state>" and, when
-// the server process is listed, its state, as in "to-be-master (server
-// registered_and_to_be_active)". An answer without the member's node line
-// is named by its first line.
+// server processes are listed, the state of each, as in "to-be-master
+// (server registered_and_to_be_active)". An answer without the member's node
+// line is named by its first line.
 func heartbeatState(pod, out string) string {
-	node := regexp.MustCompile(`current ` + regexp.QuoteMeta(pod) + `, state ([^)\s]+)\)`).FindStringSubmatch(out)
-	if node == nil {
+	node := ""
+	for _, m := range heartbeatNodeState.FindAllStringSubmatch(out, -1) {
+		if m[1] == pod {
+			node = m[2]
+			break
+		}
+	}
+	if node == "" {
 		return "no node state: " + s07Short(cmpOr(firstLine(out), "no output"))
 	}
-	if server := heartbeatServerState.FindStringSubmatch(out); server != nil {
-		return node[1] + " (server " + server[1] + ")"
+	var servers []string
+	for _, m := range heartbeatServerState.FindAllStringSubmatch(out, -1) {
+		servers = append(servers, m[1])
 	}
-	return node[1]
+	if len(servers) > 0 {
+		return node + " (server " + strings.Join(servers, ", ") + ")"
+	}
+	return node
 }
 
-// s07Short keeps the first s07StateLength bytes of s.
+// s07Short keeps the first s07StateLength characters of s.
 func s07Short(s string) string {
-	if len(s) > s07StateLength {
-		return s[:s07StateLength] + "..."
+	if r := []rune(s); len(r) > s07StateLength {
+		return string(r[:s07StateLength]) + "..."
 	}
 	return s
 }
@@ -112,9 +137,15 @@ func s07StateList(states map[string]string, members []string) string {
 }
 
 // noteS07SettleExpired records what the run last saw when the settle wait
-// ended without the cluster settling.
-func noteS07SettleExpired(rec *s07Record, now time.Time) {
-	e := &s07SettleExpiry{At: now, Conditions: map[string]string{}, Quarantine: rec.QuarantineInForce}
+// ended without the cluster settling, and why it ended: its bound reached,
+// or the run's end (ctx done).
+func noteS07SettleExpired(ctx context.Context, rec *s07Record, now time.Time) {
+	e := &s07SettleExpiry{At: now, Cause: s07SettleBoundReached, Conditions: map[string]string{},
+		Quarantine: rec.QuarantineInForce}
+	kind := "settle_wait_expired"
+	if ctx.Err() != nil {
+		e.Cause, kind = s07SettleRunEnded, "settle_wait_ended_by_run"
+	}
 	if n := len(rec.Sweeps); n > 0 {
 		e.Roles, e.States = rec.Sweeps[n-1].Roles, rec.Sweeps[n-1].States
 	}
@@ -122,21 +153,30 @@ func noteS07SettleExpired(rec *s07Record, now time.Time) {
 		e.Conditions[c.Type] = c.Status + "/" + c.Reason
 	}
 	rec.SettleExpired = e
-	rec.note("settle_wait_expired", rec.SettleUnmet)
+	rec.note(kind, rec.SettleUnmet)
 }
 
 // snapshotS07Rows reads, within s07SnapshotBound, every member's rows and
 // applies the data rules of the run's history to each member on its own. It
 // is made when the cluster did not settle, so that what the members hold is
 // kept before the namespace is deleted; it is reported and never judged.
+//
+// The members are read one after another, as the run's csql reads keep
+// shared counters, and each gets an equal share of what is left of the
+// bound: a member that hangs, as one stuck in to-be-master may, cannot take
+// the time of the members read after it, and time a member does not use
+// passes to the next.
 func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
 	ctx, cancel := context.WithTimeout(ctx, s07SnapshotBound)
 	defer cancel()
 	s := &s07RowSnapshot{At: time.Now().UTC(), Members: map[string]s07MemberRows{}}
 	rec.UnsettledRows = s
 	rows := map[string][]workload.Row{}
-	for _, pod := range h.members {
-		read, err := h.readRowsOf(ctx, dataTarget{members: []string{pod}})
+	deadline, _ := ctx.Deadline()
+	for i, pod := range h.members {
+		memberCtx, cancelMember := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(h.members)-i))
+		read, err := h.readRowsOf(memberCtx, dataTarget{members: []string{pod}})
+		cancelMember()
 		if err != nil {
 			s.Members[pod] = s07MemberRows{Error: err.Error()}
 			continue
@@ -154,15 +194,16 @@ func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
 	}
 	report := workload.Check(history, rows)
 	for pod, check := range report.Members {
-		n, missing, conflicting := check.Rows, 0, 0
+		n, missing, conflicting := check.Rows, 0, map[string]bool{}
 		for _, v := range check.Violations {
 			if v.Rule == workload.RuleMissing {
 				missing++
 			} else {
-				conflicting++
+				conflicting[v.OpID] = true
 			}
 		}
-		s.Members[pod] = s07MemberRows{Read: true, Rows: &n, AcknowledgedMissing: &missing, Conflicting: &conflicting}
+		c := len(conflicting)
+		s.Members[pod] = s07MemberRows{Read: true, Rows: &n, AcknowledgedMissing: &missing, Conflicting: &c}
 	}
 	if len(rows) >= 2 {
 		d := len(report.Diverged)
@@ -192,7 +233,7 @@ func s07SnapshotNote(rec *s07Record) string {
 		case r.AcknowledgedMissing == nil:
 			named = append(named, fmt.Sprintf("%s holds %d row(s)", m, *r.Rows))
 		default:
-			named = append(named, fmt.Sprintf("%s holds %d row(s), lacks %d acknowledged write(s), %d conflicting",
+			named = append(named, fmt.Sprintf("%s holds %d row(s), lacks %d acknowledged write(s), %d conflicting operation(s)",
 				m, *r.Rows, *r.AcknowledgedMissing, *r.Conflicting))
 		}
 	}

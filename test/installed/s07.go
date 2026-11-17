@@ -1500,12 +1500,12 @@ func (h *haRun) settleS07(ctx context.Context, rec *s07Record) {
 			return
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			noteS07SettleExpired(rec, time.Now().UTC())
+			noteS07SettleExpired(ctx, rec, time.Now().UTC())
 			return
 		}
 		select {
 		case <-ctx.Done():
-			noteS07SettleExpired(rec, time.Now().UTC())
+			noteS07SettleExpired(ctx, rec, time.Now().UTC())
 			return
 		case <-time.After(h.cfg.Poll):
 		}

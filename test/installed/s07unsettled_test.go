@@ -45,6 +45,7 @@ import (
 
 // The server process states of cubrid heartbeat status the tests print.
 const (
+	testToBeMaster = "to-be-master"
 	testToBeActive = "registered_and_to_be_active"
 	testStandby    = "registered_and_standby"
 	testActive     = "registered_and_active"
@@ -68,11 +69,15 @@ func heartbeatOutput(pod, node, server string) string {
 // which the classified role folds into "other".
 func TestHeartbeatStateKeepsCUBRIDsOwnWords(t *testing.T) {
 	tests := map[string]struct{ out, want string }{
-		"a member promoting itself": {heartbeatOutput(m0, "to-be-master", testToBeActive),
+		"a member promoting itself": {heartbeatOutput(m0, testToBeMaster, testToBeActive),
 			"to-be-master (server registered_and_to_be_active)"},
 		"an active master": {heartbeatOutput(m0, roleMaster, testActive),
 			"master (server registered_and_active)"},
 		"a member in maintenance with no server line": {heartbeatOutput(m0, "maintenance", ""), "maintenance"},
+		"two server processes": {heartbeatOutput(m0, roleSlave, testStandby) +
+			"   Server otherdb (pid 73, state registered)\n", "slave (server registered_and_standby, registered)"},
+		"a long first line is cut on a character boundary": {strings.Repeat("é", 200),
+			"no node state: " + strings.Repeat("é", 160) + "..."},
 		"output without the member's node line": {"\n  cubrid heartbeat is not running.\nmore\n",
 			"no node state: cubrid heartbeat is not running."},
 		"no output": {"", "no node state: no output"},
@@ -106,7 +111,7 @@ func s07StateAnswers(states map[string][2]string) func(context.Context, ...strin
 func TestSweepS07RecordsEachMembersRawState(t *testing.T) {
 	h, _ := s07PathClient(t, databasev1alpha1.CubridClusterStatus{}, 1, 1, 1)
 	h.members, h.guard = testS07Members, func(context.Context) error { return nil }
-	h.Command = s07StateAnswers(map[string][2]string{m0: {"to-be-master", testToBeActive},
+	h.Command = s07StateAnswers(map[string][2]string{m0: {testToBeMaster, testToBeActive},
 		m1: {roleMaster, testActive}})
 	rec := &s07Record{Target: imageIdentity{Pod: m0}, LastResolvedPrimary: m1}
 	h.sweepS07(context.Background(), rec, time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC), true, true)
@@ -139,7 +144,7 @@ func TestSettleS07NamesTheRawStatesWhenItDoesNotSettle(t *testing.T) {
 	h, _ := s07PathClient(t, status, 0, 0, 0)
 	h.cfg.Poll = 5 * time.Millisecond
 	h.members, h.guard = testS07Members, func(context.Context) error { return nil }
-	h.Command = s07StateAnswers(map[string][2]string{m0: {"to-be-master", testToBeActive},
+	h.Command = s07StateAnswers(map[string][2]string{m0: {testToBeMaster, testToBeActive},
 		m1: {roleSlave, testStandby}, m2: {roleSlave, testStandby}})
 	rec := &s07Record{Target: imageIdentity{Pod: m0}, LastResolvedPrimary: m1}
 	h.settleS07(context.Background(), rec)
@@ -151,7 +156,8 @@ func TestSettleS07NamesTheRawStatesWhenItDoesNotSettle(t *testing.T) {
 		t.Errorf("settle unmet %q, want each member's raw state", rec.SettleUnmet)
 	}
 	e := rec.SettleExpired
-	if e == nil || e.At.IsZero() || e.Roles[m0] != s07OtherRole || e.States[m0] == "" ||
+	if e == nil || e.At.IsZero() || e.Cause != s07SettleBoundReached || e.Roles[m0] != s07OtherRole ||
+		e.States[m0] == "" ||
 		e.Conditions[primaryResolvedCondition] != "False/Test" ||
 		e.Quarantine != string(databasev1alpha1.WriteQuarantinedMasterChanged) {
 		t.Fatalf("settle wait expiry %+v", e)
@@ -164,6 +170,26 @@ func TestSettleS07NamesTheRawStatesWhenItDoesNotSettle(t *testing.T) {
 	}
 }
 
+// A settle wait cut short by the end of the run is recorded with that cause,
+// not as the bound reached.
+func TestSettleS07RecordsTheRunEndingTheWait(t *testing.T) {
+	h, _ := s07PathClient(t, databasev1alpha1.CubridClusterStatus{}, 1, 1, 1)
+	h.cfg.Poll = time.Hour
+	h.members, h.guard = testS07Members, func(context.Context) error { return nil }
+	h.Command = s07StateAnswers(map[string][2]string{m0: {testToBeMaster, testToBeActive},
+		m1: {roleSlave, testStandby}, m2: {roleSlave, testStandby}})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	rec := &s07Record{Target: imageIdentity{Pod: m0}, LastResolvedPrimary: m1}
+	h.settleS07(ctx, rec)
+	if e := rec.SettleExpired; e == nil || e.Cause != s07SettleRunEnded {
+		t.Fatalf("settle wait expiry %+v, want the run's end as its cause", e)
+	}
+	if n := len(rec.Observed); n == 0 || rec.Observed[n-1].Kind != "settle_wait_ended_by_run" {
+		t.Errorf("observations %+v, want the wait noted as ended by the run", rec.Observed)
+	}
+}
+
 // s07LedgerEvent is one line of a client's history for an insert.
 func s07LedgerEvent(id, kind string) string {
 	return `{"t":"2026-11-17T12:00:01Z","client":"c","seq":` + strings.TrimPrefix(id, "c-") +
@@ -172,11 +198,15 @@ func s07LedgerEvent(id, kind string) string {
 
 // s07LedgerAnswers plays kubectl for a read of the ledger on each member: the
 // rows in rows, an error for a member in failing, and for a member in
-// hanging nothing until the read's context ends.
+// hanging nothing until the read's context ends. Once the read's context has
+// ended, every member answers with its error, as kubectl exec would.
 func s07LedgerAnswers(rows map[string][]workload.Row, failing, hanging string) func(context.Context,
 	...string) (string, error) {
 	return func(ctx context.Context, args ...string) (string, error) {
 		pod := args[3]
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		switch pod {
 		case failing:
 			return "error: unable to upgrade connection: pod does not exist", errors.New("exit status 1")
@@ -258,8 +288,8 @@ func TestSnapshotS07RowsWhenTheClusterDidNotSettle(t *testing.T) {
 }
 
 // The extra reads are bounded so that cleanup still happens within the run's
-// deadline: a member that does not answer within the bound is unreadable, and
-// the others are still read.
+// deadline: a member that does not answer within its share of the bound is
+// unreadable, and the member read before it keeps its rows.
 func TestSnapshotS07RowsIsBounded(t *testing.T) {
 	old := s07SnapshotBound
 	s07SnapshotBound = 50 * time.Millisecond
@@ -279,6 +309,41 @@ func TestSnapshotS07RowsIsBounded(t *testing.T) {
 	}
 }
 
+// A member that hangs, as one stuck in to-be-master may, uses only its share
+// of the bound: the members read after it are still read. With one shared
+// deadline the first member would leave none for the others.
+func TestSnapshotS07RowsReadsTheOthersAfterAHungFirstMember(t *testing.T) {
+	old := s07SnapshotBound
+	s07SnapshotBound = 300 * time.Millisecond
+	t.Cleanup(func() { s07SnapshotBound = old })
+	h := s07SnapshotRun(t)
+	h.history.WriteString(s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "acknowledged"))
+	h.Command = s07LedgerAnswers(map[string][]workload.Row{m1: {s07Row("c-1")}, m2: {s07Row("c-1")}}, "", m0)
+	rec := &s07Record{}
+	start := time.Now()
+	h.snapshotS07Rows(context.Background(), rec)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the snapshot took %s with a bound of %s", took, s07SnapshotBound)
+	}
+	s := rec.UnsettledRows
+	if s == nil || s.Members[m0].Read || s.Members[m0].Error == "" || !s.Members[m1].Read || !s.Members[m2].Read {
+		t.Fatalf("snapshot %+v, want %s unreadable and %s and %s read", s, m0, m1, m2)
+	}
+}
+
+// Conflicting rows are counted once per operation, however many rules the
+// row breaks: a failed write's row applied twice is one conflicting row.
+func TestSnapshotS07RowsCountsConflictingOperationsOnce(t *testing.T) {
+	h := s07SnapshotRun(t)
+	h.history.WriteString(s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "failed"))
+	h.Command = s07LedgerAnswers(map[string][]workload.Row{m0: {s07Row("c-1"), s07Row("c-1")}}, "", "")
+	rec := &s07Record{}
+	h.snapshotS07Rows(context.Background(), rec)
+	if r := rec.UnsettledRows.Members[m0]; r.Conflicting == nil || *r.Conflicting != 1 {
+		t.Errorf("%s: %+v, want one conflicting operation", m0, r)
+	}
+}
+
 // The snapshot is reported and never judged: a run that did not settle stays
 // blocked with the snapshot in its reason, however the rows look, and a
 // never-event judged elsewhere still fails it.
@@ -295,7 +360,7 @@ func TestJudgeS07ReportsTheUnsettledSnapshotWithoutJudgingIt(t *testing.T) {
 	}
 	v := judgeS07(unsettled(), testS07Limits)
 	if v.Result != evidence.Blocked || !strings.Contains(v.Reason, "did not settle") ||
-		!strings.Contains(v.Reason, m0+" holds 4 row(s), lacks 0 acknowledged write(s), 1 conflicting") ||
+		!strings.Contains(v.Reason, m0+" holds 4 row(s), lacks 0 acknowledged write(s), 1 conflicting operation(s)") ||
 		!strings.Contains(v.Reason, m2+" unreadable") {
 		t.Errorf("judged %s %q, want blocked with the snapshot reported", v.Result, v.Reason)
 	}

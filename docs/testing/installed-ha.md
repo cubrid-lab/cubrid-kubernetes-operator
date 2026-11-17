@@ -1092,7 +1092,10 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    registered_and_to_be_active)`), and `settleWaitExpired` keeps what the
    run last saw: each member's role and raw state, the last status and
    reason of `Ready`, `PrimaryResolved`, `RoutingReady`, `HAReady` and
-   `ReplicationHealthy`, and the quarantine in force.
+   `ReplicationHealthy`, the quarantine in force, and why the wait ended
+   (`cause`: `settle bound reached`, or `run ended` when the run's signal,
+   timeout or lost Lease ended it first; the observation is then
+   `settle_wait_ended_by_run` rather than `settle_wait_expired`).
 6. It stops both clients and reads their histories into
    `LAB01/history.jsonl`, and applies the data rules to every member's rows,
    read directly with `csql` and not through a Broker, waiting up to
@@ -1121,15 +1124,24 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    minutes in all, and applies the data rules of the run's history to each
    member on its own (`unsettledRowsSnapshot` in `record.json`, the full
    report in `unsettled-rows.json`): per member, the rows it holds, the
-   acknowledged writes it lacks, and the rows that contradict the history
-   (a failed or rolled-back write present, a row no client wrote, one applied
-   twice or with other values), and how many rows differ between the members
-   read. A member that could not be read in time is recorded as unreadable,
-   with the error and no count, never as zero. The snapshot is named in the
-   blocked reason and is never judged: it cannot make the run pass or fail,
-   and a never-event judged above still fails the run. The variant's
-   `-timeout` check counts these two minutes in place of
-   `-data-check-within` when they are longer.
+   acknowledged writes it lacks, and the operations whose rows contradict
+   the history (a failed or rolled-back write present, a row no client
+   wrote, one applied twice or with other values), each operation counted
+   once; and how many rows differ between the members read. The members
+   are read one after another, each within an equal share of what is left
+   of the two minutes, so a member that hangs, as one stuck in
+   `to-be-master` may, does not take the time of the members after it. A
+   member that could not be read in its share is recorded as unreadable,
+   with the error and no count, never as zero. These reads are `csql` reads
+   like the data check's, so a lost session among them is recorded under
+   `lostSessions` and counted in S07's `lostSessions` measurement. The
+   snapshot is always kept in `record.json`, and it is named in the reason
+   only when S07 is blocked because the cluster did not settle; a run that
+   fails on a never-event or a broken expectation keeps the reason of that
+   failure. It is never judged: it cannot make the run pass or fail, and a
+   never-event judged above still fails the run. The variant's `-timeout`
+   check counts these two minutes in place of `-data-check-within` when they
+   are longer.
 
 On every sweep the run also reads the manager Pod the cut names. Once it is
 gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
