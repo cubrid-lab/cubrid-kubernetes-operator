@@ -61,6 +61,12 @@ type RestoreRequest struct {
 	// its own cluster's master. It is ignored without SeedFromMaster: a
 	// restore into a new cluster takes another cluster's artifact.
 	ExpectedClusterUID string `json:"expectedClusterUID,omitempty"`
+	// ExpectedMember, when set, is the member the restore is meant for, its
+	// Pod's host name. A manager refuses the request before it records or
+	// stages anything when its own member name (RestoreRoots.Member) is
+	// another one, or when it does not know its own: a restore reached a
+	// member it was not meant for.
+	ExpectedMember string `json:"expectedMember,omitempty"`
 }
 
 // restoreExpectation is what the artifact of req must say about itself
@@ -99,6 +105,11 @@ type RestoreRoots struct {
 	// the HA member list for an HA member (docs/poc/RESULTS.md, POC-13).
 	// Empty means this member's own host name.
 	Host string
+	// Member is this member's own name, its Pod's host name, which a request
+	// that names its member (ExpectedMember) must name. Empty when the
+	// manager could not read it; a request that names a member is then
+	// refused.
+	Member string
 	// Owner is the ID of the durable operation this restore runs for. The
 	// database directory is marked with it, and the mark is left for the
 	// operation to clear once it has durably completed, so that a later
@@ -133,6 +144,10 @@ type RestoreResult struct {
 // target holds (#798).
 var ErrTargetHoldsDatabase = errors.New("the target already holds the database")
 
+// ErrWrongMember refuses a restore whose request names another member than
+// this one (RestoreRequest.ExpectedMember).
+var ErrWrongMember = errors.New("the restore names another member")
+
 // Restore verifies the artifact's trust (ADR-0007/0008), downloads its objects
 // to staging, registers the database at the empty target and runs
 // `cubrid restoredb -u -B` into it.
@@ -144,6 +159,9 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// paths confine builds from the manager's roots are used, never the
 	// request's fields.
 	if err := validateRestoreRequest(req); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := checkRestoreMember(req, roots.Member); err != nil {
 		return RestoreResult{}, err
 	}
 	targetDir, stagingDir, err := confine(req, roots)
@@ -298,6 +316,9 @@ func validateRestoreRequest(req RestoreRequest) error {
 	if req.SeedFromMaster != "" && !hostLabelPattern.MatchString(req.SeedFromMaster) {
 		return fmt.Errorf("seedFromMaster %q is not a host name (a DNS label)", req.SeedFromMaster)
 	}
+	if req.ExpectedMember != "" && !hostLabelPattern.MatchString(req.ExpectedMember) {
+		return fmt.Errorf("expectedMember %q is not a host name (a DNS label)", req.ExpectedMember)
+	}
 	for name, dir := range map[string]string{"targetDir": req.TargetDir, "stagingDir": req.StagingDir} {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == string(filepath.Separator) {
 			return fmt.Errorf("%s %q must be a clean absolute path other than the root", name, dir)
@@ -307,6 +328,21 @@ func validateRestoreRequest(req RestoreRequest) error {
 		return fmt.Errorf("stagingDir %q and targetDir %q must not contain each other", req.StagingDir, req.TargetDir)
 	}
 	return nil
+}
+
+// checkRestoreMember refuses a request that names another member than member,
+// this manager's own name, with ErrWrongMember. A manager that does not know
+// its own name cannot show that it is the member named, and refuses too. A
+// request that names no member is not checked.
+func checkRestoreMember(req RestoreRequest, member string) error {
+	switch {
+	case req.ExpectedMember == "" || req.ExpectedMember == member:
+		return nil
+	case member == "":
+		return fmt.Errorf("%w: the restore names member %q, but this manager does not know its own member name",
+			ErrWrongMember, req.ExpectedMember)
+	}
+	return fmt.Errorf("%w: the restore names member %q, but this is member %q", ErrWrongMember, req.ExpectedMember, member)
 }
 
 // stagingNamePattern is one path element: no separator and no "..".

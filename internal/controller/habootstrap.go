@@ -942,6 +942,9 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		SeedFromMaster: source,
 		// The member refuses a backup that was not taken in this cluster.
 		ExpectedClusterUID: uid,
+		// The member refuses a restore meant for another member, so the
+		// copy never fills storage that was not named (#117).
+		ExpectedMember: peer,
 	}
 	var restore instancemanager.Operation
 	var err error
@@ -1012,6 +1015,7 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", err.Error())
 			return false
 		}
+		r.warnWrongMember(cluster, database, peer, err)
 	}
 	if err != nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
@@ -1224,9 +1228,28 @@ func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, clust
 	return restore, true, err
 }
 
+// warnWrongMember records one Warning Event when the seed restore for peer
+// reached another member than peer (errWrongMember) and BootstrapReady does
+// not carry that reason yet. Such a restore restored nothing and the copy
+// waits, but the request was routed to a Pod it was not meant for, which a
+// person should see once, when the wait begins (#117).
+func (r *CubridClusterReconciler) warnWrongMember(cluster *databasev1alpha1.CubridCluster, database, peer string, err error) {
+	if !errors.Is(err, errWrongMember) {
+		return
+	}
+	if cond := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); cond != nil &&
+		cond.Reason == reasonWrongMember {
+		return
+	}
+	r.statusEvent(cluster, corev1.EventTypeWarning, reasonWrongMember, fmt.Sprintf(
+		"the seed restore of database %s for %s reached another member, which refused it before "+
+			"restoring anything; the copy waits and uses up no attempt: %v", database, peer, err))
+}
+
 // seedRestoreChecks are the Instance Manager checks a seed restore relies on
 // (ADR-0013).
-var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID}
+var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID,
+	instancemanager.CapabilityExpectedMember}
 
 // seedBackup takes the seed backup of artifact on source, for peer, and
 // reports whether it has completed. sourceAnswer is the answer of source to

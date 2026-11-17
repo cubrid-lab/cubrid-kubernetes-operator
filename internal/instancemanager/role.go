@@ -92,11 +92,16 @@ const (
 	// is refused or not uploaded when the member does not report that role
 	// before and after backupdb.
 	CapabilityBackupSourceRole = "backup-source-role"
+	// CapabilityExpectedMember: a restore with expectedMember is refused
+	// before anything is recorded or staged when it names another member
+	// than this one.
+	CapabilityExpectedMember = "expected-member"
 )
 
 // Capabilities returns every check this manager enforces, for GET /v1/role.
 func Capabilities() []string {
-	return []string{CapabilityExpectedClusterUID, CapabilitySeedFromMaster, CapabilitySeedUpload, CapabilityBackupSourceRole}
+	return []string{CapabilityExpectedClusterUID, CapabilitySeedFromMaster, CapabilitySeedUpload, CapabilityBackupSourceRole,
+		CapabilityExpectedMember}
 }
 
 // ApplierProcess is one "Applylogdb" line of `cubrid heartbeat status`.

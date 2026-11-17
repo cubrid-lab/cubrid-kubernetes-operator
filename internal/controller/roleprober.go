@@ -237,10 +237,12 @@ func capabilityHold(member, step string, o RoleObservation, now time.Time, neede
 	}
 	return reasonCapabilityMissing, fmt.Sprintf(
 		"the %s is not sent to %s: its Instance Manager does not report the checks %s, which the request relies "+
-			"on. An Instance Manager of another build may accept the request and skip them. Replace the Pod of %s "+
-			"so that it runs the Instance Manager of the Operator's build; the step waits, uses up no attempt, and "+
-			"nothing is deleted",
-		step, member, strings.Join(missing, ", "), member), true
+			"on. An Instance Manager of another build may accept the request and skip them. A replaced Pod starts "+
+			"the image the cluster already runs until a newer one is accepted: point spec.image at an image with "+
+			"the Instance Manager of the Operator's build if it names an older one, and set the annotation %s on "+
+			"the cluster to exactly that image (spec.image, or the Operator's default image when spec.image is "+
+			"unset). Then Replace the Pod of %s; the step waits, uses up no attempt, and nothing is deleted",
+		step, member, strings.Join(missing, ", "), acceptImageAnnotation, member), true
 }
 
 // TokenChecker asks one member's Instance Manager whether it accepts a token.
