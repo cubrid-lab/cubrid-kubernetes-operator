@@ -813,7 +813,9 @@ by its limits with the rules of `faults.Judge`, as every scenario is:
 | `failover_limit` | `-failover-limit` (unset unless given: its default of 30 seconds is the Kind value and is not used for S15) | `failoverWithin`: from the member's eviction request until the slower reconnecting client was acknowledged again without interruption, on the client's clock |
 | `stable_period` | `-stable-period` (default 30 seconds) | `shortestStableFor` |
 
-The contract records no VM-lab value for `drain_limit` or `failover_limit`.
+The contract records the VM-lab values for this lane, set from six baseline runs:
+`drain_limit` and `failover_limit` are both 1 minute, so a judged run passes
+`-drain-limit 1m -failover-limit 1m`.
 A limit of `0` is unset and makes the run a baseline: `blocked` with
 `time_limit_unset`, never `pass`. Without `-drain-limit` and
 `-failover-limit`, a run in which every check held is such a baseline run. A limit that is set but whose
