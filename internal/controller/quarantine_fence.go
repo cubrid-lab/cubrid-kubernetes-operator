@@ -113,7 +113,8 @@ func (r *CubridClusterReconciler) unseenLaterPod(cluster *databasev1alpha1.Cubri
 // checked. The Node is read, from the API server past the cache, for every
 // member that gave no active-master or trusted non-master answer, and for a
 // member with a fence record. A Node that does not exist fences nothing; a
-// failed read is returned, and fences nothing. The Operator only reads Nodes:
+// failed read is returned, and no member is fenced: no further Node is read,
+// but every member's node is still returned. The Operator only reads Nodes:
 // it never adds or removes the taint, and never infers a fence from a Node's
 // Lease or Ready condition.
 func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -126,6 +127,7 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 	now := r.now()
 	nodes := make(map[string]string, len(members))
 	fences, refused := map[string]outOfServiceTaint{}, map[string]string{}
+	var failed error
 	for _, m := range members {
 		node := ids[m].NodeName
 		if i := slices.IndexFunc(cluster.Status.MemberPods, func(p databasev1alpha1.MemberPod) bool {
@@ -138,7 +140,9 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 		recorded := slices.ContainsFunc(cluster.Status.MemberFences, func(f databasev1alpha1.MemberFence) bool {
 			return f.Name == m
 		})
-		if node == "" || (!recorded && (activeMaster(o, now) || nonMasterAnswer(o, now))) {
+		if failed != nil || node == "" || (!recorded && (activeMaster(o, now) || nonMasterAnswer(o, now))) {
+			// After a failed read, the nodes of the remaining members are
+			// still mapped, but no further Node is read.
 			continue
 		}
 		var n corev1.Node
@@ -147,7 +151,8 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 		case apierrors.IsNotFound(err):
 			continue
 		case err != nil:
-			return nodes, nil, refused, fmt.Errorf("read Node %s of member %s for its out-of-service taint: %w", node, m, err)
+			failed = fmt.Errorf("read Node %s of member %s for its out-of-service taint: %w", node, m, err)
+			continue
 		}
 		i := slices.IndexFunc(n.Spec.Taints, func(t corev1.Taint) bool {
 			return t.Key == corev1.TaintNodeOutOfService && t.Effect == corev1.TaintEffectNoExecute
@@ -165,6 +170,9 @@ func (r *CubridClusterReconciler) outOfServiceFences(ctx context.Context, cluste
 		default:
 			fences[m] = outOfServiceTaint{Node: node, NodeUID: string(n.UID), TimeAdded: n.Spec.Taints[i].TimeAdded.Time}
 		}
+	}
+	if failed != nil {
+		return nodes, nil, refused, failed
 	}
 	return nodes, fences, refused, nil
 }
