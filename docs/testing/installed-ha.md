@@ -1219,7 +1219,7 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
       not terminating while the quarantine is in force and no other token
       released it, is a never-event, and the run sets no other token. A
       release in that window by a token the run did not set, such as a
-      person's, is recorded (`releasedByAnotherToken`), ends the run's release,
+      person's, is recorded (`otherRelease`), ends the run's release,
       and blocks S07, since the run can no longer say what released the
       quarantine.
    3. It reads the current `status.writeQuarantine.releaseToken` again,

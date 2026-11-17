@@ -158,7 +158,7 @@ type s07ManualRelease struct {
 	TokenReplaced string `json:"currentTokenReplaced,omitempty"`
 	// OtherRelease is a release of the quarantine by a token the run did not
 	// set; it ends the run's release and blocks S07.
-	OtherRelease string `json:"releasedByAnotherToken,omitempty"`
+	OtherRelease string `json:"otherRelease,omitempty"`
 	// currentToken is the current token the run set, and lastSet the last
 	// token it set; neither is written to the evidence.
 	currentToken, lastSet string

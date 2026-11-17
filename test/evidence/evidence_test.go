@@ -1005,6 +1005,47 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+// Redaction keeps indented JSON valid when a key that names a credential
+// opens an object or an array, as "staleToken": { did in the network
+// partition lane's record.json on the VM lab: the brace or bracket is the
+// structure, not a value. A string value under such a key is still removed.
+func TestRedactKeepsJSONValidWhenACredentialKeyOpensAnObjectOrArray(t *testing.T) {
+	const secret = "token-s3cr3t-full-value"
+	doc := map[string]any{
+		"staleToken":    map[string]any{"kind": "the current token altered", "tokenPrefix": "token-s3..."},
+		"releaseTokens": []any{"a"},
+		"token":         []any{map[string]any{"name": "n"}},
+		"password":      map[string]any{},
+		"nested":        map[string]any{"token": secret, "secret": []any{}},
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := NewRedactor().Redact(data)
+	if !json.Valid(got) {
+		t.Fatalf("redacted JSON does not parse:\n%s", got)
+	}
+	if strings.Contains(string(got), secret) {
+		t.Errorf("the token value was kept:\n%s", got)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(got, &back); err != nil {
+		t.Fatal(err)
+	}
+	if stale, ok := back["staleToken"].(map[string]any); !ok || stale["kind"] != "the current token altered" {
+		t.Errorf("staleToken = %v, want the object kept", back["staleToken"])
+	}
+	if nested := back["nested"].(map[string]any); nested["token"] != redacted {
+		t.Errorf("nested token = %v, want it redacted", nested["token"])
+	}
+	for _, line := range []string{"token: {", "password=[", `"secret":{`} {
+		if out := string(NewRedactor().Redact([]byte(line))); out != line {
+			t.Errorf("%q redacted to %q, want an opening brace or bracket kept", line, out)
+		}
+	}
+}
+
 // A value learned during the run, a cluster's generated token for example, is
 // removed from everything written after it was added.
 // A registered value is also removed where it appears encoded: in base64,

@@ -537,7 +537,8 @@ var (
 // same line, honoring escapes and SQL's doubled quote; without one it ends
 // like an unquoted value.
 // An unquoted value ends at a space, a quote, a comma, a brace, or a URL
-// query's & or ;. An empty value is left as it is.
+// query's & or ;, and never starts with { or [, which open a JSON or YAML
+// object or array. An empty value is left as it is.
 var fieldPatterns = func() []*regexp.Regexp {
 	const key = `(?i)((?:password|passwd|token|secret[_-]?access[_-]?key|secret[_-]?key|secret|` +
 		`access[_-]?key(?:[_-]?id)?|api[_-]?key|private[_-]?key|client[_-]?key[_-]?data|` +
@@ -550,7 +551,10 @@ var fieldPatterns = func() []*regexp.Regexp {
 		// SQL writes a quote inside a string as ''.
 		regexp.MustCompile(key + `')(?:''|[^'\n])+(')`),
 		regexp.MustCompile(key + `["'])()[^\s"']+`),
-		regexp.MustCompile(key + `)()[^\s"'\\,;&}]+`),
+		// An unquoted value never starts with { or [: under such a key in
+		// JSON or YAML they open an object or an array, and replacing them
+		// would break the document (#115).
+		regexp.MustCompile(key + `)()[^\s"'\\,;&}{\[][^\s"'\\,;&}]*`),
 		// The password of CREATE USER and ALTER USER in a statement a log quotes.
 		regexp.MustCompile(`(?i)(\bpassword\s+')(?:''|[^'\n])+(')`),
 		regexp.MustCompile(`(?i)(\bpassword\s+")(?:""|[^"\n])+(")`),

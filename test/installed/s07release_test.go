@@ -588,6 +588,25 @@ func TestReleaseS07ReleaseByAnotherTokenDuringTheStaleWatchBlocks(t *testing.T) 
 	if v := judgeS07(rec, testS07Limits); v.Result != evidence.Blocked || !strings.Contains(v.Reason, "another token") {
 		t.Errorf("judged %s %q, want blocked naming the other token's release", v.Result, v.Reason)
 	}
+	// The record keeps what released the quarantine after the evidence
+	// writer's redaction, which blanks a string under a key ending in token.
+	file := s07File(f.rec.Variant, "record.json")
+	if err := f.h.writeJSON(file, f.rec); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(f.h.cfg.EvidenceDir, file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		ManualRelease s07ManualRelease `json:"manualRelease"`
+	}
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.ManualRelease.OtherRelease != r.OtherRelease {
+		t.Errorf("written other release %q, want %q", back.ManualRelease.OtherRelease, r.OtherRelease)
+	}
 }
 
 // A Broker Pod still terminating from the quarantine's enforcement is not the
@@ -817,4 +836,57 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// Every evidence file the release writes, and the record and timeline written
+// with it, parses after the evidence writer's redaction and holds no full
+// release token. On the VM lab the redaction turned "staleToken": { into
+// "staleToken": [REDACTED], and record.json no longer parsed.
+func TestReleaseS07EvidenceParsesAfterRedaction(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
+	f.h.releaseS07(context.Background(), f.rec)
+	if f.rec.ManualRelease == nil || f.rec.ManualRelease.Stale == nil {
+		t.Fatalf("release %+v, want the stale token recorded", f.rec.ManualRelease)
+	}
+	if err := f.h.writeJSON(s07File(f.rec.Variant, "record.json"), f.rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.writeTimeline(s07File(f.rec.Variant, "timeline.jsonl"), f.rec.Observed); err != nil {
+		t.Fatal(err)
+	}
+	files := 0
+	err := filepath.WalkDir(f.h.cfg.EvidenceDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files++
+		switch filepath.Ext(path) {
+		case ".json":
+			if !json.Valid(data) {
+				t.Errorf("%s does not parse as JSON after redaction", path)
+			}
+		case ".jsonl":
+			for line := range strings.Lines(string(data)) {
+				if !json.Valid([]byte(line)) {
+					t.Errorf("%s: line %q does not parse as JSON after redaction", path, line)
+				}
+			}
+		}
+		for _, token := range []string{testCurrentToken, testEarlierToken} {
+			if strings.Contains(string(data), token) {
+				t.Errorf("%s holds the full release token %q", path, token)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files < 4 {
+		t.Errorf("checked %d evidence file(s), want the record, the timeline and both rows files", files)
+	}
 }
