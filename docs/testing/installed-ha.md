@@ -1032,7 +1032,9 @@ example `-partition-hold 20m -timeout 60m`: the run's `-timeout` (default
 than the bounds of the variant's own steps: the 10-minute move, 4 minutes to
 prepare and confirm the cut, `-partition-hold`, 2 minutes of confirmation
 slack, 2 minutes to remove the cut, 5 minutes to settle and
-`-data-check-within`; 27 minutes with the defaults. LAB01 needs its own time
+`-data-check-within`, or, when the cluster does not settle, the 4 minutes
+and 20 seconds of the rows and engine logs read before cleanup when that is
+longer; 29 minutes and 20 seconds with the defaults. LAB01 needs its own time
 on top, so give that variant `-timeout 45m` or more.
 
 Two opt-in options, off by default, follow what happens after the heal
@@ -1059,7 +1061,8 @@ their own: the reads of the clients' histories, the sweep before the current
 token, the removal of an unconsumed token, the Events read and the last poll
 of each watch). These are the steps' bounds, not a guarantee of how long
 LAB01 or the run takes. The lab command for a 20-minute settle and the
-release, about 52.5 minutes of the variant's own bounds with the other
+release, about 55 minutes (54 minutes and 50 seconds) of the variant's own
+bounds with the other
 defaults, plus LAB01:
 
 ```sh
@@ -1187,9 +1190,27 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    (#716). Per member, under `S07/<variant>/engine-logs/<member>/`:
    - `heartbeat-status-verbose.txt`: `cubrid heartbeat status -v`, run once
      the cut is removed, as the diagnostic log bundle's heartbeat status is;
+   - `applyinfo-<peer>-first.txt` and `applyinfo-<peer>-second.txt`: two
+     readings of `cubrid applyinfo -L <copied log> -a appdb` for each copied
+     log the verbose heartbeat status names in a `Copylogdb
+     appdb@<peer>:<copied log>` line (such as
+     `/var/lib/cubrid/databases/appdb_ha-1`), at least one minute apart. This
+     is the command POC-66 read on the lab's image
+     (`docs/poc/poc66/applyinfo-sampler.sh`). Comparing the delayed log page
+     count and the applied position of the two readings tells whether the
+     member's applier for that peer still applies the copied log or has
+     stopped (#716). Each reading records in `at` when it started. A member
+     whose heartbeat status could not be read, or names no copier, has one
+     `cubrid applyinfo` source, unavailable with the reason;
    - `changemode.txt`: the server's HA mode from `cubrid changemode
      appdb@localhost` with no mode, the read the identity check of
      `test/sqlcheck` and S12's member state already use;
+   - `sockets.txt`: the member's TCP sockets with their owning processes
+     and TCP internals from `ss -tnpio`, run in the member's database
+     container as its CUBRID user, as POC-66 did (`docs/poc/poc66/trial.sh`).
+     The copier and the applier show as `cub_admin`; the process IDs in the
+     verbose heartbeat status tell which is which. No other container or
+     privilege is used;
    - `cubrid-log-listing.txt`: the listing of `$CUBRID/log` (the data
      volume's `cubrid-log` directory) with the same command and the same list
      of allowed files as the diagnostic log bundle;
@@ -1204,15 +1225,21 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    Each command prints at most 1 MiB and each log keeps at most its newest
    2,000 lines and 1 MiB, whole lines only; the capture reads at most
    16 MiB in all, and a file past that bound is recorded as `not read`.
-   Everything stored passes the evidence redaction. The capture takes at
-   most two minutes in all, each member within an equal share of what is
-   left, as the rows snapshot does. `unsettledEngineLogs` in `record.json`
+   Everything stored passes the evidence redaction. The capture reads the
+   members in two passes within two minutes, each member within an equal
+   share of what is left, as the rows snapshot does: the heartbeat status
+   and the first applyinfo readings within the first minute, then the other
+   sources. The minute between the two applyinfo readings so passes while
+   the logs are read. The second readings take at most 20 seconds after the
+   last of them is due, so the capture takes at most two minutes and
+   20 seconds in all. `unsettledEngineLogs` in `record.json`
    lists every source with its status (`collected`, `truncated`, `empty`,
    `unavailable` with the error, or `not read` with the bound reached) and
    its file. A source that could not be read never blocks cleanup, and the
    capture never changes the verdict or its reason. The variant's
-   `-timeout` check counts the two minutes of the rows and the two of the
-   capture in place of `-data-check-within` when they are longer.
+   `-timeout` check counts the two minutes of the rows and the two minutes
+   and 20 seconds of the capture in place of `-data-check-within` when they
+   are longer.
 8. With `-partition-manual-release` only, after the settle wait (settled or
    not) and before step 6, the run releases the quarantine itself when one
    only a person may release is in force, it is a generation the run saw,

@@ -48,10 +48,15 @@ const s07EngineSecret = "engine-log-secret-value"
 // member: files maps a member to the files of its $CUBRID/log, in the order
 // ls -1t lists them, and their content; failing names a member whose exec
 // does not reach it, and hanging one whose exec waits for its context.
+// stuck names a member whose second applyinfo reading waits for its context,
+// and readings counts the applyinfo readings of each member's copied log, so
+// that the second reading prints fewer delayed pages than the first.
 type s07EngineFake struct {
-	files   map[string][][2]string
-	failing string
-	hanging string
+	files    map[string][][2]string
+	failing  string
+	hanging  string
+	stuck    string
+	readings map[string]int
 }
 
 func (f s07EngineFake) command(ctx context.Context, args ...string) (string, error) {
@@ -76,6 +81,18 @@ func (f s07EngineFake) command(ctx context.Context, args ...string) (string, err
 		return heartbeatOutput(pod, roleMaster, testToBeActive) + "password=" + s07EngineSecret + "\n", nil
 	case strings.Contains(script, "changemode"):
 		return "The server '" + databaseName + "@localhost''s current HA running mode is to-be-active.\n", nil
+	case strings.Contains(script, "applyinfo"):
+		key := pod + " " + params[2]
+		f.readings[key]++
+		if pod == f.stuck && f.readings[key] > 1 {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return fmt.Sprintf(" *** Applied Info. *** \nDelayed log page count         : %d\ncopied log %s, db %s\n",
+			100/f.readings[key], params[2], params[1]), nil
+	case strings.Contains(script, "ss -tnpio"):
+		return "ESTAB 0 0 10.0.0.1:41234 10.0.0.2:1523 users:((\"cub_admin\",pid=326,fd=6))\n" +
+			"\t bytes_received:7985092 password=" + s07EngineSecret + "\n", nil
 	case strings.Contains(script, "ls -1t"):
 		var b strings.Builder
 		for _, file := range f.files[pod] {
@@ -102,8 +119,12 @@ func (f s07EngineFake) command(ctx context.Context, args ...string) (string, err
 }
 
 // s07EngineRun is a run of the three members whose redactor knows
-// s07EngineSecret.
+// s07EngineSecret, with a short interval between the two applyinfo readings.
 func s07EngineRun(t *testing.T, fake s07EngineFake) *haRun {
+	s07ShortApplyInfoInterval(t)
+	if fake.readings == nil {
+		fake.readings = map[string]int{}
+	}
 	h := s07SnapshotRun(t)
 	h.redactor = evidence.NewRedactor(s07EngineSecret)
 	h.Command = fake.command
@@ -121,6 +142,14 @@ func s07AllHALogs(pod string) [][2]string {
 		{databaseName + "@localhost_applylogdb_ha-1.err", "applylogdb line\n"},
 		{databaseName + "@localhost_applylogdb_ha-2.err", "applylogdb line\n"},
 	}
+}
+
+// s07ShortApplyInfoInterval makes the interval between the two applyinfo
+// readings short for one test.
+func s07ShortApplyInfoInterval(t *testing.T) {
+	old := s07ApplyInfoInterval
+	s07ApplyInfoInterval = 50 * time.Millisecond
+	t.Cleanup(func() { s07ApplyInfoInterval = old })
 }
 
 func s07Members(c *s07EngineLogs) map[string]*s07MemberEngineLogs {
@@ -198,6 +227,101 @@ func TestCaptureS07EngineLogsWhenTheClusterDidNotSettle(t *testing.T) {
 	for _, s := range d.Sources {
 		if s.Status != evidence.LogUnavailable || s.File != "" || s.Reason == "" {
 			t.Errorf("%s %s: %+v, want unreadable with its reason and no file", m2, s.Origin, s)
+		}
+	}
+}
+
+// A member stuck in to-be-active may have an applier that still applies the
+// copied log or one that has stopped (POC-66, #716). To tell them apart, the
+// run reads cubrid applyinfo for each copied log the member's verbose
+// heartbeat status names twice, s07ApplyInfoInterval apart, and keeps the
+// member's TCP sockets with the processes that own them, redacted. A member
+// whose heartbeat status could not be read names no copied log, so its
+// applyinfo is unreadable and says why.
+func TestCaptureS07EngineLogsReadsEachApplierTwice(t *testing.T) {
+	h := s07EngineRun(t, s07EngineFake{files: map[string][][2]string{m0: s07AllHALogs(m0)}, failing: m2})
+	rec := &s07Record{Variant: s07HigherRankIsolated}
+	h.captureS07EngineLogs(context.Background(), rec)
+	a := s07Members(rec.UnsettledEngineLogs)[m0]
+	dir := "/var/lib/cubrid/databases/" + databaseName + "_ha-1"
+	var texts [2]string
+	var at [2]time.Time
+	for i, reading := range []string{"first", "second"} {
+		origin := "cubrid applyinfo -L " + dir + " -a " + databaseName + " (" + reading + " reading)"
+		s := s07Source(a, origin)
+		if s == nil || s.Status != evidence.LogCollected || s.File == "" || s.At == nil {
+			t.Fatalf("%s %s: %+v, want collected into a file with its time", m0, origin, s)
+		}
+		data, err := os.ReadFile(filepath.Join(h.cfg.EvidenceDir, s.File))
+		if err != nil || !strings.Contains(string(data), "copied log "+dir+", db "+databaseName) {
+			t.Fatalf("%s: %v, %q, want applyinfo of %s on %s", s.File, err, data, dir, databaseName)
+		}
+		texts[i], at[i] = string(data), *s.At
+	}
+	if texts[0] == texts[1] {
+		t.Errorf("both readings stored %q, want each reading's own output", texts[0])
+	}
+	if gap := at[1].Sub(at[0]); gap < s07ApplyInfoInterval {
+		t.Errorf("the readings are %s apart, want at least %s", gap, s07ApplyInfoInterval)
+	}
+	s := s07Source(a, s07OriginSockets)
+	if s == nil || s.Status != evidence.LogCollected || s.File == "" {
+		t.Fatalf("%s sockets: %+v, want collected into a file", m0, s)
+	}
+	data, _ := os.ReadFile(filepath.Join(h.cfg.EvidenceDir, s.File))
+	if !strings.Contains(string(data), "cub_admin") || strings.Contains(string(data), s07EngineSecret) {
+		t.Errorf("the sockets %q lost the owning process or were not redacted", data)
+	}
+	d := s07Members(rec.UnsettledEngineLogs)[m2]
+	if s := s07Source(d, s07OriginApplyInfo); s == nil || s.Status != evidence.LogUnavailable || s.File != "" ||
+		!strings.Contains(s.Reason, "heartbeat status") {
+		t.Errorf("%s, whose heartbeat status could not be read: applyinfo %+v, want unreadable with the reason", m2, s)
+	}
+}
+
+// The copied logs to read are taken only from the Copylogdb lines of the
+// verbose heartbeat status for the run's database, and a line whose peer or
+// directory is not a plain host name or absolute path is left out, so that
+// nothing the engine prints reaches the shell as anything but an argument.
+func TestS07CopiedLogsFromTheVerboseHeartbeatStatus(t *testing.T) {
+	out := " HA-Process Info (master 63, state master)\n" +
+		"   Copylogdb appdb@ha-1:/var/lib/cubrid/databases/appdb_ha-1 (pid 326, state registered)\n" +
+		"   Copylogdb appdb@ha-2:/var/lib/cubrid/databases/appdb_ha-2 (pid 327, state registered)\n" +
+		"   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_ha-1 (pid 328, state registered)\n" +
+		"   Copylogdb otherdb@ha-1:/var/lib/cubrid/databases/otherdb_ha-1 (pid 329, state registered)\n" +
+		"   Copylogdb appdb@ha-3:/tmp/$(reboot) (pid 330, state registered)\n" +
+		"   Copylogdb appdb@ha-1:/var/lib/cubrid/databases/appdb_ha-1 (pid 326, state registered)\n"
+	got := s07CopiedLogs(out)
+	want := []s07CopiedLog{{Peer: "ha-1", Dir: "/var/lib/cubrid/databases/appdb_ha-1"},
+		{Peer: "ha-2", Dir: "/var/lib/cubrid/databases/appdb_ha-2"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("copied logs %+v, want %+v", got, want)
+	}
+}
+
+// The second readings have a time bound of their own: a member whose
+// applyinfo hangs on its second reading uses only its share of it, and the
+// members after it are still read twice.
+func TestCaptureS07EngineLogsBoundsTheSecondApplyInfoReadings(t *testing.T) {
+	old := s07ApplyInfoBound
+	s07ApplyInfoBound = 300 * time.Millisecond
+	t.Cleanup(func() { s07ApplyInfoBound = old })
+	h := s07EngineRun(t, s07EngineFake{files: map[string][][2]string{}, stuck: m0})
+	rec := &s07Record{Variant: s07HigherRankIsolated}
+	start := time.Now()
+	h.captureS07EngineLogs(context.Background(), rec)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the capture took %s with a second-reading bound of %s", took, s07ApplyInfoBound)
+	}
+	second := "cubrid applyinfo -L /var/lib/cubrid/databases/" + databaseName + "_ha-1 -a " + databaseName +
+		" (second reading)"
+	c := rec.UnsettledEngineLogs
+	if s := s07Source(c.Members[m0], second); s == nil || s.Status != evidence.LogUnavailable || s.File != "" {
+		t.Errorf("%s hung on its second reading: %+v, want unreadable", m0, s)
+	}
+	for _, pod := range []string{m1, m2} {
+		if s := s07Source(c.Members[pod], second); s == nil || s.Status != evidence.LogCollected {
+			t.Errorf("%s after a hung %s: %+v, want collected", pod, m0, s)
 		}
 	}
 }
@@ -283,7 +407,9 @@ func TestFinishS07KeepsTheEngineLogsOfAClusterThatDidNotSettle(t *testing.T) {
 		h.rec.Client = &imageIdentity{Pod: clientPodName, Node: testClientNode}
 		open := s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "acknowledged")
 		ledger := s07LedgerAnswers(map[string][]workload.Row{m0: {s07Row("c-1")}, m1: {s07Row("c-1")}}, m2, "")
-		engine := s07EngineFake{files: map[string][][2]string{m0: s07AllHALogs(m0)}, failing: m2}
+		s07ShortApplyInfoInterval(t)
+		engine := s07EngineFake{files: map[string][][2]string{m0: s07AllHALogs(m0)}, failing: m2,
+			readings: map[string]int{}}
 		h.Command = func(ctx context.Context, args ...string) (string, error) {
 			script := args[len(args)-1]
 			switch {
@@ -295,7 +421,8 @@ func TestFinishS07KeepsTheEngineLogsOfAClusterThatDidNotSettle(t *testing.T) {
 				return "", nil
 			case slices.ContainsFunc(args, func(a string) bool {
 				return strings.Contains(a, "heartbeat status -v") || strings.Contains(a, "changemode") ||
-					strings.Contains(a, "ls -1t") || strings.Contains(a, "tail -n")
+					strings.Contains(a, "ls -1t") || strings.Contains(a, "tail -n") ||
+					strings.Contains(a, "applyinfo") || strings.Contains(a, "ss -tnpio")
 			}):
 				if !capture {
 					return "", errors.New("exit status 1")
@@ -329,13 +456,20 @@ func TestFinishS07KeepsTheEngineLogsOfAClusterThatDidNotSettle(t *testing.T) {
 }
 
 // The -timeout check counts the capture with the rows read when the cluster
-// does not settle, in place of -data-check-within when they are longer.
+// does not settle, in place of -data-check-within when they are longer: the
+// two passes over the members, during which the interval between the two
+// applyinfo readings passes, and the second readings.
 func TestS07StepBoundsCountTheEngineLogCapture(t *testing.T) {
 	cfg := testHAConfig(t)
 	cfg.PartitionHold, cfg.DataCheckWithin = 2*time.Minute, time.Second
 	withoutCapture := s07PrepareBound + cfg.PartitionHold + s07ConfirmSlack + s07CleanupBound + cfg.s07Settle() +
 		s07SnapshotBound
-	if got, want := cfg.s07StepBounds(), withoutCapture+s07EngineLogBound; got != want {
+	if 2*s07ApplyInfoInterval > s07EngineLogBound {
+		t.Errorf("the applyinfo interval %s is longer than half the capture's bound %s, so its wait adds time",
+			s07ApplyInfoInterval, s07EngineLogBound)
+	}
+	capture := s07EngineLogBound + s07ApplyInfoBound
+	if got, want := cfg.s07StepBounds(), withoutCapture+capture; got != want {
 		t.Errorf("the steps' bounds are %s, want %s with the engine log capture", got, want)
 	}
 }
@@ -372,5 +506,29 @@ func TestS07EngineLogScripts(t *testing.T) {
 	}
 	if got := run(evidence.ListEngineLogs[2]); got != rel+"\n" {
 		t.Errorf("the listing printed %q", got)
+	}
+	// Stand-in cubrid and ss print the arguments they were given, so the
+	// command forms are those POC-66 ran on the lab's image.
+	stubs := t.TempDir()
+	for path, name := range map[string]string{filepath.Join(home, "bin", "cubrid"): "cubrid",
+		filepath.Join(stubs, "ss"): "ss"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\necho "+name+" \"$@\"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", stubs+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := "/var/lib/cubrid/databases/" + databaseName + "_ha-1"
+	if got, want := run(s07ApplyInfo, s07EngineLogArg0, "100", databaseName, dir),
+		"cubrid applyinfo -L "+dir+" -a "+databaseName+"\n"; got != want {
+		t.Errorf("applyinfo ran %q, want %q", got, want)
+	}
+	if got := run(s07Sockets, s07EngineLogArg0, "100"); got != "ss -tnpio\n" {
+		t.Errorf("the socket listing ran %q", got)
+	}
+	if got := run(s07Sockets, s07EngineLogArg0, "4"); got != "ss -" {
+		t.Errorf("the socket listing is not bounded in bytes: %q", got)
 	}
 }
