@@ -17,6 +17,7 @@ limitations under the License.
 package hack
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,60 @@ import (
 )
 
 const windowsGOOS = "windows"
+
+func TestRunE2ETermDuringCreateUsesConfirmedOwnership(t *testing.T) {
+	if runtime.GOOS == windowsGOOS {
+		t.Skip("requires Unix process signals")
+	}
+	for _, tc := range []struct {
+		name       string
+		createExit string
+		wantDelete bool
+	}{
+		{name: "competing cluster survives", createExit: "1"},
+		{name: "confirmed cluster is cleaned up", createExit: "0", wantDelete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			trace := filepath.Join(dir, "trace")
+			kind := filepath.Join(dir, "kind")
+			if err := os.WriteFile(kind, []byte(`#!/bin/sh
+printf 'kind %s\n' "$*" >> "$TRACE"
+if [ "$1" = create ]; then
+  kill -TERM "$PPID"
+  exit "$CREATE_EXIT"
+fi
+exit 0
+`), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", "run-e2e.sh", "sh", "-c", `echo 'suite ran' >> "$TRACE"`)
+			cmd.Env = append(os.Environ(),
+				"KIND="+kind, "CONTAINER_TOOL="+kind,
+				"KIND_CLUSTER=ci-create-signal-test", "KIND_NODE_IMAGE=example.com/kind-node:test",
+				"E2E_REUSE_CLUSTER=", "TRACE="+trace, "CREATE_EXIT="+tc.createExit,
+			)
+			out, err := cmd.CombinedOutput()
+			status, ok := err.(*exec.ExitError)
+			if !ok || status.ExitCode() != 143 {
+				t.Errorf("cancellation returned %v, want exit 143\n%s", err, out)
+			}
+			data, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log := string(data)
+			if strings.Contains(log, "kind delete cluster --name ci-create-signal-test") != tc.wantDelete {
+				t.Errorf("cleanup did not match confirmed cluster ownership:\n%s", log)
+			}
+			if strings.Contains(log, "kind load") || strings.Contains(log, "suite ran") {
+				t.Errorf("the canceled run advanced past creation:\n%s", log)
+			}
+		})
+	}
+}
 
 // Stub Kind and the container tool: no real cluster or image is changed.
 // A failed helper-image pull must not start E2E and must clean up this run's cluster.
