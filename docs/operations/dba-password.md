@@ -315,17 +315,19 @@ What a start of a DB container does with the password depends on the member:
   it logs `the DBA password of '<db>' could not be checked (exit 1, see
   dba_password_failed)`. Either way the server is not started (fail closed).
 - **An HA member** is **not checked** when it starts again: the entrypoint
-  starts heartbeat as before. A standalone-mode open of an HA member's
-  database before heartbeat, with its restart recovery, for example on a
-  former master after a failover, is not shown to leave its HA log, copy and
-  apply state unchanged, and a transient failure of the check would keep a
-  healthy member from starting. A changed value on an HA cluster is reported
-  by the Operator's rotation check above (`DBAPasswordRotationUnsupported`),
-  for as long as it differs; the members go on serving with the database's
-  password. This is an intentional safety boundary, not a verification result:
-  [#894](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894)
-  tracks whether a non-mutating HA-member pre-start check can be established
-  without altering HA log, copy or apply state.
+  starts heartbeat as before. A standalone-mode open is not a read-only
+  check: on a stopped HA slave, a `csql -S` login wrote to the member's data
+  volume and active log whether its password was right or wrong, and also
+  with `-r` (docs/poc/RESULTS.md, POC-65, one Docker trial on CUBRID 11.4.7).
+  Whether such writes are harmless to its HA log, copy and apply state, for
+  example on a former master after a failover, is not shown, and a transient
+  failure of the check would keep a healthy member from starting. A changed
+  value on an HA cluster is reported by the Operator's rotation check above
+  (`DBAPasswordRotationUnsupported`), for as long as it differs; the members
+  go on serving with the database's password, and a changed Secret is never
+  applied to them. This is an intentional safety boundary, not a verification
+  result
+  ([#894](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894)).
 
 When a standalone start is refused, the log says `dba_password_failed`; the
 container ends, and the kubelet starts it again with its usual back-off until

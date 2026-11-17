@@ -6508,6 +6508,17 @@ The proposed peer-identity counterexample remains unexecuted, so #894's engine
 qualification and operational decision remain open. This is not a Kind, VM or
 release-qualification result and does not replace POC-61 or POC-62.
 
+## POC-65 — whether a standalone-mode login on a stopped HA slave changes its files, in Docker on 11.4.7.1995 (#894) — **observation: yes; with the slave's heartbeat stopped and no change in 30 s with nothing run, a `csql -S` login refused for a wrong password, a read-only `csql -S -r` login and a `csql -S` login with the right password each changed the SHA-256 of the slave's data volume and active log, and moved log positions in the active log's first page; the copied logs of the master did not change; after a native restart the slave rejoined as a standby and later held every row, with no applier failure, but the new row took 13.5 min against 2.5 min after a control restart, in one trial on a busy host, so that delay is not attributed to the logins**
+
+Local Docker, the pinned image of `build/instance-manager/Dockerfile`
+(`cubrid/cubrid:11.4@sha256:a8c8792f…`, CUBRID 11.4.7.1995), synthetic passwords, one trial.
+Scripts, outputs and limits: [poc65/README.md](poc65/README.md). A standalone-mode open is
+therefore not a non-mutating password check for a stopped HA member, and the Instance Manager
+keeps not checking an initialized HA member before `cubrid heartbeat start`
+([DBA password](../operations/dba-password.md#restarting-after-a-changed-value)). A former
+master after a failover, an unclean stop and an interrupted restart were not tried; this is not a
+Kind, VM or Operator result.
+
 ## Applier pause mechanism: unavailable local preflight (#291)
 
 One bounded local Docker attempt sought to establish whether the current

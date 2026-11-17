@@ -1,0 +1,257 @@
+# 2026-11-17T02:42:10.931942779Z X poc65-hapw-slave bash -lc cd $CUBRID/log && ls -l . server && for f in *copylogdb*.err *applylogdb*.err server/*.err cub_client.err; do echo "=== $f"; grep -v "CODE = -982" "$f" | grep -v "^Set interrupt" | tail -n 40; done
+.:
+total 72
+-rw-rw-r-- 1 cubrid cubrid  4690 Nov 17 02:36 appdb@localhost_applylogdb_appdb_poc65-hapw-master.err
+-rw-rw-r-- 1 cubrid cubrid 17937 Nov 17 02:40 appdb@poc65-hapw-master_copylogdb.err
+-rw-rw-r-- 1 cubrid cubrid   324 Nov 17 02:22 appdb_restoreslave.access
+-rw-rw-r-- 1 cubrid cubrid  5457 Nov 17 02:22 appdb_restoreslave.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:22 cub_client.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:22 cub_server.access
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:22 cub_server.err
+-rw-rw-r-- 1 cubrid cubrid   836 Nov 17 02:42 cubrid_utility.log
+drwxrwxr-x 2 cubrid cubrid  4096 Nov 17 02:22 pl
+-rw-rw-r-- 1 cubrid cubrid 13755 Nov 17 02:40 poc65-hapw-slave_master.err
+drwxrwxr-x 2 cubrid cubrid  4096 Nov 17 02:31 server
+
+server:
+total 68
+-rw-rw-r-- 1 cubrid cubrid  1568 Nov 17 02:24 appdb_20261117_0222.access
+-rw-rw-r-- 1 cubrid cubrid  9733 Nov 17 02:24 appdb_20261117_0222.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:22 appdb_20261117_0222.event
+-rw-rw-r-- 1 cubrid cubrid  5465 Nov 17 02:27 appdb_20261117_0224.access
+-rw-rw-r-- 1 cubrid cubrid  8385 Nov 17 02:27 appdb_20261117_0224.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:24 appdb_20261117_0224.event
+-rw-rw-r-- 1 cubrid cubrid 22143 Nov 17 02:42 appdb_20261117_0231.access
+-rw-rw-r-- 1 cubrid cubrid  2314 Nov 17 02:38 appdb_20261117_0231.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 17 02:31 appdb_20261117_0231.event
+lrwxrwxrwx 1 cubrid cubrid    57 Nov 17 02:31 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb_20261117_0231.access
+lrwxrwxrwx 1 cubrid cubrid    54 Nov 17 02:31 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb_20261117_0231.err
+lrwxrwxrwx 1 cubrid cubrid    56 Nov 17 02:31 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261117_0231.event
+=== appdb@poc65-hapw-master_copylogdb.err
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'na' to 'active'. 
+
+Time: 11/17/26 02:40:28.200 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 2, EID = 4
+Server no longer responding.... Invalid argument
+
+Time: 11/17/26 02:40:28.200 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 2, EID = 5
+Your transaction has been aborted by the system due to server failure or mode change.
+
+Time: 11/17/26 02:40:29.599 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = -1, EID = 6
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'active' to 'dead'. 
+
+Time: 11/17/26 02:40:29.599 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = -1, EID = 7
+Server no longer responding.... Invalid argument
+
+Time: 11/17/26 02:40:29.991 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_admin.c, line 1093 ERROR CODE = -224, Tran = -1, EID = 8
+A database has not been restarted.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/17/26 02:40:30.993 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 9
+Program 'copylogdb' (pid 3031) connected to database server 'appdb@poc65-hapw-master' on the host 'poc65-hapw-master' (port 1523).
+
+Time: 11/17/26 02:40:31.012 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 685 ERROR CODE = -171, Tran = 2, EID = 10
+Incorrect or missing password.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/17/26 02:40:33.106 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 3332) connected to database server 'appdb@poc65-hapw-master' on the host 'poc65-hapw-master' (port 1523).
+
+Time: 11/17/26 02:40:33.143 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 2, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/17/26 02:40:35.139 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'na' to 'active'. 
+
+*** The previous error message is the last one. ***
+
+=== appdb@localhost_applylogdb_appdb_poc65-hapw-master.err
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'idle' to 'to-be-active'. 
+
+Time: 11/17/26 02:22:56.884 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 7
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|11288. 
+
+Time: 11/17/26 02:23:08.074 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 8
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'to-be-active' to 'active'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/17/26 02:24:50.659 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 787) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/17/26 02:24:51.484 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 1, EID = 2
+log applier: log applier started. required LSA: 146|13384. last committed LSA: 146|13296. last committed repl LSA: 146|13216.
+
+Time: 11/17/26 02:25:31.432 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 1, EID = 3
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'idle' to 'active'. 
+
+Time: 11/17/26 02:25:34.966 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 4
+HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 146|16224. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/17/26 02:31:49.810 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 2145) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/17/26 02:31:50.757 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 2
+log applier: log applier started. required LSA: 147|6280. last committed LSA: 147|6096. last committed repl LSA: 147|6016.
+
+Time: 11/17/26 02:36:25.946 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'idle' to 'active'. 
+
+Time: 11/17/26 02:36:27.566 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 4
+HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 147|15472. 
+
+*** The previous error message is the last one. ***
+
+=== server/appdb_20261117_0222.err
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Time: 11/17/26 02:24:23.794 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0
+Server status is DOWN.
+
+*** The previous error message is the last one. ***
+
+=== server/appdb_20261117_0224.err
+Process event: Disconnected with the cub_master and will shut itself down. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Time: 11/17/26 02:27:42.437 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0
+Server status is DOWN.
+
+*** The previous error message is the last one. ***
+
+=== server/appdb_20261117_0231.err
+
+Time: 11/17/26 02:31:47.797 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 1
+Server HA mode is changed from 'idle' to 'standby'.
+
+Time: 11/17/26 02:31:47.797 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0, CLIENT = :(0), EID = 2
+Server status is UP.
+
+Time: 11/17/26 02:32:04.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(349), EID = 6
+Time out in receiving data.
+
+Time: 11/17/26 02:32:41.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(599), EID = 12
+Time out in receiving data.
+
+Time: 11/17/26 02:33:37.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(601), EID = 21
+Time out in receiving data.
+
+Time: 11/17/26 02:34:24.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(603), EID = 29
+Time out in receiving data.
+
+Time: 11/17/26 02:35:54.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(605), EID = 40
+Time out in receiving data.
+
+Time: 11/17/26 02:37:47.371 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 55
+Checkpoint started (previous checkpoint page id: 154, previous redo page id: 154).
+
+Time: 11/17/26 02:38:03.330 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 57
+Checkpoint finished (checkpoint page id: 165, checkpoint redo page id: 165, flushed page count: 1).
+
+*** The previous error message is the last one. ***
+
+=== server/appdb_latest.err
+
+Time: 11/17/26 02:31:47.797 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 1
+Server HA mode is changed from 'idle' to 'standby'.
+
+Time: 11/17/26 02:31:47.797 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0, CLIENT = :(0), EID = 2
+Server status is UP.
+
+Time: 11/17/26 02:32:04.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(349), EID = 6
+Time out in receiving data.
+
+Time: 11/17/26 02:32:41.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(599), EID = 12
+Time out in receiving data.
+
+Time: 11/17/26 02:33:37.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(601), EID = 21
+Time out in receiving data.
+
+Time: 11/17/26 02:34:24.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(603), EID = 29
+Time out in receiving data.
+
+Time: 11/17/26 02:35:54.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6708 ERROR CODE = -1122, Tran = 1, CLIENT = poc65-hapw-master:copylogdb(605), EID = 40
+Time out in receiving data.
+
+Time: 11/17/26 02:37:47.371 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 55
+Checkpoint started (previous checkpoint page id: 154, previous redo page id: 154).
+
+Time: 11/17/26 02:38:03.330 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 57
+Checkpoint finished (checkpoint page id: 165, checkpoint redo page id: 165, flushed page count: 1).
+
+*** The previous error message is the last one. ***
+
+=== cub_client.err
+# rc=0 2026-11-17T02:42:11.369532612Z

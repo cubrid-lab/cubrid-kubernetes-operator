@@ -1,0 +1,10 @@
+# 2026-11-17T02:31:28.727670521Z X poc65-hapw-slave bash -lc csql -S -u dba -p 'Poc65-Right' appdb -c 'select count(*) from t'
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                     3
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+# rc=0 2026-11-17T02:31:40.235053798Z

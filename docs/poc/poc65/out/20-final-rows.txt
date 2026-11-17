@@ -1,0 +1,10 @@
+== master
+            1  'before password'   
+            2  'after password'    
+            3  'after control restart'
+            4  'after standalone logins'
+== slave
+            1  'before password'   
+            2  'after password'    
+            3  'after control restart'
+            4  'after standalone logins'

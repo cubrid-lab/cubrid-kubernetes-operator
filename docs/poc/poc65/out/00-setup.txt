@@ -1,0 +1,77 @@
+# 2026-11-17T02:18:22.822363130Z /data/GitHub/cubrid-kubernetes-operator/.claude/worktrees/agent-aaf46f9e30d7eb2ed/docs/poc/poc65/setup.sh
+setup start 2026-11-17T02:18:22.824417771Z
+
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 192.0M.
+
+CUBRID 11.4.7
+
+@ cubrid heartbeat start
+@ cubrid master start
+++ cubrid master start: success
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.7
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+Backup Volume Label: Level: 0, Unit: 0, Database appdb, Backup Time: Tue Nov 17 02:22:07 2026
+
+CUBRID 11.4.7
+
+@ cubrid heartbeat start
+@ cubrid master start
+++ cubrid master start: success
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.7
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+Execute OK. (8.699924 sec) Committed. (4.627959 sec) 
+1 row affected. (2.871975 sec) Committed. (0.000000 sec) 
+Execute OK. (0.000000 sec) Committed. (3.463969 sec) 
+1 row affected. (4.271962 sec) Committed. (0.000000 sec) 
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc65-hapw-master, state master)
+   Node poc65-hapw-slave (priority 2, state slave)
+   Node poc65-hapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 86, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-slave (pid 351, state registered)
+   Copylogdb appdb@poc65-hapw-slave:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-slave (pid 349, state registered)
+   Server appdb (pid 95, state registered_and_active)
+
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc65-hapw-slave, state slave)
+   Node poc65-hapw-slave (priority 2, state slave)
+   Node poc65-hapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 92, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-master (pid 358, state registered)
+   Copylogdb appdb@poc65-hapw-master:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-master (pid 356, state registered)
+   Server appdb (pid 101, state registered_and_standby)
+
+setup end 2026-11-17T02:23:57.967161575Z
+# rc=0 2026-11-17T02:23:57.967960614Z

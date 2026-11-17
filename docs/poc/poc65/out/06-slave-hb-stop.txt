@@ -1,0 +1,7 @@
+# 2026-11-17T02:27:36.409100607Z X poc65-hapw-slave bash -lc cubrid heartbeat stop
+@ cubrid heartbeat stop
+
+The heartbeat feature has been deactivated. Please wait until all shutdown processes of cub_servers are completed.
+
+++ cubrid heartbeat stop: success
+# rc=0 2026-11-17T02:27:43.524638254Z

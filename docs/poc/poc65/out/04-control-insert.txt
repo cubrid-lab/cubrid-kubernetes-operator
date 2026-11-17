@@ -1,0 +1,3 @@
+# 2026-11-17T02:25:01.605697690Z X poc65-hapw-master bash -lc csql -u dba -p 'Poc65-Right' appdb@localhost -c "INSERT INTO t VALUES (3, 'after control restart')"
+1 row affected. (3.083972 sec) Committed. (0.000000 sec) 
+# rc=0 2026-11-17T02:25:04.781014646Z
