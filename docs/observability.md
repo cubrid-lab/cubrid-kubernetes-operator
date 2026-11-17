@@ -1297,6 +1297,140 @@ the member as the user that owns the volume. A member that ends with
 `invalid argument` on a sandboxed runtime without open file description
 locks) never starts there; that is by design.
 
+### Rebuilding a member
+
+A member of an HA cluster whose storage was lost is rebuilt only on an
+administrator's explicit request, which names the member and carries a
+one-time token the Operator publishes for it, as on the
+[manual release](#manual-release) of a write quarantine (#117). A member that
+the HA bootstrap recorded as seeded (`status.databases[].seededMembers`) is
+never seeded again without such a request. The Operator never deletes a
+PersistentVolumeClaim, and its RBAC does not allow it to: the administrator
+provides the empty replacement claim.
+
+**What the Operator records.** While a member answers as a master or a slave,
+freshly and consistently, from a Pod created no earlier than its data claim
+`data-<member>` and whose Pod UID did not change during the observation, the
+Operator records that claim's UID and the PersistentVolume it is bound to in
+`status.memberDataClaims`. That claim and that volume have held the
+database, and their data is never discarded on a request. A member recorded
+there also counts as holding the database, as a member in `seededMembers`
+does.
+
+**When a token is published.** `status.memberRebuildOffers` lists one entry
+per member that can be rebuilt now, with its `token`, the member's `podUID`,
+`claimUID` and `volumeName`, and the `source` member and its `sourcePodUID`.
+A member is listed only when all of these hold in the latest observation:
+
+- the HA bootstrap has copied the first database to every member
+  (`haConfigured`), and the member is recorded as holding it;
+- no write quarantine is in force (`status.writeQuarantine` is empty): a
+  rebuild never picks between the data of members that may have diverged,
+  and is no way around the [manual release](#manual-release);
+- no other rebuild is in progress (`status.memberRebuild` is empty);
+- the member is not the current primary and does not report itself master;
+- every other member answers, freshly and consistently, and exactly one of
+  them is an active master, the `source`; the others answer as slaves. A
+  member that lost its storage gives no role, so `PrimaryResolved` stays
+  `False` meanwhile: the source is found among the other members. A member
+  whose Pod UID changed between the reads before and after the role probes
+  counts as one that did not answer;
+- the member is not the last resolved primary (`status.lastResolvedPrimary`).
+  It may hold writes no other member has, and its claim cannot be shown to
+  be a replacement while it gives no role, so a former primary whose storage
+  was lost cannot be rebuilt through this request (#117);
+- the member has a Pod and a data claim that is bound to a volume, is not
+  being deleted and was created no later than the Pod, a claim of the member
+  is recorded in `status.memberDataClaims`, the current claim has another
+  UID, and its volume is not one recorded for any member: the claim was
+  replaced, and a retained volume bound to a new claim is not taken for an
+  empty one.
+
+The token is kept while the member's Pod, claim and volume, the source and
+the source's Pod stay the same, also across an Operator restart, and
+replaced by a new one as soon as any of them changes.
+
+**An offer is not proof that the storage is empty.** The Operator can only
+compare the claim and volume with what it saw holding the database. A
+replacement claim bound to a volume the Operator never saw, such as a
+pre-provisioned or retained volume from elsewhere that holds data, is still
+offered. The administrator stays responsible for providing empty storage,
+and the restore of an accepted request is not allowed to rely on the offer:
+before anything is written, the Instance Manager has to refuse to restore
+over a target that already holds a database, and the claim's and volume's
+owner and the cluster UID have to be checked again.
+
+**Requesting a rebuild.** Replace the member's claim first, outside the
+Operator: check that nothing on the old claim is needed, then delete the
+member's Pod and its claim `data-<member>`; the StatefulSet creates an empty
+claim and a new Pod. Then read the token and set it with the member's name:
+
+```sh
+kubectl get cubridcluster <name> -o jsonpath='{range .status.memberRebuildOffers[*]}{.member} {.claimUID} {.source} {.token}{"\n"}{end}'
+kubectl annotate cubridcluster <name> database.cubrid.io/rebuild-member="<member>:<token>" --overwrite
+```
+
+The Operator acts on it in the next observation of the roles. It reads the
+cluster from the API server, past its cache, and compares the annotation with
+the **stored** offers:
+
+- A value that is not `<member>:<token>`, a token that is not the stored
+  offer's current token for the named member (including another member's
+  token), or a token whose offer no longer binds this observation's member
+  Pod, claim and volume, source and source Pod, is ignored, with one Warning Event
+  `MemberRebuildIgnored` per value and reason.
+- A request naming a member that cannot be rebuilt now (the reasons above,
+  such as the current primary or a claim that held the database) is refused,
+  with one Warning Event `MemberRebuildRefused` per value and reason that says
+  why. A refused or ignored annotation is left in place.
+- When the stored cluster cannot be read, or holds a newer offer than the one
+  the observation decided from, nothing is accepted and the pass is retried
+  after a second.
+- On acceptance it records `status.memberRebuild`: the member, its Pod and
+  claim UIDs and volume, the source and its Pod UID, the consumed `token`, a new
+  `operationID`, the `acceptedTime` and the `state` `Accepted`, and a Normal
+  Event `MemberRebuildAccepted`. The operation ID is in the stored status
+  before anything is restored on the member, and an Operator restart keeps
+  it. No offer is published while a rebuild is in progress.
+- The next observation finds the token consumed in the stored status and
+  removes the annotation. An annotation that names the token of
+  `status.memberRebuild` or `status.lastMemberRebuild` again is removed and
+  changes nothing.
+
+**Interruptions between acceptance and the annotation's removal.** The
+acceptance exists only once the status that records it is written:
+
+- If that status write fails, or the Operator stops before it, nothing is
+  accepted. `status.memberRebuild` stays empty, the offer and its token stay
+  as they were, the annotation stays, and no `MemberRebuildAccepted` Event is
+  recorded. The next observation decides on the same annotation again and,
+  while the offer is unchanged, accepts it with a new operation ID; the
+  operation ID of the unwritten acceptance was never stored, so nothing can
+  run under it.
+- If the status was written and the Operator stops before the annotation is
+  removed, the next observation, in this or another Operator process, finds
+  the token consumed in the stored `status.memberRebuild` and removes the
+  annotation; the operation ID stays the stored one.
+- If the removal itself fails, the annotation stays inert, because its token
+  is consumed, and every later observation tries to remove it again.
+
+An accepted rebuild is withdrawn when a write quarantine starts, when the
+member answers as a master, when its Pod, claim or volume, the source or the
+source's Pod changes, or when the member could no longer be offered a
+rebuild for any of the reasons above (for example its claim is seen holding
+the database, or it becomes the last resolved primary). It then moves to
+`status.lastMemberRebuild` with the state `Withdrawn` and a message, with a
+Warning Event `MemberRebuildWithdrawn`, and a new token is published once the
+member can be rebuilt again. An observation that sees no healthy primary
+among the other members keeps it, unless a write quarantine is in force.
+
+Whether this build restores the database on the member for an accepted
+request is recorded in [ROADMAP.md](../ROADMAP.md). An accepted request has
+no other way out: removing the annotation does not cancel it, and only a
+withdrawal as above ends it.
+Restrict `update`/`patch` on `cubridclusters` to administrators; the actor is
+in the API audit log.
+
 ### The DBA password step in the Instance Manager's log
 
 When `CUBRID_DBA_PASSWORD_FILE` names a file in the database container, the
