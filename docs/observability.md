@@ -631,8 +631,43 @@ A manual release is a risk acceptance, not a fence the Operator verifies
 (ADR-0005, section 8). Before it, the administrator obtains independent
 evidence that the recorded members (`status.writeQuarantine.members`) were
 actually fenced, reviews possible divergent data, and accepts that writes
-acknowledged by a member that was not fenced may be lost. They then set the
-quarantine's current `status.writeQuarantine.releaseToken` as an annotation:
+acknowledged by a member that was not fenced may be lost.
+
+**Before releasing after a change of master** (`WriteQuarantinedMasterChanged`,
+or `WriteQuarantinedMultipleMasters` where the master that remains is not the
+one recorded before the quarantine), check whether the new master holds the
+writes acknowledged before the quarantine. CUBRID chooses the master, and the
+master it chooses can lack writes that the former master acknowledged. On the
+VM lab on 2026-11-17 UTC, a member ranked above the active master was cut off
+and then healed; CUBRID demoted the active master and left the higher-ranked
+member as heartbeat master (its server `registered_and_to_be_active`), and
+that member lacked 50 acknowledged writes that the other two members held.
+The Operator kept the write path closed with `WriteQuarantinedMasterChanged`
+([#115](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115),
+[#702](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/702)).
+
+- Compare the data on every member before setting the annotation: for the
+  tables your application writes, the row count, and a recent row you know
+  was acknowledged before `status.writeQuarantine` started (a known key or
+  marker), read on each member directly, not through `-rw`. The per-member
+  `SELECT COUNT(*)` loop in
+  [retained-volume recovery, step 5](operations/retained-volume-recovery.md#5-check-the-data-on-every-member)
+  shows the form; use your cluster's Pod names. A member that cannot be read
+  is recorded as unknown, not as holding or lacking those writes.
+- If the new master lacks writes that another member holds, a release makes
+  those writes unavailable through the managed write path, and new writes
+  are accepted on top of the master's data. The missing writes may still
+  exist on the other members, which are now slaves. Preserve every member's
+  volume and logs.
+- The Operator does not pick a winner between members holding different data
+  (ADR-0005), and releases nothing on its own in this state. A verified
+  procedure to recover such writes onto the new master, or to return
+  mastership to the member that holds them, is not yet established
+  ([#702](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/702)).
+  Releasing in this state is a decision to accept that loss.
+
+Then set the quarantine's current `status.writeQuarantine.releaseToken` as an
+annotation:
 
 ```sh
 TOKEN=$(kubectl get cubridcluster <name> -o jsonpath='{.status.writeQuarantine.releaseToken}')

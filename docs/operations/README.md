@@ -155,6 +155,10 @@ member verification or fence checks. A
 [manual release](../observability.md#manual-release) requires the current
 one-time token and exactly one observed active master; its exemptions for
 unverified identities end after an Operator restart or leader change.
+After a change of master, compare every member's data first: the new master
+may lack writes acknowledged before the quarantine, and a release makes them
+unavailable through the managed path
+([before releasing after a change of master](../observability.md#manual-release)).
 Follow the [accepted quarantine policy](../adr/0005-failover-split-brain.md#8-write-path-quarantine-policy-113)
 and collect the real-fault SQL evidence required by #115; these Kubernetes
 observations alone do not qualify managed write isolation.
