@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Run offline note fixtures
@@ -30,4 +30,4 @@ jobs:
           for note in docs/releases/v*.md; do
             python3 hack/check_release_notes.py "$note"
           done
-          echo "No release is created or published by this workflow."
+          echo "This checks note format only; factual claims need human review. No release is created or published by this workflow."

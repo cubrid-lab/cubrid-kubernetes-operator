@@ -13,7 +13,7 @@ SUB = re.compile(r"^### ([^\n]+)$")
 ALLOWED = {
     "Upgrade notes", "Compatibility", "Features", "Bug Fixes", "Added", "Changed",
     "Deprecated", "Removed", "Fixed", "Security", "Performance", "Documentation",
-    "CI", "Tests",
+    "CI", "Tests", "Known limitations", "Known issues",
 }
 
 
@@ -39,7 +39,7 @@ def issues(body: str, expected_tag: str) -> list[str]:
         if title not in ALLOWED:
             errors.append(f"unknown section: {title}")
         end = sections[index + 1][0] if index + 1 < len(sections) else len(lines)
-        changes = [s.strip() for s in lines[start + 1 : end] if s.startswith(("- ", "* "))]
+        changes = [s.strip() for s in lines[start + 1 : end] if s.strip().startswith(("- ", "* "))]
         if not changes:
             errors.append(f"empty section: {title}")
         for change in changes:

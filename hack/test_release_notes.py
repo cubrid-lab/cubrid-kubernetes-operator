@@ -5,7 +5,7 @@ from check_release_notes import issues
 
 GOOD = """## v0.1.0 (2026-12-01)
 
-This release brings verified HA reconciliation with explicitly scoped write quarantine behavior.
+Adds a `RoutingReady` condition; see Known limitations for write-path behavior that has not been validated.
 
 ### Upgrade notes
 
@@ -13,7 +13,11 @@ This release brings verified HA reconciliation with explicitly scoped write quar
 
 ### Features
 
-- Expose readiness conditions and refuse writes while there is no verified master ([#123](https://github.com/cubrid-lab/cubrid-kubernetes-operator/pull/123)) by @reviewer.
+- Expose a `RoutingReady` condition ([#123](https://github.com/cubrid-lab/cubrid-kubernetes-operator/pull/123)) by `@example-author`.
+
+### Known limitations
+
+- Write quarantine has unit, envtest and one Kind run only; behavior under VM failure or network partition is not validated.
 """
 
 
@@ -23,7 +27,7 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def test_missing_summary(self):
         body = GOOD.replace(
-            "This release brings verified HA reconciliation with explicitly scoped write quarantine behavior.", ""
+            "Adds a `RoutingReady` condition; see Known limitations for write-path behavior that has not been validated.", ""
         )
         self.assertIn("missing observable user-impact summary", issues(body, "v0.1.0"))
 
@@ -38,8 +42,20 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def test_raw_generated(self):
         self.assertTrue(any("raw generated bullet" in e for e in issues(
-            GOOD.replace("- Expose readiness", "* Expose readiness"), "v0.1.0"
+            GOOD.replace("- Expose a `RoutingReady`", "* Expose a `RoutingReady`"), "v0.1.0"
         )))
+
+    def test_indented_raw_bullet(self):
+        self.assertTrue(any("raw generated bullet" in e for e in issues(
+            GOOD.replace("- Expose a `RoutingReady`", "  * Expose a `RoutingReady`"), "v0.1.0"
+        )))
+
+    def test_known_limitations_allowed(self):
+        self.assertFalse(any("unknown section" in e for e in issues(GOOD, "v0.1.0")))
+
+    def test_known_issues_allowed(self):
+        body = GOOD.replace("### Known limitations", "### Known issues")
+        self.assertEqual(issues(body, "v0.1.0"), [])
 
 
 if __name__ == "__main__":
