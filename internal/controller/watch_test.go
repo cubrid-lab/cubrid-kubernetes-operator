@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,18 +44,43 @@ import (
 
 // countingProber reports <cluster>-0 as the master and the other members as
 // slaves whose applier counters rise with every probe, as on a busy cluster.
+// It records when each observation starts: every observation probes the
+// master once.
 type countingProber struct {
 	master string
 	probes atomic.Int64
+
+	mu     sync.Mutex
+	starts []time.Time
 }
 
 func (p *countingProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	n := p.probes.Add(1)
 	if podName == p.master {
+		p.mu.Lock()
+		p.starts = append(p.starts, time.Now())
+		p.mu.Unlock()
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
 		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: n}}
+}
+
+// gapsSince returns the time between consecutive observations from the last
+// one that started before since onwards.
+func (p *countingProber) gapsSince(since time.Time) []time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	first := len(p.starts)
+	for first > 0 && !p.starts[first-1].Before(since) {
+		first--
+	}
+	first = max(first-1, 0)
+	var gaps []time.Duration
+	for i := first + 1; i < len(p.starts); i++ {
+		gaps = append(gaps, p.starts[i].Sub(p.starts[i-1]))
+	}
+	return gaps
 }
 
 // versionProber reports <cluster>-0 as the master, every member with the same
@@ -129,12 +155,21 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		}).WithTimeout(10 * time.Second).Should(Equal(3))
 		time.Sleep(2 * time.Second)
 
-		By("counting the observations over a window shorter than the HA resync interval")
-		start := prober.probes.Load()
+		// The members stay unverified here, as envtest runs no Pod, so the
+		// cluster is observed again every unverifiedResyncInterval (3 s), and
+		// a fixed window may hold one or two of these timed passes. A pass
+		// that its own status write started would follow the previous one
+		// within milliseconds, while every timed retry of a settled pass
+		// waits at least a second. The time between consecutive
+		// observations, not their number in a window, therefore shows
+		// whether a status write started one (#969).
+		By("measuring the time between consecutive observations")
+		since := time.Now()
 		time.Sleep(4 * time.Second)
-		reconciles := (prober.probes.Load() - start) / 3
-		Expect(reconciles).To(BeNumerically("<=", 1),
-			"a status write must not start the next observation; the HA resync does")
+		for _, gap := range prober.gapsSince(since) {
+			Expect(gap).To(BeNumerically(">=", 500*time.Millisecond),
+				"a status write must not start the next observation; the timed resync does")
+		}
 	})
 
 	It("restores a deleted PodDisruptionBudget of a standalone cluster, which has no periodic reconcile", func() {
