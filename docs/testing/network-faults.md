@@ -195,6 +195,11 @@ How a path from a sender to a receiver is probed:
   deletes the chain and reads the rules back, again a few times while any
   rule or chain of the faults is left, and then connects to the peer until
   a connect succeeds. Nothing is removed when the injection never ran.
+- **Partition at a run's end.** `RemoveDrops` takes the drop rules away
+  without the probes: one exec per member that removes them and reads them
+  back, every member at the same time, tried again while any is left.
+  `RemoveOnEnd` runs it as soon as a run's context ends, for a run that may
+  get `SIGKILL` shortly after; `Remove` still follows when there is time.
 - **Time.** Each wait for the probes ends `Env.Reserve` (default 20 s)
   before the cleanup limit, so that the last steps fit in the limit.
 - **Failures.** Every failure is returned, so `faults.Run` records

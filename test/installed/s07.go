@@ -18,6 +18,7 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -29,6 +30,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -82,6 +84,15 @@ const (
 	// s07NoAnswer is the outcome of a new-connection write with no line in
 	// the client's history.
 	s07NoAnswer = "no answer"
+	// s07UnknownPresent and s07UnknownAbsent resolve a write whose outcome
+	// the client could not know by the rows the data check read: its row is
+	// on some member, or on none.
+	s07UnknownPresent = "unknown-present"
+	s07UnknownAbsent  = "unknown-absent"
+	// s07MemberPort is the member port the faults probe (cub_master);
+	// s07OperatorPort the manager's health port.
+	s07MemberPort   = 1523
+	s07OperatorPort = 8081
 )
 
 // The run's own bounds on the steps of S07; they are not the contract's
@@ -100,6 +111,9 @@ var (
 	// Pod gone and the -rw EndpointSlices empty a new connection may still
 	// have been answered by what kube-proxy had not yet changed.
 	s07ProbeSlack = 2 * time.Second
+	// s07HealthWindow is how long, after the data check, the run reads
+	// whether the cluster reports Ready with no quarantine.
+	s07HealthWindow = 30 * time.Second
 )
 
 // partitionFault reports whether the run's fault is an S07 partition.
@@ -157,7 +171,11 @@ type s07Revision struct {
 	Reason       string    `json:"reason"`
 	Revision     int64     `json:"revision"`
 	Members      []string  `json:"members,omitempty"`
+	MemberNames  []string  `json:"memberNames,omitempty"`
 	Master       string    `json:"observedMaster,omitempty"`
+	// WhileCut is set when the run first saw this revision while the member
+	// was cut off.
+	WhileCut bool `json:"seenWhileCut"`
 }
 
 // s07Condition is a condition of the cluster when the run saw it change.
@@ -191,6 +209,9 @@ type s07Probe struct {
 	Exit       int       `json:"exit"`
 	Outcome    string    `json:"outcome"`
 	Error      string    `json:"error,omitempty"`
+	// Resolved is, for an unknown outcome, s07UnknownPresent or
+	// s07UnknownAbsent once the data check read every member.
+	Resolved string `json:"resolved,omitempty"`
 }
 
 // s07Session is what happened to the one connection s07OpenClient held from
@@ -236,7 +257,22 @@ type s07Record struct {
 	// Operator is the manager Pod the target is cut off from, which the
 	// faults never enter.
 	Operator      string          `json:"operatorPod"`
+	OperatorUID   string          `json:"operatorPodUID"`
+	OperatorIP    string          `json:"operatorPodIP"`
 	MembersBefore []imageIdentity `json:"membersBefore"`
+	// OperatorChangedAt is when the run first saw the manager Pod replaced,
+	// gone or with another IP, and OperatorChange how; from then on no
+	// trigger is counted.
+	OperatorChangedAt *time.Time `json:"operatorChangedAt,omitempty"`
+	OperatorChange    string     `json:"operatorChange,omitempty"`
+	// ClusterReadsAfterGrace counts the readings of the cluster, and
+	// OneMasterSweepsAfterGrace the complete sweeps with exactly one
+	// reachable active master, made while the member was cut off and the
+	// grace had passed: the control's evidence that it was observed.
+	ClusterReadsAfterGrace    int `json:"clusterReadsAfterGrace"`
+	OneMasterSweepsAfterGrace int `json:"oneMasterSweepsAfterGrace"`
+	// StillRunning names the steps of the fault flow that did not return.
+	StillRunning []string `json:"stepsStillRunning,omitempty"`
 	// ForeignTargets are endpoints the faults would have entered that are
 	// not the run's own members; any fails the result and nothing is cut.
 	ForeignTargets []string           `json:"foreignTargetsRefused,omitempty"`
@@ -303,27 +339,33 @@ type s07Record struct {
 	// SettledAt is when, after the removal, every member answered with one
 	// master and two slaves and any quarantine left was one only a person
 	// can release; SettleUnmet what did not hold at the settle bound.
-	SettledAt       *time.Time         `json:"settledAt,omitempty"`
-	SettleUnmet     string             `json:"settleUnmet,omitempty"`
-	FinalMaster     string             `json:"finalMaster,omitempty"`
-	FinalSlaves     []string           `json:"finalSlaves,omitempty"`
-	MembersAfter    []imageIdentity    `json:"membersAfter"`
-	Data            *s07Data           `json:"dataCheck,omitempty"`
-	HealthyAtEnd    bool               `json:"healthyAtEnd"`
-	Observed        []faults.Step      `json:"observed"`
-	ClientsStopped  bool               `json:"clientsStopped"`
-	ClientsRead     bool               `json:"clientsRead"`
-	ClientHistories []s04ClientHistory `json:"clientHistories,omitempty"`
-	Partition       *netfault.Record   `json:"partition,omitempty"`
+	SettledAt    *time.Time      `json:"settledAt,omitempty"`
+	SettleUnmet  string          `json:"settleUnmet,omitempty"`
+	FinalMaster  string          `json:"finalMaster,omitempty"`
+	FinalSlaves  []string        `json:"finalSlaves,omitempty"`
+	MembersAfter []imageIdentity `json:"membersAfter"`
+	Data         *s07Data        `json:"dataCheck,omitempty"`
+	// HealthReadings counts the readings of the cluster in the health window
+	// after the data check, and ReadyWithoutQuarantineAt is when one first
+	// reported Ready with no quarantine; HealthyAtEnd is set then.
+	HealthReadings           int                `json:"healthReadings"`
+	ReadyWithoutQuarantineAt *time.Time         `json:"readyWithoutQuarantineAt,omitempty"`
+	HealthyAtEnd             bool               `json:"healthyAtEnd"`
+	Observed                 []faults.Step      `json:"observed"`
+	ClientsStopped           bool               `json:"clientsStopped"`
+	ClientsRead              bool               `json:"clientsRead"`
+	ClientHistories          []s04ClientHistory `json:"clientHistories,omitempty"`
+	Partition                *netfault.Record   `json:"partition,omitempty"`
+	// mu serializes the observations and the record's writes, which the run's
+	// end can make while a step of the fault is still running; cut is the
+	// state in cut.json.
+	mu  sync.Mutex
+	cut *s07CutFile
 }
 
-// s07NoteMu serializes the observations, which the run's end can add while
-// a step of the fault is still running.
-var s07NoteMu sync.Mutex
-
 func (rec *s07Record) note(kind, detail string) {
-	s07NoteMu.Lock()
-	defer s07NoteMu.Unlock()
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
 	rec.Observed = append(rec.Observed, faults.Step{T: time.Now().UTC(), Kind: kind, Detail: detail})
 }
 
@@ -435,7 +477,9 @@ func s07NewConnectionsStopped(probes []s07Probe, from, until time.Time) *time.Ti
 		if p.StartedAt.Before(from) || !until.IsZero() && !p.StartedAt.Before(until) {
 			continue
 		}
-		if p.Outcome == workload.Acknowledged {
+		if s07TookEffect(p) || p.Outcome == workload.Unknown && p.Resolved == "" {
+			// An unknown outcome not resolved may have taken effect: it does
+			// not show new connections stopped.
 			stopped = nil
 			continue
 		}
@@ -445,6 +489,12 @@ func s07NewConnectionsStopped(probes []s07Probe, from, until time.Time) *time.Ti
 		}
 	}
 	return stopped
+}
+
+// s07TookEffect reports whether a new-connection write is known to have
+// taken effect: acknowledged, or unknown with its row on some member.
+func s07TookEffect(p s07Probe) bool {
+	return p.Outcome == workload.Acknowledged || p.Resolved == s07UnknownPresent
 }
 
 // s07Limits are the contract's limits S07 is judged by; zero is unset.
@@ -481,10 +531,10 @@ func s07NeverEvents(rec *s07Record) []string {
 		never = append(never, fmt.Sprintf("a %s quarantine, which only a person may release, was released %s",
 			rec.ReleaseReason, rec.ReleaseMethod))
 	}
-	if d := rec.Data; d != nil && d.Read && !d.OK && rec.HealthyAtEnd {
+	if d := rec.Data; d != nil && d.Read && d.Diverged > 0 && rec.HealthyAtEnd {
 		never = append(never, fmt.Sprintf("the cluster reported Ready with no quarantine after the partition ended "+
-			"while the members' data broke the rules: %d acknowledged write(s) missing, %d row(s) differing "+
-			"between members", d.AcknowledgedMissing, d.Diverged))
+			"while the members held different data: %d row(s) differing between members, %d acknowledged "+
+			"write(s) missing", d.Diverged, d.AcknowledgedMissing))
 	}
 	if len(rec.ForeignTargets) > 0 {
 		never = append(never, "the run was about to cut Pods that are not its own: "+
@@ -504,10 +554,41 @@ func s07Broken(rec *s07Record) string {
 	case rec.TriggerObservedAt != nil && (rec.RWPodsGoneAt == nil || rec.RWEndpointsEmptyAt == nil):
 		return "a write quarantine was recorded, but the run never saw every read-write Broker Pod gone and the " +
 			"-rw EndpointSlices empty; RoutingReady=False or a desired replica count alone is no quarantine"
-	case rec.Control && rec.TriggerObservedAt == nil && rec.QuarantineSeenAt != nil && rec.IncompleteSweeps == 0:
-		return fmt.Sprintf("a write quarantine (%s) started in the control case, where every sweep read one "+
-			"reachable active master and only a lower-ranked member that is not the last resolved primary cut off",
-			cmpOr(firstReason(rec), "reason unknown"))
+	case rec.Control && rec.TriggerObservedAt == nil && rec.QuarantineSeenAt != nil && s07ControlUncounted(rec) == "":
+		return fmt.Sprintf("a write quarantine (%s) naming only %s started in the control case while it was cut "+
+			"off, where every sweep read one reachable active master and only a lower-ranked member that is not "+
+			"the last resolved primary cut off", firstReason(rec), rec.Target.Pod)
+	}
+	return ""
+}
+
+// s07ControlUncounted says why a quarantine in the control case is not
+// counted as a violation, or "" when it is: only a
+// WriteQuarantinedMemberUnverified quarantine first seen while the member was
+// cut off, naming that member alone, with every sweep complete, the manager
+// Pod unchanged, and no member having answered as an active master beside
+// the master before it was seen, is one. Another may be legitimate: two
+// masters after the heal (rule 1), or an Operator that could not verify a
+// reachable member.
+func s07ControlUncounted(rec *s07Record) string {
+	if len(rec.Revisions) == 0 {
+		return "its reason was not read"
+	}
+	r := rec.Revisions[0]
+	claimedBefore := func(t *time.Time) bool { return t != nil && !t.After(r.SeenAt) }
+	switch {
+	case r.Reason != string(databasev1alpha1.WriteQuarantinedMemberUnverified):
+		return "its reason is " + r.Reason
+	case !r.WhileCut:
+		return "it was first seen after the cut was removed"
+	case !slices.Equal(r.MemberNames, []string{rec.Target.Pod}):
+		return fmt.Sprintf("it names %s, not %s alone", strings.Join(r.MemberNames, ", "), rec.Target.Pod)
+	case rec.IncompleteSweeps > 0:
+		return fmt.Sprintf("%d sweep(s) could not read every reachable member's role", rec.IncompleteSweeps)
+	case rec.OperatorChangedAt != nil:
+		return "the manager Pod changed: " + rec.OperatorChange
+	case claimedBefore(rec.TargetClaimedAt) || claimedBefore(rec.TwoClaimsAt):
+		return "a member other than the master had answered as an active master before it was seen"
 	}
 	return ""
 }
@@ -523,6 +604,9 @@ func firstReason(rec *s07Record) string {
 // or "".
 func s07Blocked(rec *s07Record) string {
 	switch {
+	case len(rec.StillRunning) > 0:
+		return "steps of the fault flow were still running after their limit: " +
+			strings.Join(rec.StillRunning, ", ")
 	case rec.FaultConfirmedAt == nil:
 		return "the partition was not confirmed: " + cmpOr(rec.NotHeld, "the fault did not take effect")
 	case rec.HoldEndedAt == nil:
@@ -530,9 +614,20 @@ func s07Blocked(rec *s07Record) string {
 	case !rec.Control && rec.TriggerObservedAt == nil:
 		return "no sweep pair showed a quarantine trigger while the partition held: the run cannot say a " +
 			"quarantine was required (whether one started is recorded)"
+	case rec.OperatorChangedAt != nil:
+		return fmt.Sprintf("the manager Pod changed at %s (%s): the run stopped counting triggers",
+			rec.OperatorChangedAt.Format(time.RFC3339), rec.OperatorChange)
 	case rec.Control && rec.TriggerObservedAt == nil && rec.QuarantineSeenAt != nil:
-		return fmt.Sprintf("a write quarantine started in the control case while %d sweep(s) could not read every "+
-			"reachable member's role", rec.IncompleteSweeps)
+		return fmt.Sprintf("a %s quarantine started in the control case and is recorded, not counted as a "+
+			"violation, because %s", cmpOr(firstReason(rec), "reason unknown"), s07ControlUncounted(rec))
+	case rec.Control && (rec.ClusterReadsAfterGrace < 2 || rec.OneMasterSweepsAfterGrace < 2):
+		return fmt.Sprintf("the control was not observed: after the grace the run read the cluster %d time(s) and "+
+			"saw one reachable active master in %d complete sweep(s), and needs two of each",
+			rec.ClusterReadsAfterGrace, rec.OneMasterSweepsAfterGrace)
+	case rec.Session != nil && rec.Session.AcknowledgedAfterClosed > 0:
+		return fmt.Sprintf("the already-open connection had %d write(s) acknowledged after the run saw every "+
+			"read-write Broker Pod gone and no -rw endpoint: an anomaly the run cannot explain",
+			rec.Session.AcknowledgedAfterClosed)
 	case rec.SettledAt == nil:
 		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown")
 	case rec.Data == nil || !rec.Data.Read:
@@ -541,6 +636,8 @@ func s07Blocked(rec *s07Record) string {
 			reason = rec.Data.Error
 		}
 		return "the post-recovery data check on every member could not be made: " + reason
+	case rec.HealthReadings == 0:
+		return "the cluster was not read in the health window after the data check"
 	}
 	return ""
 }
@@ -595,7 +692,8 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 	}
 	if d := rec.Data; d.AcknowledgedMissing > 0 || d.Diverged > 0 {
 		v.Reason += fmt.Sprintf("; %d acknowledged write(s) are missing on some member and %d row(s) differ "+
-			"between members, reported while the cluster was not Ready", d.AcknowledgedMissing, d.Diverged)
+			"between members (reported: ADR-0005 expects writes acknowledged while a quarantine closes the path "+
+			"to be lost)", d.AcknowledgedMissing, d.Diverged)
 	}
 	return v
 }
@@ -637,6 +735,12 @@ func s07Measurements(rec *s07Record) map[string]any {
 	m["releaseMethod"] = cmpOr(rec.ReleaseMethod, evidence.Unknown)
 	m["quarantineAtEnd"] = cmpOr(rec.QuarantineAtEnd, evidence.Unknown)
 	m["finalMaster"] = cmpOr(rec.FinalMaster, evidence.Unknown)
+	classes := map[string]int{}
+	for _, p := range rec.Probes {
+		classes[cmpOr(p.Resolved, p.Outcome)]++
+	}
+	m["newConnectionWrites"] = classes
+	m["operatorChange"] = cmpOr(rec.OperatorChange, "none seen")
 	m["establishedSession"] = evidence.Unknown
 	if s := rec.Session; s != nil && s.ReadError == "" {
 		m["establishedSession"] = "open at the end"
@@ -690,7 +794,7 @@ func (h *haRun) s07Endpoint(ctx context.Context, name string) (netfault.Endpoint
 		return netfault.Endpoint{}, fmt.Errorf("member Pod %s is not running with an IP", name)
 	}
 	return netfault.Endpoint{Name: name, Namespace: h.cfg.Namespace, Pod: name, UID: string(pod.UID),
-		IP: pod.Status.PodIP, Port: 1523}, nil
+		IP: pod.Status.PodIP, Port: s07MemberPort}, nil
 }
 
 // s07Operator is the one manager Pod LAB01 recorded, as an address only: the
@@ -711,7 +815,7 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 			manager.Pod, manager.UID)
 	}
 	return netfault.Endpoint{Name: "operator", Namespace: h.cfg.OperatorNamespace, Pod: pod.Name,
-		UID: string(pod.UID), IP: pod.Status.PodIP, Port: 8081, NoEnter: true}, nil
+		UID: string(pod.UID), IP: pod.Status.PodIP, Port: s07OperatorPort, NoEnter: true}, nil
 }
 
 // prepareS07 picks the member to cut off and builds the partition: that
@@ -762,7 +866,7 @@ func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Parti
 	if err != nil {
 		return nil, err
 	}
-	rec.Operator = op.Pod
+	rec.Operator, rec.OperatorUID, rec.OperatorIP = op.Pod, op.UID, op.IP
 	p.Cuts = append(p.Cuts, netfault.Cut{Peer: op, Direction: netfault.Both})
 	if rec.ForeignTargets = h.s07Foreign(p); len(rec.ForeignTargets) > 0 {
 		return nil, fmt.Errorf("the partition would enter Pods that are not the run's own: %v", rec.ForeignTargets)
@@ -801,7 +905,8 @@ func (h *haRun) beforeS07(ctx context.Context, rec *s07Record, p *netfault.Parti
 // sweepS07 reads every member's role and records the sweep, the trigger it
 // shows, and what CUBRID did that the Operator could see only in part. cut
 // is set while the target is cut off from the Operator.
-func (h *haRun) sweepS07(ctx context.Context, rec *s07Record, now time.Time, cut bool) {
+func (h *haRun) sweepS07(ctx context.Context, rec *s07Record, now time.Time, cut, afterGrace bool) {
+	h.checkS07Operator(ctx, rec, now)
 	sweep := s07Sweep{T: now, Roles: map[string]string{}}
 	var claims []string
 	for _, pod := range h.members {
@@ -825,6 +930,11 @@ func (h *haRun) sweepS07(ctx context.Context, rec *s07Record, now time.Time, cut
 	if cut && !sweep.Complete {
 		rec.IncompleteSweeps++
 	}
+	if cut && afterGrace && sweep.Complete && len(slices.DeleteFunc(slices.Clone(claims), func(m string) bool {
+		return slices.Contains(sweep.Unreachable, m)
+	})) == 1 {
+		rec.OneMasterSweepsAfterGrace++
+	}
 	if cut && slices.Contains(claims, rec.Target.Pod) && rec.TargetClaimedAt == nil {
 		rec.TargetClaimedAt = &now
 		rec.note("target_claimed_active_master", rec.Target.Pod)
@@ -834,7 +944,7 @@ func (h *haRun) sweepS07(ctx context.Context, rec *s07Record, now time.Time, cut
 		rec.note("two_active_master_claims", strings.Join(claims, " and "))
 	}
 	rec.Sweeps = append(rec.Sweeps, sweep)
-	if rec.TriggerObservedAt == nil && rec.FaultIssuedAt != nil {
+	if rec.TriggerObservedAt == nil && rec.FaultIssuedAt != nil && rec.OperatorChangedAt == nil {
 		if at, from, trigger := s07Triggered(rec.Sweeps, *rec.FaultIssuedAt); at != nil {
 			rec.TriggerObservedAt, rec.TriggerWindowStart, rec.Trigger = at, from, trigger
 			rec.note("trigger_observed", trigger)
@@ -852,7 +962,10 @@ func (h *haRun) observeS07Path(ctx context.Context, rec *s07Record, now time.Tim
 		rec.note("cluster_unread", err.Error())
 		return
 	}
-	h.observeS07Quarantine(rec, cluster, now)
+	if cut && afterGrace {
+		rec.ClusterReadsAfterGrace++
+	}
+	h.observeS07Quarantine(rec, cluster, now, cut)
 	for _, t := range []string{readyCondition, primaryResolvedCondition, "RoutingReady"} {
 		c := meta.FindStatusCondition(cluster.Status.Conditions, t)
 		status, reason := "Unknown", ""
@@ -912,7 +1025,8 @@ func (h *haRun) observeS07Path(ctx context.Context, rec *s07Record, now time.Tim
 
 // observeS07Quarantine records the quarantine in force, each reason and
 // revision, its enforcement, and the release of a quarantine the run saw.
-func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.CubridCluster, now time.Time) {
+func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.CubridCluster, now time.Time,
+	cut bool) {
 	q := cluster.Status.WriteQuarantine
 	rec.QuarantineInForce = ""
 	if q != nil {
@@ -928,9 +1042,10 @@ func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.C
 		if n := len(rec.Revisions); n == 0 || rec.Revisions[n-1].GenerationID != q.GenerationID ||
 			rec.Revisions[n-1].Revision != q.Revision || rec.Revisions[n-1].Reason != string(q.Reason) {
 			r := s07Revision{SeenAt: now, GenerationID: q.GenerationID, Reason: string(q.Reason), Revision: q.Revision,
-				Master: q.ObservedMaster}
+				Master: q.ObservedMaster, WhileCut: cut}
 			for _, m := range q.Members {
 				r.Members = append(r.Members, m.Name+" ("+m.ObservedRole+")")
+				r.MemberNames = append(r.MemberNames, m.Name)
 			}
 			rec.Revisions = append(rec.Revisions, r)
 		}
@@ -1132,28 +1247,14 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 // stops the watch when the scenario ends and returns once the watch has; it
 // may be called more than once.
 func (h *haRun) removeOnEnd(ctx context.Context, rec *s07Record, p *netfault.Partition) func() {
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	var once sync.Once
-	wg.Go(func() {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			end, cancel := context.WithTimeout(context.WithoutCancel(ctx), s07EndRemoveBound)
-			defer cancel()
-			err := p.RemoveDrops(end)
-			s07NoteMu.Lock()
-			rec.RemovedOnEnd = err == nil
-			if err != nil {
-				rec.RemoveOnEndError = err.Error()
-			}
-			s07NoteMu.Unlock()
+	return p.RemoveOnEnd(ctx, s07EndRemoveBound, func(err error) {
+		rec.mu.Lock()
+		rec.RemovedOnEnd = err == nil
+		if err != nil {
+			rec.RemoveOnEndError = err.Error()
 		}
+		rec.mu.Unlock()
 	})
-	return func() {
-		once.Do(func() { close(done) })
-		wg.Wait()
-	}
 }
 
 // whileCut observes the cluster while the target is cut off and holds once
@@ -1163,7 +1264,7 @@ func (h *haRun) whileCut(ctx context.Context, rec *s07Record, p *netfault.Partit
 	if rec.FaultConfirmedAt == nil {
 		rec.FaultConfirmedAt = &now
 	}
-	h.sweepS07(ctx, rec, now, true)
+	h.sweepS07(ctx, rec, now, true, now.Sub(*rec.FaultConfirmedAt) >= primaryResolvedGrace)
 	h.observeS07Path(ctx, rec, now, true, now.Sub(*rec.FaultConfirmedAt) >= primaryResolvedGrace)
 	if time.Since(*rec.FaultConfirmedAt) < h.cfg.PartitionHold {
 		return false, nil
@@ -1192,7 +1293,7 @@ func (h *haRun) settleS07(ctx context.Context, rec *s07Record) {
 	deadline := time.Now().Add(s07SettleBound)
 	for {
 		now := time.Now().UTC()
-		h.sweepS07(ctx, rec, now, false)
+		h.sweepS07(ctx, rec, now, false, false)
 		h.observeS07Path(ctx, rec, now, false, false)
 		roles := rec.Sweeps[len(rec.Sweeps)-1].Roles
 		var masters, slaves []string
@@ -1267,9 +1368,13 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 			v := judgeS07(rec, h.s07Limits())
 			result.Measurements, result.Limits = v.Measurements, v.Limits
 		}
-		s07NoteMu.Lock()
+		rec.mu.Lock()
 		err := h.writeJSON(s07File(variant, "record.json"), rec)
-		s07NoteMu.Unlock()
+		if rec.cut != nil {
+			rec.cut.RemovedOnEnd = rec.RemovedOnEnd
+			err = errors.Join(err, h.writeJSON(s07File(variant, "cut.json"), rec.cut))
+		}
+		rec.mu.Unlock()
 		if err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S07 evidence: "+err.Error()
 		}
@@ -1297,6 +1402,17 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	if err != nil {
 		return end(evidence.Blocked, "%v", err)
 	}
+	if h.rec.Client == nil {
+		return end(evidence.Blocked, "the workload client's node is not known: its clock offset cannot be read")
+	}
+	if _, ok := offsets[h.rec.Client.Node]; !ok {
+		return end(evidence.Blocked, "the clock offset of the workload client's node %s was not read",
+			h.rec.Client.Node)
+	}
+	if _, err := h.clientRun(ctx, "rm -f /tmp/s07n.log /tmp/s07n.jsonl /tmp/s07n.err /tmp/s07n.stop /tmp/s07n.pid "+
+		"/tmp/"+s07OpenClient+".jsonl /tmp/"+s07OpenClient+".diag.jsonl"); err != nil {
+		return end(evidence.Blocked, "clear the clients' files: %v", err)
+	}
 	clientsStarted = true
 	if err := h.startBackgroundClientWith(ctx, s07OpenClient, "APP_RECONNECT_POLICY=stop-after-error "+
 		"APP_CONNECTION_DIAGNOSTICS=/tmp/"+s07OpenClient+".diag.jsonl "); err != nil {
@@ -1308,7 +1424,7 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	stopWatch := h.removeOnEnd(ctx, rec, p)
 	defer stopWatch()
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault: p,
+		Fault: &s07Cut{Partition: p, h: h, rec: rec},
 		Limits: faults.Limits{Confirm: s07PrepareBound, Outcome: h.cfg.PartitionHold + s07ConfirmSlack,
 			Cleanup: s07CleanupBound, Poll: h.cfg.Poll},
 		Before: func(ctx context.Context) error { return h.beforeS07(ctx, rec, p) },
@@ -1331,6 +1447,15 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	}
 	if outcome.FaultIssuedAt.IsZero() {
 		return end(evidence.Blocked, "%s", outcome.Reason)
+	}
+	if len(outcome.StillRunning) > 0 {
+		// A step that did not return may still write the record: nothing more
+		// is observed or read next to it.
+		rec.mu.Lock()
+		rec.StillRunning = outcome.StillRunning
+		rec.mu.Unlock()
+		return end(evidence.Blocked, "steps of the fault flow were still running after their limit: %s",
+			strings.Join(outcome.StillRunning, ", "))
 	}
 	if outcome.CleanupSucceeded {
 		h.settleS07(ctx, rec)
@@ -1382,10 +1507,7 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 		return end(evidence.Fail, "stop the clients: %v", err)
 	}
 	rec.ClientsStopped = true
-	offset := time.Duration(0)
-	if h.rec.Client != nil {
-		offset = time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second))
-	}
+	offset := time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second))
 	probes, err := h.readS07Probes(ctx, offset)
 	if err != nil {
 		return end(evidence.Blocked, "read the new-connection writes: %v", err)
@@ -1395,27 +1517,6 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	var closedOnClient time.Time
 	if closed != nil {
 		closedOnClient = closed.Add(offset)
-		until := time.Time{}
-		if rec.ReleaseSeenAt != nil {
-			until = *rec.ReleaseSeenAt
-		}
-		for _, p := range probes {
-			if p.Outcome == workload.Acknowledged && p.StartedAt.After(*closed) &&
-				(until.IsZero() || p.StartedAt.Before(until)) {
-				rec.ReopenedWhileQuarantined = append(rec.ReopenedWhileQuarantined, fmt.Sprintf(
-					"the write %s through a new connection to %s-rw, started at %s after the run saw every "+
-						"read-write Broker Pod gone and no -rw endpoint, was acknowledged while the quarantine was "+
-						"in force", p.Client, haClusterName, p.StartedAt.Format(time.RFC3339)))
-				break
-			}
-		}
-	}
-	if rec.TriggerWindowStart != nil {
-		until := time.Time{}
-		if rec.ReleaseSeenAt != nil {
-			until = *rec.ReleaseSeenAt
-		}
-		rec.NewConnectionsStoppedAt = s07NewConnectionsStopped(probes, *rec.TriggerWindowStart, until)
 	}
 	h.readS07Session(ctx, rec, rec.FaultIssuedAt.Add(offset), closedOnClient)
 	rec.ClientsRead = true
@@ -1427,10 +1528,38 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	}
 	if rec.SettledAt != nil {
 		h.checkS07Data(ctx, rec)
+		h.observeS07Health(ctx, rec)
 	}
+	h.judgeS07Probes(rec, closed)
 	v := judgeS07(rec, h.s07Limits())
 	result.Measurements, result.Limits, result.NeverEvents = v.Measurements, v.Limits, v.NeverEvents
 	return end(v.Result, "%s", v.Reason)
+}
+
+// judgeS07Probes records, from the new-connection writes with their unknown
+// outcomes resolved, when new connections stopped succeeding and whether one
+// took effect after the run saw the path closed while the quarantine was in
+// force.
+func (h *haRun) judgeS07Probes(rec *s07Record, closed *time.Time) {
+	until := time.Time{}
+	if rec.ReleaseSeenAt != nil {
+		until = *rec.ReleaseSeenAt
+	}
+	if closed != nil {
+		for _, p := range rec.Probes {
+			if s07TookEffect(p) && p.StartedAt.After(*closed) && (until.IsZero() || p.StartedAt.Before(until)) {
+				rec.ReopenedWhileQuarantined = append(rec.ReopenedWhileQuarantined, fmt.Sprintf(
+					"the write %s through a new connection to %s-rw, started at %s after the run saw every "+
+						"read-write Broker Pod gone and no -rw endpoint, took effect (%s) while the quarantine was "+
+						"in force", p.Client, haClusterName, p.StartedAt.Format(time.RFC3339),
+					cmpOr(p.Resolved, p.Outcome)))
+				break
+			}
+		}
+	}
+	if rec.TriggerWindowStart != nil {
+		rec.NewConnectionsStoppedAt = s07NewConnectionsStopped(rec.Probes, *rec.TriggerWindowStart, until)
+	}
 }
 
 // s07PathClosedAt is when the run had seen both every read-write Broker Pod
@@ -1448,9 +1577,9 @@ func s07PathClosedAt(rec *s07Record) *time.Time {
 }
 
 // checkS07Data applies the data rules of the run's whole history to every
-// member, read directly and not through a Broker, and records what is
-// missing and what differs; then it reads whether the cluster reports
-// itself healthy.
+// member, read directly and not through a Broker, records what is missing
+// and what differs, and resolves the new-connection writes whose outcome
+// was unknown by whether their row is on some member.
 func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 	file := s07File(rec.Variant, "data-check.json")
 	d := &s07Data{File: file, MissingByMember: map[string]int{}}
@@ -1476,15 +1605,160 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 			}
 		}
 	}
+	rows, err := h.readRowsOf(ctx, dataTarget{members: h.members})
+	if err != nil {
+		rec.note("unknown_outcomes_unresolved", err.Error())
+	} else {
+		present := map[string]bool{}
+		for _, member := range rows {
+			for _, row := range member {
+				present[row.OpID] = true
+			}
+		}
+		resolveS07Unknowns(rec.Probes, present)
+	}
 	cluster := &databasev1alpha1.CubridCluster{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		d.Read, d.Error = false, "read the cluster after the data check: "+err.Error()
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err == nil {
+		if members, unmet, err := h.memberIdentities(ctx, cluster); err == nil && unmet == "" {
+			rec.MembersAfter = members
+		}
+	}
+}
+
+// resolveS07Unknowns resolves each new-connection write with an unknown
+// outcome by whether its row is present on some member.
+func resolveS07Unknowns(probes []s07Probe, present map[string]bool) {
+	for i := range probes {
+		if probes[i].Outcome != workload.Unknown {
+			continue
+		}
+		probes[i].Resolved = s07UnknownAbsent
+		if present[fmt.Sprintf("%s-%06d", probes[i].Client, 1)] {
+			probes[i].Resolved = s07UnknownPresent
+		}
+	}
+}
+
+// observeS07Health reads the cluster for s07HealthWindow and records
+// whether any reading reported Ready with no quarantine.
+func (h *haRun) observeS07Health(ctx context.Context, rec *s07Record) {
+	deadline := time.Now().Add(s07HealthWindow)
+	for {
+		cluster := &databasev1alpha1.CubridCluster{}
+		err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster)
+		if err == nil {
+			rec.HealthReadings++
+			if cluster.Status.WriteQuarantine == nil && rec.ReadyWithoutQuarantineAt == nil &&
+				meta.IsStatusConditionTrue(cluster.Status.Conditions, readyCondition) {
+				now := time.Now().UTC()
+				rec.ReadyWithoutQuarantineAt, rec.HealthyAtEnd = &now, true
+				rec.note("ready_without_quarantine", "")
+			}
+		}
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+}
+
+// checkS07Operator reads the manager Pod and records the first time it is
+// gone, replaced or has another IP.
+func (h *haRun) checkS07Operator(ctx context.Context, rec *s07Record, now time.Time) {
+	if rec.OperatorChangedAt != nil || rec.Operator == "" {
 		return
 	}
-	rec.HealthyAtEnd = cluster.Status.WriteQuarantine == nil &&
-		meta.IsStatusConditionTrue(cluster.Status.Conditions, readyCondition)
-	if members, unmet, err := h.memberIdentities(ctx, cluster); err == nil && unmet == "" {
-		rec.MembersAfter = members
+	pod := &corev1.Pod{}
+	err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.OperatorNamespace, Name: rec.Operator}, pod)
+	change := ""
+	switch {
+	case apierrors.IsNotFound(err):
+		change = "the manager Pod " + rec.Operator + " is gone"
+	case err != nil:
+		rec.note("operator_unread", err.Error())
+		return
+	case string(pod.UID) != rec.OperatorUID:
+		change = fmt.Sprintf("the manager Pod %s has UID %s, was %s", rec.Operator, pod.UID, rec.OperatorUID)
+	case pod.Status.PodIP != rec.OperatorIP:
+		change = fmt.Sprintf("the manager Pod %s has IP %s, was %s", rec.Operator, pod.Status.PodIP, rec.OperatorIP)
+	case pod.DeletionTimestamp != nil:
+		change = "the manager Pod " + rec.Operator + " is being deleted"
+	default:
+		return
+	}
+	rec.OperatorChangedAt, rec.OperatorChange = &now, change
+	rec.note("operator_changed", change)
+}
+
+// s07CutFile is the state of the cut alone, written before it is injected
+// and when it is removed, so that what was injected is on disk before a
+// SIGKILL.
+type s07CutFile struct {
+	Namespace         string     `json:"namespace"`
+	Target            string     `json:"target"`
+	TargetIP          string     `json:"targetIP"`
+	Peers             []string   `json:"peers"`
+	OperatorPod       string     `json:"operatorPod"`
+	OperatorIP        string     `json:"operatorIP"`
+	InjectRequestedAt *time.Time `json:"injectRequestedAt,omitempty"`
+	RemovedAt         *time.Time `json:"removedAt,omitempty"`
+	RemoveError       string     `json:"removeError,omitempty"`
+	RemovedOnEnd      bool       `json:"dropRulesRemovedOnRunEnd,omitempty"`
+}
+
+// s07Cut is the partition with the cut state written around its injection
+// and removal.
+type s07Cut struct {
+	*netfault.Partition
+	h   *haRun
+	rec *s07Record
+}
+
+// Inject writes the cut's state, then injects it.
+func (c *s07Cut) Inject(ctx context.Context) error {
+	now := time.Now().UTC()
+	c.writeState(func(f *s07CutFile) { f.InjectRequestedAt = &now })
+	return c.Partition.Inject(ctx)
+}
+
+// Remove removes the cut and writes how that went.
+func (c *s07Cut) Remove(ctx context.Context) error {
+	err := c.Partition.Remove(ctx)
+	now := time.Now().UTC()
+	c.writeState(func(f *s07CutFile) {
+		if err != nil {
+			f.RemoveError = err.Error()
+			return
+		}
+		f.RemovedAt, f.RemoveError = &now, ""
+	})
+	return err
+}
+
+// writeState changes the cut's state and writes cut.json at once, under the
+// record's lock. The file is listed with the record at the scenario's end.
+func (c *s07Cut) writeState(change func(*s07CutFile)) {
+	c.rec.mu.Lock()
+	defer c.rec.mu.Unlock()
+	if c.rec.cut == nil {
+		f := &s07CutFile{Namespace: c.h.cfg.Namespace, Target: c.Target.Pod, TargetIP: c.Target.IP}
+		for _, cut := range c.Cuts {
+			if cut.Peer.NoEnter {
+				f.OperatorPod, f.OperatorIP = cut.Peer.Pod, cut.Peer.IP
+				continue
+			}
+			f.Peers = append(f.Peers, cut.Peer.Pod)
+		}
+		c.rec.cut = f
+	}
+	change(c.rec.cut)
+	c.rec.cut.RemovedOnEnd = c.rec.RemovedOnEnd
+	if data, err := json.MarshalIndent(c.rec.cut, "", "  "); err == nil {
+		_ = c.h.redactor.WriteFile(c.h.cfg.EvidenceDir, s07File(c.rec.Variant, "cut.json"), append(data, '\n'))
 	}
 }
 

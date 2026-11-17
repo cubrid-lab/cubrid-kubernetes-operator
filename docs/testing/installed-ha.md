@@ -900,13 +900,26 @@ real partition between the database members would let it. The faults:
   and every kept path open before the hold counts;
 - are removed after every run in which they were injected: after a failure,
   at `-timeout`, and on `SIGINT`, `SIGTERM` or `SIGHUP`. When the run's
-  context ends, the drop rules are taken away at once, within 10 seconds,
-  without waiting for a step still running (`dropRulesRemovedOnRunEnd`); the
-  full removal, which probes every path open again and takes away the
-  counting rules, follows within two minutes. A fault not seen removed fails
-  S07. The rules live only in the network namespaces of the run's own Pods,
-  so deleting the run namespace removes them too. After a `SIGKILL`, find and
-  remove what is left with:
+  context ends, the drop rules are taken away at once, without waiting for a
+  step still running (`dropRulesRemovedOnRunEnd`): every member at the same
+  time, with one `kubectl exec` per member that removes the rules and reads
+  them back, tried again while any is left, and bounded by 10 seconds in
+  all. The full removal, which probes every path open again and takes away
+  the counting rules, follows within two minutes. A fault not seen removed
+  fails S07.
+- leave `cut.json` on disk before the injection is sent: the namespace, the
+  member cut off and its IP, the peers, the manager Pod and its IP, and when
+  the injection was requested; it is written again when the cut was removed
+  (`removedAt`, or `removeError`).
+
+**The 2-second window.** On a lost Lease the lab launcher sends `SIGTERM`
+and `SIGKILL` 2 seconds later (a `SIGTERM` you send yourself is followed by
+no `SIGKILL`). The removal at the run's end is one concurrent exec per member,
+which normally fits; a slow API server or kubelet can make it miss the window,
+and `SIGKILL` itself allows no cleanup. The rules live only in the network
+namespaces of the run's own Pods, so deleting the run namespace removes them
+too. After a `SIGKILL`, read `cut.json` for what was injected, then find and
+remove what is left with:
 
   ```sh
   kubectl -n <run namespace> exec <member> -c netfault -- iptables-save | grep NETFAULT
@@ -973,32 +986,60 @@ installed-ha-network-partition-slave-isolated` select the same runs.
 6. It stops both clients and reads their histories into
    `LAB01/history.jsonl`, and applies the data rules to every member's rows,
    read directly with `csql` and not through a Broker, waiting up to
-   `-data-check-within` for a slave that is behind. It then reads whether
-   the cluster reports `Ready` with no quarantine.
+   `-data-check-within` for a slave that is behind. A new-connection write
+   whose outcome the client could not know is resolved by those rows:
+   `unknown-present` when its row is on some member, `unknown-absent`
+   otherwise; an unknown one that could not be resolved counts as possibly
+   taken effect. Then, for 30 seconds, the run reads whether the cluster
+   reports `Ready` with no quarantine (`healthReadings`,
+   `readyWithoutQuarantineAt`).
+
+On every sweep the run also reads the manager Pod the cut names. Once it is
+gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
+isolates the Operator as intended: the run counts no trigger after it and
+S07 is blocked. A client node whose clock offset was not read blocks S07
+before the clients start, and the clients' files of an earlier run are
+removed before they do.
 
 What it judges, in this order:
 
 1. **Never-events fail S07:** `PrimaryResolved` or `RoutingReady` `True` 30
    seconds or more after the cut was confirmed while a member is cut off from
-   the Operator; `-rw` endpoints back, or a write through a new connection
-   acknowledged, after the run saw every read-write Broker Pod gone and no
-   endpoint (with two seconds for kube-proxy), while the quarantine is still
-   in force; a `WriteQuarantinedMultipleMasters` or
-   `WriteQuarantinedMasterChanged` quarantine released by anything but a
-   person; the cluster reporting `Ready` with no quarantine at the end while
-   a member lacks an acknowledged write or the members' rows differ; and an
-   endpoint the faults would enter that is not the run's own.
+   the Operator (the 30 seconds are S04's grace for an observation that can
+   no longer be fresh, reused here; the value needs a maintainer's
+   acceptance for S07); `-rw` endpoints back, or a write through a new
+   connection acknowledged or `unknown-present`, after the run saw every
+   read-write Broker Pod gone and no endpoint (with two seconds for
+   kube-proxy), while the quarantine is still in force; a
+   `WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`
+   quarantine released by anything but a person; the cluster reporting
+   `Ready` with no quarantine in the health window while the members hold
+   different data; and an endpoint the faults would enter that is not the
+   run's own.
 2. **Broken expectations fail S07:** the fault not seen removed; a trigger
    seen in two consecutive sweeps and no `status.writeQuarantine`; a
    quarantine recorded while the run never saw every read-write Broker Pod
    gone and the `-rw` EndpointSlices empty (`RoutingReady=False` or a
    Deployment at zero replicas is not a quarantine); and, in the control, a
-   quarantine while every sweep read one reachable active master.
-3. **Blocked, never passed:** the cut not confirmed or not held; for
-   `master-isolated`, no trigger seen while the cut held (the run cannot say
-   a quarantine was required, and records whether one started); a control
-   quarantine while some sweep could not read a role; a cluster that did not
-   settle; a data check that could not read every member.
+   `WriteQuarantinedMemberUnverified` quarantine first seen while the member
+   was cut off, naming that member alone, with every sweep complete, the
+   manager Pod unchanged, and no member other than the master having
+   answered as an active master before it was seen.
+3. **Blocked, never passed:** a step of the fault flow still running after
+   its limit (nothing more is observed); the cut not confirmed or not held;
+   the manager Pod changed; for `master-isolated`, no trigger seen while the
+   cut held (the run cannot say a quarantine was required, and records
+   whether one started); any other quarantine in the control, which may be
+   legitimate and is recorded with why it was not counted, such as two
+   masters after the heal (`WriteQuarantinedMultipleMasters`), a quarantine
+   first seen after the cut was removed or naming another member, or one
+   seen after the cut-off member answered as an active master; a control
+   without at least two cluster readings and two complete sweeps showing one
+   reachable active master after the 30-second grace; a write acknowledged
+   on the already-open connection after the run saw the path closed, an
+   anomaly the run cannot explain; a cluster that did not settle; a data
+   check that could not read every member; and no reading of the cluster in
+   the health window.
 4. **Limits**, with the rules of `faults.Judge`:
 
 | Limit | Flag | Measured |
@@ -1015,8 +1056,11 @@ at least `-partition-duration`.
 Acknowledged writes that a member lacks after the recovery are reported, not
 hidden: `acknowledgedMissing`, `acknowledgedMissingByMember` and
 `membersDiverged` in the measurements, and in the reason of a passing run.
-The ADR expects such loss while a quarantine is in force; it fails S07 only
-when the cluster reports itself healthy.
+The ADR expects writes acknowledged around the start of a quarantine to be
+lost (section 8, "The quarantine limits the loss but does not prevent it"),
+so writes missing from every member alike are reported, not failed. Members
+that hold different data while the cluster reports `Ready` with no
+quarantine fail S07: the contract forbids reporting such a cluster healthy.
 
 Other measurements, from the cut's issue on the run's clock unless named:
 `faultConfirmedWithin`, `triggerObservedWithin`,
@@ -1026,7 +1070,10 @@ termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
 interruption for new connections), `releaseSeenWithin`, `rwReopenedWithin`;
 `quarantineStartTime`, `enforcedTime` and `releaseTime` as status gives them,
 on the Operator's clock; `quarantineReason`, `releaseMethod`,
-`quarantineAtEnd` and `finalMaster`; and for `s07open`
+`quarantineAtEnd`, `finalMaster` and `operatorChange`; `newConnectionWrites`,
+the new-connection writes counted by outcome (`acknowledged`, `failed`,
+`no answer`, `unknown-present`, `unknown-absent`, or `unknown` when not
+resolved); and for `s07open`
 `establishedSession`, `establishedAcknowledgedAfterFault` and
 `establishedAcknowledgedAfterPathClosed`, on the client's clock. The
 established session is reported, not judged: the contract sets no bound on
@@ -1044,6 +1091,8 @@ Evidence, under `S07/<variant>/`:
   its exit code and outcome, the established session, the settle, the data
   check, the partition's rules and probes (`partition`), and the run's
   observations in time order (`observed`);
+- `cut.json`: the cut's state alone, written before the injection and at
+  its removal;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`;
 - `clients/<client>.jsonl` when S07 ended before it read the clients.
