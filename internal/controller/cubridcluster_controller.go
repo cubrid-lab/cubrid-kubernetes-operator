@@ -439,12 +439,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "ServiceReconcileFailed", err)
 	}
 
 	// One alias Service per member, so its short HA host name resolves.
 	if err := r.reconcileMemberServices(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "MemberServiceReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "MemberServiceReconcileFailed", err)
 	}
 
 	// The DB Pods authenticate the operator with the cluster's own token
@@ -453,23 +453,23 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logf.FromContext(ctx).V(1).Info("Retrying until the cache holds the token Secret")
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	} else if err != nil {
-		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "SecretReconcileFailed", err)
 	}
 
 	// The HA member list every member reads (ADR-0004); none when standalone.
 	if err := r.reconcileHAConfig(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "HAConfigReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "HAConfigReconcileFailed", err)
 	}
 
 	// The ingress NetworkPolicies exist before the first DB Pod does.
 	if err := r.reconcileNetworkPolicies(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
 	}
 
 	// The member spread an unset spec falls back to is recorded before the
 	// StatefulSet exists, so that it tells a new cluster from an old one.
 	if err := r.recordMemberSpreadDefault(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "PlacementReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "PlacementReconcileFailed", err)
 	}
 
 	// A database is never created without the DBA password its cluster
@@ -481,12 +481,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
 	sts, err := r.reconcileStatefulSet(ctx, &cluster)
 	if err != nil {
-		return r.failed(ctx, &cluster, "StatefulSetReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "StatefulSetReconcileFailed", err)
 	}
 
 	// The budgets that limit a node drain (docs/architecture/voluntary-disruption.md).
 	if err := r.reconcileDisruptionBudgets(ctx, &cluster); err != nil {
-		return r.failed(ctx, &cluster, "DisruptionBudgetReconcileFailed", err)
+		return r.failedChild(ctx, &cluster, "DisruptionBudgetReconcileFailed", err)
 	}
 
 	r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
@@ -1264,16 +1264,9 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	sts *appsv1.StatefulSet) (bool, stepResult) {
 	// The first database is created once, on one member (ADR-0010).
 	r.reconcileHABootstrap(ctx, cluster)
-	lastResolved := cluster.Status.LastResolvedPrimary
-	members := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
-	// The members' Pods are read before and after the probes, so that an
-	// answer is counted only for the Pod it came from.
-	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
-	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
-	// The write quarantine is decided from the same observation, before the
-	// Broker tier, which keeps the read-write Brokers at zero while one is in
-	// force (ADR-0005, section 8).
-	quarantine := r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr)
+	// The write quarantine is decided before the Broker tier, which keeps the
+	// read-write Brokers at zero while one is in force (ADR-0005, section 8).
+	res, quarantine := r.observeAndQuarantine(ctx, cluster)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the
@@ -1300,6 +1293,20 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 		steps.retry = poll
 	}
 	return res.MultipleMasters, steps
+}
+
+// observeAndQuarantine observes the roles of an HA cluster's members and
+// decides and enforces the write quarantine from the same observation
+// (ADR-0005, section 8).
+func (r *CubridClusterReconciler) observeAndQuarantine(ctx context.Context,
+	cluster *databasev1alpha1.CubridCluster) (PrimaryResolution, stepResult) {
+	lastResolved := cluster.Status.LastResolvedPrimary
+	members := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
+	// The members' Pods are read before and after the probes, so that an
+	// answer is counted only for the Pod it came from.
+	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
+	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	return res, r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr)
 }
 
 // updateStatus sets Ready and the Updating condition of an image change from
@@ -1546,6 +1553,56 @@ func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev
 	// Best-effort status update; return the original cause for requeue.
 	_ = r.writeStatus(ctx, cluster)
 	return ctrl.Result{}, cause
+}
+
+// failedChild reports a failed write of one of the cluster's child objects
+// like failed. Before that, the members of an HA cluster whose StatefulSet
+// exists are observed, and the write quarantine is decided and enforced from
+// that observation (ADR-0005, section 8), so that a child write that keeps
+// failing, as one an admission webhook or a quota rejects, does not keep two
+// active masters or an unverified member that outranks the master from being
+// quarantined (#949). A cluster without a StatefulSet has no member to
+// observe; one in a recovery bootstrap is not observed here, as in a pass
+// without a failure. The status still reports the roles as not observed in
+// this pass: the observation serves the quarantine decision alone. A failed
+// observation or quarantine enforcement is
+// returned together with cause, even when failed would retry cause without an
+// error.
+func (r *CubridClusterReconciler) failedChild(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string,
+	cause error) (ctrl.Result, error) {
+	var safety error
+	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil && !recoveryActive(cluster) && !namespaceTerminating(cause) {
+		err := r.childClient().Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			safety = fmt.Errorf("read the StatefulSet to observe the members for the write quarantine: %w", err)
+		default:
+			// Only the quarantine is kept from this observation. The roles,
+			// the primary and the observation times stay as a pass that did
+			// not observe them reports them (#340, #370), and the applier
+			// readings are not kept as the base of the next pass.
+			reported := cluster.Status.DeepCopy()
+			_, quarantine := r.observeAndQuarantine(ctx, cluster)
+			safety = quarantine.err
+			cluster.Status.CurrentPrimary = reported.CurrentPrimary
+			cluster.Status.LastResolvedPrimary = reported.LastResolvedPrimary
+			cluster.Status.LastResolvedPrimaryTime = reported.LastResolvedPrimaryTime
+			cluster.Status.LastObservedTime = reported.LastObservedTime
+			cluster.Status.Instances = reported.Instances
+			if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+				report.(*reconcileReport).positions = nil
+			}
+		}
+	}
+	res, err := r.failed(ctx, cluster, reason, cause)
+	if safety == nil {
+		return res, err
+	}
+	if err == nil {
+		err = cause
+	}
+	return ctrl.Result{}, errors.Join(err, safety)
 }
 
 func setCondition(cluster *databasev1alpha1.CubridCluster, condType string, status metav1.ConditionStatus, reason, msg string) {
