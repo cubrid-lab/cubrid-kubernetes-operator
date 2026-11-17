@@ -614,6 +614,24 @@ func (p *Partition) removeDrops(ctx context.Context, e Endpoint) ([]string, erro
 	return left, errors.Join(errs...)
 }
 
+// RemoveDrops takes away the drop rules of every endpoint that has them,
+// reads them back, and returns what is left. It makes none of the probes of
+// Remove, so it fits a run that must end at once, as on a signal; Remove
+// must still follow when there is time for it.
+func (p *Partition) RemoveDrops(ctx context.Context) error {
+	var errs []error
+	for _, e := range p.ruled() {
+		left, err := p.removeDrops(ctx, e)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if len(left) > 0 {
+			errs = append(errs, fmt.Errorf("%s: drop rules left after the removal: %v", e.Name, left))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Remove takes away the drop rules, checks that none is left, waits until
 // every path is seen open again, reads the rules once more, and then takes
 // away the counting rules of every entered endpoint and checks that none is

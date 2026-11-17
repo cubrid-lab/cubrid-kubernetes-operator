@@ -614,3 +614,44 @@ func TestReplacedPodIsAChange(t *testing.T) {
 		t.Fatalf("currentPod of a replaced manager Pod returned %v", err)
 	}
 }
+
+// A run that must end at once, as on a signal, takes the drop rules away
+// without the probes of Remove: no member drops anything of the fault's
+// afterwards, and Remove can still follow. Drop rules that stay are
+// reported, never taken for a removal.
+func TestPartitionRemoveDropsAtOnce(t *testing.T) {
+	ctx := context.Background()
+	injected := func(t *testing.T) (*fakeNet, *Partition) {
+		t.Helper()
+		n := newFakeNet(testPods)
+		p := isolateMaster(n, testEnv(t, n))
+		if err := p.Prepare(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Inject(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return n, p
+	}
+	n, p := injected(t)
+	if err := p.RemoveDrops(ctx); err != nil {
+		t.Fatalf("RemoveDrops returned %v", err)
+	}
+	for name, ip := range testPods {
+		for _, line := range n.installed(ip) {
+			if strings.Contains(line, chainIn) || strings.Contains(line, chainOut) {
+				t.Errorf("%s still drops after RemoveDrops: %s", name, line)
+			}
+		}
+	}
+	if err := p.Remove(ctx); err != nil {
+		t.Fatalf("Remove after RemoveDrops returned %v", err)
+	}
+	requireClean(t, n)
+
+	n, p = injected(t)
+	n.ignoreRemove = true
+	if err := p.RemoveDrops(ctx); err == nil || !strings.Contains(err.Error(), "drop rules left") {
+		t.Fatalf("RemoveDrops with drop rules that stay returned %v", err)
+	}
+}

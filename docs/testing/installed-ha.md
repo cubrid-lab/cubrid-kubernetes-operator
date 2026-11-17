@@ -12,7 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S15
-`drain-slave-node` and `drain-master-node`, S11 `complete`,
+`drain-slave-node` and `drain-master-node`, S07 `master-isolated` and
+`slave-isolated`, S11 `complete`,
 `missing-destination`, `denied-credentials`, `signature-mismatch`,
 `interrupted-upload`, `operator-restart`, `instance-manager-restart` and
 `overlapping`, and S12
@@ -853,6 +854,208 @@ observation of the policy that ADR-0012 and the
 [voluntary-disruption page](../architecture/voluntary-disruption.md) expect;
 envtest covers only the API server's eviction rules for a written budget
 status.
+
+## S07 network partition
+
+With `-fault partition-master-isolated` or `-fault partition-slave-isolated`
+the run goes on after LAB01 passed, on the same cluster, with S07 of the
+scenario contract: one member is cut off, both ways, from the other two
+members and from the manager Pod, and the run records what the Operator's
+write quarantine (ADR-0005 section 8) does with real SQL. The lane is then
+`lab-installed-ha-s07-master-isolated` or
+`lab-installed-ha-s07-slave-isolated`, and it requires both LAB01 and S07
+with that variant. It runs on the `vm-lab` level only.
+
+- `master-isolated` cuts off the master, which is the last resolved primary.
+  Once another member is an active master that the Operator can reach, the
+  cut-off member is unverified and the ADR requires a
+  `WriteQuarantinedMemberUnverified` quarantine; two active masters the
+  Operator can reach require `WriteQuarantinedMultipleMasters`.
+- `slave-isolated` is the intentional non-trigger: it cuts off a slave that
+  ranks below the master (a higher ordinal, later in `ha_node_list`) and is
+  not `status.lastResolvedPrimary`. While the master stays the one active
+  master the Operator can reach, no quarantine may start. A cluster with no
+  such slave, as when the master is the last member, blocks the variant.
+
+The lane does not cover the contract's `asymmetric` variant, a cut-off member
+of higher rank than the master, the replication lag of S08, or the
+persistence, Operator-restart, release-token, out-of-service-taint and
+return-to-service checks of S07. It makes no manual release.
+
+**The cut.** The run uses the partition of
+[network faults](network-faults.md) as `bin/netfault -variants isolate` does:
+an ephemeral container named `netfault` in each member Pod drops, by Pod IP,
+the traffic between the cut-off member and each other member and the cut-off
+member's traffic with the manager Pod. The other two members keep reaching
+each other, and the Broker Pods, the workload client and the kubelet keep
+reaching every member: a Broker still sends writes to the cut-off master, as a
+real partition between the database members would let it. The faults:
+
+- enter only the run's own three members in the run namespace; the manager
+  Pod is an address and is never entered. An endpoint that is not one of the
+  run's members is refused before anything is changed
+  (`foreignTargetsRefused`) and fails S07;
+- refuse to start on a member whose network namespace still has rules or
+  chains of an earlier fault, and are confirmed by probing every cut path cut
+  and every kept path open before the hold counts;
+- are removed after every run in which they were injected: after a failure,
+  at `-timeout`, and on `SIGINT`, `SIGTERM` or `SIGHUP`. When the run's
+  context ends, the drop rules are taken away at once, within 10 seconds,
+  without waiting for a step still running (`dropRulesRemovedOnRunEnd`); the
+  full removal, which probes every path open again and takes away the
+  counting rules, follows within two minutes. A fault not seen removed fails
+  S07. The rules live only in the network namespaces of the run's own Pods,
+  so deleting the run namespace removes them too. After a `SIGKILL`, find and
+  remove what is left with:
+
+  ```sh
+  kubectl -n <run namespace> exec <member> -c netfault -- iptables-save | grep NETFAULT
+  kubectl delete namespace <run namespace>
+  ```
+
+  The `netfault` container stays in each member Pod; it only sleeps.
+
+The run namespace is created with Pod Security `enforce=privileged`, and
+`warn` and `audit` at `restricted`, for the ephemeral container with
+`NET_ADMIN` and `NET_RAW`. The labels are in `LAB01/record.json`.
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-master-isolated [-partition-hold 2m] \
+  [-quarantine-limit <duration>] [-partition-duration <duration>]'
+```
+
+Use `-fault partition-slave-isolated` for the control. `-check
+installed-ha-network-partition-master-isolated` and `-check
+installed-ha-network-partition-slave-isolated` select the same runs.
+
+1. The run reads `status.lastResolvedPrimary` and picks the member to cut
+   off as above. It reads each node's clock as S04 does, starts one client,
+   `s07open`, that holds a single application connection to `<cluster>-rw`
+   and stops at its first error (`APP_RECONNECT_POLICY=stop-after-error`),
+   and waits for its first ten acknowledgements. It then starts writes
+   through new connections, one operation at a time (`workload run` with one
+   operation, client `s07n1`, `s07n2` and so on, a second apart), each with
+   its start, end and exit code logged on the client's clock.
+2. Right before the cut, the starting conditions must be `True`, the master,
+   `status.currentPrimary` and `status.lastResolvedPrimary` as when the
+   member was picked, and no quarantine in force; then the faults are
+   prepared. Otherwise S07 is blocked and nothing is cut.
+3. The cut is injected and confirmed within four minutes, which covers
+   adding the ephemeral container, and held for `-partition-hold` (default
+   two minutes); at its end the run confirms the cut again.
+4. On every poll while the member is cut off, and after the removal until the
+   cluster settles, the run:
+   - reads every member's role with `cubrid heartbeat status` through
+     `kubectl exec`, which reaches the cut-off member through its kubelet. It
+     decides from the members the Operator can reach, and the member it
+     cannot, whether the ADR's rules require a quarantine. A trigger counts
+     once two consecutive sweeps show it (`triggerObservedAt`); it arose after
+     the sweep before them (`triggerWindowStart`). A sweep that could not
+     read a reachable member's role decides nothing and is counted
+     (`incompleteSweeps`). When the cut-off member answers as an active
+     master itself, or two members do, that is recorded
+     (`targetClaimedActiveMasterAt`, `twoActiveMasterClaimsAt`): CUBRID's
+     view, which the Operator sees only in part;
+   - reads `status.writeQuarantine` (each reason and revision, the start
+     time and `enforcedTime`) and `status.lastWriteQuarantineRelease`
+     (release time and method) for a quarantine it saw;
+   - reads, itself, the read-write Broker Deployment's desired replicas, its
+     Broker Pods and the `<cluster>-rw` EndpointSlices, and records each
+     change and when it first saw the Deployment at zero, no Broker Pod, and
+     no endpoint;
+   - records each change of `Ready`, `PrimaryResolved` and `RoutingReady`.
+5. The run removes the cut, then waits up to five minutes for the cluster to
+   settle: every member answers, CUBRID reports one master and two slaves, and
+   any quarantine left is one only a person may release
+   (`WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`).
+6. It stops both clients and reads their histories into
+   `LAB01/history.jsonl`, and applies the data rules to every member's rows,
+   read directly with `csql` and not through a Broker, waiting up to
+   `-data-check-within` for a slave that is behind. It then reads whether
+   the cluster reports `Ready` with no quarantine.
+
+What it judges, in this order:
+
+1. **Never-events fail S07:** `PrimaryResolved` or `RoutingReady` `True` 30
+   seconds or more after the cut was confirmed while a member is cut off from
+   the Operator; `-rw` endpoints back, or a write through a new connection
+   acknowledged, after the run saw every read-write Broker Pod gone and no
+   endpoint (with two seconds for kube-proxy), while the quarantine is still
+   in force; a `WriteQuarantinedMultipleMasters` or
+   `WriteQuarantinedMasterChanged` quarantine released by anything but a
+   person; the cluster reporting `Ready` with no quarantine at the end while
+   a member lacks an acknowledged write or the members' rows differ; and an
+   endpoint the faults would enter that is not the run's own.
+2. **Broken expectations fail S07:** the fault not seen removed; a trigger
+   seen in two consecutive sweeps and no `status.writeQuarantine`; a
+   quarantine recorded while the run never saw every read-write Broker Pod
+   gone and the `-rw` EndpointSlices empty (`RoutingReady=False` or a
+   Deployment at zero replicas is not a quarantine); and, in the control, a
+   quarantine while every sweep read one reachable active master.
+3. **Blocked, never passed:** the cut not confirmed or not held; for
+   `master-isolated`, no trigger seen while the cut held (the run cannot say
+   a quarantine was required, and records whether one started); a control
+   quarantine while some sweep could not read a role; a cluster that did not
+   settle; a data check that could not read every member.
+4. **Limits**, with the rules of `faults.Judge`:
+
+| Limit | Flag | Measured |
+|---|---|---|
+| `quarantine_limit` | `-quarantine-limit` (default `0`, unset) | `quarantineWithin`: from `triggerWindowStart` until the first write through a new connection that was not acknowledged and after which none was acknowledged before the release (`newConnectionsStoppedAt`); an upper bound. Not applied when no trigger was seen |
+| `partition_duration` | `-partition-duration` (default `0`, unset) | `partitionHeldFor`: from the cut's confirmation until the end of the hold; at least the limit |
+
+The contract records no value for either. A limit of `0` is unset and makes
+the run a baseline: `blocked` with `time_limit_unset`, never `pass`. A limit
+that is set but whose time was not measured blocks S07 with
+`measurement_missing`. `-partition-hold` is the run's own choice and must be
+at least `-partition-duration`.
+
+Acknowledged writes that a member lacks after the recovery are reported, not
+hidden: `acknowledgedMissing`, `acknowledgedMissingByMember` and
+`membersDiverged` in the measurements, and in the reason of a passing run.
+The ADR expects such loss while a quarantine is in force; it fails S07 only
+when the cluster reports itself healthy.
+
+Other measurements, from the cut's issue on the run's clock unless named:
+`faultConfirmedWithin`, `triggerObservedWithin`,
+`targetClaimedActiveMasterWithin`, `quarantineSeenWithin` (detection),
+`rwScaledDownWithin` (Broker scale-down), `rwPodsGoneWithin` (actual Pod
+termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
+interruption for new connections), `releaseSeenWithin`, `rwReopenedWithin`;
+`quarantineStartTime`, `enforcedTime` and `releaseTime` as status gives them,
+on the Operator's clock; `quarantineReason`, `releaseMethod`,
+`quarantineAtEnd` and `finalMaster`; and for `s07open`
+`establishedSession`, `establishedAcknowledgedAfterFault` and
+`establishedAcknowledgedAfterPathClosed`, on the client's clock. The
+established session is reported, not judged: the contract sets no bound on
+it, and the pinned JDBC driver can reconnect internally under one Java
+connection, so an open connection is not proof of one physical session. A
+time that was not seen is `unknown`.
+
+Evidence, under `S07/<variant>/`:
+
+- `record.json`: the member cut off and why, the manager Pod, the clock
+  offsets, every sweep with each member's role, the members the Operator
+  could not reach and the trigger, the quarantine's reasons and revisions,
+  the release, each change of the conditions and of the read-write path,
+  every new-connection write with its UTC start and end on the run's clock,
+  its exit code and outcome, the established session, the settle, the data
+  check, the partition's rules and probes (`partition`), and the run's
+  observations in time order (`observed`);
+- `timeline.jsonl`: the fault flow's steps;
+- `data-check.json` and `open-connection.jsonl`;
+- `clients/<client>.jsonl` when S07 ended before it read the clients.
+
+Beyond LAB01's, the account needs in the run namespace `update` on
+`pods/ephemeralcontainers` and `create` on `pods/exec` (for the faults), and
+`list` on EndpointSlices; and `get` on the manager Pod in the Operator's
+namespace.
+
+The lane has not run on the lab yet. Its unit tests use fake clients and a
+model of the members' network namespaces; they are no evidence of CUBRID's
+or the Operator's behavior under a real cut.
 
 ## S11 complete
 
@@ -4570,6 +4773,11 @@ and S12 variant other than `complete` and `exact` only those under
   `LAB01/history.jsonl`, and so are the clients' operations, or, when S04
   ended before it read them, in `S04/power-off/clients/<client>.jsonl` as the
   clients wrote them.
+- with `-fault partition-master-isolated` or `-fault partition-slave-isolated`,
+  `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` and
+  `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
+  lists them. The clients' and the new-connection writes' operations are in
+  `LAB01/history.jsonl`.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
   started and the status time it wrote, the members before and after),

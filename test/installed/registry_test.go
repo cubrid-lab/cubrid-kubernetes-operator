@@ -103,7 +103,8 @@ func TestInstalledLanesMatchTheRegistry(t *testing.T) {
 		check(string(mode), lane, requirements)
 	}
 	checkHA("no option", testHAConfig(t))
-	for _, fault := range []string{FaultVMPowerOff, FaultOperatorRestart, FaultDrainSlaveNode, FaultDrainMasterNode} {
+	for _, fault := range []string{FaultVMPowerOff, FaultOperatorRestart, FaultDrainSlaveNode, FaultDrainMasterNode,
+		FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated} {
 		cfg := testHAConfig(t)
 		cfg.Fault = fault
 		checkHA(fault, cfg)
@@ -207,7 +208,8 @@ func TestSmokeRequirementsKeepLegacyDeclarations(t *testing.T) {
 
 // newerHAKeys are the checks added after the 24-lane baseline below was
 // frozen; their plans are covered by their own tests.
-var newerHAKeys = []string{"installed-node-drain-slave-node", "installed-node-drain-master-node"}
+var newerHAKeys = []string{"installed-node-drain-slave-node", "installed-node-drain-master-node",
+	"installed-ha-network-partition-master-isolated", "installed-ha-network-partition-slave-isolated"}
 
 const plainHALegacyID = "LAB01"
 const plainHALane = "lab-installed-ha"

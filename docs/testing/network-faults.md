@@ -87,12 +87,15 @@ remove every rule and qdisc they installed.
   keeps `warn` and `audit` at `restricted`, so that a database Pod that
   would break `restricted` still shows up.
 - The installed HA command labels its namespace `enforce=restricted`, except
-  with `-backup-interrupted-upload`: that run's namespace is created with
-  `enforce=privileged` and `warn` and `audit` at `restricted`, and the labels
-  are recorded. That run collects neither the warnings nor the audit log, so
-  its Pods are not proven to comply with `restricted`. The variant refuses to start unless the namespace enforces
-  `privileged`. Elsewhere, attaching the container fails, and the run is
-  blocked.
+  with `-backup-interrupted-upload` and the other variants that use these
+  faults, the S07 partitions among them
+  ([S07 network partition](installed-ha.md#s07-network-partition)): such a
+  run's namespace is created with `enforce=privileged` and `warn` and
+  `audit` at `restricted`, and the labels are recorded. Such a run collects
+  neither the warnings nor the audit log, so its Pods are not proven to
+  comply with `restricted`. S11 `interrupted-upload` refuses to start unless
+  the namespace enforces `privileged`. Elsewhere, attaching the container
+  fails, and the run is blocked.
 
 ## How a fault is confirmed
 
