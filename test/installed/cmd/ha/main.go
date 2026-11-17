@@ -74,9 +74,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"how long the starting state must keep holding before the workload starts")
 	flags.StringVar(&cfg.Fault, "fault", "",
 		"scenario after LAB01: empty for none, operator-restart for S06 restart (deletes the manager Pod), "+
-			"vm-power-off for S04 power-off (powers off the VM of the master's node; vm-lab only), or "+
+			"vm-power-off for S04 power-off (powers off the VM of the master's node; vm-lab only), "+
 			"drain-slave-node or drain-master-node for S15 (cordons that member's node and evicts the run's Pods "+
-			"on it; vm-lab only)")
+			"on it; vm-lab only), or partition-master-isolated or partition-slave-isolated for S07 (cuts the "+
+			"master, or a slave ranked below it, off the other members and the manager Pod; vm-lab only)")
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
 		"S04, S06 and S15: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.StringVar(&cfg.VMStopCommand, "vm-stop-command", "",
@@ -93,6 +94,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.DrainLimit, "drain-limit", 0,
 		"S15: bound from the cordon until the drained node's member and Broker Pods are gone or the eviction is "+
 			"refused (drain_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
+	flags.DurationVar(&cfg.QuarantineLimit, "quarantine-limit", 0,
+		"S07: bound from the quarantine-triggering observation until new connections through the read-write "+
+			"Service stop succeeding (quarantine_limit); 0, the default, is unset and makes the run a baseline")
+	flags.DurationVar(&cfg.PartitionDuration, "partition-duration", 0,
+		"S07: least time the confirmed partition must be held (partition_duration); 0, the default, is unset "+
+			"and makes the run a baseline")
+	flags.DurationVar(&cfg.PartitionHold, "partition-hold", 2*time.Minute,
+		"S07: how long the run holds the confirmed partition before it removes it; at least -partition-duration")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,

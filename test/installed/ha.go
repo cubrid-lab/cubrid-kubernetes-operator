@@ -110,9 +110,11 @@ type HAConfig struct {
 	// Fault selects a scenario after LAB01: empty for none,
 	// FaultOperatorRestart for S06 restart, which deletes the installed
 	// manager's Pod, FaultVMPowerOff for S04 power-off, which powers off
-	// the VM of the master's node, or FaultDrainSlaveNode or
+	// the VM of the master's node, FaultDrainSlaveNode or
 	// FaultDrainMasterNode for S15, which cordons the node of a slave or of
-	// the master and evicts the run's Pods on it.
+	// the master and evicts the run's Pods on it, or
+	// FaultPartitionMasterIsolated or FaultPartitionSlaveIsolated for S07,
+	// which cut the master, or a lower-ranked slave, off the network.
 	Fault string
 	// VMStopCommand, VMStartCommand and VMStatusCommand are the lab's own
 	// controls of a node's VM, for S04: each runs with sh -c on the run's
@@ -132,6 +134,13 @@ type HAConfig struct {
 	// (drain_limit); zero is unset, which makes the run a baseline. In S15
 	// FailoverLimit bounds the clients' recovery from the member's eviction.
 	DrainLimit time.Duration
+	// QuarantineLimit bounds S07 from the quarantine-triggering observation
+	// until new connections through the read-write Service stop succeeding
+	// (quarantine_limit); PartitionDuration is the least time S07 must hold
+	// the confirmed partition (partition_duration). Zero is unset for both,
+	// which makes the run a baseline. PartitionHold is how long the run holds
+	// the confirmed partition: the run's own choice, not the contract's.
+	QuarantineLimit, PartitionDuration, PartitionHold time.Duration
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12
@@ -295,11 +304,13 @@ type HAConfig struct {
 
 // privileged reports whether the run namespace must enforce Pod Security
 // privileged: S11 interrupted-upload, instance-manager-restart, overlapping
-// and operation-store-loss, and S12 instance-manager-restart at seed-backup,
-// add an ephemeral container with NET_ADMIN and NET_RAW to a member's Pod.
+// and operation-store-loss, S12 instance-manager-restart at seed-backup, and
+// the S07 partitions add an ephemeral container with NET_ADMIN and NET_RAW to
+// a member's Pod.
 func (c HAConfig) privileged() bool {
 	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping ||
-		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup)
+		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup) ||
+		c.partitionFault()
 }
 
 func (c HAConfig) validate() error {
@@ -320,14 +331,18 @@ func (c HAConfig) validate() error {
 		len(validation.IsDNS1123Subdomain(c.SeedSecret)) != 0 || c.SeedSecretNamespace == c.Namespace {
 		return errors.New("the seed Secret must be named, outside the run namespace")
 	}
-	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff && !c.drainFault() {
-		return fmt.Errorf("fault must be empty, %s, %s, %s or %s", FaultOperatorRestart, FaultVMPowerOff,
-			FaultDrainSlaveNode, FaultDrainMasterNode)
+	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff && !c.drainFault() &&
+		!c.partitionFault() {
+		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s or %s", FaultOperatorRestart, FaultVMPowerOff,
+			FaultDrainSlaveNode, FaultDrainMasterNode, FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated)
 	}
 	if err := c.validateS04(); err != nil {
 		return err
 	}
 	if err := c.validateS15(); err != nil {
+		return err
+	}
+	if err := c.validateS07(); err != nil {
 		return err
 	}
 	if c.Fault != "" && c.StablePeriod <= 0 {
@@ -455,6 +470,8 @@ type haRun struct {
 	s06 *evidence.Scenario
 	// s15 is the result of the S15 node drain, once it ran.
 	s15 *evidence.Scenario
+	// s07 is the result of the S07 network partition, once it ran.
+	s07 *evidence.Scenario
 	// drainMu serializes S15's cordon and uncordon of its node, which the
 	// fault's steps, its cleanup and the run's end can each attempt.
 	drainMu sync.Mutex
@@ -727,6 +744,16 @@ func faultLane(fault string) (string, evidence.Requirement, string) {
 			"member and Broker Pods on it are evicted, with every member's volume bound to its node (no spare " +
 			"node); no other S00-S15 qualification"
 	}
+	if fault == FaultPartitionMasterIsolated || fault == FaultPartitionSlaveIsolated {
+		variant := s07Variant(fault)
+		member := map[string]string{s07MasterIsolated: "the master",
+			s07SlaveIsolated: "a slave ranked below the master that is not the last resolved primary"}[variant]
+		return s07LanePrefix + variant, evidence.Requirement{ID: s07ID, Variant: variant}, "Three-member HA " +
+			"cluster against an installed Operator, then S07 " + variant + ": " + member + " is cut off both ways " +
+			"from the other members and the manager Pod by network faults in the members' Pods, and the write " +
+			"quarantine, SQL through the read-write Service and every member's rows are recorded; no other " +
+			"S00-S15 qualification"
+	}
 	if fault == FaultVMPowerOff {
 		return s04Lane, evidence.Requirement{ID: s04ID, Variant: s04Variant}, "Three-member HA cluster against an " +
 			"installed Operator, then S04 power-off: the VM of the master's node is powered off without a " +
@@ -769,6 +796,7 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s15ID, Variant: h.cfg.Fault}, evidence.Blocked,
 			"S15 starts from LAB01's checked state, and LAB01 did not pass")
 	}
+	h.recordS07(summary)
 	if h.s11 != nil {
 		summary.Record(*h.s11)
 	} else if h.cfg.BackupBucket != "" {
@@ -910,6 +938,12 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s15 = &s15
 		if s15.Result != evidence.Pass {
 			return fmt.Errorf("S15/%s: %s", s15.Variant, s15.Reason)
+		}
+	case h.cfg.partitionFault():
+		s07 := h.runS07(ctx)
+		h.s07 = &s07
+		if s07.Result != evidence.Pass {
+			return fmt.Errorf("S07/%s: %s", s07.Variant, s07.Reason)
 		}
 	case h.cfg.Fault == FaultOperatorRestart:
 		s06 := h.runS06(ctx)

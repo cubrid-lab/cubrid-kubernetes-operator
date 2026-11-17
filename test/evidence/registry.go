@@ -117,9 +117,10 @@ const (
 	deletionText    = "Cluster deletion and data-retention policy"
 	accessText      = "Instance Manager network isolation, token-checked requests, service-account permissions " +
 		"and a search for leaked credentials"
-	smokeText   = "Installed Operator standalone connection and SQL smoke"
-	drainText   = "Node drain and PodDisruptionBudget behavior"
-	haSmokeText = "Installed three-member HA and SQL smoke"
+	smokeText     = "Installed Operator standalone connection and SQL smoke"
+	drainText     = "Node drain and PodDisruptionBudget behavior"
+	partitionText = "HA network partition"
+	haSmokeText   = "Installed three-member HA and SQL smoke"
 )
 
 // The keys the lanes share.
@@ -173,7 +174,7 @@ var registry = scenarioRegistry{
 		{"S04", "installed-ha-primary-vm-failure", vmFailureText, "s04-primary-vm-failure"},
 		{"S05", "broker-failure-recovery", brokerText, "s05-broker-failure"},
 		{"S06", "operator-failure-recovery", operatorText, "s06-operator-failure"},
-		{"S07", "ha-network-partition", "HA network partition", "s07-network-partition"},
+		{"S07", "ha-network-partition", partitionText, "s07-network-partition"},
 		{"S08", "ha-replication-lag-repeated-faults", "Replication lag under repeated faults",
 			"s08-replication-lag-followed-by-repeated-failures"},
 		{"S09", "ha-former-primary-rejoin", "Rejoin of a former primary member", "s09-former-primary-rejoins"},
@@ -219,6 +220,10 @@ var registry = scenarioRegistry{
 			drainText+" - drain of a slave's node, no spare node"),
 		labResult("installed-node-drain-master-node", "S15/drain-master-node",
 			drainText+" - drain of the master's node, no spare node"),
+		labResult("installed-ha-network-partition-master-isolated", "S07/master-isolated",
+			partitionText+" - master cut off from the other members and the Operator"),
+		labResult("installed-ha-network-partition-slave-isolated", "S07/slave-isolated",
+			partitionText+" - lower-ranked slave cut off, a case that must not quarantine"),
 
 		labResult(backupCompleteKey, "S11/complete", backupText+" - complete"),
 		labResult("installed-backup-missing-destination", "S11/missing-destination",
@@ -273,6 +278,8 @@ var registry = scenarioRegistry{
 		labLane("lab-installed-ha-s06", "installed-operator-failure-recovery-restart"),
 		labLane("lab-installed-ha-s15-drain-slave-node", "installed-node-drain-slave-node"),
 		labLane("lab-installed-ha-s15-drain-master-node", "installed-node-drain-master-node"),
+		labLane("lab-installed-ha-s07-master-isolated", "installed-ha-network-partition-master-isolated"),
+		labLane("lab-installed-ha-s07-slave-isolated", "installed-ha-network-partition-slave-isolated"),
 		backupLane("lab-installed-ha-s11"),
 		backupLane("lab-installed-ha-s11-missing-destination", "installed-backup-missing-destination"),
 		backupLane("lab-installed-ha-s11-denied-credentials", "installed-backup-denied-credentials"),
