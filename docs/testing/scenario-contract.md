@@ -3198,7 +3198,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `ready_limit` | Single-member cluster created until SQL succeeds | Kind on a GitHub-hosted runner: 90 seconds. VM lab: unset | Kind: measured |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
-| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured |
+| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: S15 node drain, 1 minute; other scenarios unset | Kind: measured; VM lab S15: measured |
 | `quarantined_failover_limit` | The same, for a master Pod whose termination the Operator cannot see confirmed: S03 `abrupt` and `abrupt-first-member` (deleted with `--force`) and S06 `absent-during-failover` (deleted while the Operator is absent). It is the write quarantine's availability cost (ADR-0005, section 8) | Kind on a GitHub-hosted runner: 6 minutes. VM lab: unset | Kind: measured, one run |
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds | choice |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset | Kind: measured |
@@ -3211,7 +3211,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
 | `delete_limit` | Cluster deleted until its resources are gone | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
-| `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
+| `drain_limit` | Drain issued until it finishes or is refused | VM lab: 1 minute. Kind: unset (no multi-node Kind cluster) | VM lab: measured |
 
 S00 uses the same four rules as every other required scenario
 (`faults.JudgeS00Limits`). If either `install_limit` or `ready_limit`
@@ -3239,6 +3239,9 @@ no limit is unset. S00 records both limits and the resulting
 | `operator_resync_limit` | The same; scenario S06, both variants | In five runs on 2026-10-05 and 2026-10-06: 12.3 s to 13.5 s (`restart`), 17.5 s to 20.3 s (`absent-during-failover`) | `restart`: from the moment the Operator Pod's deletion was issued until another Operator Pod is available and the status names the master with every condition `True`. `absent-during-failover`: from the moment the Operator's Deployment was scaled back to one until the status names the new master with every condition `True` | 2 minutes |
 
 | `delete_limit` | The same; scenario S13, a standalone cluster, both variants | 2.65 s (`retain`) and 2.45 s (`delete`) in one run on 2026-11-12, [E2E run 43118644220](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43118644220) at `d518b4f`, both `blocked` with `time_limit_unset` and every other check held. The run's `summary.json` was overwritten after the suite by a provisional checkpoint (#807), so the values are taken from `S13/<variant>/timeline.jsonl` in its `e2e-evidence` artifact: `fault_issued` to `outcome_reached`, the same two instants `deleteSeconds` is computed from | `deleteSeconds`: from the moment `kubectl delete cubridcluster --wait=false` was issued until no StatefulSet, Deployment, Service or Pod is left in the namespace (and in `delete` no PVC), as the test's polling saw it | 1 minute. One run is a small sample, and how fast a PVC goes depends on the storage provisioner, so the margin is wider than the usual four times the slowest run |
+
+| `drain_limit` | VM lab (three workers, `local-path`, every member bound to its node: the `no-spare-node` layout), installed Operator `66ab5ee`, scenario S15 both variants | 6.3 s to 12.7 s in six runs on 2026-11-17 (three per variant): `drain-slave-node` 10.8 s, 6.3 s, 12.5 s; `drain-master-node` 12.3 s, 12.7 s, 12.5 s; every run `blocked` with `time_limit_unset` and every other check held (#614) | `drainWithin`: from the cordon of the target node until the run's member and Broker Pods on it are gone or the eviction is refused | 1 minute, about four times the slowest run |
+| `failover_limit` | The same VM lab; scenario S15 both variants | 0.14 s to 0.35 s (`drain-slave-node`) and 1.9 s to 12.5 s (`drain-master-node`) in the same six runs | `failoverWithin`: from the first eviction request to the clients' first acknowledged operation after which none failed. Writes on new connections through `-rw` resumed 7.7 s to 14.3 s after the cordon (`sqlContinuedWithin`, recorded, not limited) | 1 minute for S15 only, about four times the slowest run; the other VM-lab scenarios keep it unset until their own baselines |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 
