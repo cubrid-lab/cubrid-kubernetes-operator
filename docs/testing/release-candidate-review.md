@@ -105,6 +105,30 @@ already defines `recorded` versus `judged`, candidate versus observed
 manifest.** A recorded `pass` whose mandatory raw evidence is absent cannot
 be independently accepted as `pass`.
 
+To generate a read-only Markdown inventory, place the unpacked bundles in a
+directory named for their respective run IDs. Pass the immutable release
+evidence index and the parent directory to the reporter:
+
+```sh
+go run ./test/evidence/cmd/candidate-matrix \
+  -index candidate-index.json -runs ./retained-runs > candidate-matrix.md
+```
+
+The reporter matches each local summary to the index, checks SHA-256
+digests for the summary, JUnit and listed scenario files, and shows the
+recorded verdict alongside the verdict supported by the local evidence.
+Rows retain their run's lane and level. The run table identifies filtered
+and unfinished runs, missing bundles or files, mismatched revisions and
+images, and lanes the evidence reader could not validate. Related evidence
+must stay in its own run directory.
+
+Use GitHub Actions run or artifact URLs in this repository for `source`.
+The report omits raw log content, archive locations, and local paths. The
+[generated sample](../../test/evidence/cmd/candidate-matrix/testdata/sample.md)
+uses synthetic inputs and a placeholder Actions link. Keep manual judgement
+of SQL, repetitions, soak results, and release approval in the candidate
+review.
+
 Review the original bundle and the scenario-specific
 [oracle](scenario-contract.md#oracle-correctness), not the green status
 of a wrapper workflow. A fault that did not occur, untrusted role evidence,
