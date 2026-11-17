@@ -46,6 +46,14 @@ var (
 	s07StaleTokenWindow   = 30 * time.Second
 	s07ReleaseBound       = 5 * time.Minute
 	s07ReleaseWriteWindow = 30 * time.Second
+	// s07ReleaseSlack covers the release's steps that have no bound of their
+	// own: the reads of the clients' histories, the sweep before the current
+	// token, the removal of an unconsumed token, the Events read and the last
+	// poll of each watch running over its bound.
+	s07ReleaseSlack = time.Minute
+	// s07RemoveTokenBound bounds the removal of an unconsumed token, which is
+	// made also after the run's context ended.
+	s07RemoveTokenBound = 10 * time.Second
 )
 
 const (
@@ -86,6 +94,10 @@ type s07StaleTokenRecord struct {
 	Readings       int        `json:"readings"`
 	QuarantineHeld bool       `json:"quarantineHeldThroughout"`
 	BrokersHeld    bool       `json:"rwBrokersHeldAtZeroThroughout"`
+	// PathBefore is the read-write path just before the stale token was set,
+	// which must be closed: no desired replica and no Broker Pod that is Ready
+	// or not terminating.
+	PathBefore *s07Path `json:"rwPathBefore,omitempty"`
 }
 
 // s07ManualRelease is the run's own release of a quarantine only a person
@@ -135,18 +147,34 @@ type s07ManualRelease struct {
 	// Unmet is what had not happened when the run stopped watching.
 	Unmet       string   `json:"unmet,omitempty"`
 	NeverEvents []string `json:"neverEvents,omitempty"`
+	// AnnotationRemovedByRun is when the run removed a token it had set that
+	// no release consumed, as when the release was refused or the run ended
+	// first, so the Operator cannot release on it later; AnnotationRemoveError
+	// says why that removal failed.
+	AnnotationRemovedByRun *time.Time `json:"annotationRemovedByRun,omitempty"`
+	AnnotationRemoveError  string     `json:"annotationRemoveError,omitempty"`
+	// TokenReplaced says that the quarantine's token changed after the run set
+	// it and before any release, so the token set went stale.
+	TokenReplaced string `json:"currentTokenReplaced,omitempty"`
+	// OtherRelease is a release of the quarantine by a token the run did not
+	// set; it ends the run's release and blocks S07.
+	OtherRelease string `json:"releasedByAnotherToken,omitempty"`
+	// currentToken is the current token the run set, and lastSet the last
+	// token it set; neither is written to the evidence.
+	currentToken, lastSet string
 	// before is the data rules' report of RowsBefore.
 	before *workload.Report
 }
 
-// s07ReleaseBounds is the longest the run's manual release may take, with
-// -partition-manual-release: the rows read before and after it, the stale
-// token's watch and the wait for the release and the path's return.
+// s07ReleaseBounds is the time the run's manual release is allowed in the
+// -timeout check, with -partition-manual-release: the rows read before and
+// after it, the stale token's watch, the wait for the release and the path's
+// return, and s07ReleaseSlack for its steps without a bound of their own.
 func (c HAConfig) s07ReleaseBounds() time.Duration {
 	if !c.PartitionManualRelease {
 		return 0
 	}
-	return 2*s07SnapshotBound + s07StaleTokenWindow + s07ReleaseBound
+	return 2*s07SnapshotBound + s07StaleTokenWindow + s07ReleaseBound + s07ReleaseSlack
 }
 
 // s07ServerIsActive reports whether a member's raw state lists a server
@@ -190,9 +218,9 @@ func noteS07ActiveServers(rec *s07Record) {
 // s07StaleToken is the token the run sets before the current one: the newest
 // earlier token of the run's quarantine, which an observation revised away,
 // or else the current token with its last character changed.
-func s07StaleToken(tokens []string, current string) (string, string) {
-	for _, t := range slices.Backward(tokens) {
-		if t != "" && t != current {
+func s07StaleToken(tokens []s07SeenToken, generation, current string) (string, string) {
+	for _, seen := range slices.Backward(tokens) {
+		if t := seen.Token; seen.Generation == generation && t != "" && t != current {
 			return t, s07StaleEarlier
 		}
 	}
@@ -206,6 +234,46 @@ func s07StaleToken(tokens []string, current string) (string, string) {
 		altered[len(altered)-1] = '0'
 	}
 	return string(altered), s07StaleAltered
+}
+
+// s07SeenToken is a release token of the run's quarantine and its generation.
+type s07SeenToken struct{ Generation, Token string }
+
+// noteS07RunRelease records rel as the run's release when it released the
+// run's quarantine generation with the current token the run set: when, the
+// Operator's release time and master, and the acknowledged writes that master
+// lacked before the release, which the release accepts as lost. It is called
+// whenever the run reads the release, also after its own watch ended.
+func noteS07RunRelease(rec *s07Record, rel *databasev1alpha1.WriteQuarantineRelease, now time.Time) {
+	r := rec.ManualRelease
+	if r == nil || rel == nil || r.currentToken == "" || r.AcceptedSeenAt != nil ||
+		rel.GenerationID != r.GenerationID || rel.ReleaseToken != r.currentToken {
+		return
+	}
+	released := rel.ReleaseTime.UTC()
+	r.AcceptedSeenAt, r.ReleaseTime, r.ReleasedMaster = &now, &released, rel.ObservedMaster
+	r.AcceptedAsLost = s07MissingOn(r.before, rel.ObservedMaster)
+	rec.note("manual_release_seen", string(rel.Method)+" "+rel.ObservedMaster)
+}
+
+// s07ReleasedByRun reports whether the run's own current token released the
+// quarantine: only then are the writes accepted as lost left out of the data
+// rules' never-event.
+func s07ReleasedByRun(rec *s07Record) bool {
+	return rec.ManualRelease != nil && rec.ManualRelease.AcceptedSeenAt != nil
+}
+
+// noteS07OtherRelease records a release of the run's quarantine generation by
+// a token the run did not set, once.
+func noteS07OtherRelease(rec *s07Record, rel *databasev1alpha1.WriteQuarantineRelease, now time.Time) {
+	r := rec.ManualRelease
+	if r == nil || rel == nil || r.OtherRelease != "" || rel.GenerationID != r.GenerationID ||
+		(r.currentToken != "" && rel.ReleaseToken == r.currentToken) {
+		return
+	}
+	r.OtherRelease = fmt.Sprintf("released %s at %s by a token the run did not set (%s)", rel.Method,
+		now.Format(time.RFC3339), cmpOr(s07TokenPrefix(rel.ReleaseToken), "none"))
+	rec.note("quarantine_released_by_another_token", r.OtherRelease)
 }
 
 // s07TokenPrefix is the first 8 characters of a token, as the Operator names
@@ -267,6 +335,49 @@ func (h *haRun) setS07ReleaseToken(ctx context.Context, token string) error {
 	return h.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch))
 }
 
+// removeS07ReleaseToken removes the release annotation the run set when it
+// still names token and no release consumed it, as the Operator removes a
+// consumed one: a JSON patch that tests the run's cluster UID and the value
+// before it removes the annotation. It runs within s07RemoveTokenBound, also
+// after ctx ended, so that a refused release or a run ended by a signal does
+// not leave a token the Operator could accept later.
+func (h *haRun) removeS07ReleaseToken(ctx context.Context, rec *s07Record, r *s07ManualRelease) {
+	if r.lastSet == "" || r.AcceptedSeenAt != nil && r.lastSet == r.currentToken {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s07RemoveTokenBound)
+	defer cancel()
+	cluster, err := h.s07OwnCluster(ctx)
+	if err == nil && cluster.Annotations[releaseWriteQuarantineAnnotation] != r.lastSet {
+		return
+	}
+	if err == nil {
+		annotation := "/metadata/annotations/" + strings.ReplaceAll(strings.ReplaceAll(
+			releaseWriteQuarantineAnnotation, "~", "~0"), "/", "~1")
+		type operation struct {
+			Op    string `json:"op"`
+			Path  string `json:"path"`
+			Value string `json:"value,omitempty"`
+		}
+		var patch []byte
+		patch, err = json.Marshal([]operation{{"test", "/metadata/uid", string(cluster.UID)},
+			{"test", annotation, r.lastSet}, {"remove", annotation, ""}})
+		if err == nil {
+			target := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: cluster.Name,
+				Namespace: cluster.Namespace}}
+			err = h.Client.Patch(ctx, target, client.RawPatch(types.JSONPatchType, patch))
+		}
+	}
+	if err != nil {
+		r.AnnotationRemoveError = err.Error()
+		rec.note("release_token_not_removed", err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	r.AnnotationRemovedByRun = &now
+	rec.note("release_token_removed", "")
+}
+
 // s07HistoryNow is the run's history with what both S07 clients have written
 // so far, without stopping them, so that the rows read before the release are
 // judged against the writes those clients acknowledged. A line still being
@@ -325,11 +436,18 @@ func (h *haRun) releaseS07(ctx context.Context, rec *s07Record) {
 	case !slices.Contains(rec.Generations, q.GenerationID):
 		notMade("the quarantine in force, generation %s, is not one the run saw", q.GenerationID)
 		return
-	case q.ClusterUID != "" && q.ClusterUID != string(cluster.UID):
-		notMade("the quarantine was recorded for the cluster UID %s, not the run's %s", q.ClusterUID, cluster.UID)
+	case q.ClusterUID != string(cluster.UID):
+		notMade("the quarantine was recorded for the cluster UID %q, not the run's %s", q.ClusterUID, cluster.UID)
 		return
 	}
 	r.ClusterUID, r.GenerationID, r.Reason = string(cluster.UID), q.GenerationID, string(q.Reason)
+	h.observeS07Release(ctx, rec, time.Now().UTC())
+	before := s07LastPath(rec)
+	if before.Desired != 0 || before.ActivePods != 0 || before.ReadyPods != 0 {
+		notMade("the read-write path was not closed before the release: %d desired replica(s), %d Broker Pod(s) "+
+			"not terminating, %d Ready", before.Desired, before.ActivePods, before.ReadyPods)
+		return
+	}
 	r.RowsBefore, r.before = h.readS07Rows(ctx, h.s07HistoryNow(ctx, rec),
 		s07File(rec.Variant, "rows-before-release.json"))
 	defer func() {
@@ -337,18 +455,24 @@ func (h *haRun) releaseS07(ctx context.Context, rec *s07Record) {
 			s07File(rec.Variant, "rows-after-release.json"))
 		r.Events = h.s07ReleaseEvents(ctx)
 	}()
-	stale, kind := s07StaleToken(rec.tokens, q.ReleaseToken)
-	r.Stale = &s07StaleTokenRecord{Kind: kind, TokenPrefix: s07TokenPrefix(stale)}
+	defer h.removeS07ReleaseToken(ctx, rec, r)
+	stale, kind := s07StaleToken(rec.tokens, q.GenerationID, q.ReleaseToken)
+	r.Stale = &s07StaleTokenRecord{Kind: kind, TokenPrefix: s07TokenPrefix(stale), PathBefore: &before}
 	if err := h.setS07ReleaseToken(ctx, stale); err != nil {
 		r.Stale.SetError = err.Error()
 		notMade("the stale token could not be set: %v", err)
 		return
 	}
+	r.lastSet = stale
 	setAt := time.Now().UTC()
 	r.Stale.SetAt = &setAt
 	rec.note("stale_release_token_set", kind)
-	h.watchS07StaleToken(ctx, rec, r)
-	if len(r.NeverEvents) > 0 || !r.Stale.QuarantineHeld {
+	h.watchS07StaleToken(ctx, rec, r, stale)
+	switch {
+	case r.OtherRelease != "":
+		r.Unmet = "the current token was not set: the quarantine was " + r.OtherRelease
+		return
+	case len(r.NeverEvents) > 0 || !r.Stale.QuarantineHeld:
 		r.Unmet = "the current token was not set: the quarantine did not stay in force after the stale token"
 		return
 	}
@@ -359,7 +483,7 @@ func (h *haRun) releaseS07(ctx context.Context, rec *s07Record) {
 // stale token was set: a release of the quarantine, or Brokers above zero
 // while it is in force, is a never-event; the quarantine gone without a
 // release ends the watch.
-func (h *haRun) watchS07StaleToken(ctx context.Context, rec *s07Record, r *s07ManualRelease) {
+func (h *haRun) watchS07StaleToken(ctx context.Context, rec *s07Record, r *s07ManualRelease, stale string) {
 	s := r.Stale
 	s.QuarantineHeld, s.BrokersHeld = true, true
 	deadline := s.SetAt.Add(s07StaleTokenWindow)
@@ -370,20 +494,29 @@ func (h *haRun) watchS07StaleToken(ctx context.Context, rec *s07Record, r *s07Ma
 			s.Readings++
 			q := cluster.Status.WriteQuarantine
 			inForce := q != nil && q.GenerationID == r.GenerationID
-			if rel := cluster.Status.LastWriteQuarantineRelease; rel != nil && rel.GenerationID == r.GenerationID {
+			rel := cluster.Status.LastWriteQuarantineRelease
+			switch {
+			case rel != nil && rel.GenerationID == r.GenerationID && rel.ReleaseToken == stale:
 				s.QuarantineHeld = false
 				r.NeverEvents = append(r.NeverEvents, fmt.Sprintf("the %s quarantine (generation %s) was released "+
-					"(%s) at %s while only a stale token (%s, %s) was set", r.Reason, r.GenerationID, rel.Method,
+					"(%s) at %s on the stale token (%s, %s) the run set", r.Reason, r.GenerationID, rel.Method,
 					now.Format(time.RFC3339), s.Kind, s.TokenPrefix))
-			} else if !inForce {
+			case rel != nil && rel.GenerationID == r.GenerationID:
+				s.QuarantineHeld = false
+				noteS07OtherRelease(rec, rel, now)
+			case !inForce:
 				s.QuarantineHeld = false
 				rec.note("stale_release_token_quarantine_gone", "")
 			}
-			if p := s07LastPath(rec); inForce && s.BrokersHeld && (p.Desired > 0 || p.Pods > 0) {
+			// A Broker Pod still terminating from the enforcement is not the
+			// path coming back.
+			if p := s07LastPath(rec); inForce && s.BrokersHeld && r.OtherRelease == "" &&
+				(p.Desired > 0 || p.ReadyPods > 0 || p.ActivePods > 0) {
 				s.BrokersHeld = false
 				r.NeverEvents = append(r.NeverEvents, fmt.Sprintf("the read-write Brokers were at %d desired "+
-					"replica(s) and %d Pod(s) at %s while the %s quarantine was in force and only a stale token "+
-					"(%s) was set", p.Desired, p.Pods, now.Format(time.RFC3339), r.Reason, s.Kind))
+					"replica(s), %d Broker Pod(s) not terminating and %d Ready at %s while the %s quarantine was in "+
+					"force and only a stale token (%s) was set", p.Desired, p.ActivePods, p.ReadyPods,
+					now.Format(time.RFC3339), r.Reason, s.Kind))
 			}
 		}
 		if !s.QuarantineHeld || !now.Before(deadline) || ctx.Err() != nil {
@@ -421,6 +554,7 @@ func (h *haRun) applyS07ReleaseToken(ctx context.Context, rec *s07Record, r *s07
 		r.Unmet = "the current token was not set: " + err.Error()
 		return
 	}
+	r.currentToken, r.lastSet = q.ReleaseToken, q.ReleaseToken
 	applied := time.Now().UTC()
 	r.AppliedAt = &applied
 	rec.note("release_token_set", cmpOr(r.MasterAtApply, "no active master"))
@@ -430,6 +564,10 @@ func (h *haRun) applyS07ReleaseToken(ctx context.Context, rec *s07Record, r *s07
 		h.observeS07Release(ctx, rec, now)
 		h.noteS07Release(ctx, rec, r, now)
 		if r.RWEndpointsReadyAt != nil && now.Sub(*r.RWEndpointsReadyAt) >= s07ReleaseWriteWindow {
+			break
+		}
+		if r.OtherRelease != "" {
+			r.Unmet = "the quarantine was " + r.OtherRelease
 			break
 		}
 		if !now.Before(deadline) || ctx.Err() != nil {
@@ -443,9 +581,14 @@ func (h *haRun) applyS07ReleaseToken(ctx context.Context, rec *s07Record, r *s07
 	}
 	if rec.SettledAt != nil {
 		rec.QuarantineAtEnd = rec.QuarantineInForce
-		if master := s07SoleMaster(rec.Sweeps[len(rec.Sweeps)-1], h.members); master != "" {
-			rec.FinalMaster = master
-			rec.FinalSlaves = slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == master })
+		last := rec.Sweeps[len(rec.Sweeps)-1]
+		if master := s07SoleMaster(last, h.members); master != "" {
+			rec.FinalMaster, rec.FinalSlaves = master, nil
+			for _, m := range h.members {
+				if last.Roles[m] == s07Slave {
+					rec.FinalSlaves = append(rec.FinalSlaves, m)
+				}
+			}
 		}
 	}
 }
@@ -467,18 +610,19 @@ func (h *haRun) noteS07Release(ctx context.Context, rec *s07Record, r *s07Manual
 		rec.note("cluster_unread", err.Error())
 		return
 	}
-	if q := cluster.Status.WriteQuarantine; q != nil && q.GenerationID == r.GenerationID && q.ReleaseRefusal != "" &&
-		!slices.Contains(r.Refusals, q.ReleaseRefusal) {
-		r.Refusals = append(r.Refusals, q.ReleaseRefusal)
-		rec.note("manual_release_refused", q.ReleaseRefusal)
+	if q := cluster.Status.WriteQuarantine; q != nil && q.GenerationID == r.GenerationID {
+		if q.ReleaseRefusal != "" && !slices.Contains(r.Refusals, q.ReleaseRefusal) {
+			r.Refusals = append(r.Refusals, q.ReleaseRefusal)
+			rec.note("manual_release_refused", q.ReleaseRefusal)
+		}
+		if q.ReleaseToken != r.currentToken && r.TokenReplaced == "" {
+			r.TokenReplaced = fmt.Sprintf("revision %d replaced the token the run set at %s, before any release",
+				q.Revision, now.Format(time.RFC3339))
+			rec.note("release_token_replaced", r.TokenReplaced)
+		}
 	}
-	if rel := cluster.Status.LastWriteQuarantineRelease; rel != nil && rel.GenerationID == r.GenerationID &&
-		r.AcceptedSeenAt == nil {
-		released := rel.ReleaseTime.UTC()
-		r.AcceptedSeenAt, r.ReleaseTime, r.ReleasedMaster = &now, &released, rel.ObservedMaster
-		r.AcceptedAsLost = s07MissingOn(r.before, rel.ObservedMaster)
-		rec.note("manual_release_seen", string(rel.Method)+" "+rel.ObservedMaster)
-	}
+	noteS07RunRelease(rec, cluster.Status.LastWriteQuarantineRelease, now)
+	noteS07OtherRelease(rec, cluster.Status.LastWriteQuarantineRelease, now)
 	if r.AcceptedSeenAt == nil {
 		return
 	}
@@ -624,8 +768,14 @@ func s07ReleaseNote(rec *s07Record) string {
 			"write(s) it lacked before the release are accepted as lost", cmpOr(r.ReleasedMaster, "unknown"),
 			len(r.AcceptedAsLost)))
 	}
+	if r.TokenReplaced != "" {
+		notes = append(notes, "the current token went stale: "+r.TokenReplaced)
+	}
 	if r.Unmet != "" {
 		notes = append(notes, r.Unmet)
+	}
+	if r.AnnotationRemovedByRun != nil {
+		notes = append(notes, "the run removed the token it set, which no release consumed")
 	}
 	return "; manual release by the run: " + strings.Join(notes, "; ")
 }

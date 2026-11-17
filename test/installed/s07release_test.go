@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -157,16 +158,24 @@ func TestSettleS07RecordsWhenAServerFirstBecomesActiveAfterTheHeal(t *testing.T)
 }
 
 // The release is made with a token that is not current: the newest earlier
-// token of the run's quarantine when there is one, or else the current
-// token altered.
-func TestS07StaleTokenPrefersAnEarlierToken(t *testing.T) {
-	stale, kind := s07StaleToken(nil, testCurrentToken)
+// token of the same quarantine generation when there is one, or else the
+// current token altered. A token of an earlier generation is not used: the
+// Operator may treat it as consumed and remove it without an Ignored Event,
+// which would not test that a stale token is ignored.
+func TestS07StaleTokenPrefersAnEarlierTokenOfTheSameGeneration(t *testing.T) {
+	stale, kind := s07StaleToken(nil, "g1", testCurrentToken)
 	if stale == testCurrentToken || stale == "" || kind != s07StaleAltered {
 		t.Errorf("no earlier token: %q (%s), want the current token altered", stale, kind)
 	}
-	stale, kind = s07StaleToken([]string{"token-first", testEarlierToken, testCurrentToken}, testCurrentToken)
+	tokens := []s07SeenToken{{"g1", "token-first"}, {"g1", testEarlierToken}, {"g1", testCurrentToken}}
+	stale, kind = s07StaleToken(tokens, "g1", testCurrentToken)
 	if stale != testEarlierToken || kind != s07StaleEarlier {
 		t.Errorf("with earlier tokens: %q (%s), want %q", stale, kind, testEarlierToken)
+	}
+	tokens = []s07SeenToken{{"g0", testEarlierToken}, {"g1", testCurrentToken}}
+	stale, kind = s07StaleToken(tokens, "g1", testCurrentToken)
+	if stale == testEarlierToken || kind != s07StaleAltered {
+		t.Errorf("with only an earlier generation's token: %q (%s), want the current token altered", stale, kind)
 	}
 }
 
@@ -246,10 +255,34 @@ func reopenS07Path(ctx context.Context, c client.WithWatch, ns string) error {
 // m0 lacks the acknowledged write c-2 that m1 and m2 hold. The fake API
 // records each release annotation the run sets and lets operator answer it.
 type s07ReleaseFixture struct {
-	h      *haRun
-	rec    *s07Record
-	mu     sync.Mutex
-	values []string
+	h        *haRun
+	rec      *s07Record
+	c        client.Client
+	mu       sync.Mutex
+	values   []string
+	removals int
+	t        *testing.T
+}
+
+// cluster reads the fixture's cluster.
+func (f *s07ReleaseFixture) cluster(t *testing.T) *databasev1alpha1.CubridCluster {
+	t.Helper()
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: f.h.cfg.Namespace, Name: haClusterName},
+		cluster); err != nil {
+		t.Fatal(err)
+	}
+	return cluster
+}
+
+// update changes the fixture's cluster.
+func (f *s07ReleaseFixture) update(t *testing.T, change func(*databasev1alpha1.CubridCluster)) {
+	t.Helper()
+	cluster := f.cluster(t)
+	change(cluster)
+	if err := f.c.Update(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *s07ReleaseFixture) annotations() []string {
@@ -289,6 +322,15 @@ func newS07ReleaseFixture(t *testing.T, operator s07Operator, states map[string]
 		data, err := patch.Data(obj)
 		if err != nil {
 			return err
+		}
+		if patch.Type() == types.JSONPatchType {
+			if !strings.Contains(string(data), `"path":"/metadata/uid","value":"`+testS07ClusterUID+`"`) {
+				return errors.New("the removal does not test the run's cluster UID")
+			}
+			f.mu.Lock()
+			f.removals++
+			f.mu.Unlock()
+			return c.Patch(ctx, obj, patch, opts...)
 		}
 		var body struct {
 			Metadata struct {
@@ -343,12 +385,12 @@ func newS07ReleaseFixture(t *testing.T, operator s07Operator, states map[string]
 		return ledger(ctx, args...)
 	}
 	settled := time.Date(2026, 11, 17, 13, 10, 0, 0, time.UTC)
-	f.h = h
+	f.h, f.c = h, c
 	f.rec = &s07Record{Variant: s07HigherRankIsolated, Target: imageIdentity{Pod: m0}, Master: m1,
 		LastResolvedPrimary: m1, QuarantineInForce: string(databasev1alpha1.WriteQuarantinedMasterChanged),
 		QuarantineAtEnd: string(databasev1alpha1.WriteQuarantinedMasterChanged), Generations: []string{"g1"},
 		SettledAt: &settled, FinalMaster: m0, FinalSlaves: []string{m1, m2},
-		tokens: []string{testEarlierToken, testCurrentToken}}
+		tokens: []s07SeenToken{{"g1", testEarlierToken}, {"g1", testCurrentToken}}}
 	f.rec.RWEndpointsEmptyAt, f.rec.RWPodsGoneAt = &settled, &settled
 	return f
 }
@@ -449,6 +491,162 @@ func TestReleaseS07RecordsARefusalWithoutAnActiveMaster(t *testing.T) {
 	if f.rec.QuarantineInForce == "" {
 		t.Errorf("the quarantine is no longer in force after a refusal")
 	}
+	if r.AnnotationRemovedByRun == nil || r.AnnotationRemoveError != "" {
+		t.Errorf("annotation removed by the run at %v (%q), want it removed", r.AnnotationRemovedByRun,
+			r.AnnotationRemoveError)
+	}
+	if v, ok := f.cluster(t).Annotations[releaseWriteQuarantineAnnotation]; ok {
+		t.Errorf("the release annotation %q is still on the cluster after a refused release", v)
+	}
+}
+
+// When the run's end cuts the watch short, the token the run set is still
+// removed, within a bound of its own, so the Operator cannot release later
+// with nothing in the record to say the run accepted the loss.
+func TestReleaseS07RemovesItsTokenWhenTheRunEnds(t *testing.T) {
+	f := newS07ReleaseFixture(t, refuseRelease, nil)
+	s07ReleaseBound = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	f.h.releaseS07(ctx, f.rec)
+	r := f.rec.ManualRelease
+	if r == nil || r.AppliedAt == nil || r.AnnotationRemovedByRun == nil {
+		t.Fatalf("release %+v, want the current token set and removed after the run ended", r)
+	}
+	if v, ok := f.cluster(t).Annotations[releaseWriteQuarantineAnnotation]; ok {
+		t.Errorf("the release annotation %q is still on the cluster after the run ended", v)
+	}
+}
+
+// The current token changed before the Operator accepted it, as when an
+// observation revised the quarantine's members: the run notes that the token
+// it set went stale.
+func TestReleaseS07NotesACurrentTokenThatWentStale(t *testing.T) {
+	revise := func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		q := cluster.Status.WriteQuarantine
+		if q == nil || cluster.Annotations[releaseWriteQuarantineAnnotation] != testCurrentToken {
+			return nil
+		}
+		q.Revision, q.ReleaseToken = 3, "token-revised-0003"
+		return c.Update(ctx, cluster)
+	}
+	f := newS07ReleaseFixture(t, revise, nil)
+	f.h.releaseS07(context.Background(), f.rec)
+	if r := f.rec.ManualRelease; r == nil || !strings.Contains(r.TokenReplaced, "revision 3") {
+		t.Errorf("release %+v, want the token noted as replaced by revision 3", r)
+	}
+}
+
+// A release the run's own token made after its watch ended, as when the
+// annotation could not be removed, is still the run's release: the writes the
+// released master lacked before it are accepted as lost. A release by another
+// token is not.
+func TestNoteS07RunReleaseAcceptsALateReleaseOfTheRunsToken(t *testing.T) {
+	report := &workload.Report{Members: map[string]workload.MemberCheck{
+		m0: {Violations: []workload.Violation{{Rule: workload.RuleMissing, OpID: testS07LostWrite}}}}}
+	release := func(token string) *databasev1alpha1.WriteQuarantineRelease {
+		return &databasev1alpha1.WriteQuarantineRelease{GenerationID: "g1", ObservedMaster: m0, ReleaseToken: token,
+			Method: databasev1alpha1.WriteQuarantineReleasedManually, ReleaseTime: metav1.NewTime(time.Now())}
+	}
+	rec := &s07Record{ManualRelease: &s07ManualRelease{GenerationID: "g1", currentToken: testCurrentToken,
+		before: report}}
+	noteS07RunRelease(rec, release("token-by-someone"), time.Now())
+	if r := rec.ManualRelease; r.AcceptedSeenAt != nil || len(r.AcceptedAsLost) > 0 {
+		t.Errorf("a release by another token was taken as the run's: %+v", r)
+	}
+	noteS07RunRelease(rec, release(testCurrentToken), time.Now())
+	if r := rec.ManualRelease; r.AcceptedSeenAt == nil || r.ReleasedMaster != m0 ||
+		!slices.Equal(r.AcceptedAsLost, []string{testS07LostWrite}) {
+		t.Errorf("release %+v, want the run's token's release accepted with %s's missing write", r, m0)
+	}
+}
+
+// A release during the stale-token watch by a token the run did not set,
+// such as a person's release, is not the stale token's: it is recorded, the
+// run sets no current token, and S07 is blocked, not failed.
+func TestReleaseS07ReleaseByAnotherTokenDuringTheStaleWatchBlocks(t *testing.T) {
+	other := func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		q := cluster.Status.WriteQuarantine
+		if q == nil {
+			return nil
+		}
+		cluster.Status.LastWriteQuarantineRelease = &databasev1alpha1.WriteQuarantineRelease{
+			GenerationID: q.GenerationID, Reason: q.Reason, StartTime: q.StartTime,
+			ReleaseTime: metav1.NewTime(time.Now().UTC()), Method: databasev1alpha1.WriteQuarantineReleasedManually,
+			ObservedMaster: m0, ReleaseToken: "token-by-someone"}
+		cluster.Status.WriteQuarantine = nil
+		return c.Update(ctx, cluster)
+	}
+	f := newS07ReleaseFixture(t, other, nil)
+	f.h.releaseS07(context.Background(), f.rec)
+	r := f.rec.ManualRelease
+	if r == nil || len(r.NeverEvents) > 0 || r.OtherRelease == "" || r.AppliedAt != nil {
+		t.Fatalf("release %+v, want the other token's release recorded, no never-event, no current token", r)
+	}
+	rec := s07Base(false)
+	rec.ManualRelease = r
+	if v := judgeS07(rec, testS07Limits); v.Result != evidence.Blocked || !strings.Contains(v.Reason, "another token") {
+		t.Errorf("judged %s %q, want blocked naming the other token's release", v.Result, v.Reason)
+	}
+}
+
+// A Broker Pod still terminating from the quarantine's enforcement is not the
+// path coming back: only desired replicas above zero or a Pod that is Ready
+// or not terminating count while the stale token is set.
+func TestReleaseS07IgnoresATerminatingBrokerPodDuringTheStaleWatch(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
+	terminating := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ha-broker-rw-old",
+		Namespace: f.h.cfg.Namespace, Finalizers: []string{"test/keep"},
+		Labels: map[string]string{instanceLabel: haClusterName, componentLabel: brokerComponent,
+			s07AccessModeLabel: "rw"}}}
+	if err := f.c.Create(context.Background(), terminating); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(context.Background(), terminating); err != nil {
+		t.Fatal(err)
+	}
+	f.h.releaseS07(context.Background(), f.rec)
+	r := f.rec.ManualRelease
+	if r == nil || len(r.NeverEvents) > 0 || r.Stale == nil || !r.Stale.BrokersHeld || r.Stale.PathBefore == nil {
+		t.Fatalf("release %+v, want a terminating Pod not counted and the path before recorded", r)
+	}
+}
+
+// The run sets no token when the read-write path is not closed before it: a
+// Broker that is up then would make the stale token's watch meaningless.
+func TestReleaseS07RequiresAClosedPathBeforeTheStaleToken(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(""), nil)
+	if err := reopenS07Path(context.Background(), f.c.(client.WithWatch), f.h.cfg.Namespace); err != nil {
+		t.Fatal(err)
+	}
+	f.h.releaseS07(context.Background(), f.rec)
+	if got := f.annotations(); len(got) > 0 {
+		t.Errorf("annotations set %q with the path open", got)
+	}
+	if r := f.rec.ManualRelease; r == nil || !strings.Contains(r.NotMade, "not closed") {
+		t.Errorf("release %+v, want it not made because the path was not closed", r)
+	}
+}
+
+// After the release the final slaves are the members the last sweep read as
+// slaves, not every member but the master.
+func TestReleaseS07TakesTheFinalSlavesFromTheLastSweep(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), map[string][2]string{m0: {roleMaster, testActive},
+		m1: {roleSlave, testStandby}, m2: {testToBeMaster, testToBeActive}})
+	f.h.releaseS07(context.Background(), f.rec)
+	if f.rec.FinalMaster != m0 || !slices.Equal(f.rec.FinalSlaves, []string{m1}) {
+		t.Errorf("final master %s and slaves %v, want %s and only %s", f.rec.FinalMaster, f.rec.FinalSlaves, m0, m1)
+	}
+}
+
+// The release's bounds include a fixed slack for its steps without a bound
+// of their own: the clients' history reads, the sweep before the current
+// token, the Events read and the last poll.
+func TestS07ReleaseBoundsIncludeSlack(t *testing.T) {
+	cfg := HAConfig{PartitionManualRelease: true}
+	if got, least := cfg.s07ReleaseBounds(), 2*s07SnapshotBound+s07StaleTokenWindow+s07ReleaseBound; got <= least {
+		t.Errorf("release bounds %s, want more than the bounded steps' %s", got, least)
+	}
 }
 
 // The run releases only its own cluster: not when the cluster's UID is not
@@ -470,10 +668,14 @@ func TestReleaseS07ReleasesOnlyTheRunsOwnManualQuarantine(t *testing.T) {
 		"no quarantine": {func(f *s07ReleaseFixture) { f.rec.QuarantineInForce = "" }, "only a person"},
 		"a quarantine the run did not see": {func(f *s07ReleaseFixture) { f.rec.Generations = []string{"g0"} },
 			"generation"},
+		"a quarantine with no cluster UID": {func(f *s07ReleaseFixture) {
+			f.update(f.t, func(c *databasev1alpha1.CubridCluster) { c.Status.WriteQuarantine.ClusterUID = "" })
+		}, "cluster UID"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			f := newS07ReleaseFixture(t, releaseOn(""), nil)
+			f.t = t
 			tc.change(f)
 			f.h.releaseS07(context.Background(), f.rec)
 			if got := f.annotations(); len(got) > 0 {

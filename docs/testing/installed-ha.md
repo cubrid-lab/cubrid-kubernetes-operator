@@ -1052,10 +1052,15 @@ with `WriteQuarantinedMasterChanged`, as on the VM lab on 2026-11-17 UTC
 
 With either option, any variant refuses to start unless `-timeout` is longer
 than its steps' bounds: the settle wait is `-partition-settle`, and the
-release adds 9.5 minutes (two 2-minute reads of every member's rows, the
-30-second watch of the stale token and the 5-minute wait for the release and
-the path's return). The lab command for a 20-minute settle and the release,
-51.5 minutes of the variant's own bounds with the other defaults, plus LAB01:
+release adds 10.5 minutes (two 2-minute reads of every member's rows, the
+30-second watch of the stale token, the 5-minute wait for the release and
+the path's return, and 1 minute of slack for the steps without a bound of
+their own: the reads of the clients' histories, the sweep before the current
+token, the removal of an unconsumed token, the Events read and the last poll
+of each watch). These are the steps' bounds, not a guarantee of how long
+LAB01 or the run takes. The lab command for a 20-minute settle and the
+release, about 52.5 minutes of the variant's own bounds with the other
+defaults, plus LAB01:
 
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
@@ -1181,32 +1186,52 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    not) and before step 6, the run releases the quarantine itself when one
    only a person may release is in force, it is a generation the run saw,
    and it is on the run's own cluster: the namespace guard passes, the
-   cluster's UID is the one LAB01 recorded (and the quarantine's
-   `clusterUID`), and the annotation patch names that UID, so the API server
-   refuses it for another cluster of the same name. Otherwise nothing is
+   cluster's UID is the one LAB01 recorded and the quarantine records that
+   same `clusterUID` (an empty one is refused), and the annotation patch
+   names that UID, so the API server
+   refuses it for another cluster of the same name. The read-write path must
+   also be closed: no desired replica and no Broker Pod that is Ready or not
+   terminating (`staleToken.rwPathBefore`; a Pod still terminating from the
+   enforcement is allowed). Otherwise nothing is
    annotated and `manualRelease.notMade` says why. The steps, recorded in
    `manualRelease` in `record.json`:
    1. It reads every member's rows as in step 7, against the run's history
       with what both S07 clients have written so far, into
-      `rows-before-release.json` (`rowsBeforeRelease`).
+      `rows-before-release.json` (`rowsBeforeRelease`). This file exists also
+      when the stale token then could not be set.
    2. It sets a stale token on `database.cubrid.io/release-write-quarantine`:
-      the newest earlier token of the quarantine, replaced when a later
-      observation revised it (as at the escalation to
+      the newest earlier token of the same quarantine generation, replaced
+      when a later observation revised it (as at the escalation to
       `WriteQuarantinedMasterChanged`), or else the current token with its
-      last character changed (`staleToken.kind`). For 30 seconds it reads the
+      last character changed (`staleToken.kind`). A token of an earlier
+      generation is never used: the Operator may take it as a consumed token
+      and remove it without the `WriteQuarantineReleaseIgnored` Event, which
+      would not show a stale token ignored. The token is recorded by its first
+      8 characters (`staleToken.tokenPrefix`), which for the altered token
+      are the same as the current token's; `staleToken.kind` tells them apart.
+      For 30 seconds it reads the
       cluster and the read-write path on every poll. The Operator must ignore
       that token (`WriteQuarantineReleaseIgnored`): the quarantine stays in
       force and the read-write Brokers stay at zero
       (`quarantineHeldThroughout`, `rwBrokersHeldAtZeroThroughout`). A release
-      of the quarantine in that window, or a Broker above zero while it is in
-      force, is a never-event, and the run sets no other token.
+      that `status.lastWriteQuarantineRelease.releaseToken` records as the
+      stale token, or desired replicas above zero or a Broker Pod Ready or
+      not terminating while the quarantine is in force and no other token
+      released it, is a never-event, and the run sets no other token. A
+      release in that window by a token the run did not set, such as a
+      person's, is recorded (`releasedByAnotherToken`), ends the run's release,
+      and blocks S07, since the run can no longer say what released the
+      quarantine.
    3. It reads the current `status.writeQuarantine.releaseToken` again,
       makes a sweep and records which member answered as the active master
       and each member's raw state (`activeMasterWhenSet`, `statesWhenSet`),
       then sets that token. Setting it while no member is an active master is
       recorded, not prevented: the Operator then refuses the release, and each
       refusal in `status.writeQuarantine.releaseRefusal` is kept
-      (`releaseRefusals`).
+      (`releaseRefusals`). When the quarantine's token changes after the run
+      set it and before any release, as when an observation revises the
+      members, the run notes that the token it set went stale
+      (`currentTokenReplaced`).
    4. For up to 5 minutes it observes as in step 4, and records the release
       in `status.lastWriteQuarantineRelease` (`releaseSeenAt`, the
       Operator's `releaseTime` and `releasedObservedMaster`), the
@@ -1217,7 +1242,18 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
       connection can be acknowledged. `unmet` names what had not happened
       when the 5 minutes ended. The acknowledged writes the released master
       lacked in `rowsBeforeRelease` are listed as accepted as lost
-      (`acknowledgedWritesAcceptedAsLost`).
+      (`acknowledgedWritesAcceptedAsLost`). When the watch ends without a
+      release on the run's token (refused, unconfirmed, or cut short by the
+      run's signal, timeout or lost Lease), the run removes the token it set,
+      within 10 seconds of its own even after the run's end, with a JSON patch
+      that tests the cluster UID and the value before it removes the
+      annotation, as the Operator removes a consumed one
+      (`annotationRemovedByRun`, or `annotationRemoveError`). The Operator
+      then cannot release on it later. If a release on the run's token is
+      still read later (in the data check or the health window), it is taken
+      as the run's release, with the same writes accepted as lost. After the
+      release the final master and slaves are taken from the last sweep's
+      roles.
    5. It reads every member's rows again into `rows-after-release.json`
       (`rowsAfterRelease`) and lists the Operator's Events about the
       annotation (`events`). After the clients stop, the first write through
@@ -1262,8 +1298,9 @@ What it judges, in this order:
    window while a member holds conflicting rows or the final master lacks an
    acknowledged write (except the writes the run's own manual release
    accepted as lost, step 8); with `-partition-manual-release`, the
-   quarantine released, or a read-write Broker above zero while it is in
-   force, while only the stale token was set; and an endpoint the faults
+   quarantine released on the stale token the run set, or desired replicas
+   above zero or a Broker Pod Ready or not terminating while it is in force
+   and only the stale token was set; and an endpoint the faults
    would enter that is not the run's own.
 2. **Broken expectations fail S07:** the fault not seen removed; a trigger
    seen in two consecutive sweeps and no `status.writeQuarantine`; a
@@ -1287,7 +1324,9 @@ What it judges, in this order:
    without at least two cluster readings and two complete sweeps showing one
    reachable active master after the 30-second grace; a write acknowledged
    on the already-open connection after the run saw the path closed, an
-   anomaly the run cannot explain; a cluster that did not settle; a data
+   anomaly the run cannot explain; with `-partition-manual-release`, the
+   quarantine released by a token the run did not set during or after its
+   release; a cluster that did not settle; a data
    check that could not read every member; and no reading of the cluster in
    the health window.
 4. **Limits**, with the rules of `faults.Judge`:

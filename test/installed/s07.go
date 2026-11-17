@@ -259,10 +259,11 @@ type s07Path struct {
 	// Desired is spec.replicas of the read-write Broker Deployment, -1 when
 	// it could not be read.
 	Desired int32 `json:"desiredReplicas"`
-	// Pods counts the read-write Broker Pods, terminating ones included, and
-	// ReadyPods the Ready ones; Endpoints the endpoints of the -rw
+	// Pods counts the read-write Broker Pods, terminating ones included,
+	// ActivePods the ones not terminating, and ReadyPods the Ready ones; Endpoints the endpoints of the -rw
 	// EndpointSlices, ReadyEndpoints the ready ones.
 	Pods           int `json:"pods"`
+	ActivePods     int `json:"nonTerminatingPods"`
 	ReadyPods      int `json:"readyPods"`
 	Endpoints      int `json:"endpoints"`
 	ReadyEndpoints int `json:"readyEndpoints"`
@@ -476,7 +477,7 @@ type s07Record struct {
 	// evidence.
 	mu     sync.Mutex
 	cut    *s07CutFile
-	tokens []string
+	tokens []s07SeenToken
 }
 
 // s07MasterMove records how the run moved the master off the first member:
@@ -698,8 +699,11 @@ func s07NeverEvents(rec *s07Record) []string {
 	// Writes the run's own manual release accepted as lost are reported, not
 	// counted here: the release records that acceptance.
 	if d := rec.Data; d != nil && d.Read && rec.HealthyAtEnd {
-		conflicting := s07Sum(d.ConflictingByMember) - s07Sum(d.ConflictingAcceptedByMember)
-		missing := d.MasterMissingAcknowledged - d.MasterMissingAccepted
+		conflicting, missing := s07Sum(d.ConflictingByMember), d.MasterMissingAcknowledged
+		if s07ReleasedByRun(rec) {
+			conflicting -= s07Sum(d.ConflictingAcceptedByMember)
+			missing -= d.MasterMissingAccepted
+		}
 		if conflicting > 0 || missing > 0 {
 			never = append(never, fmt.Sprintf("the cluster reported HAReady and ReplicationHealthy True with no "+
 				"quarantine after the partition ended while %d conflicting row(s) were on members other than the "+
@@ -799,6 +803,9 @@ func s07Blocked(rec *s07Record) string {
 		return fmt.Sprintf("the already-open connection had %d write(s) acknowledged after the run saw every "+
 			"read-write Broker Pod gone and no -rw endpoint: an anomaly the run cannot explain",
 			rec.Session.AcknowledgedAfterClosed)
+	case rec.ManualRelease != nil && rec.ManualRelease.OtherRelease != "":
+		return "the run's manual release was cut short: the quarantine was " + rec.ManualRelease.OtherRelease +
+			", another token than the one the run set"
 	case rec.SettledAt == nil:
 		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown") +
 			s07SnapshotNote(rec)
@@ -897,13 +904,15 @@ func s07DataNote(rec *s07Record) string {
 		notes = append(notes, fmt.Sprintf("slave %s lacks %d row(s) the master holds (%s)", member,
 			d.LaggingByMember[member], reported))
 	}
-	if d.MasterMissingAccepted > 0 || s07Sum(d.ConflictingAcceptedByMember) > 0 {
+	n, missing := s07Sum(d.ConflictingByMember), d.MasterMissingAcknowledged
+	if s07ReleasedByRun(rec) && (d.MasterMissingAccepted > 0 || s07Sum(d.ConflictingAcceptedByMember) > 0) {
 		notes = append(notes, fmt.Sprintf("%d acknowledged write(s) the final master lacks, and %d row(s) of them "+
 			"on other members, were accepted as lost by the run's manual release", d.MasterMissingAccepted,
 			s07Sum(d.ConflictingAcceptedByMember)))
+		n -= s07Sum(d.ConflictingAcceptedByMember)
+		missing -= d.MasterMissingAccepted
 	}
-	n := s07Sum(d.ConflictingByMember) - s07Sum(d.ConflictingAcceptedByMember)
-	if missing := d.MasterMissingAcknowledged - d.MasterMissingAccepted; n > 0 || missing > 0 {
+	if n > 0 || missing > 0 {
 		notes = append(notes, fmt.Sprintf("%d conflicting row(s) on other members and %d acknowledged write(s) "+
 			"the final master lacks, reported while the cluster did not report its replication healthy",
 			n, missing))
@@ -1212,7 +1221,8 @@ func (h *haRun) observeS07Path(ctx context.Context, rec *s07Record, now time.Tim
 	observeS07Conditions(rec, cluster, now, cut && afterGrace)
 	path := h.readS07Path(ctx)
 	if n := len(rec.Path); n == 0 || rec.Path[n-1].Desired != path.Desired || rec.Path[n-1].Pods != path.Pods ||
-		rec.Path[n-1].ReadyPods != path.ReadyPods || rec.Path[n-1].Endpoints != path.Endpoints ||
+		rec.Path[n-1].ActivePods != path.ActivePods || rec.Path[n-1].ReadyPods != path.ReadyPods ||
+		rec.Path[n-1].Endpoints != path.Endpoints ||
 		rec.Path[n-1].ReadyEndpoints != path.ReadyEndpoints {
 		path.T = now
 		rec.Path = append(rec.Path, path)
@@ -1292,8 +1302,9 @@ func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.C
 		if !slices.Contains(rec.Generations, q.GenerationID) {
 			rec.Generations = append(rec.Generations, q.GenerationID)
 		}
-		if q.ReleaseToken != "" && !slices.Contains(rec.tokens, q.ReleaseToken) {
-			rec.tokens = append(rec.tokens, q.ReleaseToken)
+		if seen := (s07SeenToken{q.GenerationID, q.ReleaseToken}); q.ReleaseToken != "" &&
+			!slices.Contains(rec.tokens, seen) {
+			rec.tokens = append(rec.tokens, seen)
 		}
 		if n := len(rec.Revisions); n == 0 || rec.Revisions[n-1].GenerationID != q.GenerationID ||
 			rec.Revisions[n-1].Revision != q.Revision || rec.Revisions[n-1].Reason != string(q.Reason) {
@@ -1311,6 +1322,7 @@ func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.C
 			rec.note("quarantine_enforced", enforced.Format(time.RFC3339))
 		}
 	}
+	noteS07RunRelease(rec, cluster.Status.LastWriteQuarantineRelease, now)
 	if rel := cluster.Status.LastWriteQuarantineRelease; rel != nil && rec.ReleaseSeenAt == nil &&
 		slices.Contains(rec.Generations, rel.GenerationID) {
 		released := rel.ReleaseTime.UTC()
@@ -1324,7 +1336,7 @@ func (h *haRun) observeS07Quarantine(rec *s07Record, cluster *databasev1alpha1.C
 // readS07Path reads the read-write Broker Deployment's desired replicas, its
 // Pods and the -rw EndpointSlices. A value that could not be read is -1.
 func (h *haRun) readS07Path(ctx context.Context) s07Path {
-	path := s07Path{Desired: -1, Pods: -1, ReadyPods: -1, Endpoints: -1, ReadyEndpoints: -1}
+	path := s07Path{Desired: -1, Pods: -1, ActivePods: -1, ReadyPods: -1, Endpoints: -1, ReadyEndpoints: -1}
 	deployment := &appsv1.Deployment{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace,
 		Name: haClusterName + "-broker-" + s07ReadWrite}, deployment); err == nil {
@@ -1337,8 +1349,11 @@ func (h *haRun) readS07Path(ctx context.Context) s07Path {
 	if err := h.Client.List(ctx, pods, client.InNamespace(h.cfg.Namespace),
 		client.MatchingLabels{instanceLabel: haClusterName, componentLabel: brokerComponent,
 			"database.cubrid.io/broker-access-mode": s07ReadWrite}); err == nil {
-		path.Pods, path.ReadyPods = len(pods.Items), 0
+		path.Pods, path.ActivePods, path.ReadyPods = len(pods.Items), 0, 0
 		for i := range pods.Items {
+			if pods.Items[i].DeletionTimestamp == nil {
+				path.ActivePods++
+			}
 			if podReady(&pods.Items[i]) {
 				path.ReadyPods++
 			}
@@ -1797,6 +1812,11 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 			Acknowledged: all.Counts[workload.Acknowledged], Failed: all.Counts[workload.Failed],
 			Unknown: all.Counts[workload.Unknown]}
 	}
+	if rec.ManualRelease != nil {
+		if cluster, err := h.s07OwnCluster(ctx); err == nil {
+			noteS07RunRelease(rec, cluster.Status.LastWriteQuarantineRelease, time.Now().UTC())
+		}
+	}
 	if rec.SettledAt != nil {
 		h.checkS07Data(ctx, rec)
 		h.observeS07Health(ctx, rec)
@@ -1885,9 +1905,15 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 		rec.note("unknown_outcomes_unresolved", err.Error())
 	} else {
 		d.LaggingByMember, d.ConflictingByMember = classifyS07Rows(rec.FinalMaster, rows)
-		if r := rec.ManualRelease; r != nil && r.AcceptedSeenAt != nil && len(r.AcceptedAsLost) > 0 {
-			d.MasterMissingAccepted, d.ConflictingAcceptedByMember = s07AcceptedLoss(rec.FinalMaster, rows,
-				r.AcceptedAsLost)
+		// Counted whenever the run set a current token: a release on it may
+		// still be read after the data check (noteS07RunRelease), and the
+		// counts are applied only once one was.
+		if r := rec.ManualRelease; r != nil && r.currentToken != "" {
+			accepted := r.AcceptedAsLost
+			if r.AcceptedSeenAt == nil {
+				accepted = s07MissingOn(r.before, rec.FinalMaster)
+			}
+			d.MasterMissingAccepted, d.ConflictingAcceptedByMember = s07AcceptedLoss(rec.FinalMaster, rows, accepted)
 		}
 		present := map[string]bool{}
 		for _, member := range rows {
@@ -2001,6 +2027,7 @@ func (h *haRun) observeS07Health(ctx context.Context, rec *s07Record) {
 		if err == nil {
 			rec.HealthReadings++
 			now := time.Now().UTC()
+			noteS07RunRelease(rec, cluster.Status.LastWriteQuarantineRelease, now)
 			noteS07Stall(rec, cluster, now)
 			if cluster.Status.WriteQuarantine == nil && rec.ReadyWithoutQuarantineAt == nil &&
 				meta.IsStatusConditionTrue(cluster.Status.Conditions, readyCondition) {
