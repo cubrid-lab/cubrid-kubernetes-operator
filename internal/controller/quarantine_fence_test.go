@@ -62,13 +62,14 @@ func TestWriteQuarantineSeparatesNodeAndPodReadFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{
-				Name: "qc", Namespace: "ns", UID: "cluster-uid",
+				Name: "qc", Namespace: "ns", UID: releaseClusterUID,
 			}}
 			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 				Name: brokerDeploymentName(cluster.Name, brokerModeRW), Namespace: cluster.Namespace,
 				OwnerReferences: []metav1.OwnerReference{{UID: cluster.UID, Controller: new(true)}},
 			}, Spec: appsv1.DeploymentSpec{Replicas: new(int32(1))}}
-			objects := []client.Object{deployment}
+			objects := make([]client.Object, 1, len(quarantineMembers)+1)
+			objects[0] = deployment
 			for i, uid := range []types.UID{uid0, uid1, uid2} {
 				objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 					Name: quarantineMembers[i], Namespace: cluster.Namespace, UID: uid,
