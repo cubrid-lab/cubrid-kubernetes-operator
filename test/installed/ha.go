@@ -48,6 +48,7 @@ import (
 
 const (
 	haLane          = "lab-installed-ha"
+	haSmokeKey      = "installed-ha-sql-smoke"
 	haScenarioID    = "LAB01"
 	haClusterName   = "ha"
 	haMemberCount   = 3
@@ -661,14 +662,19 @@ func (h *haRun) observeTarget(ctx context.Context, observed *record, env *eviden
 }
 
 // planHARun returns the lane of the run and its requirements, and says what
-// the run does in the summary's notes. The plain lane uses an explicit key;
-// compound lanes retain their independently assembled legacy requirements.
+// the run does in the summary's notes. The plain and Operator restart lanes
+// declare their required checks by key.
 func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requirement, error) {
 	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
 	switch {
 	case cfg.Fault != "":
 		var requirement evidence.Requirement
 		lane, requirement, summary.Notes[0] = faultLane(cfg.Fault)
+		if cfg.Fault == FaultOperatorRestart {
+			required, err := evidence.RequirementsForKeys(lane, evidence.LevelVMLab,
+				haSmokeKey, "installed-operator-failure-recovery-restart")
+			return lane, required, err
+		}
 		requirements = append(requirements, requirement)
 	case cfg.Restore:
 		lane = s12Lane
@@ -730,7 +736,7 @@ func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requ
 		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, summary)
 		lane, requirements = planS11GracefulStop(cfg, lane, requirements, summary)
 	default:
-		required, err := evidence.RequirementsForKeys(haLane, evidence.LevelVMLab, "installed-ha-sql-smoke")
+		required, err := evidence.RequirementsForKeys(haLane, evidence.LevelVMLab, haSmokeKey)
 		return lane, required, err
 	}
 	return lane, requirements, nil
