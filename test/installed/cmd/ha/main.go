@@ -73,10 +73,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.StableFor, "stable-for", 15*time.Second,
 		"how long the starting state must keep holding before the workload starts")
 	flags.StringVar(&cfg.Fault, "fault", "",
-		"scenario after LAB01: empty for none, operator-restart for S06 restart (deletes the manager Pod), or "+
-			"vm-power-off for S04 power-off (powers off the VM of the master's node; vm-lab only)")
+		"scenario after LAB01: empty for none, operator-restart for S06 restart (deletes the manager Pod), "+
+			"vm-power-off for S04 power-off (powers off the VM of the master's node; vm-lab only), "+
+			"drain-slave-node or drain-master-node for S15 (cordons that member's node and evicts the run's Pods "+
+			"on it; vm-lab only), or partition-master-isolated, partition-slave-isolated or "+
+			"partition-higher-rank-isolated for S07 (cuts the master, a slave ranked below it, or a slave ranked "+
+			"above it, off the other members and the manager Pod; the last first moves the master off the first "+
+			"member by deleting its Pod when it is there; vm-lab only)")
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
-		"S04 and S06: how long the clients must stay acknowledged after the fault (stable_period)")
+		"S04, S06 and S15: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.StringVar(&cfg.VMStopCommand, "vm-stop-command", "",
 		"S04: shell command that powers off the VM of node $NODE without a shutdown; the lab's own control")
 	flags.StringVar(&cfg.VMStartCommand, "vm-start-command", "",
@@ -85,8 +90,20 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S04: shell command that prints \"stopped\" when the VM of node $NODE is powered off and \"running\" when it "+
 			"runs")
 	flags.DurationVar(&cfg.FailoverLimit, "failover-limit", 30*time.Second,
-		"S04: bound from the VM stop being issued until every client's writes are acknowledged again "+
-			"(failover_limit)")
+		"S04: bound from the VM stop being issued, S15: from the member's eviction, until every client's writes "+
+			"are acknowledged again (failover_limit); in S15 the default is not used: unset unless this flag is "+
+			"given")
+	flags.DurationVar(&cfg.DrainLimit, "drain-limit", 0,
+		"S15: bound from the cordon until the drained node's member and Broker Pods are gone or the eviction is "+
+			"refused (drain_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
+	flags.DurationVar(&cfg.QuarantineLimit, "quarantine-limit", 0,
+		"S07: bound from the quarantine-triggering observation until new connections through the read-write "+
+			"Service stop succeeding (quarantine_limit); 0, the default, is unset and makes the run a baseline")
+	flags.DurationVar(&cfg.PartitionDuration, "partition-duration", 0,
+		"S07: least time the confirmed partition must be held (partition_duration); 0, the default, is unset "+
+			"and makes the run a baseline")
+	flags.DurationVar(&cfg.PartitionHold, "partition-hold", 2*time.Minute,
+		"S07: how long the run holds the confirmed partition before it removes it; at least -partition-duration")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,
@@ -267,6 +284,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 			return err
 		}
 	}
+	s15FailoverLimit(&cfg, set)
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
 	}
@@ -305,4 +323,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	return runner.RunHA(ctx, cfg)
+}
+
+// s15FailoverLimit leaves the node drain's failover_limit unset unless
+// -failover-limit was given: the flag's default is the Kind value, and the
+// contract records none for the VM lab, so the default must not judge a lab
+// drain. set holds the flags given.
+func s15FailoverLimit(cfg *installed.HAConfig, set map[string]bool) {
+	if (cfg.Fault == installed.FaultDrainSlaveNode || cfg.Fault == installed.FaultDrainMasterNode) &&
+		!set["failover-limit"] {
+		cfg.FailoverLimit = 0
+	}
 }

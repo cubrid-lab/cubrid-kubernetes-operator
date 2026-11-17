@@ -101,6 +101,10 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 			`{"error":"this member is a standalone server, not an HA member","code":"NotAnHAMember"}`,
 			[]error{errStartConflict, errNotAnHAMember}, []error{errOperationInProgress, errRequestConflict, errStagingInUse},
 			reasonNotAnHAMember, "standalone server"},
+		{"a restore that reached another member than the one it names", http.StatusConflict,
+			`{"error":"the restore names another member: the restore names member \"db-2\", but this is member \"db-1\"","code":"WrongMember"}`,
+			[]error{errStartConflict, errWrongMember}, []error{errOperationInProgress, errRequestConflict, errStagingInUse, errNotAnHAMember},
+			reasonWrongMember, `this is member "db-1"`},
 		{"a conflict of a code this operator does not know", http.StatusConflict,
 			`{"error":"a cause named by a later manager","code":"SomethingLater"}`,
 			[]error{errStartConflict}, []error{errOperationInProgress, errRequestConflict, errStagingInUse, errNotAnHAMember},
@@ -196,6 +200,19 @@ func TestOperationOfKey(t *testing.T) {
 	if asked || !errors.Is(err, errNotAnHAMember) || instanceManagerFailureReason(err) != reasonNotAnHAMember {
 		t.Errorf("a member that is no HA member: asked = %v, err = %v (reason %s), want no lookup and %s",
 			asked, err, instanceManagerFailureReason(err), reasonNotAnHAMember)
+	}
+
+	// A member that is not the one the restore names holds nothing under
+	// the key, which names a restore on another member (#117).
+	asked = false
+	wrong := imAnswer(http.StatusConflict, `{"error":"the restore names another member","code":"WrongMember"}`)
+	_, err = operationOfKey(ctx, wrong, instancemanager.OpRestore, "k", func() (instancemanager.Operation, bool, error) {
+		asked = true
+		return instancemanager.Operation{}, true, nil
+	})
+	if asked || !errors.Is(err, errWrongMember) || instanceManagerFailureReason(err) != reasonWrongMember {
+		t.Errorf("a restore that reached another member: asked = %v, err = %v (reason %s), want no lookup and %s",
+			asked, err, instanceManagerFailureReason(err), reasonWrongMember)
 	}
 }
 

@@ -16,6 +16,20 @@ immutable, and the executable destination is object storage. The
 requires an accessible S3-compatible store, a real bucket and the source
 cluster's configured credential Secret; it is not a complete setup.
 
+The Instance Manager uses HTTPS and verifies the object store's certificate
+by default. Its trust roots come from the member container. For an endpoint
+signed by a private CA, supply that CA through the trust store in a custom
+member image. The current `spec.objectStorage` API supplies
+endpoint and credential settings and has no CA reference. The pinned
+MinIO client also reads a PEM bundle named by `SSL_CERT_FILE` when the
+container environment provides one. The Operator does not inject that
+environment variable or mount a CA bundle.
+
+`spec.objectStorage.insecure: true` selects plain HTTP for development
+stores. Keep HTTPS enabled and verify the private trust configuration on
+the actual member image and endpoint before relying on backup or restore.
+See [Go certificate roots](https://pkg.go.dev/crypto/x509#SystemCertPool).
+
 Restore is the bootstrap of a **new** `CubridCluster`, using
 `spec.bootstrap.recovery.manifestUri`. Use the exact completed backup's
 `status.artifact.uri`, not a guessed object prefix or the most recently

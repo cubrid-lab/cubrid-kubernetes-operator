@@ -211,6 +211,11 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
 | `lab-installed-ha-s04` | The installed-Operator HA command with `-fault vm-power-off` and the lab's VM power commands, at the `vm-lab` level only ([details](installed-ha.md#s04-power-off)) | LAB01, then S04 (`power-off`) on the same cluster: the VM of the master's node is powered off without a shutdown and powered on again | none |
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
+| `lab-installed-ha-s15-drain-slave-node` | The installed-Operator HA command with `-fault drain-slave-node`, at the `vm-lab` level only ([details](installed-ha.md#s15-node-drain)) | LAB01, then S15 (`drain-slave-node`) on the same cluster, where every member's volume is bound to its node (the `no-spare-node` expectations): a slave's node is cordoned and the run's member and Broker Pods on it are evicted through the Eviction API, a second member's eviction must be refused by the PodDisruptionBudget, and the node is made schedulable again | none |
+| `lab-installed-ha-s15-drain-master-node` | The installed-Operator HA command with `-fault drain-master-node`, at the `vm-lab` level only ([details](installed-ha.md#s15-node-drain)) | LAB01, then S15 (`drain-master-node`) on the same cluster, as `drain-slave-node` with the master's node, which must also end as a graceful deletion of the master's Pod does | none |
+| `lab-installed-ha-s07-master-isolated` | The installed-Operator HA command with `-fault partition-master-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`master-isolated`) on the same cluster: the master is cut off both ways from the other members and the manager Pod by network faults in the members' Pods, the write quarantine, SQL through new and already-open connections to the read-write Service, the release and every member's rows are recorded, and the fault is removed | none |
+| `lab-installed-ha-s07-slave-isolated` | The installed-Operator HA command with `-fault partition-slave-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`slave-isolated`) on the same cluster, as `master-isolated` with a slave that ranks below the master and is not the last resolved primary: the intentional non-trigger, which must start no quarantine | none |
+| `lab-installed-ha-s07-higher-rank-isolated` | The installed-Operator HA command with `-fault partition-higher-rank-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`higher-rank-isolated`) on the same cluster, as `master-isolated` with a slave that ranks above the master, the master being the last resolved primary; when the master is the first member, the run first moves it off by a graceful deletion of its Pod and lets CUBRID fail over | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
@@ -2380,8 +2385,9 @@ it needs more.
 - **Level:** VM lab for the verdict. A Kind run is allowed as an earlier
   signal and is reported at its own level.
 - **Variants:** `master-isolated` (the master cannot reach either slave or the
-  Operator), `slave-isolated`, and `asymmetric` (traffic is dropped in one
-  direction only).
+  Operator), `slave-isolated`, `higher-rank-isolated` (a slave that ranks
+  above the master cannot reach the other members or the Operator), and
+  `asymmetric` (traffic is dropped in one direction only).
 - **Fault confirmed by:** a probe sent across the partition is dropped, in
   each direction the variant names, and the paths the variant leaves open
   are probed open ([network faults](network-faults.md)).
@@ -2461,6 +2467,30 @@ it needs more.
   no numeric bound for it. Missing or unordered measurements remain unknown,
   never zero. Direct database connections and the interval when the Operator
   cannot observe or act retain the ADR's stated limits.
+- **VM-lab lane:** the installed HA command runs `master-isolated`, the
+  `slave-isolated` control and `higher-rank-isolated` on the lab
+  (`lab-installed-ha-s07-master-isolated`,
+  `lab-installed-ha-s07-slave-isolated` and
+  `lab-installed-ha-s07-higher-rank-isolated`,
+  [details](installed-ha.md#s07-network-partition)). `higher-rank-isolated`
+  cuts off a slave that outranks the master, the row "an unverified member
+  that outranks it" above; when the master is the first member, the run
+  first moves it by a graceful deletion of its Pod and lets CUBRID fail over.
+  It cuts the member off
+  with the faults of [network faults](network-faults.md), reads every
+  member's role itself to decide whether the rows above require a
+  quarantine, records detection, the Broker scale-down, the Broker Pods'
+  termination, the empty `-rw` EndpointSlices, `enforcedTime`, new-connection
+  and established-session SQL and the release separately, removes the fault
+  however the run ends and checks every member's rows. It covers neither the
+  `asymmetric` variant nor the persistence, release-token and return checks
+  above. The limits above stay unset, so a run is a baseline until they are
+  set. Its first lab runs, on 2026-11-17 UTC, are recorded with the lane
+  ([first lab runs](installed-ha.md#first-lab-runs)): the control started no
+  quarantine, and a 2-minute symmetric cut of the master produced no second
+  active master, so the quarantine triggers still need another fault shape.
+  `higher-rank-isolated` was added for that, from POC-50 and POC-51, and has
+  not run on the lab yet.
 
 ### S08: replication lag followed by repeated failures
 
@@ -3125,6 +3155,16 @@ because they move the master.
   operation missing.
 - **Data check:** all data rules on all members that are running.
 - **Limits:** `failover_limit`, `drain_limit`.
+- **VM-lab lane:** the installed HA command runs `drain-slave-node` and
+  `drain-master-node` on the lab, where every member's volume is bound to its
+  node, so each carries the `no-spare-node` expectations above
+  (`lab-installed-ha-s15-drain-slave-node` and
+  `lab-installed-ha-s15-drain-master-node`,
+  [details](installed-ha.md#s15-node-drain)). It cordons the node, evicts only
+  the run's own member and Broker Pods through the Eviction API, asks for a
+  second member's eviction that the budget must refuse, and uncordons the node
+  however the run ends. It has not run on the lab yet; the limits above stay
+  unset for the VM lab, so a run is a baseline until they are set.
 - **Source note:** no outside test was read.
 
 ### Reserved: S16 and S17
@@ -3186,7 +3226,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `ready_limit` | Single-member cluster created until SQL succeeds | Kind on a GitHub-hosted runner: 90 seconds. VM lab: unset | Kind: measured |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
-| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured |
+| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: S15 node drain, 1 minute; other scenarios unset | Kind: measured; VM lab S15: measured |
 | `quarantined_failover_limit` | The same, for a master Pod whose termination the Operator cannot see confirmed: S03 `abrupt` and `abrupt-first-member` (deleted with `--force`) and S06 `absent-during-failover` (deleted while the Operator is absent). It is the write quarantine's availability cost (ADR-0005, section 8) | Kind on a GitHub-hosted runner: 6 minutes. VM lab: unset | Kind: measured, one run |
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds | choice |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset | Kind: measured |
@@ -3199,7 +3239,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
 | `delete_limit` | Cluster deleted until its resources are gone | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
-| `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
+| `drain_limit` | Drain issued until it finishes or is refused | VM lab: 1 minute. Kind: unset (no multi-node Kind cluster) | VM lab: measured |
 
 S00 uses the same four rules as every other required scenario
 (`faults.JudgeS00Limits`). If either `install_limit` or `ready_limit`
@@ -3227,6 +3267,9 @@ no limit is unset. S00 records both limits and the resulting
 | `operator_resync_limit` | The same; scenario S06, both variants | In five runs on 2026-10-05 and 2026-10-06: 12.3 s to 13.5 s (`restart`), 17.5 s to 20.3 s (`absent-during-failover`) | `restart`: from the moment the Operator Pod's deletion was issued until another Operator Pod is available and the status names the master with every condition `True`. `absent-during-failover`: from the moment the Operator's Deployment was scaled back to one until the status names the new master with every condition `True` | 2 minutes |
 
 | `delete_limit` | The same; scenario S13, a standalone cluster, both variants | 2.65 s (`retain`) and 2.45 s (`delete`) in one run on 2026-11-12, [E2E run 43118644220](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43118644220) at `d518b4f`, both `blocked` with `time_limit_unset` and every other check held. The run's `summary.json` was overwritten after the suite by a provisional checkpoint (#807), so the values are taken from `S13/<variant>/timeline.jsonl` in its `e2e-evidence` artifact: `fault_issued` to `outcome_reached`, the same two instants `deleteSeconds` is computed from | `deleteSeconds`: from the moment `kubectl delete cubridcluster --wait=false` was issued until no StatefulSet, Deployment, Service or Pod is left in the namespace (and in `delete` no PVC), as the test's polling saw it | 1 minute. One run is a small sample, and how fast a PVC goes depends on the storage provisioner, so the margin is wider than the usual four times the slowest run |
+
+| `drain_limit` | VM lab (three workers, `local-path`, every member bound to its node: the `no-spare-node` layout), installed Operator `66ab5ee`, scenario S15 both variants | 6.3 s to 12.7 s in six runs on 2026-11-17 (three per variant): `drain-slave-node` 10.8 s, 6.3 s, 12.5 s; `drain-master-node` 12.3 s, 12.7 s, 12.5 s; every run `blocked` with `time_limit_unset` and every other check held (#614) | `drainWithin`: from the cordon of the target node until the run's member and Broker Pods on it are gone or the eviction is refused | 1 minute, about four times the slowest run |
+| `failover_limit` | The same VM lab; scenario S15 both variants | 0.14 s to 0.35 s (`drain-slave-node`) and 1.9 s to 12.5 s (`drain-master-node`) in the same six runs | `failoverWithin`: from the first eviction request to the clients' first acknowledged operation after which none failed. Writes on new connections through `-rw` resumed 7.7 s to 14.3 s after the cordon (`sqlContinuedWithin`, recorded, not limited) | 1 minute for S15 only, about four times the slowest run; the other VM-lab scenarios keep it unset until their own baselines |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 

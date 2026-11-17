@@ -1,0 +1,17 @@
+# 2026-11-17T02:31:42.321666533Z X poc65-hapw-slave bash -lc cubrid heartbeat start
+@ cubrid heartbeat start
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.7
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+# rc=0 2026-11-17T02:32:00.597494202Z

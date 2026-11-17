@@ -1,0 +1,32 @@
+2026-11-17T02:42:30Z slave ids: 1 2 3 
+2026-11-17T02:42:45Z slave ids: 1 2 3 
+2026-11-17T02:43:00Z slave ids: 1 2 3 
+2026-11-17T02:43:16Z slave ids: 1 2 3 
+2026-11-17T02:43:31Z slave ids: 1 2 3 
+2026-11-17T02:43:46Z slave ids: 1 2 3 
+2026-11-17T02:44:01Z slave ids: 1 2 3 
+2026-11-17T02:44:16Z slave ids: 1 2 3 
+2026-11-17T02:44:31Z slave ids: 1 2 3 
+2026-11-17T02:44:49Z slave ids: 1 2 3 
+2026-11-17T02:45:04Z slave ids: 1 2 3 
+2026-11-17T02:45:20Z slave ids: 1 2 3 
+2026-11-17T02:45:35Z slave ids: 1 2 3 4 
+log applier: log applier started. required LSA: 147|6280. last committed LSA: 147|6096. last committed repl LSA: 147|6016.
+Time: 11/17/26 02:36:25.946 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc65-hapw-master) from 'idle' to 'active'. 
+Time: 11/17/26 02:36:27.566 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 4
+HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 147|15472. 
+*** The previous error message is the last one. ***
+Insert count                   : 4
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 36
+Fail count                     : 0
+EOF LSA                        : 153 | 6224
+Append LSA                     : 153 | 6224
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4
+Estimated Delay                : - second(s)
+
+[exited with code 0]

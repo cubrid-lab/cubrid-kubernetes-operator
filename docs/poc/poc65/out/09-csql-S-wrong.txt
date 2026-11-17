@@ -1,0 +1,5 @@
+# 2026-11-17T02:28:59.851155518Z X poc65-hapw-slave bash -lc csql -S -u dba -p 'Poc65-Wrong' appdb -c 'select 1'
+
+ERROR: Incorrect or missing password.
+
+# rc=1 2026-11-17T02:29:39.804690636Z

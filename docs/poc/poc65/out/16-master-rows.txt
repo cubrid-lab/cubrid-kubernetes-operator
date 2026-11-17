@@ -1,0 +1,13 @@
+# 2026-11-17T02:42:10.750243913Z X poc65-hapw-master bash -lc csql -u dba -p 'Poc65-Right' appdb@localhost -c 'select id, note from t order by id'
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password'    
+            3  'after control restart'
+            4  'after standalone logins'
+
+4 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+# rc=0 2026-11-17T02:42:10.855701509Z

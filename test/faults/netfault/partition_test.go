@@ -614,3 +614,121 @@ func TestReplacedPodIsAChange(t *testing.T) {
 		t.Fatalf("currentPod of a replaced manager Pod returned %v", err)
 	}
 }
+
+// A run that must end at once, as on a signal, takes the drop rules away
+// without the probes of Remove: no member drops anything of the fault's
+// afterwards, and Remove can still follow. Drop rules that stay are
+// reported, never taken for a removal.
+func TestPartitionRemoveDropsAtOnce(t *testing.T) {
+	ctx := context.Background()
+	injected := func(t *testing.T) (*fakeNet, *Partition) {
+		t.Helper()
+		n := newFakeNet(testPods)
+		p := isolateMaster(n, testEnv(t, n))
+		if err := p.Prepare(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Inject(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return n, p
+	}
+	n, p := injected(t)
+	if err := p.RemoveDrops(ctx); err != nil {
+		t.Fatalf("RemoveDrops returned %v", err)
+	}
+	for name, ip := range testPods {
+		for _, line := range n.installed(ip) {
+			if strings.Contains(line, chainIn) || strings.Contains(line, chainOut) {
+				t.Errorf("%s still drops after RemoveDrops: %s", name, line)
+			}
+		}
+	}
+	if err := p.Remove(ctx); err != nil {
+		t.Fatalf("Remove after RemoveDrops returned %v", err)
+	}
+	requireClean(t, n)
+
+	n, p = injected(t)
+	n.ignoreRemove = true
+	if err := p.RemoveDrops(ctx); err == nil || !strings.Contains(err.Error(), "drop rules left") {
+		t.Fatalf("RemoveDrops with drop rules that stay returned %v", err)
+	}
+
+	// The launcher's SIGKILL follows its SIGTERM by 2 seconds: each member
+	// gets one exec that removes and reads back, and the members are not
+	// taken one after another.
+	n, p = injected(t)
+	n.mu.Lock()
+	n.scripts = nil
+	n.latency["removedrops"] = 300 * time.Millisecond
+	n.mu.Unlock()
+	start := time.Now()
+	if err := p.RemoveDrops(ctx); err != nil {
+		t.Fatalf("RemoveDrops returned %v", err)
+	}
+	if took := time.Since(start); took > 800*time.Millisecond {
+		t.Errorf("RemoveDrops on three members took %s; the members were not taken together", took)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.scripts) != 3 {
+		t.Errorf("RemoveDrops ran %d execs, want one per member: %v", len(n.scripts), n.scripts)
+	}
+	for _, script := range n.scripts {
+		if !strings.HasSuffix(script, "netfault removedrops") {
+			t.Errorf("RemoveDrops ran %q, want the one removal that reads back", script)
+		}
+	}
+}
+
+// When the run's context ends while the fault is being injected or held, the
+// drop rules go at once, the watch reports it, and the fault's own removal
+// still succeeds after it.
+func TestPartitionRemoveOnEnd(t *testing.T) {
+	for _, during := range []string{opInject, "hold"} {
+		t.Run(during, func(t *testing.T) {
+			n := newFakeNet(testPods)
+			p := isolateMaster(n, testEnv(t, n))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var injected, cancelled atomic.Bool
+			if during == opInject {
+				// Cancelled while Inject reads its rules back: they are installed.
+				n.stall = func(op string) bool {
+					if op == opInject {
+						injected.Store(true)
+					}
+					if op == opRules && injected.Load() && !cancelled.Swap(true) {
+						cancel()
+						return true
+					}
+					return false
+				}
+			}
+			var removed atomic.Bool
+			var removeErr error
+			stop := p.RemoveOnEnd(ctx, 2*time.Second, func(err error) {
+				removeErr = err
+				removed.Store(true)
+			})
+			o := faults.Run(ctx, faults.Scenario{Fault: p, Limits: testLimits, Before: p.Prepare,
+				Check: func(ctx context.Context) (bool, error) {
+					cancel()
+					<-ctx.Done()
+					return false, nil
+				}})
+			stop()
+			if !removed.Load() || removeErr != nil {
+				t.Fatalf("the watch removed %v with %v", removed.Load(), removeErr)
+			}
+			if !o.CleanupSucceeded {
+				t.Fatalf("the removal after the watch failed: %+v", o.Timeline)
+			}
+			if during == "hold" && !o.FaultConfirmed {
+				t.Fatalf("the fault was not held: %+v", o.Timeline)
+			}
+			requireClean(t, n)
+		})
+	}
+}

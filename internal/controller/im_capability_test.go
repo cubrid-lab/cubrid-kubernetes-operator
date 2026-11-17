@@ -202,6 +202,16 @@ var _ = Describe("A seed step for an Instance Manager that does not report the c
 		Expect(msg).To(And(ContainSubstring("cap-peer-1"), ContainSubstring("expected-cluster-uid"),
 			Not(ContainSubstring("seed-from-master,"))))
 
+		By("a peer of a build that does not compare the member a restore names is held for that check")
+		prober.reports["cap-peer-1"] = []string{instancemanager.CapabilityExpectedClusterUID, instancemanager.CapabilitySeedFromMaster,
+			instancemanager.CapabilitySeedUpload, instancemanager.CapabilityBackupSourceRole}
+		r.reconcileSeeding(ctx, c, status, "cap-peer-0")
+		Expect(seed.backupOn).To(BeEmpty())
+		Expect(seed.restoreOn).To(BeEmpty(), "a seed restore that names its member was sent to a manager that would not compare it")
+		reason, msg = condition(c)
+		Expect(reason).To(Equal("InstanceManagerCapabilityMissing"))
+		Expect(msg).To(And(ContainSubstring("cap-peer-1"), ContainSubstring("expected-member")))
+
 		By("a peer that cannot be asked waits as an unavailable Instance Manager")
 		prober.unreachable = map[string]bool{"cap-peer-1": true}
 		r.reconcileSeeding(ctx, c, status, "cap-peer-0")
@@ -225,7 +235,71 @@ var _ = Describe("A seed step for an Instance Manager that does not report the c
 		Expect(seed.restoreOn).To(Equal([]string{"cap-peer-1"}))
 		Expect(seed.restoreReq.SeedFromMaster).To(Equal("cap-peer-0"))
 		Expect(seed.restoreReq.ExpectedClusterUID).To(Equal(string(c.UID)))
+		Expect(seed.restoreReq.ExpectedMember).To(Equal("cap-peer-1"))
 		Expect(status.BootstrapAttempts).To(BeZero())
+	})
+
+	// A seed restore that reached another member than the peer it names, as
+	// after a Service that routes to the wrong Pod, is refused by that
+	// member before anything is restored. The Operator waits without using
+	// up an attempt, keeps the copy's record, and warns once (#117).
+	It("waits on a seed restore that reached another member, and warns once", func() {
+		seed := newSeed()
+		seed.startErr = imAnswer(http.StatusConflict,
+			`{"error":"the restore names another member: the restore names member \"cap-wrong-1\", but this is member \"cap-wrong-2\"","code":"WrongMember"}`)
+		c, status := created("cap-wrong")
+		prober := &capabilityProber{reports: map[string][]string{"cap-wrong-0": allCapabilities, "cap-wrong-1": allCapabilities}}
+		recorder := record.NewFakeRecorder(20)
+		r := &CubridClusterReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
+			Prober: prober, Backup: seed, Restore: seed,
+		}
+		var warnings []string
+		drain := func() {
+			for {
+				select {
+				case e := <-recorder.Events:
+					if strings.Contains(e, reasonWrongMember) {
+						warnings = append(warnings, e)
+					}
+				default:
+					return
+				}
+			}
+		}
+
+		// The source is recorded first; the restore is sent in a later pass.
+		for i := 0; i < 3 && len(seed.restoreOn) == 0; i++ {
+			r.reconcileSeeding(ctx, c, status, "cap-wrong-0")
+		}
+		Expect(seed.restoreOn).NotTo(BeEmpty(), "the seed restore was never sent")
+		for i := range 3 {
+			if i > 0 {
+				r.reconcileSeeding(ctx, c, status, "cap-wrong-0")
+			}
+			drain()
+			reason, msg := condition(c)
+			Expect(reason).To(Equal(reasonWrongMember))
+			Expect(msg).To(ContainSubstring(`this is member "cap-wrong-2"`))
+			Expect(status.BootstrapAttempts).To(BeZero(), "a refusal that restored nothing used up an attempt")
+			Expect(status.Seeding).NotTo(BeNil(), "the copy's record was dropped")
+			Expect(status.Seeding.Member).To(Equal("cap-wrong-1"))
+			Expect(status.Seeding.RestoreOperationID).To(BeEmpty())
+			Expect(status.SeededMembers).To(BeEmpty())
+		}
+		Expect(seed.restoreOn).To(HaveEach("cap-wrong-1"))
+		Expect(seed.lookups).To(BeZero(), "the key was looked up on a member that is not the one the restore names")
+		Expect(warnings).To(HaveLen(1), "the warning was not emitted exactly once while the reason stayed")
+		Expect(warnings[0]).To(And(HavePrefix("Warning"), ContainSubstring("cap-wrong-1")))
+
+		By("a restore the member then accepts ends the wait, with no further warning")
+		seed.startErr = nil
+		seed.restore["cap-wrong-1"] = instancemanager.OpRestoring
+		r.reconcileSeeding(ctx, c, status, "cap-wrong-0")
+		reason, _ := condition(c)
+		Expect(reason).NotTo(Equal(reasonWrongMember))
+		drain()
+		Expect(warnings).To(HaveLen(1))
 	})
 
 	It("sends no seed restore to a peer that loses a check after its seed backup completed", func() {
@@ -516,7 +590,8 @@ func TestProbeRole_ReadsTheChecksTheInstanceManagerReports(t *testing.T) {
 		t.Fatalf("the member did not answer: %+v", o)
 	}
 	for _, c := range []string{instancemanager.CapabilitySeedUpload, instancemanager.CapabilityBackupSourceRole,
-		instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID} {
+		instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID,
+		instancemanager.CapabilityExpectedMember} {
 		if !slices.Contains(o.Capabilities, c) {
 			t.Errorf("capabilities = %v, want %q among them", o.Capabilities, c)
 		}

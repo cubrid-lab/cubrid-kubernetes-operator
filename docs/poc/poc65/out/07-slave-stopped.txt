@@ -1,0 +1,13 @@
+# 2026-11-17T02:27:53.526373806Z X poc65-hapw-slave bash -lc cubrid heartbeat status; for p in /proc/[0-9]*; do tr "\0" " " <$p/cmdline; echo; done | grep -E "^cub_|copylog|applylog" || true
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc65-hapw-slave, state unknown)
+
+
+ HA-Process Info (master 92, state unknown)
+
+bash -lc cubrid heartbeat status; for p in /proc/[0-9]*; do tr "\0" " " <$p/cmdline; echo; done | grep -E "^cub_|copylog|applylog" || true 
+bash -lc cubrid heartbeat status; for p in /proc/[0-9]*; do tr "\0" " " <$p/cmdline; echo; done | grep -E "^cub_|copylog|applylog" || true 
+grep -E ^cub_|copylog|applylog 
+cub_master 
+# rc=0 2026-11-17T02:27:53.617439312Z

@@ -3125,6 +3125,30 @@ the stop record of `instance-manager shutdown` stays, so the restarted
 entrypoint started nothing; on Kubernetes a restarted container is a new one.
 The containers and both volumes were removed afterwards.
 
+**Follow-up, 2026-11-17 UTC (#252, one Docker run): rotation at the sizes the
+Operator sets.** Scripts, raw samples and limits are in
+[`log-rotation-size-limits/`](log-rotation-size-limits/README.md). The pinned
+`cubrid/cubrid:11.4@sha256:a8c8792f…` (CUBRID 11.4.7.1995), on a native
+linux/amd64 host, ran a standalone server with the entrypoint's
+`error_log=…/server/appdb.err` and `error_log_size=10485760`, and a read-write
+Broker started by `broker-entrypoint.sh` (`error_log_size=4194304`) with the
+configuration `generateBrokerConf("rw", 5)` renders (`SQL_LOG_MAX_SIZE=4096`,
+`ACCESS_LOG=OFF`); `$CUBRID/log` was a 256 MiB tmpfs on both. 100,000
+statements failing with `-670`, 50,000 through `csql` and 50,000 through the
+Broker, drove the files past their limits several times. The server's error
+log rotated at 10 MiB, its `.bak` 10,485,844 to 10,486,073 bytes; the CAS
+error log at 4 MiB, `.bak` 4,194,390 and 4,194,412 bytes; each of these two
+passed its limit by at most one more message. The CAS SQL and slow-query logs
+rotated once the file passed about 4,097,000 bytes, `.bak` 4,097,028 to
+4,097,140 bytes: 1,028 to 1,140 bytes past 4,096 × 1,000, more than one entry,
+so whether the engine compares whole kilobytes is not known. All of them
+stayed below 4,096 × 1,024 bytes, so `SQL_LOG_MAX_SIZE` counts in units of
+1,000 bytes (the question left open above). Each kept one `.bak` and no other
+copy; the server was sampled only through its `csql` phase and in the final
+listing. Not observed here: `cub_master`, the copier, the
+applier and `cubrid_utility.log` at 10 MiB, an HA member, a Broker Pod's
+emptyDir limit, and anything on Kubernetes.
+
 ---
 
 ## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master or its backlog; the cause is not known**
@@ -6507,6 +6531,23 @@ owned container, network and anonymous volume. No executable reproducer is shipp
 The proposed peer-identity counterexample remains unexecuted, so #894's engine
 qualification and operational decision remain open. This is not a Kind, VM or
 release-qualification result and does not replace POC-61 or POC-62.
+
+## POC-65 — whether a standalone-mode login on a stopped HA slave changes its files, in Docker on 11.4.7.1995 (#894) — **observation: yes; with the slave's heartbeat stopped and no change in 30 s with nothing run, a `csql -S` login refused for a wrong password, a read-only `csql -S -r` login and a `csql -S` login with the right password each changed the SHA-256 of the slave's data volume and active log, and moved log positions in the active log's first page; the copied logs of the master did not change; after a native restart the slave rejoined as a standby and later held every row, with an applier failure count of 0, but the new row was first seen after at most 812 s against at most 152 s after a control restart, and the slave's logs recorded unexplained replication errors after that restart; with one trial on a busy host and a 4-minute stop against a 10-second one, neither is attributed to the logins**
+
+Local Docker, the pinned image of `build/instance-manager/Dockerfile`
+(`cubrid/cubrid:11.4@sha256:a8c8792f…`, CUBRID 11.4.7.1995), synthetic passwords, one trial.
+Scripts, outputs and limits: [poc65/README.md](poc65/README.md). After the restart that
+followed the logins, the slave's logs recorded five `Time out in receiving data` (-1122) errors
+from the master's copylogdb (02:32:04 to 02:35:54 UTC), an applier that took about 4 min 37 s
+to reach `recovering` (43 s after the control restart), and at 02:40:28 to 02:40:35 UTC its
+copylogdb marking the master `dead`, a reconnect refused with -171 and a successful reconnect;
+these are observed and not explained, and the record keeps too little of the control restart's
+logs to compare. A standalone-mode open is
+therefore not a non-mutating password check for a stopped HA member, and the Instance Manager
+keeps not checking an initialized HA member before `cubrid heartbeat start`
+([DBA password](../operations/dba-password.md#restarting-after-a-changed-value)). A former
+master after a failover, an unclean stop and an interrupted restart were not tried; this is not a
+Kind, VM or Operator result.
 
 ## Applier pause mechanism: unavailable local preflight (#291)
 

@@ -1,0 +1,27 @@
+broker:
+total 4
+drwxr-xr-x 4 cubrid cubrid 100 02:23:51 .
+drwxrwxrwx 3 root   root   140 02:23:50 ..
+-rw-r--r-- 1 cubrid cubrid  51 02:23:51 cubrid_broker.log
+drwxr-xr-x 2 cubrid cubrid  80 02:25:09 error_log
+drwxr-xr-x 3 cubrid cubrid 180 02:25:10 sql_log
+
+broker/error_log:
+total 5328
+drwxr-xr-x 2 cubrid cubrid      80 02:25:09 .
+drwxr-xr-x 4 cubrid cubrid     100 02:23:51 ..
+-rw-r--r-- 1 cubrid cubrid 1256249 02:25:13 rw_1.err
+-rw-r--r-- 1 cubrid cubrid 4194412 02:25:09 rw_1.err.bak
+
+broker/sql_log:
+total 12544
+drwxr-xr-x 3 cubrid cubrid     180 02:25:10 .
+drwxr-xr-x 4 cubrid cubrid     100 02:23:51 ..
+drwxr-xr-x 2 cubrid cubrid      40 02:23:50 query
+-rw-r--r-- 1 cubrid cubrid  572528 02:25:13 rw_1.slow.log
+-rw-r--r-- 1 cubrid cubrid 4097103 02:25:10 rw_1.slow.log.bak
+-rw-r--r-- 1 cubrid cubrid 4065681 02:25:13 rw_1.sql.log
+-rw-r--r-- 1 cubrid cubrid 4097116 02:25:06 rw_1.sql.log.bak
+-rw-r--r-- 1 cubrid cubrid       0 02:23:51 rw_2.slow.log
+-rw-r--r-- 1 cubrid cubrid      83 02:23:51 rw_2.sql.log
+18284041	.

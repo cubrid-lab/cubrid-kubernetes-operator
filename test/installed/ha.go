@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -108,8 +109,13 @@ type HAConfig struct {
 	MemberSpread databasev1alpha1.MemberSpread
 	// Fault selects a scenario after LAB01: empty for none,
 	// FaultOperatorRestart for S06 restart, which deletes the installed
-	// manager's Pod, or FaultVMPowerOff for S04 power-off, which powers off
-	// the VM of the master's node.
+	// manager's Pod, FaultVMPowerOff for S04 power-off, which powers off
+	// the VM of the master's node, FaultDrainSlaveNode or
+	// FaultDrainMasterNode for S15, which cordons the node of a slave or of
+	// the master and evicts the run's Pods on it, or
+	// FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated or
+	// FaultPartitionHigherRankIsolated for S07, which cut the master, a
+	// lower-ranked slave, or a slave that outranks the master off the network.
 	Fault string
 	// VMStopCommand, VMStartCommand and VMStatusCommand are the lab's own
 	// controls of a node's VM, for S04: each runs with sh -c on the run's
@@ -124,6 +130,18 @@ type HAConfig struct {
 	// VMDownFor is how long the VM stays off at least; with FailoverLimit
 	// and the boot it must stay under the member Pod's taint toleration.
 	FailoverLimit, VMReturnLimit, VMDownFor time.Duration
+	// DrainLimit bounds S15's drain from the cordon until the drained
+	// node's member and Broker Pods are gone or the eviction is refused
+	// (drain_limit); zero is unset, which makes the run a baseline. In S15
+	// FailoverLimit bounds the clients' recovery from the member's eviction.
+	DrainLimit time.Duration
+	// QuarantineLimit bounds S07 from the quarantine-triggering observation
+	// until new connections through the read-write Service stop succeeding
+	// (quarantine_limit); PartitionDuration is the least time S07 must hold
+	// the confirmed partition (partition_duration). Zero is unset for both,
+	// which makes the run a baseline. PartitionHold is how long the run holds
+	// the confirmed partition: the run's own choice, not the contract's.
+	QuarantineLimit, PartitionDuration, PartitionHold time.Duration
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12
@@ -287,11 +305,13 @@ type HAConfig struct {
 
 // privileged reports whether the run namespace must enforce Pod Security
 // privileged: S11 interrupted-upload, instance-manager-restart, overlapping
-// and operation-store-loss, and S12 instance-manager-restart at seed-backup,
-// add an ephemeral container with NET_ADMIN and NET_RAW to a member's Pod.
+// and operation-store-loss, S12 instance-manager-restart at seed-backup, and
+// the S07 partitions add an ephemeral container with NET_ADMIN and NET_RAW to
+// a member's Pod.
 func (c HAConfig) privileged() bool {
 	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping ||
-		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup)
+		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup) ||
+		c.partitionFault()
 }
 
 func (c HAConfig) validate() error {
@@ -301,7 +321,7 @@ func (c HAConfig) validate() error {
 	if err := c.Config.validate(); err != nil {
 		return err
 	}
-	if !strings.Contains(c.WorkloadImage, "@sha256:") || !validPinnedImage(c.WorkloadImage, c.Commit) {
+	if !evidence.ValidDigestImage(c.WorkloadImage) {
 		return errors.New("the workload client image must be pinned by digest")
 	}
 	if !regexp.MustCompile(`^[A-Za-z0-9.-]+(:[0-9]+)?$`).MatchString(c.SeedEndpoint) ||
@@ -312,10 +332,19 @@ func (c HAConfig) validate() error {
 		len(validation.IsDNS1123Subdomain(c.SeedSecret)) != 0 || c.SeedSecretNamespace == c.Namespace {
 		return errors.New("the seed Secret must be named, outside the run namespace")
 	}
-	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff {
-		return fmt.Errorf("fault must be empty, %s or %s", FaultOperatorRestart, FaultVMPowerOff)
+	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff && !c.drainFault() &&
+		!c.partitionFault() {
+		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s, %s or %s", FaultOperatorRestart,
+			FaultVMPowerOff, FaultDrainSlaveNode, FaultDrainMasterNode, FaultPartitionMasterIsolated,
+			FaultPartitionSlaveIsolated, FaultPartitionHigherRankIsolated)
 	}
 	if err := c.validateS04(); err != nil {
+		return err
+	}
+	if err := c.validateS15(); err != nil {
+		return err
+	}
+	if err := c.validateS07(); err != nil {
 		return err
 	}
 	if c.Fault != "" && c.StablePeriod <= 0 {
@@ -441,6 +470,13 @@ type haRun struct {
 	s04 *evidence.Scenario
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
+	// s15 is the result of the S15 node drain, once it ran.
+	s15 *evidence.Scenario
+	// s07 is the result of the S07 network partition, once it ran.
+	s07 *evidence.Scenario
+	// drainMu serializes S15's cordon and uncordon of its node, which the
+	// fault's steps, its cleanup and the run's end can each attempt.
+	drainMu sync.Mutex
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
 	// denied-credentials, s11Signature that of S11 signature-mismatch and
@@ -703,6 +739,25 @@ func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requ
 // faultLane returns the lane, the requirement and the summary's first note
 // of a fault scenario after LAB01.
 func faultLane(fault string) (string, evidence.Requirement, string) {
+	if fault == FaultDrainSlaveNode || fault == FaultDrainMasterNode {
+		node := map[string]string{FaultDrainSlaveNode: "a slave's", FaultDrainMasterNode: "the master's"}[fault]
+		return s15LanePrefix + fault, evidence.Requirement{ID: s15ID, Variant: fault}, "Three-member HA cluster " +
+			"against an installed Operator, then S15 " + fault + ": " + node + " node is cordoned and the run's " +
+			"member and Broker Pods on it are evicted, with every member's volume bound to its node (no spare " +
+			"node); no other S00-S15 qualification"
+	}
+	if (HAConfig{Fault: fault}).partitionFault() {
+		variant := s07Variant(fault)
+		member := map[string]string{s07MasterIsolated: "the master",
+			s07SlaveIsolated: "a slave ranked below the master that is not the last resolved primary",
+			s07HigherRankIsolated: "a slave ranked above the master, once the master was moved off the first " +
+				"member if it was there,"}[variant]
+		return s07LanePrefix + variant, evidence.Requirement{ID: s07ID, Variant: variant}, "Three-member HA " +
+			"cluster against an installed Operator, then S07 " + variant + ": " + member + " is cut off both ways " +
+			"from the other members and the manager Pod by network faults in the members' Pods, and the write " +
+			"quarantine, SQL through the read-write Service and every member's rows are recorded; no other " +
+			"S00-S15 qualification"
+	}
 	if fault == FaultVMPowerOff {
 		return s04Lane, evidence.Requirement{ID: s04ID, Variant: s04Variant}, "Three-member HA cluster against an " +
 			"installed Operator, then S04 power-off: the VM of the master's node is powered off without a " +
@@ -738,6 +793,14 @@ func (h *haRun) recordFault(summary *evidence.Summary) {
 // settles as blocked those that did not run.
 func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 	h.recordFault(summary)
+	switch {
+	case h.s15 != nil:
+		summary.Record(*h.s15)
+	case h.cfg.drainFault():
+		summary.Settle(evidence.Requirement{ID: s15ID, Variant: h.cfg.Fault}, evidence.Blocked,
+			"S15 starts from LAB01's checked state, and LAB01 did not pass")
+	}
+	h.recordS07(summary)
 	if h.s11 != nil {
 		summary.Record(*h.s11)
 	} else if h.cfg.BackupBucket != "" {
@@ -873,6 +936,18 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s04 = &s04
 		if s04.Result != evidence.Pass {
 			return fmt.Errorf("S04/%s: %s", s04Variant, s04.Reason)
+		}
+	case h.cfg.drainFault():
+		s15 := h.runS15(ctx)
+		h.s15 = &s15
+		if s15.Result != evidence.Pass {
+			return fmt.Errorf("S15/%s: %s", s15.Variant, s15.Reason)
+		}
+	case h.cfg.partitionFault():
+		s07 := h.runS07(ctx)
+		h.s07 = &s07
+		if s07.Result != evidence.Pass {
+			return fmt.Errorf("S07/%s: %s", s07.Variant, s07.Reason)
 		}
 	case h.cfg.Fault == FaultOperatorRestart:
 		s06 := h.runS06(ctx)
@@ -1402,9 +1477,10 @@ func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.
 func (h *haRun) clientPod() *corev1.Pod {
 	jdbc := func(mode string, port int) string { return h.jdbcURL(haClusterName, mode, port) }
 	no, yes, user, grace := false, true, int64(clientUser), int64(1)
-	// S04 powers off the master's node and refuses a client there (#110).
+	// S04 powers off the master's node and refuses a client there (#110);
+	// S15 drain-master-node drains it.
 	var affinity *corev1.Affinity
-	if node := h.masterNode(); h.cfg.Fault == FaultVMPowerOff && node != "" {
+	if node := h.masterNode(); (h.cfg.Fault == FaultVMPowerOff || h.cfg.Fault == FaultDrainMasterNode) && node != "" {
 		affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{{

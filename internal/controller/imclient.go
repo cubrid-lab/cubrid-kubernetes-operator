@@ -146,6 +146,13 @@ const (
 // not asked again before its Pod runs as an HA member.
 var errNotAnHAMember = errors.New("the member is a standalone server, not an HA member")
 
+// errWrongMember is wrapped, with errStartConflict, by a restore that a
+// member refused because the request names another member, or because the
+// member does not know its own name. Nothing is held under the key, and
+// nothing was restored; the start is tried again, and waits until the name
+// reaches the member it names.
+var errWrongMember = errors.New("the request reached another member than the one it names")
+
 // errRequestRefused is wrapped by a start that the member refused as a
 // request it does not carry out (400, 413, 422): the same request is refused
 // again, so it is a failed attempt, not a wait.
@@ -155,6 +162,7 @@ var errRequestRefused = errors.New("the member refused the request")
 const (
 	reasonRequestRefused      = "InstanceManagerRequestRefused"
 	reasonNotAnHAMember       = "InstanceManagerNotAnHAMember"
+	reasonWrongMember         = "InstanceManagerWrongMember"
 	reasonOperationInProgress = "InstanceManagerOperationInProgress"
 	reasonStagingInUse        = "InstanceManagerStagingInUse"
 	reasonRequestConflict     = "InstanceManagerRequestConflict"
@@ -220,6 +228,8 @@ func statusError(resp *http.Response, code, detail string) error {
 		return fmt.Errorf("%w: %w (%s)", errStartConflict, errRequestConflict, detail)
 	case instancemanager.CodeNotAnHAMember:
 		return fmt.Errorf("%w: %w (%s)", errStartConflict, errNotAnHAMember, detail)
+	case instancemanager.CodeWrongMember:
+		return fmt.Errorf("%w: %w (%s)", errStartConflict, errWrongMember, detail)
 	}
 	return fmt.Errorf("%w (%s)", errStartConflict, detail)
 }
@@ -300,6 +310,8 @@ func instanceManagerFailureReason(err error) string {
 		return reasonRequestConflict
 	case errors.Is(err, errNotAnHAMember):
 		return reasonNotAnHAMember
+	case errors.Is(err, errWrongMember):
+		return reasonWrongMember
 	case errors.Is(err, errRequestRefused):
 		return reasonRequestRefused
 	case errors.Is(err, errStartConflict):
@@ -322,14 +334,14 @@ const reasonInstanceManagerUnavailable = "InstanceManagerUnavailable"
 // so it is followed to its end and the changed request is never started in
 // its place. A refusal for another cause, or from a manager that names none,
 // is looked up the same way unless it says that the database or the staging
-// destination is busy, or that the member is no HA member, which holds
-// nothing under the key and is retried. An
-// operation that cannot be found leaves the refusal, with what the lookup
+// destination is busy, that the member is no HA member, or that it is not the
+// member the request names, which holds nothing under the key and is retried.
+// An operation that cannot be found leaves the refusal, with what the lookup
 // said.
 func operationOfKey(ctx context.Context, err error, kind instancemanager.OperationKind, key string,
 	find func() (instancemanager.Operation, bool, error)) (instancemanager.Operation, error) {
 	if !errors.Is(err, errStartConflict) || errors.Is(err, errOperationInProgress) || errors.Is(err, errStagingInUse) ||
-		errors.Is(err, errNotAnHAMember) {
+		errors.Is(err, errNotAnHAMember) || errors.Is(err, errWrongMember) {
 		return instancemanager.Operation{}, err
 	}
 	op, found, lookupErr := find()

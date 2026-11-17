@@ -193,19 +193,14 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 			ns.input, ns.seenRules = slices.DeleteFunc(ns.input, func(c string) bool { return c == chainSeen }), nil
 		}
 		return "", nil
-	case "inject":
+	case opInject:
 		return n.inject(ns, script)
 	case "remove":
-		ns.removed = true
-		if ns.pending != nil {
-			ns.readsSinceRemove = 0
-		}
-		if !n.ignoreRemove {
-			ns.in, ns.out, ns.extra, ns.jumpOut = nil, nil, nil, false
-			ns.input = slices.DeleteFunc(ns.input, func(c string) bool { return c == chainIn })
-			ns.sticky = n.stickyCut
-		}
+		n.remove(ns)
 		return "", nil
+	case "removedrops":
+		n.remove(ns)
+		return n.rules(ns), nil
 	case opConnect:
 		return n.connects(ns, op[3], op[5])
 	case "qdisc":
@@ -224,6 +219,19 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 		return "", nil
 	}
 	return n.uploadFault(ns, op[2], script)
+}
+
+// remove answers the removal of the drop rules.
+func (n *fakeNet) remove(ns *fakeNS) {
+	ns.removed = true
+	if ns.pending != nil {
+		ns.readsSinceRemove = 0
+	}
+	if !n.ignoreRemove {
+		ns.in, ns.out, ns.extra, ns.jumpOut = nil, nil, nil, false
+		ns.input = slices.DeleteFunc(ns.input, func(c string) bool { return c == chainIn })
+		ns.sticky = n.stickyCut
+	}
 }
 
 // uploadFault answers the commands of the rate limit and the reset.
@@ -542,6 +550,7 @@ const testNamespace = "cubrid-lab-test"
 const (
 	opConnect = "connect"
 	opRules   = "rules"
+	opInject  = "inject"
 )
 
 // defaultQdisc is a Pod's qdisc with no fault; testConnect the time of a

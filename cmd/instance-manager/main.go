@@ -176,6 +176,12 @@ func run(logger *slog.Logger) error {
 		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
 	}
 
+	member, err := os.Hostname()
+	if err != nil {
+		logger.Warn("Could not read the member name; a restore that names a member is refused", "error", err)
+		member = ""
+	}
+
 	cli := instancemanager.LoggingCLI{
 		CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second, Logger: logger}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
@@ -189,6 +195,10 @@ func run(logger *slog.Logger) error {
 			// below the staging root; both come from this process, never a request.
 			Target:  envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases"),
 			Staging: envOr("IM_RESTORE_STAGING_ROOT", "/var/lib/cubrid/restore-staging"),
+			// A StatefulSet Pod's host name is its Pod name, the member name
+			// the Operator names in a restore. A name that cannot be read
+			// stays empty, and a restore that names a member is refused.
+			Member: member,
 		})
 
 	// A standalone member has no HA role; its readiness is its server's

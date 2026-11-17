@@ -192,6 +192,9 @@ type haFixture struct {
 	// podRead and deploymentRead run before each read of a Pod and of a
 	// Deployment; the error is the read's.
 	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// evicted plays the API server when the run asks to evict a Pod (S15);
+	// nil fails the test on any eviction.
+	evicted func(ctx context.Context, c client.Client, pod client.Object) error
 	// haClusterRead, when set, plays a read of the HA cluster.
 	haClusterRead  func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	deploymentRead func(key client.ObjectKey) error
@@ -299,6 +302,7 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				return errors.New("forbidden write")
 			}
 		},
+		SubResourceCreate: f.subResourceCreate,
 		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object,
 			opts ...client.SubResourceUpdateOption) error {
 			pod, ok := obj.(*corev1.Pod)
@@ -376,6 +380,20 @@ func (f *haFixture) deleteHooked(ctx context.Context, c client.WithWatch, obj cl
 		}
 	}
 	return nil, false
+}
+
+// subResourceCreate plays the API server for an eviction the run asks for
+// (S15) and fails the test on any other subresource created, or on an
+// eviction when no test expects one.
+func (f *haFixture) subResourceCreate(ctx context.Context, c client.Client, sub string, obj client.Object,
+	_ client.Object, _ ...client.SubResourceCreateOption) error {
+	if sub != "eviction" || f.evicted == nil {
+		f.t.Fatalf("runner created subresource %s of %T %s", sub, obj, obj.GetName())
+	}
+	f.mu.Lock()
+	f.writes = append(f.writes, "eviction")
+	f.mu.Unlock()
+	return f.evicted(ctx, c, obj)
 }
 
 // beforeGet plays the Operator and the kubelet before a read of obj.

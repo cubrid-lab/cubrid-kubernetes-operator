@@ -614,6 +614,84 @@ func (p *Partition) removeDrops(ctx context.Context, e Endpoint) ([]string, erro
 	return left, errors.Join(errs...)
 }
 
+// removeDropsScript removes the drop chains as removeScript does and reads
+// the rules back, in one exec.
+var removeDropsScript = ": netfault removedrops\n" + strings.TrimPrefix(removeScript, ": netfault remove\n") +
+	"\niptables-save -c -t filter"
+
+// RemoveDrops takes away the drop rules of every endpoint that has them and
+// reads them back, one exec per endpoint and every endpoint at once, and
+// returns what is left. It makes none of the probes of Remove, so it fits a
+// run that must end at once, as on a signal; Remove must still follow when
+// there is time for it.
+func (p *Partition) RemoveDrops(ctx context.Context) error {
+	ruled := p.ruled()
+	errs := make([]error, len(ruled))
+	var wg sync.WaitGroup
+	for i, e := range ruled {
+		wg.Go(func() { errs[i] = p.removeDropsAtOnce(ctx, e) })
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// removeDropsAtOnce removes the endpoint's drop chains and reads them back
+// in one exec, again while any is left, and returns what is left.
+func (p *Partition) removeDropsAtOnce(ctx context.Context, e Endpoint) error {
+	var left []string
+	var errs []error
+	for range removeAttempts {
+		out, err := shell(ctx, p.Env, e, removeDropsScript)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("remove the drop rules: %w", err))
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		r, err := parseRules(out)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", e.Name, err))
+			continue
+		}
+		if left = dropLeft(r); len(left) == 0 {
+			return nil
+		}
+	}
+	if len(left) > 0 {
+		errs = append(errs, fmt.Errorf("%s: drop rules left after the removal: %v", e.Name, left))
+	}
+	return errors.Join(errs...)
+}
+
+// RemoveOnEnd watches ctx and, as soon as it ends, takes the drop rules
+// away with RemoveDrops within bound, then calls done with the result. The
+// returned func stops the watch and returns once it has; it may be called
+// more than once.
+func (p *Partition) RemoveOnEnd(ctx context.Context, bound time.Duration, done func(error)) func() {
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var once sync.Once
+	wg.Go(func() {
+		select {
+		case <-stop:
+			// A context that ended as the watch was stopped still gets the
+			// removal: which of the two the select saw first is chance.
+			if ctx.Err() == nil {
+				return
+			}
+		case <-ctx.Done():
+		}
+		end, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+		defer cancel()
+		done(p.RemoveDrops(end))
+	})
+	return func() {
+		once.Do(func() { close(stop) })
+		wg.Wait()
+	}
+}
+
 // Remove takes away the drop rules, checks that none is left, waits until
 // every path is seen open again, reads the rules once more, and then takes
 // away the counting rules of every entered endpoint and checks that none is

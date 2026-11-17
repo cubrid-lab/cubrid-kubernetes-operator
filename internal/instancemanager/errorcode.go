@@ -51,6 +51,10 @@ const (
 	// CodeNotAnHAMember answers 409: an HA request reached a standalone
 	// member. Terminal for this member.
 	CodeNotAnHAMember = "NotAnHAMember"
+	// CodeWrongMember answers 409: a restore names another member than this
+	// one, or this manager does not know its own name. Terminal for this
+	// member; the request was meant for another.
+	CodeWrongMember = "WrongMember"
 	// CodeObjectStorageNotApplied answers 412: the manager was started
 	// without object storage. Terminal until the Pod is restarted with it.
 	CodeObjectStorageNotApplied = "ObjectStorageNotApplied"

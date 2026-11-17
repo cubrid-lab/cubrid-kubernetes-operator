@@ -5,6 +5,10 @@ CUBRID cluster it runs there. So a lab run is never started by a pull request
 or by `make test-e2e`; it is started by hand through one entry point, which
 refuses to run against the wrong cluster or next to another campaign (#122).
 
+To reduce waiting without overlapping faults, use the [campaign handoff and
+elapsed-time measurement protocol](lab-handoff.md). It does not authorize
+CI dispatch or change the Lease and reservation rules below.
+
 ```sh
 make test-lab LAB_CONTEXT=<kubectl context> LAB_TARGET=<lab name> LAB_COMMAND='<command>'
 ```
