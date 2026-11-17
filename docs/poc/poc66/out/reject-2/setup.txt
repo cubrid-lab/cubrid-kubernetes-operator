@@ -1,0 +1,37 @@
+setup start 2026-11-17T19:52:58.336Z lane p66b
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+heartbeat start rc=0
+## 2026-11-17T19:58:11.524Z ha-0 alone
+ HA-Node Info (current p66b-ha-0, state master)
+   Node p66b-ha-2 (priority 3, state unknown)
+   Node p66b-ha-1 (priority 2, state unknown)
+   Node p66b-ha-0 (priority 1, state master)
+ HA-Process Info (master 95, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 370, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 368, state registered)
+   Copylogdb appdb@p66b-ha-2:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 366, state registered)
+   Copylogdb appdb@p66b-ha-1:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 364, state registered)
+   Server appdb (pid 104, state registered_and_to_be_active)
+The server 'appdb@localhost''s current HA running mode is to-be-active.
+heartbeat start rc=0
+heartbeat start rc=0
+## 2026-11-17T20:00:34.426Z ha-0 60 s after ha-1 and ha-2 started
+ HA-Node Info (current p66b-ha-0, state master)
+   Node p66b-ha-2 (priority 3, state slave)
+   Node p66b-ha-1 (priority 2, state slave)
+   Node p66b-ha-0 (priority 1, state master)
+ HA-Process Info (master 95, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 370, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 368, state registered)
+   Copylogdb appdb@p66b-ha-2:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 366, state registered)
+   Copylogdb appdb@p66b-ha-1:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 364, state registered)
+   Server appdb (pid 104, state registered_and_active)
+The server 'appdb@localhost''s current HA running mode is active.
+log applier: log applier started. required LSA: 145|12216. last committed LSA: 145|12216. last committed repl LSA: 145|12216.
+HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 145|12216. 
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 145|14720. 
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 146|1312. 
+log applier: log applier started. required LSA: 145|12216. last committed LSA: 145|12216. last committed repl LSA: 145|12216.
+HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 145|12216. 
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 146|128. 
+setup end 2026-11-17T20:00:35.125Z

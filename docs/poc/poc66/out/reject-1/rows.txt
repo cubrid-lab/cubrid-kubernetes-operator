@@ -1,0 +1,36 @@
+## 2026-11-17T20:26:47.325Z p66a-ha-0
+
+Time: 11/17/26 20:26:47.384 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 10941) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 192000
+        min(id)                 : 1002001
+        max(id)                 : 1194000
+        sum( cast(id as bigint)): 210816096000
+
+1 row selected. (0.059999 sec) Committed. (0.000000 sec) 
+## 2026-11-17T20:26:47.604Z p66a-ha-1
+
+Time: 11/17/26 20:26:47.707 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 1
+Cannot connect to server "appdb" on "localhost".
+
+Time: 11/17/26 20:26:47.707 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 2
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ERROR: Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+## 2026-11-17T20:26:47.924Z p66a-ha-2
+
+Time: 11/17/26 20:26:48.012 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 3683) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 130000
+        min(id)                 : 1002001
+        max(id)                 : 1132000
+        sum( cast(id as bigint)): 138710065000
+
+1 row selected. (0.040000 sec) Committed. (0.000000 sec) 

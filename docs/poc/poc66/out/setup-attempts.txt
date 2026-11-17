@@ -1,0 +1,60 @@
+Set-up attempts before the counted trials (2026-11-17, UTC). These groups were removed without
+keeping their logs; the lines below were copied from the terminal at the times given.
+
+== Lane p66t (17:21Z): ha-0 created and started; the set-up then stopped at a CREATE TABLE that
+   failed with -116 (no login shell), so ha-1 and ha-2 never started.
+
+$ cubrid heartbeat status -v        (on p66t-ha-0, about 17:29Z)
+ HA-Node Info (current p66t-ha-0, state master)
+   Node p66t-ha-2 (priority 3, state unknown)
+   Node p66t-ha-1 (priority 2, state unknown)
+   Node p66t-ha-0 (priority 1, state master)
+   ...
+   Server appdb (pid 71, state registered_and_to_be_active)
+
+$CUBRID/log/server/appdb_latest.err:
+Time: 11/17/26 17:25:59.245 - ERROR *** ... ERROR CODE = -970 ...
+Server HA mode is changed from 'standby' to 'to-be-active'.
+
+$CUBRID/log/p66t-ha-0_master.err (last entries):
+Time: 11/17/26 17:29:39.526 ... HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:71).
+Time: 11/17/26 17:29:39.526 ... HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:71).
+
+$CUBRID/log/appdb@localhost_applylogdb_appdb_p66t-ha-1.err (last entry, repeated every 0.2 s):
+Time: 11/17/26 17:29:45.657 ... ERROR CODE = -82 ...
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_p66t-ha-1/appdb_lgat".... No such file or directory
+
+== Lane p66a, first attempt (17:40Z): ha-0 started alone, ha-1 and ha-2 started 17:44Z to 17:45Z.
+   The CREATE TABLE on ha-0 failed: "Attempted to update the database when updates are disabled."
+
+$ cubrid heartbeat status; cubrid changemode appdb@localhost      (on p66a-ha-0, about 17:49Z)
+ HA-Node Info (current p66a-ha-0, state master)
+   Node p66a-ha-2 (priority 3, state slave)
+   Node p66a-ha-1 (priority 2, state slave)
+   Node p66a-ha-0 (priority 1, state master)
+   ...
+   Server appdb (pid 103, state registered_and_to_be_active)
+The server 'appdb@localhost''s current HA running mode is to-be-active.
+
+$ date -u
+Tue Nov 17 05:49:43 PM UTC 2026
+
+ha-0's applier for ha-1: "log applier started" 17:44:57.122, "change log apply state from 'unregistered' to 'done'" 17:44:58.409.
+ha-0's applier for ha-2: connected 17:44:06.691; last entry "Unable to mount log disk volume/file
+  .../appdb_p66a-ha-2/appdb_lgat .... No such file or directory" at 17:45:25.836; nothing after.
+ha-0's copylogdb for ha-2: "log writer started" 17:45:26.032; ha-2 'na' to 'standby' 17:45:32.596.
+`cubrid applyinfo -L .../appdb_p66a-ha-2 -a appdb` at 17:49Z: "Can't generate the applied info ...";
+  copied EOF LSA 145|15944, HA server state standby.
+
+== Other attempts that never reached a cut (not counted, files not kept)
+- p66a 17:31Z and 17:36Z: CREATE TABLE failed on a reserved column name (`at`), a harness bug.
+- p66a, a run started about 17:51Z: stopped at once because the set-up script was being changed.
+- p66c 17:54:59Z: stopped at 18:05Z, before its cut, to switch to the light writer.
+- p66c 18:07:10Z: the CREATE TABLE on ha-1 was refused ("updates are disabled") although
+  `heartbeat status` showed ha-1 registered_and_active; stopped at 18:19Z. The harness then waited
+  for ha-1's `changemode` to say active.
+- p66a, p66b about 18:15Z to 18:19Z: two set-ups stopped when the next round was redefined.
+- p66c 19:49:27Z: a fourth `working` trial, stopped in its set-up and replaced by wait-1.
+- p66a 20:02Z: reject-1's first attempt; the CREATE TABLE on ha-1 was refused ("updates are
+  disabled") although its `changemode` said active; the harness then retried the CREATE TABLE
+  and reject-1 was run again.

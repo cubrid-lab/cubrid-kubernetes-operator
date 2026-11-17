@@ -1,0 +1,23 @@
+## 2026-11-17T20:09:10.405Z p66b-ha-0
+Chain INPUT (policy ACCEPT 1476 packets, 108834 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     151     8316 REJECT     tcp  --  *      *       192.168.80.3         0.0.0.0/0            /* poc66 */ reject-with tcp-reset
+     301   185416 DROP       all  --  *      *       192.168.80.3         0.0.0.0/0            /* poc66 */
+     154     8436 REJECT     tcp  --  *      *       192.168.80.4         0.0.0.0/0            /* poc66 */ reject-with tcp-reset
+     299   184184 DROP       all  --  *      *       192.168.80.4         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+## 2026-11-17T20:09:10.522Z p66b-ha-1
+Chain INPUT (policy ACCEPT 4463 packets, 27157426 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     151     8416 REJECT     tcp  --  *      *       192.168.80.2         0.0.0.0/0            /* poc66 */ reject-with tcp-reset
+     351   216216 DROP       all  --  *      *       192.168.80.2         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+## 2026-11-17T20:09:10.582Z p66b-ha-2
+Chain INPUT (policy ACCEPT 5042 packets, 56065884 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     155     8656 REJECT     tcp  --  *      *       192.168.80.2         0.0.0.0/0            /* poc66 */ reject-with tcp-reset
+     351   216216 DROP       all  --  *      *       192.168.80.2         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         

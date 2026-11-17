@@ -1,0 +1,20 @@
+2026-11-17T18:22:33.070Z p66b trial lane=p66b fault=drop hold=150 watch=600 intervention=copylogdb image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T18:30:05.718Z p66b formed
+2026-11-17T18:30:24.978Z p66b heartbeat stop on ha-0: rc=0  The heartbeat feature has been deactivated. Please wait until all shutdown processes of cub_servers are completed.  ++ cubrid heartbeat stop: success 
+2026-11-17T18:30:46.298Z p66b ha-1 master/active
+2026-11-17T18:30:46.455Z p66b ha-1 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+2026-11-17T18:30:59.051Z p66b create table t on ha-1: Execute OK. (7.463958 sec) Committed. (5.043971 sec)  
+2026-11-17T18:31:13.254Z p66b heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T18:31:13.331Z p66b ha-0 slave/standby
+2026-11-17T18:31:43.333Z p66b writer started on ha-1
+2026-11-17T18:32:03.788Z p66b snapshot precut
+2026-11-17T18:32:03.990Z p66b cut issued (drop) ha-0=192.168.80.2 ha-1=192.168.80.3 ha-2=192.168.80.4
+2026-11-17T18:33:19.056Z p66b writer stopped
+2026-11-17T18:35:04.456Z p66b snapshot cut
+2026-11-17T18:35:34.887Z p66b healed
+2026-11-17T18:36:35.348Z p66b snapshot heal+60
+2026-11-17T18:38:35.832Z p66b snapshot heal+180
+2026-11-17T18:45:37.103Z p66b snapshot end-of-watch
+2026-11-17T18:45:37.211Z p66b ha-0 active at end of watch; no intervention
+2026-11-17T18:45:42.610Z p66b rows read, logs kept
+2026-11-17T18:47:04.424Z p66b done

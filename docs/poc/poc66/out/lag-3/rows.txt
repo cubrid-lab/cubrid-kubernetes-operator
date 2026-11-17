@@ -1,0 +1,39 @@
+## 2026-11-17T19:17:25.824Z p66c-ha-0
+
+Time: 11/17/26 19:17:25.901 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 4990) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 24000
+        min(id)                 : 1002001
+        max(id)                 : 1026000
+        sum( cast(id as bigint)): 24336012000
+
+1 row selected. (0.008000 sec) Committed. (0.000000 sec) 
+## 2026-11-17T19:17:25.981Z p66c-ha-1
+
+Time: 11/17/26 19:17:26.061 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 2868) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 160000
+        min(id)                 : 1002001
+        max(id)                 : 1162000
+        sum( cast(id as bigint)): 173120080000
+
+1 row selected. (6.751924 sec) Committed. (0.000000 sec) 
+## 2026-11-17T19:17:33.203Z p66c-ha-2
+
+Time: 11/17/26 19:17:33.291 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 2440) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 78000
+        min(id)                 : 1002001
+        max(id)                 : 1080000
+        sum( cast(id as bigint)): 81198039000
+
+1 row selected. (0.028000 sec) Committed. (0.000000 sec) 

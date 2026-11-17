@@ -1,0 +1,15 @@
+2026-11-17T18:46:52.520Z p66c trial lane=p66c fault=drop hold=150 watch=600 intervention=copylogdb writer=bulk image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T18:54:14.026Z p66c formed
+2026-11-17T18:55:16.129Z p66c heartbeat stop on ha-0: rc=0 @ cubrid heartbeat stop ++ cubrid heartbeat stop: success 
+2026-11-17T18:55:18.338Z p66c ha-1 master/active
+2026-11-17T18:55:18.542Z p66c ha-1 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+2026-11-17T18:55:27.115Z p66c create table t on ha-1: Execute OK. (5.607954 sec) Committed. (2.847976 sec)  
+2026-11-17T18:55:46.715Z p66c heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T18:55:46.803Z p66c ha-0 slave/standby
+2026-11-17T18:56:16.806Z p66c writer started on ha-1
+2026-11-17T18:56:37.942Z p66c snapshot precut
+2026-11-17T18:56:39.396Z p66c cut issued (drop) ha-0=192.168.96.2 ha-1=192.168.96.3 ha-2=192.168.96.4
+2026-11-17T18:57:54.484Z p66c writer stopped
+2026-11-17T18:58:40.043Z p66c snapshot cut
+2026-11-17T18:59:09.359Z p66c healed
+2026-11-17T19:00:09.771Z p66c snapshot heal+60

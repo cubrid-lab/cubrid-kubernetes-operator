@@ -1,0 +1,19 @@
+## 2026-11-17T18:59:09.044Z p66c-ha-0
+Chain INPUT (policy ACCEPT 1472 packets, 107456 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     316   185656 DROP       all  --  *      *       192.168.96.3         0.0.0.0/0            /* poc66 */
+     316   185656 DROP       all  --  *      *       192.168.96.4         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+## 2026-11-17T18:59:09.222Z p66c-ha-1
+Chain INPUT (policy ACCEPT 4191 packets, 8557062 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     429   232332 DROP       all  --  *      *       192.168.96.2         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+## 2026-11-17T18:59:09.283Z p66c-ha-2
+Chain INPUT (policy ACCEPT 4650 packets, 44419186 bytes)
+    pkts      bytes target     prot opt in     out     source               destination         
+     429   232332 DROP       all  --  *      *       192.168.96.2         0.0.0.0/0            /* poc66 */
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
