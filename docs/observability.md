@@ -599,6 +599,24 @@ section 8, "Return to service"):
 
 #### Manual release
 
+Grant `patch` and `update` on `cubridclusters` only to identities
+trusted to authorize release and return to service. The example
+[`cubridcluster-editor-role`](../config/rbac/cubridcluster_editor_role.yaml)
+grants both verbs for the entire resource, including the
+`database.cubrid.io/release-write-quarantine` and
+`database.cubrid.io/return-to-service` annotations. The controller checks
+the release token and HA evidence. Kubernetes authorizes the write against
+the resource and verb. Use the API audit log to identify the actor.
+See [Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/).
+
+For installations that delegate ordinary spec changes, evaluate a separate
+admission policy that authorizes changes to those annotation keys. Before
+enabling it, verify that ordinary edits and the controller's annotation
+cleanup still work, and that the check covers create, patch and update
+flows including server-side apply. Exercise the authorized emergency release
+path with the policy enabled. See
+[Kubernetes ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/).
+
 A manual release is a risk acceptance, not a fence the Operator verifies
 (ADR-0005, section 8). Before it, the administrator obtains independent
 evidence that the recorded members (`status.writeQuarantine.members`) were
