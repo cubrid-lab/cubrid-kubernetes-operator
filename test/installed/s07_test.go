@@ -116,6 +116,14 @@ func TestS07PickTarget(t *testing.T) {
 		{s07SlaveIsolated, m1, []string{m0, m2}, m1, m2, ""},
 		{s07SlaveIsolated, m2, []string{m0, m1}, m2, "", "control case cannot run"},
 		{s07SlaveIsolated, m1, []string{m0, m2}, m2, "", "control case cannot run"},
+		// A member that outranks the master is cut off, the highest-ranked
+		// one when two do, so that ADR-0005 section 8's rule for an
+		// unverified member of higher rank applies; the master must be the
+		// last resolved primary, so the rank alone makes the trigger.
+		{s07HigherRankIsolated, m1, []string{m0, m2}, m1, m0, ""},
+		{s07HigherRankIsolated, m2, []string{m1, m0}, m2, m0, ""},
+		{s07HigherRankIsolated, m1, []string{m0, m2}, m0, "", "not the master"},
+		{s07HigherRankIsolated, m0, []string{m1, m2}, m0, "", "no slave outranks the master"},
 	}
 	for _, tc := range tests {
 		got, err := s07PickTarget(tc.variant, tc.master, tc.slaves, tc.lrp)
@@ -123,6 +131,98 @@ func TestS07PickTarget(t *testing.T) {
 			t.Errorf("%s with master %s, slaves %v, last resolved %q: %q, %v; want %q, %q", tc.variant, tc.master,
 				tc.slaves, tc.lrp, got, err, tc.want, tc.err)
 		}
+	}
+}
+
+// When the master is the first member no slave outranks it, and the run must
+// move the master before it can pick a member to cut off; any other refusal
+// blocks the variant.
+func TestS07PickTargetAsksToMoveTheMasterOffTheFirstMember(t *testing.T) {
+	_, err := s07PickTarget(s07HigherRankIsolated, m0, []string{m1, m2}, m0)
+	if !errors.Is(err, errS07MasterOnFirstMember) {
+		t.Errorf("master on the first member: %v, want errS07MasterOnFirstMember", err)
+	}
+	_, err = s07PickTarget(s07HigherRankIsolated, m1, []string{m0, m2}, m0)
+	if err == nil || errors.Is(err, errS07MasterOnFirstMember) {
+		t.Errorf("last resolved primary not the master: %v, want a refusal that moves nothing", err)
+	}
+}
+
+// The cut of a member that outranks the master is its own fault, variant and
+// lane, and it is not the control: a trigger is expected.
+func TestS07HigherRankIsolatedIsATriggerVariant(t *testing.T) {
+	cfg := HAConfig{Fault: FaultPartitionHigherRankIsolated}
+	if !cfg.partitionFault() || s07Variant(cfg.Fault) != s07HigherRankIsolated {
+		t.Fatalf("partition %v, variant %q", cfg.partitionFault(), s07Variant(cfg.Fault))
+	}
+	lane, requirement, _ := faultLane(cfg.Fault)
+	if lane != "lab-installed-ha-s07-higher-rank-isolated" || requirement.Variant != s07HigherRankIsolated {
+		t.Errorf("lane %q, requirement %+v", lane, requirement)
+	}
+	for _, fault := range []string{FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated} {
+		if got := s07Variant(fault); got == s07HigherRankIsolated {
+			t.Errorf("%s now records under %s", fault, got)
+		}
+	}
+}
+
+// s07MoveFixture is a formed cluster whose master is the first member. When
+// the run deletes a member Pod the fake API server checks the deletion's UID
+// precondition and that it is graceful, replaces the Pod with a new UID, and
+// calls failover, which plays what CUBRID and the Operator then do.
+func s07MoveFixture(t *testing.T, failover func(f *haFixture, c client.WithWatch)) (*haRun, *haFixture) {
+	t.Helper()
+	cfg := testHAConfig(t)
+	cfg.Poll = 5 * time.Millisecond
+	f := newHAFixture(t, cfg)
+	f.primary = m0
+	f.roles = map[string]string{m0: roleMaster, m1: roleSlave, m2: roleSlave}
+	f.podDeleted = func(ctx context.Context, c client.WithWatch, pod *corev1.Pod, opts ...client.DeleteOption) error {
+		current := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+			return err
+		}
+		options := (&client.DeleteOptions{}).ApplyOptions(opts)
+		if options.Preconditions == nil || options.Preconditions.UID == nil ||
+			*options.Preconditions.UID != current.UID {
+			t.Errorf("the master Pod %s was deleted without its UID precondition", pod.Name)
+		}
+		if options.GracePeriodSeconds != nil {
+			t.Errorf("the master Pod %s was deleted with a grace period of %d s, not gracefully", pod.Name,
+				*options.GracePeriodSeconds)
+		}
+		if err := c.Delete(ctx, current); err != nil {
+			return err
+		}
+		replacement := current.DeepCopy()
+		replacement.ResourceVersion, replacement.UID = "", current.UID+"-replaced"
+		if err := c.Create(ctx, replacement); err != nil {
+			return err
+		}
+		failover(f, c)
+		return nil
+	}
+	h := &haRun{Runner: &f.runner, cfg: cfg, members: testS07Members,
+		guard: func(context.Context) error { return nil }}
+	if _, err := h.createCluster(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	setS07Primary(t, f, f.store, m0)
+	return h, f
+}
+
+// setS07Primary writes status.currentPrimary and lastResolvedPrimary as the
+// Operator would once it resolved primary.
+func setS07Primary(t *testing.T, f *haFixture, c client.Client, primary string) {
+	t.Helper()
+	cluster := &databasev1alpha1.CubridCluster{}
+	ctx := context.Background()
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Status.CurrentPrimary, cluster.Status.LastResolvedPrimary = primary, primary
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
 	}
 }
 

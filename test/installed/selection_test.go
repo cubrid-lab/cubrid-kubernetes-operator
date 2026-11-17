@@ -49,6 +49,9 @@ var legacyHAOptions = map[string]struct {
 	"installed-ha-network-partition-slave-isolated": {false, func(c *HAConfig) {
 		c.Fault = FaultPartitionSlaveIsolated
 	}},
+	"installed-ha-network-partition-higher-rank-isolated": {false, func(c *HAConfig) {
+		c.Fault = FaultPartitionHigherRankIsolated
+	}},
 	"installed-backup-complete": {true, func(*HAConfig) {}},
 	"installed-backup-missing-destination": {true, func(c *HAConfig) {
 		c.BackupMissingDestination = true
