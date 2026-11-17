@@ -67,7 +67,9 @@ that GitHub schedules its CI. It does not qualify breaking-change changelog
 rendering, draft/tag discovery, retries, duplicate-version refusal, artifact
 integrity, candidate freeze, database scenarios or publication. Those require
 their own evidence under [issue #124](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/124)
-and the [release candidate procedure](release-candidate-review.md).
+and the [release candidate procedure](release-candidate-review.md). The
+read-only check that refuses an existing version and lets a rerun continue its
+own draft is described in [release-version-check.md](release-version-check.md).
 
 ## Pinned upstream sources
 
