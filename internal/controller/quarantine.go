@@ -1258,7 +1258,9 @@ func (r *CubridClusterReconciler) writesHeld(cluster *databasev1alpha1.CubridClu
 
 // scaleUpHeld reports whether this pass keeps the read-write Brokers from
 // scaling up, without stopping running ones: it could not read the members'
-// Pods, so no quarantine could be decided, but none is known either.
+// Pods, so no quarantine could be decided, but none is known either. A Node
+// that could not be read does not hold the scale-up: the quarantine is
+// decided without fences, which is never less restrictive.
 func (r *CubridClusterReconciler) scaleUpHeld(cluster *databasev1alpha1.CubridCluster) bool {
 	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
 	return ok && report.(*reconcileReport).noScaleUp
@@ -1525,8 +1527,7 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 // probes verifies nothing in this pass. When either read failed, only the
 // rule of two active masters is applied and the read-write Brokers are not
 // scaled up in the pass; running ones keep running. A Node that could not be
-// read fences nothing and does not scale the Brokers up, but every rule is
-// applied. A failure leaves the quarantine in the status as it
+// read fences nothing, and every rule is applied. A failure leaves the quarantine in the status as it
 // was, so that the read-write Brokers stay at zero, and is returned for a
 // retry.
 func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -1554,12 +1555,18 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		nodes, fences, refused, nodeErr = r.outOfServiceFences(ctx, cluster, members, obs, ids)
 		r.reportRefusedTaints(ctx, cluster, refused)
 	}
-	if failed := errors.Join(unknown, nodeErr); failed != nil {
-		logf.FromContext(ctx).Error(failed, "Did not scale the read-write Brokers up: the members' Pods or Nodes could not be read")
+	if unknown != nil {
+		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods could not be read")
 		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 			report.(*reconcileReport).noScaleUp = true
 		}
-		steps.err = fmt.Errorf("read the members' Pods or Nodes for the write quarantine: %w", failed)
+		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
+	}
+	if nodeErr != nil {
+		// Without the fences the decision is never less restrictive than
+		// with them, so the read-write Brokers may follow it.
+		logf.FromContext(ctx).Error(nodeErr, "Fenced no member by an out-of-service taint: a Node could not be read")
+		steps.err = fmt.Errorf("read the members' Nodes for the write quarantine: %w", nodeErr)
 	}
 	state := r.quarantineState(cluster)
 	request, ignored := returnRequest(cluster, members)
@@ -1671,7 +1678,8 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 	}
 	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
-		d.Quarantine != nil || unknown != nil || nodeErr != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
+		// steps.err holds only a failed Pod or Node read here.
+		d.Quarantine != nil || steps.err != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
 	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
 		steps.err = errors.Join(steps.err, err)
 	}

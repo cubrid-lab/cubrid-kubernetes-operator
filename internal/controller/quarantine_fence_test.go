@@ -29,8 +29,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -283,10 +285,15 @@ func TestOutOfServiceFences(t *testing.T) {
 				return c.Get(ctx, key, obj, opts...)
 			}}).Build()
 		r := &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}
-		_, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0}, noAnswer,
-			map[string]memberIdentity{q0: {}})
-		if err == nil || !strings.Contains(err.Error(), node0) || len(fences) != 0 {
+		// The members after the failed read keep their nodes.
+		nodes, fences, _, err := r.outOfServiceFences(context.Background(), cluster, []string{q0, q1},
+			map[string]RoleObservation{q0: noAnswerAt(testNow), q1: noAnswerAt(testNow)},
+			map[string]memberIdentity{q0: {}, q1: {PodUID: uid1, NodeName: node9}})
+		if err == nil || !strings.Contains(err.Error(), node0) || fences != nil {
 			t.Fatalf("fences %+v, error %v; want an error naming %s and no fence", fences, err, node0)
+		}
+		if nodes[q0] != node0 || nodes[q1] != node9 {
+			t.Errorf("nodes = %v, want %s on %s and %s on %s", nodes, q0, node0, q1, node9)
 		}
 	})
 }
@@ -446,34 +453,88 @@ func TestOutOfServiceFencesUnseenLaterPodEndsTheMapping(t *testing.T) {
 	}
 }
 
-// nodeLookupCluster is a cluster whose members q0, q1 and q2 run on node0,
-// which carries the out-of-service taint, with a client that fails every Node
-// read with nodeErr and every Pod read with podErr, when set.
-func nodeLookupCluster(t *testing.T, nodeErr, podErr error) (*CubridClusterReconciler, *databasev1alpha1.CubridCluster) {
+// nodeLookup is a cluster whose members q0, q1 and q2 run on node0, which
+// carries the out-of-service taint, and a reconciler whose client fails every
+// Node read with nodeErr and every Pod read with podErr, when set. The
+// cluster is stored in the client too, for the manual release.
+type nodeLookup struct {
+	t       *testing.T
+	r       *CubridClusterReconciler
+	c       client.Client
+	cluster *databasev1alpha1.CubridCluster
+	nodeErr error
+	podErr  error
+	report  *reconcileReport
+}
+
+func newNodeLookup(t *testing.T) *nodeLookup {
 	t.Helper()
-	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns", UID: "qc-uid"}}
-	objs := make([]client.Object, 0, 4)
-	objs = append(objs, tainted())
+	l := &nodeLookup{t: t,
+		cluster: &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: "qc", Namespace: "ns", UID: "qc-uid"}}}
+	sch := runtime.NewScheme()
+	if err := errors.Join(clientgoscheme.AddToScheme(sch), databasev1alpha1.AddToScheme(sch)); err != nil {
+		t.Fatal(err)
+	}
+	objs := make([]client.Object, 0, 5)
+	objs = append(objs, tainted(), l.cluster.DeepCopy())
 	for _, m := range [][2]string{{q0, uid0}, {q1, uid1}, {q2, uid2}} {
 		objs = append(objs, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: m[0], Namespace: "ns", UID: types.UID(m[1])},
 			Spec: corev1.PodSpec{NodeName: node0}})
 	}
-	c := fake.NewClientBuilder().WithObjects(objs...).
+	l.c = fake.NewClientBuilder().WithScheme(sch).WithObjects(objs...).
 		WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
 			obj client.Object, opts ...client.GetOption) error {
 			switch obj.(type) {
 			case *corev1.Node:
-				if nodeErr != nil {
-					return nodeErr
+				if l.nodeErr != nil {
+					return l.nodeErr
 				}
 			case *corev1.Pod:
-				if podErr != nil {
-					return podErr
+				if l.podErr != nil {
+					return l.podErr
 				}
 			}
 			return c.Get(ctx, key, obj, opts...)
 		}}).Build()
-	return &CubridClusterReconciler{Client: c, APIReader: c, Clock: func() time.Time { return testNow }}, cluster
+	l.r = &CubridClusterReconciler{Client: l.c, APIReader: l.c, Clock: func() time.Time { return testNow }}
+	return l
+}
+
+// pass reconciles the write quarantine at now, with q0 silent beside q1 as
+// the only active master, under a fresh reconcile report, and stores the
+// resulting status as the API server would.
+func (l *nodeLookup) pass(now time.Time) stepResult {
+	l.t.Helper()
+	l.report = &reconcileReport{before: l.cluster.Status.DeepCopy()}
+	l.r.reports.Store(client.ObjectKeyFromObject(l.cluster), l.report)
+	before, beforeErr := l.r.memberIdentities(context.Background(), l.cluster, quarantineMembers)
+	steps := l.r.reconcileWriteQuarantine(context.Background(), l.cluster, quarantineMembers, cutOffBesideQ1(now),
+		now, q1, before, beforeErr)
+	stored := &databasev1alpha1.CubridCluster{}
+	if err := l.c.Get(context.Background(), client.ObjectKeyFromObject(l.cluster), stored); err != nil {
+		l.t.Fatal(err)
+	}
+	stored.Status = *l.cluster.Status.DeepCopy()
+	if err := l.c.Update(context.Background(), stored); err != nil {
+		l.t.Fatal(err)
+	}
+	if l.report.consumedReleaseToken != "" {
+		// As writeStatus does once the release is written.
+		l.r.ownExemption(l.cluster, l.report.consumedReleaseToken)
+	}
+	return steps
+}
+
+// quarantinedQ0 fails the pass unless a WriteQuarantinedMemberUnverified
+// quarantine naming q0 is in force.
+func (l *nodeLookup) quarantinedQ0() *databasev1alpha1.WriteQuarantine {
+	l.t.Helper()
+	q := l.cluster.Status.WriteQuarantine
+	if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified ||
+		!slices.Contains(memberNamesOf(q.Members), q0) {
+		l.t.Fatalf("quarantine = %+v, want %s naming %s", q, databasev1alpha1.WriteQuarantinedMemberUnverified, q0)
+	}
+	return q
 }
 
 // A Node that could not be read is no evidence that the member on it is
@@ -482,46 +543,138 @@ func nodeLookupCluster(t *testing.T, nodeErr, podErr error) (*CubridClusterRecon
 // cannot be read (Forbidden when the Operator may not read Nodes, as in a
 // deployment limited to its namespaces; NotFound; a timeout), q0 is
 // unverified and the write quarantine starts (ADR-0005, section 8, rule 2).
-// No fence is recorded, and a failed read is still returned for a retry.
+// No fence is recorded. A failed read is returned and retried, but does not
+// hold the read-write Brokers' scale-up: the decision without fences is never
+// less restrictive than with them.
 func TestQuarantineStartsWhenTheNodeCannotBeRead(t *testing.T) {
 	nodes := schema.GroupResource{Resource: "nodes"}
+	forbidden := apierrors.NewForbidden(nodes, node0, errors.New("the Operator may not read Nodes"))
 	for name, nodeErr := range map[string]error{
-		"Forbidden": apierrors.NewForbidden(nodes, node0, errors.New("the Operator may not read Nodes")),
+		"Forbidden": forbidden,
 		"NotFound":  apierrors.NewNotFound(nodes, node0),
 		"timeout":   apierrors.NewTimeoutError("the Node read timed out", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, cluster := nodeLookupCluster(t, nodeErr, nil)
-			before, err := r.memberIdentities(context.Background(), cluster, quarantineMembers)
-			if err != nil {
-				t.Fatal(err)
+			l := newNodeLookup(t)
+			l.nodeErr = nodeErr
+			steps := l.pass(testNow)
+			l.quarantinedQ0()
+			if len(l.cluster.Status.MemberFences) != 0 {
+				t.Errorf("member fences = %+v, want none from a Node that could not be read", l.cluster.Status.MemberFences)
 			}
-			steps := r.reconcileWriteQuarantine(context.Background(), cluster, quarantineMembers, cutOffBesideQ1(testNow),
-				testNow, "", before, nil)
-			q := cluster.Status.WriteQuarantine
-			if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified ||
-				!slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool { return m.Name == q0 }) {
-				t.Fatalf("quarantine = %+v, want %s naming %s", q, databasev1alpha1.WriteQuarantinedMemberUnverified, q0)
-			}
-			if len(cluster.Status.MemberFences) != 0 {
-				t.Errorf("member fences = %+v, want none from a Node that could not be read", cluster.Status.MemberFences)
-			}
-			if !apierrors.IsNotFound(nodeErr) && steps.err == nil {
+			switch {
+			case apierrors.IsNotFound(nodeErr) && steps.err != nil:
+				t.Errorf("error %v for a Node that does not exist, want none", steps.err)
+			case !apierrors.IsNotFound(nodeErr) && steps.err == nil:
 				t.Errorf("the failed Node read was not returned for a retry")
+			}
+			if steps.retry == 0 {
+				t.Errorf("no retry with a quarantine in force")
+			}
+			if l.report.noScaleUp {
+				t.Errorf("a Node read held the read-write Brokers' scale-up")
 			}
 		})
 	}
 
-	// When the members' Pods themselves cannot be read, their identities are
-	// unknown: only the rule of two active masters applies, and the failure
-	// is returned.
-	t.Run("the Pods cannot be read", func(t *testing.T) {
-		r, cluster := nodeLookupCluster(t, nil, errors.New("the API server is not reachable"))
-		steps := r.reconcileWriteQuarantine(context.Background(), cluster, quarantineMembers, cutOffBesideQ1(testNow),
-			testNow, "", nil, nil)
-		if cluster.Status.WriteQuarantine != nil || steps.err == nil {
-			t.Fatalf("quarantine = %+v, error %v; want no quarantine from rule 2 and an error",
-				cluster.Status.WriteQuarantine, steps.err)
+	// A quarantine in force whose member q0 counts as fenced: a pass that
+	// cannot read the Node keeps the quarantine, starts its release check
+	// over, and ends the fence record.
+	t.Run("a fenced member of a quarantine in force", func(t *testing.T) {
+		l := newNodeLookup(t)
+		l.nodeErr = forbidden
+		l.pass(testNow)
+		l.nodeErr = nil
+		t1 := testNow.Add(3 * time.Second)
+		l.pass(t1)
+		if q := l.quarantinedQ0(); q.ReleaseCheckSince == nil || len(l.cluster.Status.MemberFences) != 1 {
+			t.Fatalf("with the taint seen: quarantine %+v, fences %+v; want a release check and the fence of %s",
+				q, l.cluster.Status.MemberFences, q0)
+		}
+		l.nodeErr = forbidden
+		t2 := t1.Add(3 * time.Second)
+		if steps := l.pass(t2); steps.err == nil || l.report.noScaleUp {
+			t.Errorf("error %v, scale-up held %t; want the error and no hold", steps.err, l.report.noScaleUp)
+		}
+		if q := l.quarantinedQ0(); q.ReleaseCheckSince != nil {
+			t.Errorf("release check since %v kept without the Node", q.ReleaseCheckSince)
+		}
+		if len(l.cluster.Status.MemberFences) != 0 {
+			t.Errorf("member fences = %+v kept without the Node", l.cluster.Status.MemberFences)
 		}
 	})
+
+	// After a release on the out-of-service taint, a pass that cannot read
+	// the Node no longer sees the fence: q0 is unverified again and a new
+	// quarantine starts (rule 2).
+	t.Run("after a release on the taint", func(t *testing.T) {
+		l := newNodeLookup(t)
+		l.nodeErr = forbidden
+		l.pass(testNow)
+		l.nodeErr = nil
+		t1 := testNow.Add(3 * time.Second)
+		l.pass(t1)
+		t2 := t1.Add(quarantineReleaseInterval)
+		l.pass(t2)
+		if rel := l.cluster.Status.LastWriteQuarantineRelease; l.cluster.Status.WriteQuarantine != nil || rel == nil ||
+			rel.Method != databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint {
+			t.Fatalf("quarantine %+v, release %+v; want a release on the taint", l.cluster.Status.WriteQuarantine, rel)
+		}
+		released := l.cluster.Status.LastWriteQuarantineRelease.GenerationID
+		l.nodeErr = forbidden
+		l.pass(t2.Add(3 * time.Second))
+		if q := l.quarantinedQ0(); q.GenerationID == released {
+			t.Errorf("quarantine generation %s, want a new one after the release", q.GenerationID)
+		}
+	})
+
+	// When the members' Pods themselves cannot be read, their identities are
+	// unknown: only the rule of two active masters applies, the failure is
+	// returned, and the read-write Brokers are not scaled up.
+	t.Run("the Pods cannot be read", func(t *testing.T) {
+		l := newNodeLookup(t)
+		l.podErr = errors.New("the API server is not reachable")
+		steps := l.pass(testNow)
+		if l.cluster.Status.WriteQuarantine != nil || steps.err == nil || !l.report.noScaleUp {
+			t.Fatalf("quarantine = %+v, error %v, scale-up held %t; want no quarantine from rule 2, an error and a hold",
+				l.cluster.Status.WriteQuarantine, steps.err, l.report.noScaleUp)
+		}
+	})
+}
+
+// A manual release in a pass that cannot read the Node is accepted, and the
+// read-write Brokers may start again: the scale-up is not held while the
+// exempt member stays silent and the Node stays unreadable, as in a
+// deployment that may not read Nodes.
+func TestQuarantineManualReleaseWhenTheNodeCannotBeRead(t *testing.T) {
+	l := newNodeLookup(t)
+	l.nodeErr = apierrors.NewForbidden(schema.GroupResource{Resource: "nodes"}, node0,
+		errors.New("the Operator may not read Nodes"))
+	l.pass(testNow)
+	token := l.quarantinedQ0().ReleaseToken
+	stored := &databasev1alpha1.CubridCluster{}
+	if err := l.c.Get(context.Background(), client.ObjectKeyFromObject(l.cluster), stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Annotations = map[string]string{releaseWriteQuarantineAnnotation: token}
+	if err := l.c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	l.cluster.Annotations = map[string]string{releaseWriteQuarantineAnnotation: token}
+	t1 := testNow.Add(3 * time.Second)
+	l.pass(t1)
+	rel := l.cluster.Status.LastWriteQuarantineRelease
+	if l.cluster.Status.WriteQuarantine != nil || rel == nil || rel.Method != databasev1alpha1.WriteQuarantineReleasedManually {
+		t.Fatalf("quarantine %+v, release %+v; want a manual release", l.cluster.Status.WriteQuarantine, rel)
+	}
+	if l.report.consumedReleaseToken != token || l.report.noScaleUp {
+		t.Errorf("consumed token %q, scale-up held %t; want %q consumed and no hold",
+			l.report.consumedReleaseToken, l.report.noScaleUp, token)
+	}
+	l.cluster.Annotations = nil
+	l.pass(t1.Add(3 * time.Second))
+	if l.cluster.Status.WriteQuarantine != nil || l.report.noScaleUp {
+		t.Errorf("quarantine %+v, scale-up held %t after the manual release; want neither",
+			l.cluster.Status.WriteQuarantine, l.report.noScaleUp)
+	}
 }

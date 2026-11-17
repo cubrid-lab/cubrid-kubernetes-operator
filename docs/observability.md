@@ -502,14 +502,19 @@ partitioned node can let a second database process run.
   member, the node and the answer (once per member and message).
 - **A taint without `timeAdded` is refused** the same way: without it a taint
   removed and added again between two passes cannot be told apart.
-  `kubectl taint` sets `timeAdded` on a `NoExecute` taint. A Node that cannot
-  be read (Forbidden, because the Operator may not read Nodes, or a timeout)
-  fences nothing in that pass and ends the fence records, but the members'
-  Pods were read, so every rule still applies: a silent member ranked above
-  the only active master stays unverified and starts a quarantine. The
-  read-write Brokers are not scaled up in that pass, and the read is retried.
-  A Node that does not exist fences nothing. Only Pods that cannot be read
-  limit the pass to the rule of two active masters.
+  `kubectl taint` sets `timeAdded` on a `NoExecute` taint.
+- **A Node that cannot be read** (Forbidden, because the Operator may not read
+  Nodes, or a timeout) is no evidence of a fence: no member is fenced in that
+  pass and the fence records end. The members' Pods were read, so every rule
+  still applies, and the decision is never less restrictive than with the
+  taint. A silent member ranked above the only active master stays unverified:
+  it starts a new quarantine, also right after a release on the taint, or
+  revises the quarantine in force, which replaces its release token. A release
+  check on the taint starts over. The read is retried, and the read-write
+  Brokers follow the decision as in any other pass. A Node that does not exist
+  fences nothing and is not an error. Only Pods that cannot be read limit the
+  pass to the rule of two active masters and keep the read-write Brokers from
+  scaling up.
 - **The fence record.** `status.memberFences` keeps, for each member counted as
   fenced, the `nodeName`, since when the taint has been seen without a break
   (`since`, rounded up to the second) and the taint's `timeAdded`
