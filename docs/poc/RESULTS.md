@@ -3137,11 +3137,15 @@ configuration `generateBrokerConf("rw", 5)` renders (`SQL_LOG_MAX_SIZE=4096`,
 statements failing with `-670`, 50,000 through `csql` and 50,000 through the
 Broker, drove the files past their limits several times. The server's error
 log rotated at 10 MiB, its `.bak` 10,485,844 to 10,486,073 bytes; the CAS
-error log at 4 MiB, `.bak` 4,194,390 and 4,194,412 bytes; the CAS SQL and
-slow-query logs at 4,096,000 bytes, `.bak` 4,097,028 to 4,097,140 bytes, so
-`SQL_LOG_MAX_SIZE` counts in units of 1,000 bytes (the question left open
-above). Each kept one `.bak` and no other copy, and passed its limit by at most
-1,140 bytes before rotating. Not observed here: `cub_master`, the copier, the
+error log at 4 MiB, `.bak` 4,194,390 and 4,194,412 bytes; each of these two
+passed its limit by at most one more message. The CAS SQL and slow-query logs
+rotated once the file passed about 4,097,000 bytes, `.bak` 4,097,028 to
+4,097,140 bytes: 1,028 to 1,140 bytes past 4,096 × 1,000, more than one entry,
+so whether the engine compares whole kilobytes is not known. All of them
+stayed below 4,096 × 1,024 bytes, so `SQL_LOG_MAX_SIZE` counts in units of
+1,000 bytes (the question left open above). Each kept one `.bak` and no other
+copy; the server was sampled only through its `csql` phase and in the final
+listing. Not observed here: `cub_master`, the copier, the
 applier and `cubrid_utility.log` at 10 MiB, an HA member, a Broker Pod's
 emptyDir limit, and anything on Kubernetes.
 

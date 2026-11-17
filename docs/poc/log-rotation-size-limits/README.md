@@ -47,7 +47,7 @@ docs/poc/log-rotation-size-limits/cleanup.sh
 `run.sh` sends 25 batches of 2,000 `INSERT`s that fail with a unique-key violation (`-670`): first
 through `csql` to the server, then through the Broker with `broker_tester`. Each failure adds
 about 670 bytes to the server's error log; through the Broker, also about 275 bytes to the CAS
-error log, 560 bytes to its SQL log and 170 bytes to its slow-query log. After every batch it
+error log, 568 bytes to its SQL log and 173 bytes to its slow-query log. After every batch it
 lists every regular file under `$CUBRID/log` with its size (`out/10-server.txt`,
 `out/20-broker.txt`). It fails unless the server's error log, a CAS error log and a CAS SQL log each
 rotated at least twice, and unless no file name ever had more than one rotated copy.
@@ -59,25 +59,43 @@ From `out/30-summary.txt` and the final listings `out/11-server-final.txt` and
 
 | File | Limit | Rotations seen | Rotated copies | Size of the `.bak` |
 |---|---|---|---|---|
-| `server/appdb.err` | `error_log_size` 10,485,760 B | 3 during the server phase, more during the Broker phase | one `.bak` | 10,485,844 to 10,485,972 B in the samples; 10,486,073 B at the end |
+| `server/appdb.err` | `error_log_size` 10,485,760 B | 3 during the server phase, at least one more during the Broker phase (not sampled) | one `.bak` | 10,485,844 to 10,485,972 B in the samples; 10,486,073 B at the end |
 | `broker/error_log/rw_1.err` | `error_log_size` 4,194,304 B | 3 | one `.bak` | 4,194,390 and 4,194,412 B |
 | `broker/sql_log/rw_1.sql.log` | `SQL_LOG_MAX_SIZE=4096` | 6 | one `.bak` | 4,097,028 to 4,097,140 B |
 | `broker/sql_log/rw_1.slow.log` | `SQL_LOG_MAX_SIZE=4096` | 2 | one `.bak` | 4,097,061 and 4,097,103 B |
 
-- Each file was moved to `<name>.bak` once it passed its limit, by at most one more message: up
-  to 313 bytes for the server's error log, 108 bytes for the CAS error log, 1,140 bytes for the
-  SQL log. A later rotation replaced the `.bak`; no other copy appeared.
-- `SQL_LOG_MAX_SIZE` counts in units of 1,000 bytes: `4096` rotated the SQL and slow-query logs
-  just after 4,096,000 bytes, about 97 KB before 4 MiB.
+- The server's error log and the CAS error log were moved to `<name>.bak` once they passed
+  their limit, by at most one more message: up to 212 bytes in the server's samples (313 bytes in
+  the final listing, below) and 108 bytes for the CAS error log. A later rotation replaced the
+  `.bak`; no other copy appeared.
+- The CAS SQL and slow-query logs rotated once the file passed about 4,097,000 bytes: their
+  `.bak` files were 1,028 to 1,140 bytes past 4,096 × 1,000, more than one entry (about 568
+  bytes for the SQL log, 173 bytes for the slow-query log), and 28 to 140 bytes past 4,097,000.
+  POC-35's `.bak` sizes at `SQL_LOG_MAX_SIZE=100` (101,106 to 101,464 bytes) fit the same
+  pattern. Whether the engine compares whole kilobytes, or exactly where the threshold lies, is
+  not known.
+- `SQL_LOG_MAX_SIZE` counts in units of 1,000 bytes: every SQL and slow-query `.bak` was at most
+  4,097,140 bytes, below 4,096 × 1,024 = 4,194,304 bytes, which a 1,024-byte unit would have
+  required them to pass; the gap between the two readings is 98,304 bytes.
 - The server's error log went on rotating during the Broker phase, since the Broker's failing
-  statements reached the same server. The final listing shows its `.bak` at 10,486,073 bytes, 313
-  bytes over the limit.
+  statements reached the same server: at least one more rotation, since its `.bak` changed. The
+  server was not sampled in that phase, so the one-copy check covers it there only through the
+  final listing, which shows one `.bak` of 10,486,073 bytes, 313 bytes over the limit.
 - Largest total of `$CUBRID/log` in any sample: 20,535,512 bytes on the server, 22,453,837 bytes
-  on the Broker, where only one CAS (`rw_1`) received the statements. For one CAS that is within
-  the 25 MiB per CAS that `brokerLogSizeLimit` (`internal/controller/enginelogs.go`) allows for.
+  on the Broker, where only one CAS (`rw_1`) received the statements. With the largest `.bak`
+  sizes seen, the worst case for one CAS is an error log and its `.bak` (2 × 4,194,412 bytes)
+  plus the SQL and slow-query logs and their `.bak` files (4 × 4,097,140 bytes): about 24.8 MB,
+  23.7 MiB, within the 25 MiB per CAS that `brokerLogSizeLimit`
+  (`internal/controller/enginelogs.go`) allows for. That is derived from the observed sizes, not
+  measured as one total.
 - After rotation the server's `appdb.err` and `appdb.err.bak` had mode `0600`, while
-  `appdb.access` kept `0664`; a reader running as `cubrid`, as `kubectl exec` into the container
-  does, can still read them.
+  `appdb.access` kept `0664`. In a Pod the containers run as UID 1000, `cubrid` (`RunAsUser` in
+  `internal/controller/broker.go` and `internal/controller/cubridcluster_controller.go`), so a
+  `kubectl exec` into the container should still read them; that is inferred from the Pod
+  specification, not observed in this experiment.
+- In `out/30-summary.txt`, the `limit=` printed for the SQL and slow-query logs is 4,194,304,
+  the 1,024-byte reading the results above reject; it was only a comparison value. `run.sh` now
+  prints 4,096,000 for future runs; the recorded output is left as it was.
 
 ## What this does not show
 

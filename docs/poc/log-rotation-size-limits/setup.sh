@@ -7,7 +7,7 @@ set -euo pipefail
 . "$(dirname "$0")/env.sh"
 mkdir -p "$OUT"
 echo "start $(now)"
-docker image inspect --format 'image {{.Id}}' "$IMG"
+docker image inspect --format 'image {{.Id}} {{json .RepoDigests}}' "$IMG"
 docker network create --label poc=logrot "$NET" >/dev/null
 
 docker run -d --name "$SA" --hostname "$SA" --label poc=logrot --network "$NET" --entrypoint sleep \
