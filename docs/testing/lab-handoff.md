@@ -1,8 +1,10 @@
 # VM-lab campaign handoff and elapsed-time measurements
 
 This is an operational **measurement protocol**, not a queue implementation or
-permission to run a test. The shared VM lab has one campaign Lease and an
-external launcher reservation (see [lab runs](lab-runs.md)). Only one
+permission to run a test. The shared VM lab has one reservation, the
+`cubrid-lab/campaign` Lease, which `make test-lab` and the canonical campaign
+launcher both take and each refuses to start while the other holds it (see
+[lab runs](lab-runs.md)). Only one
 disruptive campaign may use it at a time. Namespace isolation is not
 sufficient for a VM stop, node drain or network fault.
 
@@ -14,7 +16,7 @@ sufficient for a VM stop, node drain or network fault.
 | Prepare pinned source/image identities and a proposed command | Yes, off-lab | A proposal is not an authorized dispatch |
 | Analyze already-retained, sanitized run evidence | Yes, off-lab | Do not read mutable live resources as historical evidence |
 | Read-only lab inventory | Only if the owner permits it | No reservation, readiness or capacity claim from a stale snapshot |
-| Inject faults, install/reconfigure Operator, create test namespaces, clean up | No | Approved target, external reservation and `make test-lab` Lease |
+| Inject faults, install/reconfigure Operator, create test namespaces, clean up | No | Approved target and the campaign Lease |
 | Run the release-candidate soak | No competing disruptive run | Preserve the full duration and data checks |
 
 ## Handoff for one approved scenario
@@ -27,14 +29,15 @@ sufficient for a VM stop, node drain or network fault.
    object-store credentials or private hostnames in public records.
 2. **Authorize and reserve.** A maintainer confirms the named target, fault
    authority, maintenance window, affected shared workloads, storage budget
-   and cleanup. The private launcher must reserve the lab; a prepared item
-   must not take the Lease merely because another run has finished.
+   and cleanup. A prepared item must not take the Lease merely because
+   another run has finished; it waits for that authorization.
 3. **Recheck live preflight.** Confirm the context marker, exact installed
    image identities, node placement, schedulable capacity, storage/CSI
    applicability, off-node client/evidence path and any scenario-specific
    authority. If any requirement is absent, report **blocked**, not passed.
-4. **Run exclusively.** Use the existing `make test-lab` entry point and
-   campaign Lease. Preserve fault confirmation, SQL transaction histories,
+4. **Run exclusively.** Use the existing `make test-lab` entry point, which
+   takes the campaign Lease (or the canonical launcher, which takes the same
+   Lease, never both). Preserve fault confirmation, SQL transaction histories,
    observed conditions and recovery timeline. No concurrent fault campaigns.
 5. **Finish safely.** Collect evidence and verify fault removal, namespace
    ownership and bounded cleanup **before** releasing the lab. On cancellation
@@ -44,7 +47,8 @@ sufficient for a VM stop, node drain or network fault.
    location, verify completeness and provenance, then evaluate pass/fail/
    blocked/not-run independently. This analysis can overlap the next
    separately authorized run, but must not change the prior verdict or
-   evidence. Send the result to its owning issue and #126.
+   evidence. Send the result to its owning issue, and to #126 when the run
+   qualifies a release candidate.
 
 ## Measure before optimizing
 
@@ -59,7 +63,7 @@ timestamp means *not measured*, not zero.
 | `source_sha`, `image_digests`, `lab_target` | Exact tested identity (redact private infrastructure) |
 | `prepared_at` | Inputs and test binary ready, off-lab |
 | `authorized_at` | Named target and disruptive action approved |
-| `reservation_requested_at`, `reservation_granted_at` | External reservation wait |
+| `lease_requested_at` | Authorized run starts waiting for the campaign Lease |
 | `lease_acquired_at`, `preflight_finished_at` | Exclusive preflight duration |
 | `fault_started_at`, `fault_removed_at` | Confirmed fault window, if applicable |
 | `cleanup_verified_at`, `lease_released_at` | Exclusive cleanup and lab occupancy |
@@ -68,7 +72,7 @@ timestamp means *not measured*, not zero.
 | `retries`, `retest_reason` | Avoid silently treating a rerun as the same attempt |
 
 Suggested derived durations (only when both timestamps exist):
-- **Reservation wait:** granted minus requested.
+- **Lease wait:** Lease acquired minus requested.
 - **Exclusive lab occupancy:** Lease released minus acquired.
 - **Exclusive preflight:** preflight finished minus Lease acquired.
 - **Cleanup:** cleanup verified minus fault removed (or test completion for a
