@@ -18,11 +18,13 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -169,14 +171,17 @@ type s15Record struct {
 	// CordonedByRun is set when this run made the node unschedulable, and
 	// only then does the run make it schedulable again: a node cordoned
 	// before the run is refused and left as it was.
-	CordonRequested bool          `json:"cordonRequested"`
-	CordonedByRun   bool          `json:"cordonedByRun"`
-	CordonedAt      *time.Time    `json:"cordonedAt,omitempty"`
-	Uncordoned      bool          `json:"uncordoned"`
-	UncordonedAt    *time.Time    `json:"uncordonedAt,omitempty"`
-	UncordonError   string        `json:"uncordonError,omitempty"`
-	UncordonedBy    string        `json:"uncordonedBy,omitempty"`
-	Evictions       []s15Eviction `json:"evictions"`
+	CordonRequested bool       `json:"cordonRequested"`
+	CordonedByRun   bool       `json:"cordonedByRun"`
+	CordonedAt      *time.Time `json:"cordonedAt,omitempty"`
+	Uncordoned      bool       `json:"uncordoned"`
+	UncordonedAt    *time.Time `json:"uncordonedAt,omitempty"`
+	UncordonError   string     `json:"uncordonError,omitempty"`
+	UncordonedBy    string     `json:"uncordonedBy,omitempty"`
+	// ForeignCordon is set when the run never cordoned the node and found it
+	// cordoned under another mark: not the run's cordon, left as it is.
+	ForeignCordon string        `json:"foreignCordon,omitempty"`
+	Evictions     []s15Eviction `json:"evictions"`
 	// ForeignEvictions are Pods the run was about to evict that are not its
 	// own; none was sent to the API, and any fails the result.
 	ForeignEvictions []string   `json:"foreignEvictionsRefused,omitempty"`
@@ -227,7 +232,13 @@ type s15Record struct {
 	NotAcknowledged *int               `json:"operationsNotAcknowledgedAfterFault,omitempty"`
 }
 
+// s15NoteMu serializes the observations, which the run's end can add while
+// a step of the drain is still running.
+var s15NoteMu sync.Mutex
+
 func (rec *s15Record) note(kind, detail string) {
+	s15NoteMu.Lock()
+	defer s15NoteMu.Unlock()
 	rec.Observed = append(rec.Observed, faults.Step{T: time.Now().UTC(), Kind: kind, Detail: detail})
 }
 
@@ -391,10 +402,12 @@ func (h *haRun) cordonNode(ctx context.Context, rec *s15Record) error {
 			return fmt.Errorf("node %s is cordoned, not by this run (%s=%q): the run leaves it as it is",
 				rec.TargetNode, drainOwnerAnnotation, node.Annotations[drainOwnerAnnotation])
 		}
+		// Held across the patch, so that no uncordon reads the node while
+		// the run's own cordon is in flight.
 		h.drainMu.Lock()
 		rec.CordonRequested = true
 		_ = h.writeJSON(s15File(rec.Variant, "record.json"), rec)
-		h.drainMu.Unlock()
+		h.writeCordon(rec)
 		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		node.Spec.Unschedulable = true
 		if node.Annotations == nil {
@@ -403,7 +416,10 @@ func (h *haRun) cordonNode(ctx context.Context, rec *s15Record) error {
 		node.Annotations[drainOwnerAnnotation] = owner
 		err := h.Client.Patch(ctx, node, patch)
 		if err == nil {
-			h.confirmCordon(rec)
+			h.confirmCordonLocked(rec)
+		}
+		h.drainMu.Unlock()
+		if err == nil {
 			return nil
 		}
 		if !apierrors.IsConflict(err) || conflicts >= cordonMaxConflicts {
@@ -415,9 +431,49 @@ func (h *haRun) cordonNode(ctx context.Context, rec *s15Record) error {
 func (h *haRun) confirmCordon(rec *s15Record) {
 	h.drainMu.Lock()
 	defer h.drainMu.Unlock()
+	h.confirmCordonLocked(rec)
+}
+
+// confirmCordonLocked records the run's cordon; drainMu is held.
+func (h *haRun) confirmCordonLocked(rec *s15Record) {
 	now := time.Now().UTC()
 	rec.CordonRequested, rec.CordonedByRun, rec.CordonedAt = true, true, &now
 	_ = h.writeJSON(s15File(rec.Variant, "record.json"), rec)
+	h.writeCordon(rec)
+}
+
+// s15CordonFile is the state of the run's cordon alone, which every path
+// that cordons or uncordons writes at once while it holds drainMu, so that
+// it is on disk before a SIGKILL that can follow a run's end.
+type s15CordonFile struct {
+	Node            string     `json:"node"`
+	Annotation      string     `json:"annotation"`
+	CordonRequested bool       `json:"cordonRequested"`
+	CordonedByRun   bool       `json:"cordonedByRun"`
+	CordonedAt      *time.Time `json:"cordonedAt,omitempty"`
+	Uncordoned      bool       `json:"uncordoned"`
+	UncordonedAt    *time.Time `json:"uncordonedAt,omitempty"`
+	UncordonedBy    string     `json:"uncordonedBy,omitempty"`
+	UncordonError   string     `json:"uncordonError,omitempty"`
+	ForeignCordon   string     `json:"foreignCordon,omitempty"`
+}
+
+// writeCordon writes the cordon's state to cordon.json; drainMu is held. It
+// does not list the file, which the run's end does from its own goroutine
+// (runS15), so a watch that writes it shares nothing else with the run.
+func (h *haRun) writeCordon(rec *s15Record) {
+	data, err := json.MarshalIndent(h.cordonFile(rec), "", "  ")
+	if err == nil {
+		_ = h.redactor.WriteFile(h.cfg.EvidenceDir, s15File(rec.Variant, "cordon.json"), append(data, '\n'))
+	}
+}
+
+func (h *haRun) cordonFile(rec *s15Record) s15CordonFile {
+	return s15CordonFile{Node: rec.TargetNode,
+		Annotation: drainOwnerAnnotation + "=" + h.cfg.Namespace, CordonRequested: rec.CordonRequested,
+		CordonedByRun: rec.CordonedByRun, CordonedAt: rec.CordonedAt, Uncordoned: rec.Uncordoned,
+		UncordonedAt: rec.UncordonedAt, UncordonedBy: rec.UncordonedBy, UncordonError: rec.UncordonError,
+		ForeignCordon: rec.ForeignCordon}
 }
 
 // uncordonNode makes the drained node schedulable again and removes the
@@ -433,19 +489,29 @@ func (h *haRun) uncordonNode(ctx context.Context, rec *s15Record, by string) err
 	if !rec.CordonRequested || rec.Uncordoned {
 		return nil
 	}
+	defer h.writeCordon(rec)
 	owner := h.cfg.Namespace
 	var last error
+	rechecked, conflicts := false, 0
 	for {
+		wait := h.cfg.Poll
 		node := &corev1.Node{}
 		err := h.Client.Get(ctx, client.ObjectKey{Name: rec.TargetNode}, node)
 		mark := node.Annotations[drainOwnerAnnotation]
 		switch {
 		case err != nil:
 			last = fmt.Errorf("read node %s: %w", rec.TargetNode, err)
+		case mark != owner && !node.Spec.Unschedulable && !rec.CordonedByRun && !rechecked:
+			// A cordon whose answer was lost can still be applied: read again.
+			rechecked, wait = true, s15LateCordonWait
 		case mark != owner && !node.Spec.Unschedulable:
-			now := time.Now().UTC()
-			rec.Uncordoned, rec.UncordonedAt, rec.UncordonedBy, rec.UncordonError = true, &now,
-				by+": the node held no cordon of this run", ""
+			h.settleUncordon(rec, by+": the node held no cordon of this run")
+			return nil
+		case mark != owner && !rec.CordonedByRun:
+			// The run never cordoned: someone else did, and the run's own
+			// cordon was refused. Nothing of the run's is to be undone.
+			rec.ForeignCordon = fmt.Sprintf("node %s is cordoned by %s=%q, not by this run: left as it is",
+				rec.TargetNode, drainOwnerAnnotation, mark)
 			return nil
 		case mark != owner:
 			rec.UncordonError = fmt.Sprintf("node %s is cordoned by %s=%q, not by this run: left as it is",
@@ -461,21 +527,34 @@ func (h *haRun) uncordonNode(ctx context.Context, rec *s15Record, by string) err
 			node.Spec.Unschedulable = false
 			delete(node.Annotations, drainOwnerAnnotation)
 			if last = h.Client.Patch(ctx, node, patch); last == nil {
-				now := time.Now().UTC()
-				rec.Uncordoned, rec.UncordonedAt, rec.UncordonedBy, rec.UncordonError = true, &now, by, ""
+				h.settleUncordon(rec, by)
 				return nil
 			}
-			if apierrors.IsConflict(last) {
-				continue
+			if apierrors.IsConflict(last) && conflicts < cordonMaxConflicts {
+				// Another write to the node, such as the kubelet's: read it
+				// again soon.
+				conflicts++
+				wait = min(wait, s15ConflictPause)
 			}
 		}
 		select {
 		case <-ctx.Done():
 			rec.UncordonError = fmt.Sprintf("make node %s schedulable again: %v (%v)", rec.TargetNode, ctx.Err(), last)
 			return errors.New(rec.UncordonError)
-		case <-time.After(h.cfg.Poll):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// s15ConflictPause is the pause before the uncordon reads the node again
+// after a conflicting write.
+const s15ConflictPause = 100 * time.Millisecond
+
+// settleUncordon records the run's cordon as undone; drainMu is held.
+func (h *haRun) settleUncordon(rec *s15Record, by string) {
+	now := time.Now().UTC()
+	rec.Uncordoned, rec.UncordonedAt, rec.UncordonedBy, rec.UncordonError = true, &now, by, ""
+	rec.note("uncordoned", rec.TargetNode+" by "+by)
 }
 
 // s15EndUncordonBound bounds the uncordon at the run's end. The lab's
@@ -483,13 +562,23 @@ func (h *haRun) uncordonNode(ctx context.Context, rec *s15Record, by string) err
 // for a step still running.
 var s15EndUncordonBound = 10 * time.Second
 
+// s15LateCordonWait is how long the uncordon waits to read the node again
+// when the run asked to cordon it, never saw the cordon confirmed, and finds
+// neither the cordon nor its mark: a patch whose answer was lost can still
+// be applied after it. Tests shorten it.
+var s15LateCordonWait = 2 * time.Second
+
 // uncordonOnEnd undoes the run's cordon as soon as ctx ends, as on a
 // signal, the run's timeout or a lost Lease, without waiting for a step of
 // the fault that is still running; the fault's own cleanup does nothing
-// more then. The returned func stops the watch when the scenario ends.
+// more then. The returned func stops the watch when the scenario ends and
+// returns once the watch has, so nothing writes the record after it; it may
+// be called more than once.
 func (h *haRun) uncordonOnEnd(ctx context.Context, rec *s15Record) func() {
 	done := make(chan struct{})
-	go func() {
+	var wg sync.WaitGroup
+	var once sync.Once
+	wg.Go(func() {
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -497,8 +586,11 @@ func (h *haRun) uncordonOnEnd(ctx context.Context, rec *s15Record) func() {
 			defer cancel()
 			_ = h.uncordonNode(end, rec, "the run's end")
 		}
-	}()
-	return func() { close(done) }
+	})
+	return func() {
+		once.Do(func() { close(done) })
+		wg.Wait()
+	}
 }
 
 // changedMembers names each member other than drained whose Pod or database
@@ -1202,7 +1294,7 @@ func cmpOr(s, def string) string {
 func s15Broken(rec *s15Record, clients *clientAnswers, limits s15Limits) string {
 	first := rec.targetEviction()
 	switch {
-	case (rec.CordonRequested || rec.CordonedByRun) && !rec.Uncordoned:
+	case rec.CordonedByRun && !rec.Uncordoned || rec.CordonRequested && !rec.Uncordoned && rec.ForeignCordon == "":
 		return fmt.Sprintf("node %s, cordoned by the run, was not made schedulable again: %s", rec.TargetNode,
 			rec.UncordonError)
 	case first != nil && first.Outcome == evictionPDBBlocked:
@@ -1370,6 +1462,9 @@ func (h *haRun) runS15(ctx context.Context) (result evidence.Scenario) {
 		}
 		h.drainMu.Lock()
 		err := h.writeJSON(s15File(variant, "record.json"), rec)
+		if rec.CordonRequested {
+			err = errors.Join(err, h.writeJSON(s15File(variant, "cordon.json"), h.cordonFile(rec)))
+		}
 		h.drainMu.Unlock()
 		if err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S15 evidence: "+err.Error()

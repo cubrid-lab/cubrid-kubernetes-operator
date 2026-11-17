@@ -688,7 +688,14 @@ which would evict every namespace's Pods on the node:
   while the node still carries the run's mark, and removes the mark in the
   same optimistically locked patch; a node cordoned before the run, or
   cordoned again under another mark, is left as it is and the result says so
-  (`uncordonError`). `uncordonedBy` says which path undid the cordon.
+  (`uncordonError`). When the run's own cordon was refused because someone
+  else cordoned the node first, the run never cordoned: it records that
+  (`foreignCordon`) and S15 ends blocked, not failed. When the answer to the
+  run's cordon was lost and the node shows neither the cordon nor the mark,
+  the run reads it once more two seconds later, as a lost patch can still be
+  applied. `uncordonedBy` says which path undid the cordon. The run cannot
+  tell a cordon someone else makes while the run's mark is still on the node
+  from its own, and undoes it: do not cordon a node the lane is draining.
 - when the run's context ends (a signal, `-timeout`, or the lab launcher's
   `SIGTERM` after a lost Lease), the uncordon starts at once, without waiting
   for a step of the drain that is still running, within 10 seconds of its
@@ -703,8 +710,9 @@ which would evict every namespace's Pods on the node:
   ```
 
   Undo only a node whose `CORDONED-BY` names a run namespace that no longer
-  runs; `record.json` of that run says what it cordoned
-  (`cordonRequested`, `cordonedByRun`, `uncordoned`).
+  runs; `cordon.json` of that run, written by every cordon and uncordon as it
+  happens, says what it cordoned (`cordonRequested`, `cordonedByRun`,
+  `uncordoned`, `uncordonedBy`), and `record.json` repeats it at the end.
 
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
@@ -828,6 +836,7 @@ Evidence, under `S15/<variant>/`:
   `<cluster>-rw` and `<cluster>-ro` with the ready state of each endpoint
   (`endpoints`), the new-connection writes, the open connection, and the run's
   observations in time order (`observed`). All times are UTC;
+- `cordon.json`: the cordon's state alone, written as it changes;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`;
 - `clients/<client>.jsonl` when S15 ended before it read the clients, as

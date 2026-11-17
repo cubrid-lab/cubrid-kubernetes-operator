@@ -19,6 +19,8 @@ package installed
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -111,13 +113,54 @@ func TestS15DoesNotAdoptACordonMadeMeanwhile(t *testing.T) {
 	if err := drain.Inject(t.Context()); err == nil {
 		t.Fatal("Inject() = nil, want the node refused")
 	}
-	_ = drain.Remove(t.Context())
+	// The run never cordoned: the other cordon is recorded, not reported as
+	// a cleanup that failed, so the run ends blocked rather than failed.
+	if err := drain.Remove(t.Context()); err != nil || rec.ForeignCordon == "" {
+		t.Fatalf("Remove() = %v, foreignCordon %q; want nil and the other cordon recorded", err, rec.ForeignCordon)
+	}
 	node := readDrainNode(t, h)
 	if rec.CordonedByRun || !node.Spec.Unschedulable || node.Annotations[drainOwnerAnnotation] != testOtherOwner ||
 		len(lab.evictions) != 0 {
 		t.Fatalf("cordonedByRun %t, node unschedulable %t, annotations %v, evictions %v; want the other cordon "+
 			"left alone and nothing evicted", rec.CordonedByRun, node.Spec.Unschedulable, node.Annotations,
 			lab.evictions)
+	}
+	if broken := s15Broken(rec, nil, testS15Limits); strings.Contains(broken, "schedulable again") {
+		t.Fatalf("s15Broken() = %q, want no failed uncordon for a cordon the run never made", broken)
+	}
+}
+
+// The run's cordon patch times out but is applied by the API server a moment
+// later: the cleanup must not settle on the first read showing no cordon,
+// and undoes the cordon once it lands.
+func TestS15UndoesACordonThatLandsLate(t *testing.T) {
+	was := s15LateCordonWait
+	s15LateCordonWait = 200 * time.Millisecond
+	t.Cleanup(func() { s15LateCordonWait = was })
+	lab := &s15Lab{}
+	lab.patch = func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch,
+		opts ...client.PatchOption) error {
+		late := obj.DeepCopyObject().(client.Object)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = c.Patch(context.Background(), late, patch, opts...)
+		}()
+		return context.DeadlineExceeded
+	}
+	h := newS15Run(t, lab, s15Pod("cubrid-lab-ha", testDrainTarget, testDrainNode))
+	rec := s15DrainRecord()
+	drain := nodeDrain{h: h, rec: rec}
+	if err := drain.Inject(t.Context()); err == nil {
+		t.Fatal("Inject() = nil, want the timeout reported")
+	}
+	lab.patch = nil
+	if err := drain.Remove(t.Context()); err != nil {
+		t.Fatalf("Remove() = %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if node := readDrainNode(t, h); node.Spec.Unschedulable || node.Annotations[drainOwnerAnnotation] != "" {
+		t.Fatalf("node unschedulable %t, annotations %v; want the late cordon undone", node.Spec.Unschedulable,
+			node.Annotations)
 	}
 }
 
@@ -160,6 +203,17 @@ func TestS15UncordonsWhenTheRunEnds(t *testing.T) {
 			t.Fatal("the node was still cordoned 2s after the run ended")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// Once the watch is stopped it writes nothing more, and what it did is
+	// on disk before a SIGKILL could follow.
+	stop()
+	if !rec.Uncordoned || rec.UncordonedBy != "the run's end" {
+		t.Fatalf("uncordoned %t by %q, want the run's end recorded by the time the watch stopped", rec.Uncordoned,
+			rec.UncordonedBy)
+	}
+	data, err := os.ReadFile(filepath.Join(h.cfg.EvidenceDir, s15File(rec.Variant, "cordon.json")))
+	if err != nil || !strings.Contains(string(data), `"uncordoned": true`) {
+		t.Fatalf("cordon.json = %s (%v), want the uncordon written", data, err)
 	}
 }
 
