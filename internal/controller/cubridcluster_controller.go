@@ -188,7 +188,7 @@ type CubridClusterReconciler struct {
 	// quarantineHolds holds, per cluster UID, what this reconciler keeps in
 	// memory about the cluster's write quarantine (quarantineHold).
 	quarantineHolds sync.Map
-	// rebuildReported holds, per cluster UID, the rebuild annotation's value
+	// rebuildReported holds, per cluster key, the rebuild annotation's value
 	// and outcome last reported with a Warning Event (reconcileMemberRebuild).
 	rebuildReported sync.Map
 	// podTerminations holds, per Pod UID, a database Pod the kubelet
@@ -277,6 +277,12 @@ type reconcileReport struct {
 	// consumedReleaseToken is the release token this reconcile consumed;
 	// once its release is written, the annotation that names it is removed.
 	consumedReleaseToken string
+	// identities are the members' Pods the write quarantine read after the
+	// probes, and identitiesErr the error of that read; identitiesNoted says
+	// that they were read in this reconcile (noteIdentities).
+	identities      map[string]memberIdentity
+	identitiesErr   error
+	identitiesNoted bool
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -414,6 +420,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.unresolvedSince.Delete(req.NamespacedName)
 		if apierrors.IsNotFound(err) {
 			r.forgetQuarantines(req.NamespacedName)
+			r.rebuildReported.Delete(req.NamespacedName)
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
 		}
@@ -1271,7 +1278,8 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	// read-write Brokers at zero while one is in force (ADR-0005, section 8).
 	res, quarantine, seen := r.observeAndQuarantine(ctx, cluster)
 	// A rebuild request is decided from the same observation (#117).
-	rebuild := r.reconcileMemberRebuild(ctx, cluster, seen.members, seen.obs, seen.observedAt, seen.lastResolved)
+	rebuild := r.reconcileMemberRebuild(ctx, cluster, seen.members, seen.obs, seen.observedAt, seen.lastResolved,
+		seen.podsBefore, seen.podsErr)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the

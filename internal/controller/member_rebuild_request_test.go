@@ -73,12 +73,13 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 			pvc.Finalizers = nil
 			Expect(client.IgnoreNotFound(k8sClient.Patch(ctx, pvc, patch))).To(Succeed())
 		}
-		createClaim := func(member string) {
+		createClaim := func(member, volume string) {
 			GinkgoHelper()
 			pvc := &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{Name: dataVolume + "-" + member, Namespace: key.Namespace},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					VolumeName:  volume,
 					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}},
 				},
@@ -87,7 +88,7 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 			DeferCleanup(func() { deleteClaim(member) })
 		}
 		for _, m := range []string{m0, m1, m2} {
-			createClaim(m)
+			createClaim(m, "pv-"+m)
 			createMemberPod(ctx, key.Namespace, m, nil)
 		}
 		stored := func() *databasev1alpha1.CubridCluster {
@@ -155,11 +156,19 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 			ContainSubstring("Warning "+reasonMemberRebuildRefused), ContainSubstring("not shown expendable"))))
 		Expect(annotated()).To(BeTrue(), "a refused annotation is left for the administrator")
 
-		By("the administrator replaces the third member's claim with an empty one; its new Pod gives no role")
+		By("a new claim bound to the retained volume the member ran the database on is not offered")
 		answers.set(roleReports(name, [3]string{wqMaster, wqSlave, ""}))
 		deleteMemberPod(ctx, key.Namespace, m2)
 		deleteClaim(m2)
-		createClaim(m2)
+		createClaim(m2, "pv-"+m2)
+		createMemberPod(ctx, key.Namespace, m2, nil)
+		pass(r)
+		Expect(stored().Status.MemberRebuildOffers).To(BeEmpty())
+
+		By("the administrator replaces the third member's claim with an empty one; its new Pod gives no role")
+		deleteMemberPod(ctx, key.Namespace, m2)
+		deleteClaim(m2)
+		createClaim(m2, "pv-"+m2+"-replacement")
 		createMemberPod(ctx, key.Namespace, m2, nil)
 		pass(r)
 		offers := stored().Status.MemberRebuildOffers

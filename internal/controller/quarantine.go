@@ -1535,6 +1535,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	before map[string]memberIdentity, beforeErr error) stepResult {
 	steps := stepResult{}
 	ids, err := r.memberIdentities(ctx, cluster, members)
+	r.noteIdentities(cluster, ids, err)
 	unknown := errors.Join(beforeErr, err)
 	unstable := map[string]bool{}
 	for _, m := range members {

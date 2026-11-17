@@ -860,12 +860,14 @@ type CubridClusterStatus struct {
 	LastWriteQuarantineRelease *WriteQuarantineRelease `json:"lastWriteQuarantineRelease,omitempty"`
 
 	// memberDataClaims records, for each promotable member, the UID of the
-	// data PersistentVolumeClaim it was last seen running the database on: a
-	// fresh, consistent master or slave answer from a Pod created no earlier
-	// than that claim. A member whose current claim has another UID runs on
-	// a claim that has not been seen holding the database, which is the
-	// evidence that its data is expendable for a rebuild
-	// (memberRebuildOffers).
+	// data PersistentVolumeClaim it was last seen running the database on,
+	// and the PersistentVolume that claim was bound to: a fresh, consistent
+	// master or slave answer from a Pod created no earlier than that claim,
+	// whose Pod UID did not change during the observation. A member whose
+	// current claim has another UID and is bound to a volume that no member
+	// was seen running the database on is the evidence that its data is
+	// expendable for a rebuild (memberRebuildOffers). A recorded member also
+	// counts as holding the database.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -874,11 +876,12 @@ type CubridClusterStatus struct {
 	// memberRebuildOffers lists the members whose replacement storage an
 	// administrator may ask to have rebuilt from the current primary now,
 	// each with the one-time token that asks for it. A token binds the
-	// member's Pod and data claim, the source and the source's Pod; the
-	// Operator replaces it whenever any of them changes, so a request with an
-	// earlier token is ignored. A member that is the current primary, the
-	// last resolved primary while not verified, or whose claim is the one it
-	// was seen running the database on is never offered
+	// member's Pod, data claim and volume, the source and the source's Pod;
+	// the Operator replaces it whenever any of them changes, so a request
+	// with an earlier token is ignored. Nothing is offered while a write
+	// quarantine is in force. A member that is the current primary, the last
+	// resolved primary, or whose claim or volume is one a member was seen
+	// running the database on is never offered
 	// (docs/observability.md, "Rebuilding a member").
 	// +listType=map
 	// +listMapKey=member
@@ -889,7 +892,10 @@ type CubridClusterStatus struct {
 	// annotation database.cubrid.io/rebuild-member and the Operator accepted.
 	// Its operationID is recorded when the request is accepted, before
 	// anything is restored on the member, so that it is kept across an
-	// Operator restart.
+	// Operator restart. An accepted request is withdrawn (lastMemberRebuild)
+	// when the member could no longer be offered a rebuild, or its Pod,
+	// claim, volume, source or source Pod changed; an observation that sees
+	// no healthy primary among the other members keeps it.
 	// +optional
 	MemberRebuild *MemberRebuild `json:"memberRebuild,omitempty"`
 
@@ -1238,6 +1244,10 @@ type MemberDataClaim struct {
 	Name string `json:"name"`
 	// claimUID is the UID of the member's data PersistentVolumeClaim.
 	ClaimUID string `json:"claimUID"`
+	// volumeName is the PersistentVolume the claim was bound to; empty when
+	// it was not bound.
+	// +optional
+	VolumeName string `json:"volumeName,omitempty"`
 }
 
 // MemberRebuildOffer is a rebuild of one member's replacement storage that an
@@ -1250,6 +1260,8 @@ type MemberRebuildOffer struct {
 	// claimUID is the UID of the member's data PersistentVolumeClaim: the
 	// replacement claim the rebuild would restore into.
 	ClaimUID string `json:"claimUID"`
+	// volumeName is the PersistentVolume that claim is bound to.
+	VolumeName string `json:"volumeName"`
 	// source is the member the database would be copied from: the current
 	// primary.
 	Source string `json:"source"`
@@ -1269,8 +1281,10 @@ const (
 	// recorded.
 	MemberRebuildAccepted MemberRebuildState = "Accepted"
 	// MemberRebuildWithdrawn: before anything was restored on the member, its
-	// Pod or data claim, the primary or the primary's Pod changed, so the
-	// request no longer describes what the administrator approved.
+	// Pod, data claim or volume, the primary or the primary's Pod changed, or
+	// the member could no longer be offered a rebuild (a write quarantine, a
+	// master answer, its claim seen holding the database), so the request no
+	// longer describes what the administrator approved.
 	MemberRebuildWithdrawn MemberRebuildState = "Withdrawn"
 	// MemberRebuildCompleted: the member was recorded as holding the database
 	// again.
@@ -1288,6 +1302,9 @@ type MemberRebuild struct {
 	// claimUID is the UID of the member's data claim when the request was
 	// accepted.
 	ClaimUID string `json:"claimUID"`
+	// volumeName is the PersistentVolume that claim was bound to when the
+	// request was accepted.
+	VolumeName string `json:"volumeName"`
 	// source is the primary the database is copied from.
 	Source string `json:"source"`
 	// sourcePodUID is the UID of the source's Pod when the request was
