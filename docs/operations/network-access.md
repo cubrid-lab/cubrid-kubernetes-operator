@@ -26,11 +26,18 @@ spec:
   that does not, the policies are stored and nothing is blocked. Check your
   cluster's plugin before you rely on them. Kubelet probes come from the
   node, which plugins commonly admit.
-- **They are not encryption or database authentication.** Traffic between
+- **Instance Manager transport.** Traffic between
   clients, Brokers, DB Pods and the operator is not encrypted. The Instance
   Manager requires its bearer token whether or not a policy admits the
-  caller. A database is created with an empty DBA password, so every client
-  the Broker policy admits can connect as `dba`, unless the cluster names a
+  caller. The Operator sends this token in HTTP requests to port 9090.
+  The ingress rules restrict which peers can connect on a supporting CNI
+  and provide no confidentiality for traffic on that path. Keep the
+  endpoint cluster-internal and treat the network path as trusted for
+  the current pre-release build.
+  [Kubernetes NetworkPolicy limitations](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+- **Database authentication.** A database is created with an empty DBA
+  password, so every client the Broker policy admits can connect as `dba`,
+  unless the cluster names a
   password with `spec.dbaPasswordSecretRef`
   ([DBA password](dba-password.md)).
 - A Pod may start before the NetworkPolicies that apply to it are in effect

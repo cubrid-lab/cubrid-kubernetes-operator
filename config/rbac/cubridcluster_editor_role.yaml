@@ -4,6 +4,8 @@
 # Grants permissions to create, update, and delete resources within the database.cubrid.io.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
+# Bind it only to operators trusted to authorize write-quarantine release
+# and return to service. Its patch/update rules include those annotations.
 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
