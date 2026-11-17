@@ -182,7 +182,7 @@ func (c HAConfig) validateS07() error {
 // by the bounds of its own steps.
 func (c HAConfig) s07StepBounds() time.Duration {
 	return s07MoveBound + s07PrepareBound + c.PartitionHold + s07ConfirmSlack + s07CleanupBound + s07SettleBound +
-		c.DataCheckWithin
+		max(c.DataCheckWithin, s07SnapshotBound)
 }
 
 // s07Sweep is one reading of every member's role through kubectl exec,
@@ -191,6 +191,11 @@ func (c HAConfig) s07StepBounds() time.Duration {
 type s07Sweep struct {
 	T     time.Time         `json:"t"`
 	Roles map[string]string `json:"roles"`
+	// States is each member's own state in cubrid heartbeat status, in
+	// CUBRID's words: the node state and, when listed, the server process's
+	// state, such as "to-be-master (server registered_and_to_be_active)",
+	// which Roles counts as other; or why the member could not be read.
+	States map[string]string `json:"states,omitempty"`
 	// Unreachable are the members cut off from the Operator when the sweep
 	// was made.
 	Unreachable []string `json:"unreachableFromOperator,omitempty"`
@@ -387,13 +392,19 @@ type s07Record struct {
 	Session                  *s07Session `json:"establishedSession,omitempty"`
 	// SettledAt is when, after the removal, every member answered with one
 	// master and two slaves and any quarantine left was one only a person
-	// can release; SettleUnmet what did not hold at the settle bound.
-	SettledAt    *time.Time      `json:"settledAt,omitempty"`
-	SettleUnmet  string          `json:"settleUnmet,omitempty"`
-	FinalMaster  string          `json:"finalMaster,omitempty"`
-	FinalSlaves  []string        `json:"finalSlaves,omitempty"`
-	MembersAfter []imageIdentity `json:"membersAfter"`
-	Data         *s07Data        `json:"dataCheck,omitempty"`
+	// can release; SettleUnmet what did not hold at the settle bound, and
+	// SettleExpired what the run last saw when the wait ended unsettled.
+	SettledAt     *time.Time       `json:"settledAt,omitempty"`
+	SettleUnmet   string           `json:"settleUnmet,omitempty"`
+	SettleExpired *s07SettleExpiry `json:"settleWaitExpired,omitempty"`
+	// UnsettledRows is the best-effort read of every member's rows made when
+	// the cluster did not settle, before the run namespace is deleted. It is
+	// reported, never judged: the data check above is the one that counts.
+	UnsettledRows *s07RowSnapshot `json:"unsettledRowsSnapshot,omitempty"`
+	FinalMaster   string          `json:"finalMaster,omitempty"`
+	FinalSlaves   []string        `json:"finalSlaves,omitempty"`
+	MembersAfter  []imageIdentity `json:"membersAfter"`
+	Data          *s07Data        `json:"dataCheck,omitempty"`
 	// HealthReadings counts the readings of the cluster in the health window
 	// after the data check, and ReadyWithoutQuarantineAt is when one first
 	// reported Ready with no quarantine; HealthyAtEnd is set then.
@@ -736,7 +747,8 @@ func s07Blocked(rec *s07Record) string {
 			"read-write Broker Pod gone and no -rw endpoint: an anomaly the run cannot explain",
 			rec.Session.AcknowledgedAfterClosed)
 	case rec.SettledAt == nil:
-		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown")
+		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown") +
+			s07SnapshotNote(rec)
 	case rec.Data == nil || !rec.Data.Read:
 		reason := "not made"
 		if rec.Data != nil {
@@ -1063,13 +1075,15 @@ func (h *haRun) beforeS07(ctx context.Context, rec *s07Record, p *netfault.Parti
 // is set while the target is cut off from the Operator.
 func (h *haRun) sweepS07(ctx context.Context, rec *s07Record, now time.Time, cut, afterGrace bool) {
 	h.checkS07Operator(ctx, rec, now)
-	sweep := s07Sweep{T: now, Roles: map[string]string{}}
+	sweep := s07Sweep{T: now, Roles: map[string]string{}, States: map[string]string{}}
 	var claims []string
 	for _, pod := range h.members {
 		out, err := h.member(ctx, pod, "bash", "-c", heartbeatStatus)
+		sweep.States[pod] = heartbeatState(pod, out)
 		switch {
 		case err != nil && !commandRan.MatchString(out):
 			sweep.Roles[pod] = s07Unread
+			sweep.States[pod] = "unread: " + s07Short(strings.TrimSpace(firstLine(out)+" "+err.Error()))
 		case heartbeatRole(pod, out) == roleMaster:
 			sweep.Roles[pod] = s07ActiveMaster
 			claims = append(claims, pod)
@@ -1463,7 +1477,7 @@ func (h *haRun) settleS07(ctx context.Context, rec *s07Record) {
 		now := time.Now().UTC()
 		h.sweepS07(ctx, rec, now, false, false)
 		h.observeS07Path(ctx, rec, now, false, false)
-		roles := rec.Sweeps[len(rec.Sweeps)-1].Roles
+		roles, states := rec.Sweeps[len(rec.Sweeps)-1].Roles, rec.Sweeps[len(rec.Sweeps)-1].States
 		var masters, slaves []string
 		for _, m := range h.members {
 			switch roles[m] {
@@ -1475,7 +1489,7 @@ func (h *haRun) settleS07(ctx context.Context, rec *s07Record) {
 		}
 		switch {
 		case len(masters) != 1 || len(slaves) != len(h.members)-1:
-			rec.SettleUnmet = fmt.Sprintf("CUBRID reports the roles %v", roles)
+			rec.SettleUnmet = "CUBRID reports " + s07StateList(states, h.members)
 		case rec.QuarantineInForce != "" && !manualOnly(rec.QuarantineInForce):
 			rec.SettleUnmet = "the " + rec.QuarantineInForce + " quarantine is still in force and may yet be " +
 				"released automatically"
@@ -1486,10 +1500,12 @@ func (h *haRun) settleS07(ctx context.Context, rec *s07Record) {
 			return
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
+			noteS07SettleExpired(rec, time.Now().UTC())
 			return
 		}
 		select {
 		case <-ctx.Done():
+			noteS07SettleExpired(rec, time.Now().UTC())
 			return
 		case <-time.After(h.cfg.Poll):
 		}
@@ -1697,6 +1713,8 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	if rec.SettledAt != nil {
 		h.checkS07Data(ctx, rec)
 		h.observeS07Health(ctx, rec)
+	} else {
+		h.snapshotS07Rows(ctx, rec)
 	}
 	h.judgeS07Probes(rec, closed)
 	v := judgeS07(rec, h.s07Limits())
