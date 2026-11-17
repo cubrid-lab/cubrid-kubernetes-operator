@@ -1,0 +1,33 @@
+name: Proposed release-note quality (read-only)
+
+on:
+  pull_request:
+    paths:
+      - "docs/releases/**"
+      - "docs/RELEASE_NOTES_QUALITY.md"
+      - "hack/check_release_notes.py"
+      - "hack/test_release_notes.py"
+      - ".github/workflows/release-notes-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run offline note fixtures
+        run: python3 -m unittest discover -s hack -p test_release_notes.py -v
+      - name: Check existing versioned drafts only
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for note in docs/releases/v*.md; do
+            python3 hack/check_release_notes.py "$note"
+          done
+          echo "No release is created or published by this workflow."
