@@ -33,6 +33,8 @@ var haChecks = map[string]func(*HAConfig){
 	haScenarioID:                               func(*HAConfig) {},
 	"S04/power-off":                            func(c *HAConfig) { c.Fault = FaultVMPowerOff },
 	"S06/restart":                              func(c *HAConfig) { c.Fault = FaultOperatorRestart },
+	"S15/drain-slave-node":                     func(c *HAConfig) { c.Fault = FaultDrainSlaveNode },
+	"S15/drain-master-node":                    func(c *HAConfig) { c.Fault = FaultDrainMasterNode },
 	"S11/complete":                             func(*HAConfig) {},
 	"S11/missing-destination":                  func(c *HAConfig) { c.BackupMissingDestination = true },
 	"S11/denied-credentials":                   func(c *HAConfig) { c.BackupDeniedCredentials = true },

@@ -211,6 +211,8 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
 | `lab-installed-ha-s04` | The installed-Operator HA command with `-fault vm-power-off` and the lab's VM power commands, at the `vm-lab` level only ([details](installed-ha.md#s04-power-off)) | LAB01, then S04 (`power-off`) on the same cluster: the VM of the master's node is powered off without a shutdown and powered on again | none |
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
+| `lab-installed-ha-s15-drain-slave-node` | The installed-Operator HA command with `-fault drain-slave-node`, at the `vm-lab` level only ([details](installed-ha.md#s15-node-drain)) | LAB01, then S15 (`drain-slave-node`) on the same cluster, where every member's volume is bound to its node (the `no-spare-node` expectations): a slave's node is cordoned and the run's member and Broker Pods on it are evicted through the Eviction API, a second member's eviction must be refused by the PodDisruptionBudget, and the node is made schedulable again | none |
+| `lab-installed-ha-s15-drain-master-node` | The installed-Operator HA command with `-fault drain-master-node`, at the `vm-lab` level only ([details](installed-ha.md#s15-node-drain)) | LAB01, then S15 (`drain-master-node`) on the same cluster, as `drain-slave-node` with the master's node, which must also end as a graceful deletion of the master's Pod does | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
@@ -3125,6 +3127,16 @@ because they move the master.
   operation missing.
 - **Data check:** all data rules on all members that are running.
 - **Limits:** `failover_limit`, `drain_limit`.
+- **VM-lab lane:** the installed HA command runs `drain-slave-node` and
+  `drain-master-node` on the lab, where every member's volume is bound to its
+  node, so each carries the `no-spare-node` expectations above
+  (`lab-installed-ha-s15-drain-slave-node` and
+  `lab-installed-ha-s15-drain-master-node`,
+  [details](installed-ha.md#s15-node-drain)). It cordons the node, evicts only
+  the run's own member and Broker Pods through the Eviction API, asks for a
+  second member's eviction that the budget must refuse, and uncordons the node
+  however the run ends. It has not run on the lab yet; the limits above stay
+  unset for the VM lab, so a run is a baseline until they are set.
 - **Source note:** no outside test was read.
 
 ### Reserved: S16 and S17

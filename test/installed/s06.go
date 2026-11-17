@@ -554,9 +554,15 @@ func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([
 // read-write Service, every seventh operation rolled back, and waits for its
 // first acknowledgements.
 func (h *haRun) startBackgroundClient(ctx context.Context, id string) error {
+	return h.startBackgroundClientWith(ctx, id, "")
+}
+
+// startBackgroundClientWith starts such a client with env, variable
+// assignments ending in a space, set for it.
+func (h *haRun) startBackgroundClientWith(ctx context.Context, id, env string) error {
 	file := "/tmp/" + id
-	if _, err := h.clientRun(ctx, fmt.Sprintf("CLIENT_ID=%[1]s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7 "+
-		"nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file)); err != nil {
+	if _, err := h.clientRun(ctx, fmt.Sprintf("%[3]sCLIENT_ID=%[1]s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7 "+
+		"nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file, env)); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(s06ClientStart)

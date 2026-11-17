@@ -35,6 +35,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,7 +90,7 @@ func testClient(t *testing.T, cfg Config, hooks interceptor.Funcs, extra ...clie
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
 		corev1.AddToScheme, appsv1.AddToScheme, batchv1.AddToScheme, storagev1.AddToScheme, databasev1alpha1.AddToScheme,
-		coordinationv1.AddToScheme, discoveryv1.AddToScheme,
+		coordinationv1.AddToScheme, discoveryv1.AddToScheme, policyv1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			t.Fatal(err)
