@@ -188,6 +188,9 @@ type CubridClusterReconciler struct {
 	// quarantineHolds holds, per cluster UID, what this reconciler keeps in
 	// memory about the cluster's write quarantine (quarantineHold).
 	quarantineHolds sync.Map
+	// rebuildReported holds, per cluster UID, the rebuild annotation's value
+	// and outcome last reported with a Warning Event (reconcileMemberRebuild).
+	rebuildReported sync.Map
 	// podTerminations holds, per Pod UID, a database Pod the kubelet
 	// reported terminated while it was being deleted, as the Pod watch saw
 	// it (notePodTermination).
@@ -1266,7 +1269,9 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	r.reconcileHABootstrap(ctx, cluster)
 	// The write quarantine is decided before the Broker tier, which keeps the
 	// read-write Brokers at zero while one is in force (ADR-0005, section 8).
-	res, quarantine := r.observeAndQuarantine(ctx, cluster)
+	res, quarantine, seen := r.observeAndQuarantine(ctx, cluster)
+	// A rebuild request is decided from the same observation (#117).
+	rebuild := r.reconcileMemberRebuild(ctx, cluster, seen.members, seen.obs, seen.observedAt, seen.lastResolved)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the
@@ -1275,9 +1280,11 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	if ok {
 		r.setBrokerConditions(cluster, res, available)
 	}
-	steps.err = errors.Join(quarantine.err, steps.err)
-	if quarantine.retry > 0 && (steps.retry == 0 || quarantine.retry < steps.retry) {
-		steps.retry = quarantine.retry
+	steps.err = errors.Join(quarantine.err, rebuild.err, steps.err)
+	for _, retry := range []time.Duration{quarantine.retry, rebuild.retry} {
+		if retry > 0 && (steps.retry == 0 || retry < steps.retry) {
+			steps.retry = retry
+		}
 	}
 	// Rolling update (ADR-0009): only when the engine-version guard permits
 	// (no blocked upgrade / unverifiable version), roll outdated slaves one at
@@ -1295,18 +1302,36 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	return res.MultipleMasters, steps
 }
 
+// haObservation is what observeAndQuarantine observed, for a step that
+// decides from the same observation.
+type haObservation struct {
+	members []string
+	obs     map[string]RoleObservation
+	// observedAt is the time of the observation.
+	observedAt time.Time
+	// lastResolved is status.lastResolvedPrimary before the observation.
+	lastResolved string
+	// podsBefore are the members' Pods read before the probes, or podsErr
+	// the error of that read.
+	podsBefore map[string]memberIdentity
+	podsErr    error
+}
+
 // observeAndQuarantine observes the roles of an HA cluster's members and
 // decides and enforces the write quarantine from the same observation
-// (ADR-0005, section 8).
+// (ADR-0005, section 8). It returns the observation as well.
 func (r *CubridClusterReconciler) observeAndQuarantine(ctx context.Context,
-	cluster *databasev1alpha1.CubridCluster) (PrimaryResolution, stepResult) {
+	cluster *databasev1alpha1.CubridCluster) (PrimaryResolution, stepResult, haObservation) {
 	lastResolved := cluster.Status.LastResolvedPrimary
 	members := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
 	// The members' Pods are read before and after the probes, so that an
 	// answer is counted only for the Pod it came from.
 	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
 	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
-	return res, r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr)
+	seen := haObservation{members: members, obs: obs, observedAt: observedAt, lastResolved: lastResolved,
+		podsBefore: podsBefore, podsErr: podsErr}
+	return res, r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr),
+		seen
 }
 
 // updateStatus sets Ready and the Updating condition of an image change from
@@ -1606,7 +1631,7 @@ func (r *CubridClusterReconciler) failedChild(ctx context.Context, cluster *data
 			// readings are not kept as the base of the next pass.
 			observed = true
 			reported := cluster.Status.DeepCopy()
-			_, quarantine := r.observeAndQuarantine(ctx, cluster)
+			_, quarantine, _ := r.observeAndQuarantine(ctx, cluster)
 			safety = quarantine.err
 			cluster.Status.CurrentPrimary = reported.CurrentPrimary
 			cluster.Status.LastResolvedPrimary = reported.LastResolvedPrimary

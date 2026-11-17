@@ -858,6 +858,45 @@ type CubridClusterStatus struct {
 	// released, and how.
 	// +optional
 	LastWriteQuarantineRelease *WriteQuarantineRelease `json:"lastWriteQuarantineRelease,omitempty"`
+
+	// memberDataClaims records, for each promotable member, the UID of the
+	// data PersistentVolumeClaim it was last seen running the database on: a
+	// fresh, consistent master or slave answer from a Pod created no earlier
+	// than that claim. A member whose current claim has another UID runs on
+	// a claim that has not been seen holding the database, which is the
+	// evidence that its data is expendable for a rebuild
+	// (memberRebuildOffers).
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	MemberDataClaims []MemberDataClaim `json:"memberDataClaims,omitempty"`
+
+	// memberRebuildOffers lists the members whose replacement storage an
+	// administrator may ask to have rebuilt from the current primary now,
+	// each with the one-time token that asks for it. A token binds the
+	// member's Pod and data claim, the source and the source's Pod; the
+	// Operator replaces it whenever any of them changes, so a request with an
+	// earlier token is ignored. A member that is the current primary, the
+	// last resolved primary while not verified, or whose claim is the one it
+	// was seen running the database on is never offered
+	// (docs/observability.md, "Rebuilding a member").
+	// +listType=map
+	// +listMapKey=member
+	// +optional
+	MemberRebuildOffers []MemberRebuildOffer `json:"memberRebuildOffers,omitempty"`
+
+	// memberRebuild is the rebuild an administrator requested with the
+	// annotation database.cubrid.io/rebuild-member and the Operator accepted.
+	// Its operationID is recorded when the request is accepted, before
+	// anything is restored on the member, so that it is kept across an
+	// Operator restart.
+	// +optional
+	MemberRebuild *MemberRebuild `json:"memberRebuild,omitempty"`
+
+	// lastMemberRebuild is the last requested rebuild that ended. An
+	// annotation that still names its token is ignored and removed.
+	// +optional
+	LastMemberRebuild *MemberRebuild `json:"lastMemberRebuild,omitempty"`
 }
 
 // MemberVerification is the evidence that one member is not an active master:
@@ -1190,6 +1229,85 @@ type WriteQuarantineRelease struct {
 	// returningMember is the released quarantine's returningMember.
 	// +optional
 	ReturningMember string `json:"returningMember,omitempty"`
+}
+
+// MemberDataClaim is the data claim a member was last seen running the
+// database on.
+type MemberDataClaim struct {
+	// name is the member.
+	Name string `json:"name"`
+	// claimUID is the UID of the member's data PersistentVolumeClaim.
+	ClaimUID string `json:"claimUID"`
+}
+
+// MemberRebuildOffer is a rebuild of one member's replacement storage that an
+// administrator may request now.
+type MemberRebuildOffer struct {
+	// member is the member whose storage would be rebuilt.
+	Member string `json:"member"`
+	// podUID is the UID of the member's Pod.
+	PodUID string `json:"podUID"`
+	// claimUID is the UID of the member's data PersistentVolumeClaim: the
+	// replacement claim the rebuild would restore into.
+	ClaimUID string `json:"claimUID"`
+	// source is the member the database would be copied from: the current
+	// primary.
+	Source string `json:"source"`
+	// sourcePodUID is the UID of the source's Pod.
+	SourcePodUID string `json:"sourcePodUID"`
+	// token is the one-time token that requests this rebuild: the annotation
+	// database.cubrid.io/rebuild-member set to "<member>:<token>".
+	Token string `json:"token"`
+}
+
+// MemberRebuildState is what became of a requested rebuild.
+// +kubebuilder:validation:Enum=Accepted;Withdrawn;Completed;Failed
+type MemberRebuildState string
+
+const (
+	// MemberRebuildAccepted: the request was accepted and its operation ID
+	// recorded.
+	MemberRebuildAccepted MemberRebuildState = "Accepted"
+	// MemberRebuildWithdrawn: before anything was restored on the member, its
+	// Pod or data claim, the primary or the primary's Pod changed, so the
+	// request no longer describes what the administrator approved.
+	MemberRebuildWithdrawn MemberRebuildState = "Withdrawn"
+	// MemberRebuildCompleted: the member was recorded as holding the database
+	// again.
+	MemberRebuildCompleted MemberRebuildState = "Completed"
+	// MemberRebuildFailed: the rebuild stopped; the message says why.
+	MemberRebuildFailed MemberRebuildState = "Failed"
+)
+
+// MemberRebuild is a rebuild an administrator requested.
+type MemberRebuild struct {
+	// member is the member whose storage is rebuilt.
+	Member string `json:"member"`
+	// podUID is the UID of the member's Pod when the request was accepted.
+	PodUID string `json:"podUID"`
+	// claimUID is the UID of the member's data claim when the request was
+	// accepted.
+	ClaimUID string `json:"claimUID"`
+	// source is the primary the database is copied from.
+	Source string `json:"source"`
+	// sourcePodUID is the UID of the source's Pod when the request was
+	// accepted.
+	SourcePodUID string `json:"sourcePodUID"`
+	// token is the one-time token the request consumed.
+	Token string `json:"token"`
+	// operationID identifies this rebuild's operations on the Instance
+	// Managers. It is chosen when the request is accepted and never changes.
+	OperationID string `json:"operationID"`
+	// acceptedTime is when the request was accepted.
+	AcceptedTime metav1.Time `json:"acceptedTime"`
+	// state is what became of the request.
+	State MemberRebuildState `json:"state"`
+	// endTime is when the rebuild ended.
+	// +optional
+	EndTime *metav1.Time `json:"endTime,omitempty"`
+	// message says why the rebuild ended, when it did not complete.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).

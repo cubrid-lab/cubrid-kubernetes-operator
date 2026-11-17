@@ -1130,6 +1130,70 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              lastMemberRebuild:
+                description: |-
+                  lastMemberRebuild is the last requested rebuild that ended. An
+                  annotation that still names its token is ignored and removed.
+                properties:
+                  acceptedTime:
+                    description: acceptedTime is when the request was accepted.
+                    format: date-time
+                    type: string
+                  claimUID:
+                    description: |-
+                      claimUID is the UID of the member's data claim when the request was
+                      accepted.
+                    type: string
+                  endTime:
+                    description: endTime is when the rebuild ended.
+                    format: date-time
+                    type: string
+                  member:
+                    description: member is the member whose storage is rebuilt.
+                    type: string
+                  message:
+                    description: message says why the rebuild ended, when it did not
+                      complete.
+                    type: string
+                  operationID:
+                    description: |-
+                      operationID identifies this rebuild's operations on the Instance
+                      Managers. It is chosen when the request is accepted and never changes.
+                    type: string
+                  podUID:
+                    description: podUID is the UID of the member's Pod when the request
+                      was accepted.
+                    type: string
+                  source:
+                    description: source is the primary the database is copied from.
+                    type: string
+                  sourcePodUID:
+                    description: |-
+                      sourcePodUID is the UID of the source's Pod when the request was
+                      accepted.
+                    type: string
+                  state:
+                    description: state is what became of the request.
+                    enum:
+                    - Accepted
+                    - Withdrawn
+                    - Completed
+                    - Failed
+                    type: string
+                  token:
+                    description: token is the one-time token the request consumed.
+                    type: string
+                required:
+                - acceptedTime
+                - claimUID
+                - member
+                - operationID
+                - podUID
+                - source
+                - sourcePodUID
+                - state
+                - token
+                type: object
               lastObservedTime:
                 description: |-
                   lastObservedTime is when the operator last asked every member of an HA
@@ -1330,6 +1394,34 @@ spec:
                 - releaseTime
                 - startTime
                 type: object
+              memberDataClaims:
+                description: |-
+                  memberDataClaims records, for each promotable member, the UID of the
+                  data PersistentVolumeClaim it was last seen running the database on: a
+                  fresh, consistent master or slave answer from a Pod created no earlier
+                  than that claim. A member whose current claim has another UID runs on
+                  a claim that has not been seen holding the database, which is the
+                  evidence that its data is expendable for a rebuild
+                  (memberRebuildOffers).
+                items:
+                  description: |-
+                    MemberDataClaim is the data claim a member was last seen running the
+                    database on.
+                  properties:
+                    claimUID:
+                      description: claimUID is the UID of the member's data PersistentVolumeClaim.
+                      type: string
+                    name:
+                      description: name is the member.
+                      type: string
+                  required:
+                  - claimUID
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               memberFences:
                 description: |-
                   memberFences records, for each promotable member that does not answer
@@ -1428,6 +1520,125 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
+                x-kubernetes-list-type: map
+              memberRebuild:
+                description: |-
+                  memberRebuild is the rebuild an administrator requested with the
+                  annotation database.cubrid.io/rebuild-member and the Operator accepted.
+                  Its operationID is recorded when the request is accepted, before
+                  anything is restored on the member, so that it is kept across an
+                  Operator restart.
+                properties:
+                  acceptedTime:
+                    description: acceptedTime is when the request was accepted.
+                    format: date-time
+                    type: string
+                  claimUID:
+                    description: |-
+                      claimUID is the UID of the member's data claim when the request was
+                      accepted.
+                    type: string
+                  endTime:
+                    description: endTime is when the rebuild ended.
+                    format: date-time
+                    type: string
+                  member:
+                    description: member is the member whose storage is rebuilt.
+                    type: string
+                  message:
+                    description: message says why the rebuild ended, when it did not
+                      complete.
+                    type: string
+                  operationID:
+                    description: |-
+                      operationID identifies this rebuild's operations on the Instance
+                      Managers. It is chosen when the request is accepted and never changes.
+                    type: string
+                  podUID:
+                    description: podUID is the UID of the member's Pod when the request
+                      was accepted.
+                    type: string
+                  source:
+                    description: source is the primary the database is copied from.
+                    type: string
+                  sourcePodUID:
+                    description: |-
+                      sourcePodUID is the UID of the source's Pod when the request was
+                      accepted.
+                    type: string
+                  state:
+                    description: state is what became of the request.
+                    enum:
+                    - Accepted
+                    - Withdrawn
+                    - Completed
+                    - Failed
+                    type: string
+                  token:
+                    description: token is the one-time token the request consumed.
+                    type: string
+                required:
+                - acceptedTime
+                - claimUID
+                - member
+                - operationID
+                - podUID
+                - source
+                - sourcePodUID
+                - state
+                - token
+                type: object
+              memberRebuildOffers:
+                description: |-
+                  memberRebuildOffers lists the members whose replacement storage an
+                  administrator may ask to have rebuilt from the current primary now,
+                  each with the one-time token that asks for it. A token binds the
+                  member's Pod and data claim, the source and the source's Pod; the
+                  Operator replaces it whenever any of them changes, so a request with an
+                  earlier token is ignored. A member that is the current primary, the
+                  last resolved primary while not verified, or whose claim is the one it
+                  was seen running the database on is never offered
+                  (docs/observability.md, "Rebuilding a member").
+                items:
+                  description: |-
+                    MemberRebuildOffer is a rebuild of one member's replacement storage that an
+                    administrator may request now.
+                  properties:
+                    claimUID:
+                      description: |-
+                        claimUID is the UID of the member's data PersistentVolumeClaim: the
+                        replacement claim the rebuild would restore into.
+                      type: string
+                    member:
+                      description: member is the member whose storage would be rebuilt.
+                      type: string
+                    podUID:
+                      description: podUID is the UID of the member's Pod.
+                      type: string
+                    source:
+                      description: |-
+                        source is the member the database would be copied from: the current
+                        primary.
+                      type: string
+                    sourcePodUID:
+                      description: sourcePodUID is the UID of the source's Pod.
+                      type: string
+                    token:
+                      description: |-
+                        token is the one-time token that requests this rebuild: the annotation
+                        database.cubrid.io/rebuild-member set to "<member>:<token>".
+                      type: string
+                  required:
+                  - claimUID
+                  - member
+                  - podUID
+                  - source
+                  - sourcePodUID
+                  - token
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - member
                 x-kubernetes-list-type: map
               memberTerminations:
                 description: |-
