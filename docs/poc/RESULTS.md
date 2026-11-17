@@ -3125,6 +3125,26 @@ the stop record of `instance-manager shutdown` stays, so the restarted
 entrypoint started nothing; on Kubernetes a restarted container is a new one.
 The containers and both volumes were removed afterwards.
 
+**Follow-up, 2026-11-17 UTC (#252, one Docker run): rotation at the sizes the
+Operator sets.** Scripts, raw samples and limits are in
+[`log-rotation-size-limits/`](log-rotation-size-limits/README.md). The pinned
+`cubrid/cubrid:11.4@sha256:a8c8792f…` (CUBRID 11.4.7.1995), on a native
+linux/amd64 host, ran a standalone server with the entrypoint's
+`error_log=…/server/appdb.err` and `error_log_size=10485760`, and a read-write
+Broker started by `broker-entrypoint.sh` (`error_log_size=4194304`) with the
+configuration `generateBrokerConf("rw", 5)` renders (`SQL_LOG_MAX_SIZE=4096`,
+`ACCESS_LOG=OFF`); `$CUBRID/log` was a 256 MiB tmpfs on both. 100,000
+statements failing with `-670`, 50,000 through `csql` and 50,000 through the
+Broker, drove the files past their limits several times. The server's error
+log rotated at 10 MiB, its `.bak` 10,485,844 to 10,486,073 bytes; the CAS
+error log at 4 MiB, `.bak` 4,194,390 and 4,194,412 bytes; the CAS SQL and
+slow-query logs at 4,096,000 bytes, `.bak` 4,097,028 to 4,097,140 bytes, so
+`SQL_LOG_MAX_SIZE` counts in units of 1,000 bytes (the question left open
+above). Each kept one `.bak` and no other copy, and passed its limit by at most
+1,140 bytes before rotating. Not observed here: `cub_master`, the copier, the
+applier and `cubrid_utility.log` at 10 MiB, an HA member, a Broker Pod's
+emptyDir limit, and anything on Kubernetes.
+
 ---
 
 ## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master or its backlog; the cause is not known**

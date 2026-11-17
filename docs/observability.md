@@ -1007,8 +1007,11 @@ The entrypoint bounds what CUBRID keeps there, before it starts anything
 
 POC-35 showed no bound for the `pl/` logs and each utility's own `.err` file;
 they stayed under 15 KB each there. Bounds observed: a file rotated within
-about 350 bytes past `error_log_size`, with values from 8,000 to 100,000 bytes;
-that 10 MiB rotates the same way is an extrapolation. A full log volume did not
+about 350 bytes past `error_log_size`, with values from 8,000 to 100,000 bytes
+(POC-35), and the server's error log rotated at 10 MiB to one `.bak` of at most
+313 bytes more (`docs/poc/log-rotation-size-limits/`). That `cub_master`'s, the
+copiers' and appliers' files and `cubrid_utility.log` rotate the same way at
+10 MiB is an extrapolation from 8,000 bytes. A full log volume did not
 stop a standalone server from committing (POC-35, on `tmpfs`); with a full log
 volume on another file system, and on an HA member, this was not tried. With
 the logs on the data volume, a full volume is also a full database volume.
@@ -1018,8 +1021,10 @@ the logs on the data volume, a full volume is also a full database volume.
 Pod. Its size limit is 256Mi, or 32 MiB plus 25 MiB for each CAS process when
 `--broker-max-appl-servers` asks for more than that holds; the kubelet evicts
 a Pod whose `emptyDir` passes its limit. Each CAS process's SQL and
-slow-query logs rotate at `SQL_LOG_MAX_SIZE` (4096 KB) and its error log at
-the Broker's `error_log_size` (4 MiB), each to one `.bak`. `ACCESS_LOG` stays
+slow-query logs rotate at `SQL_LOG_MAX_SIZE` (4096, in units of 1,000 bytes)
+and its error log at the Broker's `error_log_size` (4 MiB), each to one `.bak`;
+this was observed in Docker at these sizes, not yet in a Broker Pod
+(`docs/poc/log-rotation-size-limits/`). `ACCESS_LOG` stays
 `OFF`: its rotated copies were never removed in POC-35. The Broker's SQL logs
 hold statements and their bound values.
 

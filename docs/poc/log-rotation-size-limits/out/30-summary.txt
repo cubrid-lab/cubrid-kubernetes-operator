@@ -1,0 +1,12 @@
+# server error log, error_log_size=10485760
+server/appdb.err limit=10485760 rotations=3 max_live=10027495 max_copies=1 copy_suffixes= .bak bak_sizes= 10485972 10485856 10485844
+# CAS error logs, error_log_size=4194304
+broker/error_log/rw_1.err limit=4194304 rotations=3 max_live=4104917 max_copies=1 copy_suffixes= .bak bak_sizes= 4194390 4194412
+# CAS SQL and slow-query logs, SQL_LOG_MAX_SIZE=4096
+broker/sql_log/rw_1.slow.log limit=4194304 rotations=2 max_live=3965632 max_copies=1 copy_suffixes= .bak bak_sizes= 4097061 4097103
+broker/sql_log/rw_1.sql.log limit=4194304 rotations=6 max_live=4065681 max_copies=1 copy_suffixes= .bak bak_sizes= 4097028 4097088 4097140 4097116
+broker/sql_log/rw_2.slow.log limit=4194304 rotations=0 max_live=0 max_copies=0 copy_suffixes= bak_sizes=
+broker/sql_log/rw_2.sql.log limit=4194304 rotations=0 max_live=83 max_copies=0 copy_suffixes= bak_sizes=
+# largest total of $CUBRID/log in any sample
+server 20535512
+broker 22453837
