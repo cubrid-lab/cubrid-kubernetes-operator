@@ -50,7 +50,14 @@ what [the generated role](../../config/rbac/role.yaml) lists, in every
 namespace, to whoever holds the manager's ServiceAccount token, however little
 the manager's cache holds. To limit the authorization itself, replace the
 ClusterRoleBinding with namespace-bound RoleBindings, as shown below; the
-cluster-scoped `nodes` read is then unavailable. Client writes go directly to the API
+cluster-scoped `nodes` read is then unavailable. Without it, every Node read
+for the out-of-service taint is Forbidden: no member is ever fenced by a
+taint, so a silent member ranked above the only active master keeps the write
+quarantine in force until it answers again or an administrator releases it
+with the release annotation; after a manual release the read-write Brokers
+start again. A Forbidden Node read never counts as a fence, and it is logged
+and retried ([observability](../observability.md)).
+Client writes go directly to the API
 server; explicitly injected uncached readers/clients and any cluster-scoped
 resources are not restricted by a namespaced cache. Supply a namespace-bound
 `Role` and `RoleBinding` externally instead of applying the default manager
