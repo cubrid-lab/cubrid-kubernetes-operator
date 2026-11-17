@@ -98,7 +98,7 @@ detail() {
 # unknown on stderr. It runs in a command substitution, where errexit does not
 # stop it, so every step that can fail is checked here and fails as unknown.
 check() {
-  local code tag_sha="" page=1 count n published target
+  local code tag_exists=false tag_sha="" page=1 count n published target
   code=$(request "$API_URL/repos/$REPOSITORY/git/ref/tags/$TAG")
   case $code in
     200)
@@ -108,11 +108,16 @@ check() {
         echo unknown
         return
       fi
-      if ! tag_sha=$(jq -er '.object.sha | strings' "$work/body" 2> /dev/null); then
-        echo "tag lookup answered no object SHA: $(detail)" >&2
+      # A 200 means the tag exists. Its commit is only quoted in the refusal,
+      # but an answer without a full SHA is not one it recognizes: unknown,
+      # never create or resume.
+      if ! tag_sha=$(jq -er '.object.sha | strings' "$work/body" 2> /dev/null) ||
+        ! [[ $tag_sha =~ ^[0-9a-f]{40}$ ]]; then
+        echo "tag lookup answered no full object SHA: $(detail)" >&2
         echo unknown
         return
       fi
+      tag_exists=true
       ;;
     404)
       if [ "$(jq -r '.message? // empty' "$work/body" 2> /dev/null)" != "Not Found" ]; then
@@ -165,7 +170,7 @@ check() {
   fi
   if [ "$published" -gt 0 ]; then
     echo "refuse:$TAG is already published; a published version is never overwritten"
-  elif [ -n "$tag_sha" ]; then
+  elif [ "$tag_exists" = true ]; then
     echo "refuse:tag $TAG already exists at $tag_sha; a version with a tag is published or was made by hand, and a maintainer decides what happens to it"
   elif [ "$n" -gt 1 ]; then
     echo "refuse:$n releases are named $TAG; a maintainer removes the extra drafts"

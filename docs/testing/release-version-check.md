@@ -25,7 +25,7 @@ For a version tag such as `v0.1.0` and the candidate's full commit SHA:
 | The tag exists, at any commit | Refused: the version was published or tagged by hand; a maintainer decides |
 | A draft for another commit or a branch name | Refused: the version belongs to another candidate |
 | More than one release with the tag name | Refused: a maintainer removes the extra drafts |
-| A failed request, a server error, a refused token, a non-GitHub 404 or an answer it does not recognize | Retried, then refused; never read as absence |
+| A failed request, a server error, a refused token, a non-GitHub 404, a found tag without a full commit SHA, or an answer it does not recognize | Retried, then refused; never read as absence |
 
 It reads every page of the release list, so an older release on a later page
 is not missed. A page is accepted only if it is a JSON array whose every entry
