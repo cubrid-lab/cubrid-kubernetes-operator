@@ -219,7 +219,7 @@ const plainHAJUnitFile = "junit.xml"
 
 // The inputs are the existing hand-written legacy option controls, not a
 // registry-generated list. The frozen digest below protects every lane's
-// requirement order and notes while only the plain lane changes declaration.
+// requirement order and notes across key declaration changes.
 func TestHALaneDeclarationsPreserveExistingPlans(t *testing.T) {
 	type snapshot struct {
 		Lane     string
