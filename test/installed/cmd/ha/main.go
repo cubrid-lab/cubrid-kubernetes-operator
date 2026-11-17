@@ -104,6 +104,13 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"and makes the run a baseline")
 	flags.DurationVar(&cfg.PartitionHold, "partition-hold", 2*time.Minute,
 		"S07: how long the run holds the confirmed partition before it removes it; at least -partition-duration")
+	flags.DurationVar(&cfg.PartitionSettle, "partition-settle", 0,
+		"S07: how long the run waits for the cluster to settle after the cut was removed, recording when a "+
+			"member's server first becomes active; 0, the default, waits 5m. Counted in the -timeout check")
+	flags.BoolVar(&cfg.PartitionManualRelease, "partition-manual-release", false,
+		"S07: after the settle wait, when a quarantine only a person may release is in force on the run's own "+
+			"cluster, set a stale release token, which must be ignored, then the current one, and measure the "+
+			"return to service; off by default. Counted in the -timeout check")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,
