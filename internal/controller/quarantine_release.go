@@ -90,6 +90,8 @@ type manualReleaseInput struct {
 	Decision quarantineDecision
 	// IdentitiesUnknown says that the members' Pods could not be read.
 	IdentitiesUnknown bool
+	// NodeReadFailed says that a member's Node could not be read.
+	NodeReadFailed bool
 	// Identities are the members' Pods in this pass.
 	Identities map[string]memberIdentity
 }
@@ -105,8 +107,7 @@ type manualReleaseInput struct {
 // members this pass revised (which replaced its token) are inert. A pass that
 // decided from another revision than the stored one waits. Otherwise the
 // release is refused unless the pass saw exactly one active master and the
-// members' Pods: a manual release never opens the path beside no active
-// master, or two.
+// members' Pods, with no Node read failure.
 func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *databasev1alpha1.WriteQuarantineRelease) {
 	stored := in.Stored
 	switch {
@@ -141,6 +142,8 @@ func decideManualRelease(in manualReleaseInput) (manualReleaseVerdict, string, *
 		return manualReleaseWait, "", nil
 	case in.IdentitiesUnknown:
 		return manualReleaseRefused, "the members' Pods could not be read in this observation", nil
+	case in.NodeReadFailed:
+		return manualReleaseRefused, "a member's Node could not be read in this observation", nil
 	}
 	for _, m := range sq.Members {
 		// A Pod being terminated is still the Pod that was reviewed.
@@ -198,7 +201,7 @@ const manualReleaseWarning = "released on an administrator's annotation, not on 
 // inert or refused annotation is reported with a Warning Event once per value
 // and reason, and a refusal is recorded in the quarantine's releaseRefusal.
 func (r *CubridClusterReconciler) reconcileManualRelease(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	d quarantineDecision, ids map[string]memberIdentity, identitiesUnknown bool, now time.Time) (quarantineDecision, time.Duration) {
+	d quarantineDecision, ids map[string]memberIdentity, identitiesUnknown, nodeReadFailed bool, now time.Time) (quarantineDecision, time.Duration) {
 	if d.Quarantine != nil {
 		d.Quarantine.ReleaseRefusal = ""
 	}
@@ -215,7 +218,7 @@ func (r *CubridClusterReconciler) reconcileManualRelease(ctx context.Context, cl
 		stored = c
 	}
 	verdict, msg, rel := decideManualRelease(manualReleaseInput{Now: now, ClusterUID: string(cluster.UID),
-		Stored: stored, Decision: d, IdentitiesUnknown: identitiesUnknown, Identities: ids})
+		Stored: stored, Decision: d, IdentitiesUnknown: identitiesUnknown, NodeReadFailed: nodeReadFailed, Identities: ids})
 	value := ""
 	if stored != nil {
 		value = stored.Annotations[releaseWriteQuarantineAnnotation]

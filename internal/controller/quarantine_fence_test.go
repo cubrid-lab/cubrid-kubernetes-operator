@@ -26,8 +26,12 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -40,6 +44,120 @@ const (
 	node0 = "node-0"
 	node9 = "node-9"
 )
+
+func TestWriteQuarantineSeparatesNodeAndPodReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		nodeErr        error
+		podErr         error
+		wantQuarantine bool
+		wantRetry      bool
+	}{
+		{name: "Node read forbidden", nodeErr: apierrors.NewForbidden(schema.GroupResource{Resource: "nodes"},
+			node0, errors.New("Node read is denied")), wantQuarantine: true, wantRetry: true},
+		{name: "Node missing", wantQuarantine: true},
+		{name: "Node read timed out", nodeErr: context.DeadlineExceeded, wantQuarantine: true, wantRetry: true},
+		{name: "Pod read timed out", podErr: context.DeadlineExceeded, wantRetry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{
+				Name: "qc", Namespace: "ns", UID: "cluster-uid",
+			}}
+			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name: brokerDeploymentName(cluster.Name, brokerModeRW), Namespace: cluster.Namespace,
+				OwnerReferences: []metav1.OwnerReference{{UID: cluster.UID, Controller: new(true)}},
+			}, Spec: appsv1.DeploymentSpec{Replicas: new(int32(1))}}
+			objects := []client.Object{deployment}
+			for i, uid := range []types.UID{uid0, uid1, uid2} {
+				objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: quarantineMembers[i], Namespace: cluster.Namespace, UID: uid,
+				}, Spec: corev1.PodSpec{NodeName: node0}})
+			}
+			c := fake.NewClientBuilder().WithObjects(objects...).
+				WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch,
+					key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					switch obj.(type) {
+					case *corev1.Node:
+						if tc.nodeErr != nil {
+							return tc.nodeErr
+						}
+					case *corev1.Pod:
+						if tc.podErr != nil {
+							return tc.podErr
+						}
+					}
+					return c.Get(ctx, key, obj, opts...)
+				}}).Build()
+			r := &CubridClusterReconciler{Client: c, Clock: func() time.Time { return testNow }}
+			report := r.beginReport(cluster)
+			before, beforeErr := r.memberIdentities(ctx, cluster, quarantineMembers)
+			step := r.reconcileWriteQuarantine(ctx, cluster, quarantineMembers, cutOffBesideQ1(testNow),
+				testNow, q0, before, beforeErr)
+			if (step.err != nil) != tc.wantRetry {
+				t.Errorf("reconcile error = %v, want error %t", step.err, tc.wantRetry)
+			}
+			if report.noScaleUp != tc.wantRetry {
+				t.Errorf("scale-up blocked = %t, want %t", report.noScaleUp, tc.wantRetry)
+			}
+			q := cluster.Status.WriteQuarantine
+			if (q != nil) != tc.wantQuarantine {
+				t.Fatalf("write quarantine = %+v, want quarantine %t", q, tc.wantQuarantine)
+			}
+			if q != nil && (q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified ||
+				len(q.Members) != 1 || q.Members[0].PodUID != uid0) {
+				t.Errorf("quarantine = %+v, want the unverified member with its known Pod UID", q)
+			}
+			if len(cluster.Status.MemberFences) != 0 {
+				t.Errorf("recorded fences without observing a taint: %+v", cluster.Status.MemberFences)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(deployment), deployment); err != nil {
+				t.Fatal(err)
+			}
+			wantReplicas := int32(1)
+			if tc.wantQuarantine {
+				wantReplicas = 0
+			}
+			if got := *deployment.Spec.Replicas; got != wantReplicas {
+				t.Errorf("read-write Broker replicas = %d, want %d", got, wantReplicas)
+			}
+		})
+	}
+}
+
+func TestWriteQuarantineNodeReadFailureInterruptsRelease(t *testing.T) {
+	s := startUnverified(t)
+	firstAnswer := testNow.Add(3 * time.Second)
+	s.pass(firstAnswer, releasable(firstAnswer))
+	checkStarted := firstAnswer.Add(quarantineVerifyGap + time.Second)
+	d := s.pass(checkStarted, releasable(checkStarted))
+	if d.Quarantine == nil || d.Quarantine.ReleaseCheckSince == nil {
+		t.Fatalf("expected an active release check, got %+v", d.Quarantine)
+	}
+	now := checkStarted.Add(quarantineReleaseInterval)
+	d, err := decideWriteQuarantine(quarantineInput{
+		Now: now, ClusterUID: s.quarantine.ClusterUID, Members: quarantineMembers,
+		Identities: s.identities, Observations: releasable(now), Verifications: s.verifications,
+		Quarantine: s.quarantine, NodeReadFailed: true,
+	})
+	if err != nil || d.Released != nil || d.Quarantine == nil ||
+		d.Quarantine.ReleaseCheckSince != nil || d.Quarantine.ReleaseCheckLastTime != nil {
+		t.Fatalf("decision %+v, error %v; want an enforced quarantine with its release check reset", d, err)
+	}
+
+	stored := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{
+		UID:         types.UID(s.quarantine.ClusterUID),
+		Annotations: map[string]string{releaseWriteQuarantineAnnotation: s.quarantine.ReleaseToken},
+	}}
+	stored.Status.WriteQuarantine = s.quarantine
+	verdict, _, released := decideManualRelease(manualReleaseInput{
+		Now: now, ClusterUID: s.quarantine.ClusterUID, Stored: stored, Decision: d,
+		Identities: s.identities, NodeReadFailed: true,
+	})
+	if verdict != manualReleaseRefused || released != nil {
+		t.Fatalf("manual release verdict = %s, release = %+v; want a refusal", verdict, released)
+	}
+}
 
 // taintedAt is the out-of-service taint on node, added at added.
 func taintedAt(node string, added time.Time) outOfServiceTaint {

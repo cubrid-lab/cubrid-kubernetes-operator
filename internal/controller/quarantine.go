@@ -371,6 +371,9 @@ type quarantineInput struct {
 	// kept as they were, no quarantine is released, and the caller keeps the
 	// read-write Brokers at zero for the pass.
 	IdentitiesUnknown bool
+	// NodeReadFailed prevents release while taint evidence is incomplete.
+	// It does not invalidate Pod identities or suppress quarantine starts.
+	NodeReadFailed bool
 	// LastResolvedPrimary is status.lastResolvedPrimary before this pass.
 	LastResolvedPrimary string
 	// Terminations are the Pods whose termination the kubelet confirmed, as
@@ -629,9 +632,9 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 		return d, err
 	}
 	switch {
-	case in.IdentitiesUnknown || (q.ClusterUID != "" && q.ClusterUID != in.ClusterUID):
-		// Without the members' Pods, or for a quarantine recorded for another
-		// cluster UID, nothing is released.
+	case in.IdentitiesUnknown || in.NodeReadFailed || (q.ClusterUID != "" && q.ClusterUID != in.ClusterUID):
+		// An incomplete API read or a different cluster UID breaks the
+		// continuous release check.
 		q.ReleaseCheckSince, q.ReleaseCheckLastTime = nil, nil
 	case q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified,
 		q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning:
@@ -955,6 +958,8 @@ func startReturn(in quarantineInput, masters []string) (*databasev1alpha1.WriteQ
 	switch {
 	case in.IdentitiesUnknown:
 		return nil, "the members' Pods could not be read in this observation", nil
+	case in.NodeReadFailed:
+		return nil, "a member's Node could not be read in this observation", nil
 	case len(masters) == 0:
 		return nil, "no active master in this observation; a return needs exactly one to record beside it", nil
 	case len(masters) > 1:
@@ -1523,47 +1528,48 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 // before this pass; before are the members' Pods read before the probes, or
 // the error of that read. A member whose Pod differs in the read after the
 // probes verifies nothing in this pass. When either read failed, only the
-// rule of two active masters is applied and the read-write Brokers are not
-// scaled up in the pass; running ones keep running. A failure leaves the quarantine in the status as it
-// was, so that the read-write Brokers stay at zero, and is returned for a
-// retry.
+// rule of two active masters is applied. A failed Node read supplies no
+// fence evidence but still lets the Pod observations start or revise
+// quarantine. Both read failures prevent release and read-write Broker
+// scale-up in this pass, and return an error for retry.
 func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string, obs map[string]RoleObservation, now time.Time, lastResolved string,
 	before map[string]memberIdentity, beforeErr error) stepResult {
 	steps := stepResult{}
 	ids, err := r.memberIdentities(ctx, cluster, members)
-	unknown := errors.Join(beforeErr, err)
+	podReadErr := errors.Join(beforeErr, err)
 	unstable := map[string]bool{}
 	for _, m := range members {
-		if unknown == nil && before[m] != ids[m] {
+		if podReadErr == nil && before[m] != ids[m] {
 			unstable[m] = true
 		}
 	}
 	var nodes map[string]string
 	var fences map[string]outOfServiceTaint
-	if unknown == nil {
-		// A Node that could not be read is treated as Pods that could not
-		// be read: nothing is fenced, verified or released in this pass.
+	var nodeReadErr error
+	if podReadErr == nil {
 		var refused map[string]string
-		nodes, fences, refused, unknown = r.outOfServiceFences(ctx, cluster, members, obs, ids)
+		nodes, fences, refused, nodeReadErr = r.outOfServiceFences(ctx, cluster, members, obs, ids)
 		r.reportRefusedTaints(ctx, cluster, refused)
 	}
-	if unknown != nil {
-		logf.FromContext(ctx).Error(unknown, "Did not scale the read-write Brokers up: the members' Pods or Nodes could not be read")
+	readErr := errors.Join(podReadErr, nodeReadErr)
+	if readErr != nil {
+		logf.FromContext(ctx).Error(readErr, "Did not scale the read-write Brokers up: the members' Pods or Nodes could not be read")
 		if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
 			report.(*reconcileReport).noScaleUp = true
 		}
-		steps.err = fmt.Errorf("read the members' Pods for the write quarantine: %w", unknown)
+		steps.err = fmt.Errorf("read the members' Pods or Nodes for the write quarantine: %w", readErr)
 	}
 	state := r.quarantineState(cluster)
 	request, ignored := returnRequest(cluster, members)
 	terminations := cluster.Status.MemberTerminations
-	if unknown == nil {
+	if podReadErr == nil {
 		terminations = r.recordTerminations(ctx, cluster, members, before, ids)
 	}
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
-		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
+		Unstable: unstable, IdentitiesUnknown: podReadErr != nil,
+		NodeReadFailed: nodeReadErr != nil, LastResolvedPrimary: lastResolved,
 		Terminations:    terminations,
 		Verifications:   withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
 		Quarantine:      withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)),
@@ -1579,7 +1585,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	}
 	state.verifications = d.Verifications
 	var releaseRetry time.Duration
-	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, ids, unknown != nil, now)
+	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, ids, podReadErr != nil, nodeReadErr != nil, now)
 	cluster.Status.MemberVerifications = d.Verifications
 	cluster.Status.MemberTerminations = d.Terminations
 	cluster.Status.MemberFences = d.MemberFences
@@ -1665,7 +1671,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 	}
 	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
-		d.Quarantine != nil || unknown != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
+		d.Quarantine != nil || readErr != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
 	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
 		steps.err = errors.Join(steps.err, err)
 	}

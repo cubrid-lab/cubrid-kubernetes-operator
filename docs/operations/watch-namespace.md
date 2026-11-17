@@ -74,6 +74,12 @@ subjects:
     namespace: candidate-system
 ```
 
+If a Node lookup is denied or times out, the Operator has no verified taint
+evidence from that pass. It can still start a write quarantine from known
+member Pod identities and HA role observations. It retries the lookup and
+prevents quarantine release and read-write Broker scale-up for that pass.
+An absent Node also supplies no fence evidence.
+
 Keep `--operator-namespace` set to the namespace where the Operator actually
 runs (or retain its service-account namespace default). It independently
 controls Instance Manager NetworkPolicy admission; watch scope does not change
