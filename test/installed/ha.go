@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -454,6 +455,9 @@ type haRun struct {
 	s06 *evidence.Scenario
 	// s15 is the result of the S15 node drain, once it ran.
 	s15 *evidence.Scenario
+	// drainMu serializes S15's cordon and uncordon of its node, which the
+	// fault's steps, its cleanup and the run's end can each attempt.
+	drainMu sync.Mutex
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
 	// denied-credentials, s11Signature that of S11 signature-mismatch and

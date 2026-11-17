@@ -88,7 +88,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"runs")
 	flags.DurationVar(&cfg.FailoverLimit, "failover-limit", 30*time.Second,
 		"S04: bound from the VM stop being issued, S15: from the member's eviction, until every client's writes "+
-			"are acknowledged again (failover_limit); in S15, 0 is unset")
+			"are acknowledged again (failover_limit); in S15 the default is not used: unset unless this flag is "+
+			"given")
 	flags.DurationVar(&cfg.DrainLimit, "drain-limit", 0,
 		"S15: bound from the cordon until the drained node's member and Broker Pods are gone or the eviction is "+
 			"refused (drain_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
@@ -272,6 +273,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 			return err
 		}
 	}
+	s15FailoverLimit(&cfg, set)
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
 	}
@@ -310,4 +312,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	return runner.RunHA(ctx, cfg)
+}
+
+// s15FailoverLimit leaves the node drain's failover_limit unset unless
+// -failover-limit was given: the flag's default is the Kind value, and the
+// contract records none for the VM lab, so the default must not judge a lab
+// drain. set holds the flags given.
+func s15FailoverLimit(cfg *installed.HAConfig, set map[string]bool) {
+	if (cfg.Fault == installed.FaultDrainSlaveNode || cfg.Fault == installed.FaultDrainMasterNode) &&
+		!set["failover-limit"] {
+		cfg.FailoverLimit = 0
+	}
 }

@@ -262,10 +262,19 @@ type s15Lab struct {
 	// refuse answers every member eviction after the first with the budget's
 	// refusal; allowAll lets a second member go, as a missing budget would.
 	refuse bool
+	// patch, when set, plays the API server for a node patch.
+	patch func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch,
+		opts ...client.PatchOption) error
 }
 
 func (l *s15Lab) hooks() interceptor.Funcs {
-	return interceptor.Funcs{SubResourceCreate: func(ctx context.Context, c client.Client, sub string,
+	return interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object,
+		patch client.Patch, opts ...client.PatchOption) error {
+		if l.patch != nil {
+			return l.patch(ctx, c, obj, patch, opts...)
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}, SubResourceCreate: func(ctx context.Context, c client.Client, sub string,
 		obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 		if sub != "eviction" {
 			return errors.New("unexpected subresource " + sub)

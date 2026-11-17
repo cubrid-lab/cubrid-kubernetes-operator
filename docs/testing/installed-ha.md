@@ -670,7 +670,13 @@ lane does not cover a spare node the member could move to.
 The lane drains **only the run's own Pods**. It never runs `kubectl drain`,
 which would evict every namespace's Pods on the node:
 
-- it cordons the node, which keeps every new Pod off it but moves none;
+- it cordons the node, which keeps every new Pod off it but moves none. The
+  same patch marks the node with the annotation
+  `cubrid-lab.io/cordoned-by=<run namespace>`, and it applies only to the
+  node as the run read it (an optimistic lock on its `resourceVersion`): a
+  node someone cordons between the run's read and its patch is refused, never
+  adopted. The request is recorded (`cordonRequested`) and `record.json`
+  written before the patch is sent;
 - it evicts the run's member Pod on the node, and then each Broker Pod of the
   run's cluster still on it, through the Eviction API (`policy/v1`), with the
   Pod's UID as a precondition. A Pod outside the run namespace, of another
@@ -678,17 +684,32 @@ which would evict every namespace's Pods on the node:
   attempt is recorded under `foreignEvictionsRefused` and fails S15;
 - it makes the node schedulable again when S15 ends, whatever its result:
   after a failure, at the run's `-timeout`, or on `SIGINT`, `SIGTERM` or
-  `SIGHUP`. It uncordons only a node it cordoned itself
-  (`cordonedByRun`); a node cordoned before the run is refused and left as it
-  was. A run killed with `SIGKILL` cannot clean up: `record.json` is written
-  as soon as the node is cordoned, so check `cordonedByRun` and `uncordoned`
-  there and run `kubectl uncordon <node>` when the first is `true` and the
-  second `false`.
+  `SIGHUP`, and also when the answer to its cordon was lost. It does so only
+  while the node still carries the run's mark, and removes the mark in the
+  same optimistically locked patch; a node cordoned before the run, or
+  cordoned again under another mark, is left as it is and the result says so
+  (`uncordonError`). `uncordonedBy` says which path undid the cordon.
+- when the run's context ends (a signal, `-timeout`, or the lab launcher's
+  `SIGTERM` after a lost Lease), the uncordon starts at once, without waiting
+  for a step of the drain that is still running, within 10 seconds of its
+  own. The launcher sends `SIGKILL` 2 seconds after `SIGTERM`; one patch
+  normally fits, but a slow API server can leave the node cordoned, and
+  `SIGKILL` itself allows no cleanup. Find a node a run left cordoned, and
+  undo it, with:
+
+  ```sh
+  kubectl get nodes -o custom-columns='NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,CORDONED-BY:.metadata.annotations.cubrid-lab\.io/cordoned-by'
+  kubectl uncordon <node> && kubectl annotate node <node> cubrid-lab.io/cordoned-by-
+  ```
+
+  Undo only a node whose `CORDONED-BY` names a run namespace that no longer
+  runs; `record.json` of that run says what it cordoned
+  (`cordonRequested`, `cordonedByRun`, `uncordoned`).
 
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
   ...the LAB01 inputs above... -level vm-lab \
-  -fault drain-slave-node [-drain-limit <duration>] [-failover-limit 30s] [-stable-period 30s]'
+  -fault drain-slave-node [-drain-limit <duration>] [-failover-limit <duration>] [-stable-period 30s]'
 ```
 
 Use `-fault drain-master-node` for the master's node. `-check
@@ -698,8 +719,11 @@ select the same runs.
 1. The run picks the member to drain: the master for `drain-master-node`;
    otherwise the first slave whose node does not run the workload client.
    With `drain-master-node` the client is started on another node than the
-   master's, as in S04. It also picks the slave whose eviction must be
-   refused later. S15 is blocked, and nothing is changed, when:
+   master's, as in S04. For `drain-slave-node` it also picks the other slave,
+   whose eviction must be refused later; for `drain-master-node` that slave is
+   picked once CUBRID promoted one of the two, as the one that was not
+   promoted, so the master stays up even if the budget wrongly allowed the
+   eviction. S15 is blocked, and nothing is changed, when:
    - another member runs on the same node;
    - the node is cordoned already, or not `Ready`;
    - one of the member's persistent volumes is not bound to that node by a
@@ -708,8 +732,9 @@ select the same runs.
    - the members' PodDisruptionBudget `ha-database` is missing or does not
      allow one disruption.
 
-   `record.json` keeps the volumes (`volumes`), the schedulable nodes that run
-   no member (`spareNodes`, for the record only) and the three budgets with
+   `record.json` keeps the volumes (`volumes`), the nodes a member could be
+   scheduled to that run none (`spareNodes`: Ready, not cordoned, without a
+   `NoSchedule` or `NoExecute` taint; for the record only) and the three budgets with
    their `maxUnavailable`, unhealthy-Pod policy and status (`budgetsBefore`).
 2. As in S04, the run reads each node's clock and is blocked on an offset over
    a second. It starts two clients writing through `<cluster>-rw` that
@@ -740,7 +765,9 @@ select the same runs.
      (`degradedConditions`);
    - the two members that run must report one master: for
      `drain-slave-node` the same master as before, for `drain-master-node`
-     a promoted one (`newMaster`) that does not change again;
+     a promoted one (`newMaster`) that does not change again. Two members
+     that report themselves active masters in two consecutive sweeps are a
+     never-event (`twoActiveMasters`) and fail S15;
    - the other slave's eviction is asked once (`secondEvictionOutcome`). The
      budget must refuse it with `429` and the `DisruptionBudget` cause
      (`pdb-blocked`). An eviction it allows is two members evicted at once,
@@ -757,7 +784,9 @@ select the same runs.
    it, with every member `Ready`, CUBRID reporting one master and two slaves,
    `status.currentPrimary` naming the master and the starting conditions
    `True`, within ten minutes. For `drain-slave-node` the master must still be
-   the one before the drain.
+   the one before the drain. Every member other than the drained one must
+   still be the same Pod with the same database container: one replaced or
+   restarted is a never-event (`otherMembersChanged`), as in S03.
 7. The clients go on for `-stable-period`, then stop. Each reconnecting client
    must be acknowledged again without interruption for at least the stable
    period. What happened to the connection `s15open` held is recorded, not
@@ -773,13 +802,13 @@ by its limits with the rules of `faults.Judge`, as every scenario is:
 | Limit | Flag | Measured |
 |---|---|---|
 | `drain_limit` | `-drain-limit` (default `0`, unset) | `drainWithin`: from the cordon until the member's Pod and the run's Broker Pods left the node |
-| `failover_limit` | `-failover-limit` (default 30 seconds) | `failoverWithin`: from the member's eviction request until the slower reconnecting client was acknowledged again without interruption, on the client's clock |
+| `failover_limit` | `-failover-limit` (unset unless given: its default of 30 seconds is the Kind value and is not used for S15) | `failoverWithin`: from the member's eviction request until the slower reconnecting client was acknowledged again without interruption, on the client's clock |
 | `stable_period` | `-stable-period` (default 30 seconds) | `shortestStableFor` |
 
 The contract records no VM-lab value for `drain_limit` or `failover_limit`.
 A limit of `0` is unset and makes the run a baseline: `blocked` with
-`time_limit_unset`, never `pass`. With the default `-drain-limit 0`, a run in
-which every check held is such a baseline run. A limit that is set but whose
+`time_limit_unset`, never `pass`. Without `-drain-limit` and
+`-failover-limit`, a run in which every check held is such a baseline run. A limit that is set but whose
 time was not measured blocks S15 with `measurement_missing`. Do not choose a
 limit from a single run to obtain a pass; the contract's
 [time limits](scenario-contract.md#time-limits) say how a value is set.
@@ -804,9 +833,11 @@ Evidence, under `S15/<variant>/`:
 - `clients/<client>.jsonl` when S15 ended before it read the clients, as
   in S04.
 
-Beyond LAB01's, the account needs `patch` on Nodes (to cordon and
-uncordon), `get` on PersistentVolumes, and in the run namespace `create` on
-`pods/eviction` and `list` on PodDisruptionBudgets and EndpointSlices.
+Beyond LAB01's, the account needs `get`, `list` and `patch` on Nodes (to
+pick and check the node, and to cordon and uncordon it with the annotation),
+`get` on PersistentVolumes, and in the run namespace `get` on
+PersistentVolumeClaims, `create` on `pods/eviction` and `list` on
+PodDisruptionBudgets and EndpointSlices.
 
 The lane has not run on the lab yet. A pass would be the first real-node
 observation of the policy that ADR-0012 and the

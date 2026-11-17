@@ -288,7 +288,9 @@ func readS15Record(t *testing.T, dir, variant string) s15Record {
 func TestRunS15PassesWhenTheBudgetHoldsTheSecondMember(t *testing.T) {
 	for _, tc := range []struct{ variant, target, second, final string }{
 		{FaultDrainSlaveNode, testMemberHA0, testMemberLast, testHAPrimary},
-		{FaultDrainMasterNode, testHAPrimary, testMemberHA0, testMemberHA0},
+		// The second eviction waits for the promotion and targets the slave:
+		// ha-0 is promoted, so ha-2 is asked for.
+		{FaultDrainMasterNode, testHAPrimary, testMemberLast, testMemberHA0},
 	} {
 		t.Run(tc.variant, func(t *testing.T) {
 			cfg := testS15Config(t, tc.variant)

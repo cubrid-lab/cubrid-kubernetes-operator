@@ -169,12 +169,14 @@ type s15Record struct {
 	// CordonedByRun is set when this run made the node unschedulable, and
 	// only then does the run make it schedulable again: a node cordoned
 	// before the run is refused and left as it was.
-	CordonedByRun bool          `json:"cordonedByRun"`
-	CordonedAt    *time.Time    `json:"cordonedAt,omitempty"`
-	Uncordoned    bool          `json:"uncordoned"`
-	UncordonedAt  *time.Time    `json:"uncordonedAt,omitempty"`
-	UncordonError string        `json:"uncordonError,omitempty"`
-	Evictions     []s15Eviction `json:"evictions"`
+	CordonRequested bool          `json:"cordonRequested"`
+	CordonedByRun   bool          `json:"cordonedByRun"`
+	CordonedAt      *time.Time    `json:"cordonedAt,omitempty"`
+	Uncordoned      bool          `json:"uncordoned"`
+	UncordonedAt    *time.Time    `json:"uncordonedAt,omitempty"`
+	UncordonError   string        `json:"uncordonError,omitempty"`
+	UncordonedBy    string        `json:"uncordonedBy,omitempty"`
+	Evictions       []s15Eviction `json:"evictions"`
 	// ForeignEvictions are Pods the run was about to evict that are not its
 	// own; none was sent to the API, and any fails the result.
 	ForeignEvictions []string   `json:"foreignEvictionsRefused,omitempty"`
@@ -205,8 +207,15 @@ type s15Record struct {
 	OpenConnection *s15OpenConnection `json:"openConnection,omitempty"`
 	// RejoinedAt is when, after the node was uncordoned, the member ran on
 	// it again and the cluster converged; FinalMaster the master then.
-	RejoinedAt  *time.Time `json:"rejoinedAt,omitempty"`
-	FinalMaster string     `json:"finalMaster,omitempty"`
+	RejoinedAt *time.Time `json:"rejoinedAt,omitempty"`
+	// TwoMasters names two members that reported themselves active masters
+	// in two consecutive sweeps while the member was missing; dualMasters
+	// counts the consecutive sweeps. OthersChanged names a member other than
+	// the drained one whose Pod or container changed by the end.
+	TwoMasters    []string `json:"twoActiveMasters,omitempty"`
+	dualMasters   int
+	OthersChanged []string `json:"otherMembersChanged,omitempty"`
+	FinalMaster   string   `json:"finalMaster,omitempty"`
 	// Observed are the run's observations in time order, in UTC.
 	Observed     []faults.Step      `json:"observed"`
 	ClockOffsets map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
@@ -344,27 +353,183 @@ func (f nodeDrain) Name() string {
 
 func (f nodeDrain) Inject(ctx context.Context) error {
 	h, rec := f.h, f.rec
-	node := &corev1.Node{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.TargetNode}, node); err != nil {
-		return fmt.Errorf("read node %s: %w", rec.TargetNode, err)
+	if err := h.cordonNode(ctx, rec); err != nil {
+		return err
 	}
-	if node.Spec.Unschedulable {
-		rec.note("node_already_cordoned", rec.TargetNode)
-		return fmt.Errorf("node %s was cordoned before the drain, not by this run: the run leaves it as it is",
-			rec.TargetNode)
-	}
-	patch := client.MergeFrom(node.DeepCopy())
-	node.Spec.Unschedulable = true
-	if err := h.Client.Patch(ctx, node, patch); err != nil {
-		return fmt.Errorf("cordon node %s: %w", rec.TargetNode, err)
-	}
-	now := time.Now().UTC()
-	rec.CordonedByRun, rec.CordonedAt = true, &now
 	rec.note("cordoned", rec.TargetNode)
-	// Kept at once, so that a run killed later still says what it cordoned.
-	_ = h.writeJSON(s15File(rec.Variant, "record.json"), rec)
-	_, err := f.evictTarget(ctx)
+	gone, err := f.evictTarget(ctx)
+	if err == nil && gone && rec.targetEviction() == nil {
+		return fmt.Errorf("member %s was gone before the run evicted it", rec.TargetPod.Pod)
+	}
 	return err
+}
+
+// cordonMaxConflicts bounds how often the cordon is tried again after a
+// conflicting write to the node, such as the kubelet's status update.
+const cordonMaxConflicts = 5
+
+// cordonNode makes the drained node unschedulable and marks it with
+// drainOwnerAnnotation, naming the run namespace, in one patch that holds
+// only for the node as it was read (optimistic lock). The request is
+// recorded, and record.json written, before the patch is sent, so that a
+// patch whose answer is lost is still undone. A node cordoned by anyone
+// else, also between the read and the patch, is refused and left as it is.
+func (h *haRun) cordonNode(ctx context.Context, rec *s15Record) error {
+	owner := h.cfg.Namespace
+	for conflicts := 0; ; conflicts++ {
+		node := &corev1.Node{}
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.TargetNode}, node); err != nil {
+			return fmt.Errorf("read node %s: %w", rec.TargetNode, err)
+		}
+		if node.Spec.Unschedulable && node.Annotations[drainOwnerAnnotation] == owner {
+			// An earlier patch of this run took effect though its answer was lost.
+			h.confirmCordon(rec)
+			return nil
+		}
+		if node.Spec.Unschedulable {
+			rec.note("node_already_cordoned", rec.TargetNode)
+			return fmt.Errorf("node %s is cordoned, not by this run (%s=%q): the run leaves it as it is",
+				rec.TargetNode, drainOwnerAnnotation, node.Annotations[drainOwnerAnnotation])
+		}
+		h.drainMu.Lock()
+		rec.CordonRequested = true
+		_ = h.writeJSON(s15File(rec.Variant, "record.json"), rec)
+		h.drainMu.Unlock()
+		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		node.Spec.Unschedulable = true
+		if node.Annotations == nil {
+			node.Annotations = map[string]string{}
+		}
+		node.Annotations[drainOwnerAnnotation] = owner
+		err := h.Client.Patch(ctx, node, patch)
+		if err == nil {
+			h.confirmCordon(rec)
+			return nil
+		}
+		if !apierrors.IsConflict(err) || conflicts >= cordonMaxConflicts {
+			return fmt.Errorf("cordon node %s: %w", rec.TargetNode, err)
+		}
+	}
+}
+
+func (h *haRun) confirmCordon(rec *s15Record) {
+	h.drainMu.Lock()
+	defer h.drainMu.Unlock()
+	now := time.Now().UTC()
+	rec.CordonRequested, rec.CordonedByRun, rec.CordonedAt = true, true, &now
+	_ = h.writeJSON(s15File(rec.Variant, "record.json"), rec)
+}
+
+// uncordonNode makes the drained node schedulable again and removes the
+// run's mark, in one optimistically locked patch, if this run asked to
+// cordon it and the node still carries the run's mark. A node without the
+// mark and not cordoned holds nothing of the run's; one cordoned under
+// another mark is someone else's and is left as it is, with an error. It is
+// safe to call more than once and from more than one goroutine; by says
+// which path undid the cordon.
+func (h *haRun) uncordonNode(ctx context.Context, rec *s15Record, by string) error {
+	h.drainMu.Lock()
+	defer h.drainMu.Unlock()
+	if !rec.CordonRequested || rec.Uncordoned {
+		return nil
+	}
+	owner := h.cfg.Namespace
+	var last error
+	for {
+		node := &corev1.Node{}
+		err := h.Client.Get(ctx, client.ObjectKey{Name: rec.TargetNode}, node)
+		mark := node.Annotations[drainOwnerAnnotation]
+		switch {
+		case err != nil:
+			last = fmt.Errorf("read node %s: %w", rec.TargetNode, err)
+		case mark != owner && !node.Spec.Unschedulable:
+			now := time.Now().UTC()
+			rec.Uncordoned, rec.UncordonedAt, rec.UncordonedBy, rec.UncordonError = true, &now,
+				by+": the node held no cordon of this run", ""
+			return nil
+		case mark != owner:
+			rec.UncordonError = fmt.Sprintf("node %s is cordoned by %s=%q, not by this run: left as it is",
+				rec.TargetNode, drainOwnerAnnotation, mark)
+			return errors.New(rec.UncordonError)
+		default:
+			if rec.CordonedAt == nil {
+				// The cordon took effect, though its answer was lost.
+				now := time.Now().UTC()
+				rec.CordonedByRun, rec.CordonedAt = true, &now
+			}
+			patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+			node.Spec.Unschedulable = false
+			delete(node.Annotations, drainOwnerAnnotation)
+			if last = h.Client.Patch(ctx, node, patch); last == nil {
+				now := time.Now().UTC()
+				rec.Uncordoned, rec.UncordonedAt, rec.UncordonedBy, rec.UncordonError = true, &now, by, ""
+				return nil
+			}
+			if apierrors.IsConflict(last) {
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			rec.UncordonError = fmt.Sprintf("make node %s schedulable again: %v (%v)", rec.TargetNode, ctx.Err(), last)
+			return errors.New(rec.UncordonError)
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+}
+
+// s15EndUncordonBound bounds the uncordon at the run's end. The lab's
+// launcher kills the run 2 seconds after its SIGTERM, so it must not wait
+// for a step still running.
+var s15EndUncordonBound = 10 * time.Second
+
+// uncordonOnEnd undoes the run's cordon as soon as ctx ends, as on a
+// signal, the run's timeout or a lost Lease, without waiting for a step of
+// the fault that is still running; the fault's own cleanup does nothing
+// more then. The returned func stops the watch when the scenario ends.
+func (h *haRun) uncordonOnEnd(ctx context.Context, rec *s15Record) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			end, cancel := context.WithTimeout(context.WithoutCancel(ctx), s15EndUncordonBound)
+			defer cancel()
+			_ = h.uncordonNode(end, rec, "the run's end")
+		}
+	}()
+	return func() { close(done) }
+}
+
+// changedMembers names each member other than drained whose Pod or database
+// container is not the one before, with what it now is.
+func changedMembers(before, after []imageIdentity, drained string) []string {
+	var changed []string
+	for _, was := range before {
+		if was.Pod == drained {
+			continue
+		}
+		for _, now := range after {
+			if now.Pod == was.Pod && (now.UID != was.UID || now.ContainerID != was.ContainerID) {
+				changed = append(changed, fmt.Sprintf("%s has Pod UID %s and container %s, was %s and %s",
+					was.Pod, now.UID, now.ContainerID, was.UID, was.ContainerID))
+			}
+		}
+	}
+	return changed
+}
+
+// spareNode reports whether a member could be scheduled to node: Ready, not
+// cordoned, without a NoSchedule or NoExecute taint, and running no member.
+func spareNode(node *corev1.Node, members []imageIdentity) bool {
+	ready := slices.ContainsFunc(node.Status.Conditions, func(c corev1.NodeCondition) bool {
+		return c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue
+	})
+	tainted := slices.ContainsFunc(node.Spec.Taints, func(t corev1.Taint) bool {
+		return t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute
+	})
+	return ready && !node.Spec.Unschedulable && !tainted &&
+		!slices.ContainsFunc(members, func(m imageIdentity) bool { return m.Node == node.Name })
 }
 
 // evictTarget evicts the drained member's Pod unless it is gone or replaced,
@@ -458,20 +623,10 @@ func (f nodeDrain) Confirm(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// Remove makes the node schedulable again if this run cordoned it.
+// Remove makes the node schedulable again if this run asked to cordon it
+// and the node still carries the run's mark (uncordonNode).
 func (f nodeDrain) Remove(ctx context.Context) error {
-	h, rec := f.h, f.rec
-	if !rec.CordonedByRun || rec.Uncordoned {
-		return nil
-	}
-	if err := h.uncordon(ctx, rec.TargetNode); err != nil {
-		rec.UncordonError = err.Error()
-		return fmt.Errorf("make node %s schedulable again: %w", rec.TargetNode, err)
-	}
-	now := time.Now().UTC()
-	rec.Uncordoned, rec.UncordonedAt, rec.UncordonError = true, &now, ""
-	rec.note("uncordoned", rec.TargetNode)
-	return nil
+	return f.h.uncordonNode(ctx, f.rec, "the fault's cleanup")
 }
 
 // secondEviction asks to evict another member while the drained one is
@@ -550,11 +705,14 @@ func (h *haRun) s15Placement(ctx context.Context, rec *s15Record) error {
 			return fmt.Errorf("member %s runs on node %s too: the drain would take two members", member.Pod,
 				rec.TargetNode)
 		}
-		if rec.SecondMember == "" && member.Pod != rec.TargetPod.Pod && member.Pod != rec.Master {
+		// For the master's node the slave to ask for is known only once
+		// CUBRID promoted the other one (observeSurvivors).
+		if rec.Variant == FaultDrainSlaveNode && rec.SecondMember == "" && member.Pod != rec.TargetPod.Pod &&
+			member.Pod != rec.Master {
 			rec.SecondMember, rec.SecondNode = member.Pod, member.Node
 		}
 	}
-	if rec.SecondMember == "" {
+	if rec.Variant == FaultDrainSlaveNode && rec.SecondMember == "" {
 		return errors.New("no slave is left to ask a second eviction for")
 	}
 	node := &corev1.Node{}
@@ -578,16 +736,10 @@ func (h *haRun) s15Placement(ctx context.Context, rec *s15Record) error {
 		return fmt.Errorf("list the nodes: %w", err)
 	}
 	rec.SpareNodes = []string{}
-	for _, n := range nodes.Items {
-		ready := slices.ContainsFunc(n.Status.Conditions, func(c corev1.NodeCondition) bool {
-			return c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue
-		})
-		if !ready || n.Spec.Unschedulable || slices.ContainsFunc(rec.MembersBefore, func(m imageIdentity) bool {
-			return m.Node == n.Name
-		}) {
-			continue
+	for i := range nodes.Items {
+		if spareNode(&nodes.Items[i], rec.MembersBefore) {
+			rec.SpareNodes = append(rec.SpareNodes, nodes.Items[i].Name)
 		}
-		rec.SpareNodes = append(rec.SpareNodes, n.Name)
 	}
 	return nil
 }
@@ -747,7 +899,7 @@ func (h *haRun) whileDrained(ctx context.Context, rec *s15Record) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	if rec.SecondEviction == "" || rec.SecondEviction == evictionThrottled {
+	if rec.SecondMember != "" && (rec.SecondEviction == "" || rec.SecondEviction == evictionThrottled) {
 		if err := h.secondEviction(ctx, rec); err != nil {
 			return false, err
 		}
@@ -814,6 +966,16 @@ func (h *haRun) observeDegraded(ctx context.Context, rec *s15Record, now time.Ti
 func (h *haRun) observeSurvivors(ctx context.Context, rec *s15Record, now time.Time) (bool, error) {
 	survivors := slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == rec.TargetPod.Pod })
 	masters, _, unmet := h.survivorRoles(ctx, survivors)
+	if unmet == "" && len(masters) > 1 {
+		// One sweep can catch a promotion under way; two in a row cannot.
+		if rec.dualMasters++; rec.dualMasters >= 2 {
+			rec.TwoMasters = masters
+			return false, fmt.Errorf("two members reported themselves active masters in two consecutive sweeps: %s",
+				strings.Join(masters, " and "))
+		}
+		return false, nil
+	}
+	rec.dualMasters = 0
 	if unmet != "" || len(masters) != 1 {
 		return false, nil
 	}
@@ -825,6 +987,13 @@ func (h *haRun) observeSurvivors(ctx context.Context, rec *s15Record, now time.T
 	case rec.Variant == FaultDrainMasterNode && rec.NewMaster == "":
 		rec.NewMaster, rec.PromotedAt = masters[0], &now
 		rec.note("promoted", masters[0])
+		// The second eviction is asked for the survivor that is not the
+		// master, so the master stays up if the budget wrongly allows it.
+		for _, m := range rec.MembersBefore {
+			if m.Pod != rec.TargetPod.Pod && m.Pod != rec.NewMaster {
+				rec.SecondMember, rec.SecondNode = m.Pod, m.Node
+			}
+		}
 	case rec.Variant == FaultDrainMasterNode && masters[0] != rec.NewMaster:
 		return false, fmt.Errorf("the master changed a second time, from %s to %s", rec.NewMaster, masters[0])
 	}
@@ -927,6 +1096,10 @@ func (h *haRun) rejoined(ctx context.Context, rec *s15Record) (bool, string, err
 		return false, unmet, err
 	}
 	rec.MembersAfter, rec.FinalMaster = members, roles.Master
+	if rec.OthersChanged = changedMembers(rec.MembersBefore, members, rec.TargetPod.Pod); len(rec.OthersChanged) > 0 {
+		return false, "", fmt.Errorf("a member other than %s was replaced or restarted: %s", rec.TargetPod.Pod,
+			strings.Join(rec.OthersChanged, "; "))
+	}
 	return true, "", nil
 }
 
@@ -963,6 +1136,14 @@ func s15NeverEvents(rec *s15Record) []string {
 	if len(rec.ForeignEvictions) > 0 {
 		never = append(never, "the run tried to evict Pods that are not its own: "+
 			strings.Join(rec.ForeignEvictions, "; "))
+	}
+	if len(rec.TwoMasters) > 0 {
+		never = append(never, "two members reported themselves active masters in two consecutive sweeps: "+
+			strings.Join(rec.TwoMasters, " and "))
+	}
+	if len(rec.OthersChanged) > 0 {
+		never = append(never, "a member other than the drained one was replaced or restarted: "+
+			strings.Join(rec.OthersChanged, "; "))
 	}
 	return never
 }
@@ -1021,7 +1202,7 @@ func cmpOr(s, def string) string {
 func s15Broken(rec *s15Record, clients *clientAnswers, limits s15Limits) string {
 	first := rec.targetEviction()
 	switch {
-	case rec.CordonedByRun && !rec.Uncordoned:
+	case (rec.CordonRequested || rec.CordonedByRun) && !rec.Uncordoned:
 		return fmt.Sprintf("node %s, cordoned by the run, was not made schedulable again: %s", rec.TargetNode,
 			rec.UncordonError)
 	case first != nil && first.Outcome == evictionPDBBlocked:
@@ -1187,7 +1368,10 @@ func (h *haRun) runS15(ctx context.Context) (result evidence.Scenario) {
 		if result.Limits == nil {
 			result.Limits = judgeS15(rec, clients, h.s15Limits()).Limits
 		}
-		if err := h.writeJSON(s15File(variant, "record.json"), rec); err != nil {
+		h.drainMu.Lock()
+		err := h.writeJSON(s15File(variant, "record.json"), rec)
+		h.drainMu.Unlock()
+		if err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S15 evidence: "+err.Error()
 		}
 		result.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
@@ -1219,6 +1403,8 @@ func (h *haRun) runS15(ctx context.Context) (result evidence.Scenario) {
 		"APP_CONNECTION_DIAGNOSTICS=/tmp/"+s15OpenClient+".diag.jsonl "); err != nil {
 		return end(evidence.Blocked, "start the open-connection client: %v", err)
 	}
+	stopWatch := h.uncordonOnEnd(ctx, rec)
+	defer stopWatch()
 	outcome := faults.Run(ctx, faults.Scenario{
 		Fault: nodeDrain{h: h, rec: rec},
 		Limits: faults.Limits{Confirm: s15ConfirmBound, Outcome: s15OutcomeBound, Cleanup: s15CleanupBound,
@@ -1254,7 +1440,8 @@ func (h *haRun) runS15(ctx context.Context) (result evidence.Scenario) {
 		return result
 	}
 	if err := h.waitRejoin(ctx, rec); err != nil {
-		if _, ok := errors.AsType[membersNotObserved](err); ok {
+		result.NeverEvents = s15NeverEvents(rec)
+		if _, ok := errors.AsType[membersNotObserved](err); ok && len(result.NeverEvents) == 0 {
 			return end(evidence.Blocked, "%v", err)
 		}
 		return end(evidence.Fail, "%v", err)
@@ -1275,7 +1462,11 @@ func (h *haRun) finishS15(ctx context.Context, rec *s15Record, result *evidence.
 		return end(evidence.Fail, "stop the clients: %v", err)
 	}
 	rec.ClientsStopped = true
-	faultAt := *rec.firstTargetEviction()
+	evicted := rec.firstTargetEviction()
+	if evicted == nil {
+		return end(evidence.Blocked, "member %s was gone before the run evicted it", rec.TargetPod.Pod)
+	}
+	faultAt := *evicted
 	clientFaultAt := faultAt
 	if h.rec.Client != nil {
 		clientFaultAt = faultAt.Add(time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second)))
@@ -1360,12 +1551,9 @@ func (h *haRun) endS15Clients(ctx context.Context, rec *s15Record, result *evide
 // context has ended. A failure to do so fails a passing S15 and is added to
 // any other reason.
 func (h *haRun) endDrainCordon(ctx context.Context, rec *s15Record, result *evidence.Scenario) {
-	if !rec.CordonedByRun || rec.Uncordoned {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s15CleanupBound)
 	defer cancel()
-	err := nodeDrain{h: h, rec: rec}.Remove(ctx)
+	err := h.uncordonNode(ctx, rec, "the scenario's end")
 	if err == nil {
 		return
 	}
@@ -1377,3 +1565,6 @@ func (h *haRun) endDrainCordon(ctx context.Context, rec *s15Record, result *evid
 }
 
 var _ faults.Fault = nodeDrain{}
+
+// drainOwnerAnnotation marks a node S15 cordoned with the run namespace.
+const drainOwnerAnnotation = "cubrid-lab.io/cordoned-by"
