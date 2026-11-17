@@ -1,0 +1,18 @@
+2026-11-17T18:47:35.089Z	trial lane=p66a fault=drop hold=150 watch=600 intervention=copylogdb writer=bulk image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T18:54:49.654Z	formed
+2026-11-17T18:55:51.411Z	heartbeat stop on ha-0: rc=0 @ cubrid heartbeat stop ++ cubrid heartbeat stop: success 
+2026-11-17T18:55:57.892Z	ha-1 master/active
+2026-11-17T18:55:58.063Z	ha-1 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+2026-11-17T18:56:09.201Z	create table t on ha-1: Execute OK. (7.351823 sec) Committed. (3.707911 sec)  
+2026-11-17T18:56:30.538Z	heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T18:56:30.626Z	ha-0 slave/standby
+2026-11-17T18:57:00.628Z	writer started on ha-1
+2026-11-17T18:57:21.085Z	snapshot precut
+2026-11-17T18:57:21.287Z	cut issued (drop) ha-0=192.168.64.2 ha-1=192.168.64.3 ha-2=192.168.64.4
+2026-11-17T18:58:36.364Z	writer stopped
+2026-11-17T18:59:22.016Z	snapshot cut
+2026-11-17T18:59:51.344Z	healed
+2026-11-17T19:00:52.197Z	snapshot heal+60
+2026-11-17T19:01:31.299Z	trial ended early by finish-early.sh
+2026-11-17T19:01:40.093Z	rows read, logs kept
+2026-11-17T19:03:00.938Z	done

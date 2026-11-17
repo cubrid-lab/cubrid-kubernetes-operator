@@ -1,0 +1,1254 @@
+=== 2026-11-17T20:23:59.190Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:24:14.291Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:24:29.393Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:24:44.512Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:24:59.738Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:25:14.863Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:25:29.975Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:25:45.223Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:26:00.335Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:26:15.452Z
+Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+ *** Applied Info. *** 
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+=== 2026-11-17T20:26:30.537Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 27
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 147 | 4288
+Append LSA                     : 147 | 4288
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:26:45.648Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 49
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 1403 | 4376
+Append LSA                     : 653 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1254
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:27:00.782Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 49
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 1623 | 168
+Append LSA                     : 1034 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1474
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:27:15.921Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 49
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 1954 | 4136
+Append LSA                     : 1415 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1805
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:27:31.073Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 50
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 2174 | 1720
+Append LSA                     : 1669 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2025
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:27:46.184Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 50
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 2393 | 5208
+Append LSA                     : 2177 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2244
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:28:01.348Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 51
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 2612 | 9416
+Append LSA                     : 2558 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2463
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:28:16.484Z
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 54
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 2944 | 680
+Append LSA                     : 2939 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2795
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:28:31.577Z
+
+ *** Applied Info. *** 
+Insert count                   : 2000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 55
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 3270 | 3128
+Append LSA                     : 3066 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3073
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:28:46.681Z
+
+ *** Applied Info. *** 
+Insert count                   : 6000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 58
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 3766 | 1400
+Append LSA                     : 3701 | -1
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3460
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:29:01.861Z
+
+ *** Applied Info. *** 
+Insert count                   : 10000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 60
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 4094 | 16320
+Append LSA                     : 4095 | 0
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3679
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:29:16.982Z
+
+ *** Applied Info. *** 
+Insert count                   : 14000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 63
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 4095 | 48
+Append LSA                     : 4095 | 48
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3569
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:29:32.075Z
+
+ *** Applied Info. *** 
+Insert count                   : 16000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 64
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 4428 | 2856
+Append LSA                     : 4428 | 2856
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3850
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:29:47.225Z
+
+ *** Applied Info. *** 
+Insert count                   : 18000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 65
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 4592 | 12952
+Append LSA                     : 4592 | 12952
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3958
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:30:02.428Z
+
+ *** Applied Info. *** 
+Insert count                   : 22000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 67
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 4867 | 15672
+Append LSA                     : 4867 | 15672
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4122
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:30:17.545Z
+
+ *** Applied Info. *** 
+Insert count                   : 26000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 69
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5142 | 16088
+Append LSA                     : 5142 | 16088
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4291
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:30:32.686Z
+
+ *** Applied Info. *** 
+Insert count                   : 28000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 70
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5362 | 13720
+Append LSA                     : 5362 | 13720
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4453
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:30:47.821Z
+
+ *** Applied Info. *** 
+Insert count                   : 32000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 73
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : active
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4618
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:31:02.943Z
+
+ *** Applied Info. *** 
+Insert count                   : 48000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 91
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 4178
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:31:18.056Z
+
+ *** Applied Info. *** 
+Insert count                   : 64000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 110
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3739
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:31:33.173Z
+
+ *** Applied Info. *** 
+Insert count                   : 80000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 127
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 3299
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:31:48.269Z
+
+ *** Applied Info. *** 
+Insert count                   : 98000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 145
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2804
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:32:03.386Z
+
+ *** Applied Info. *** 
+Insert count                   : 116000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 162
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2309
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:32:18.520Z
+
+ *** Applied Info. *** 
+Insert count                   : 136000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 183
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1759
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:32:33.659Z
+
+ *** Applied Info. *** 
+Insert count                   : 154000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 206
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1264
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:32:48.794Z
+
+ *** Applied Info. *** 
+Insert count                   : 166000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 222
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 933
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:33:03.944Z
+
+ *** Applied Info. *** 
+Insert count                   : 182000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 244
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 495
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:33:19.056Z
+
+ *** Applied Info. *** 
+Insert count                   : 194000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 260
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 165
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:33:34.159Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:33:49.287Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:34:04.437Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:34:19.543Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:34:34.671Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:34:49.861Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:35:04.980Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:35:20.096Z
+
+ *** Applied Info. *** 
+Insert count                   : 200000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 269
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 5637 | 14296
+Append LSA                     : 5637 | 14296
+HA server state                : dead
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:35:35.230Z
+
+ *** Applied Info. *** 
+Insert count                   : 202000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 270
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8613 | 1192
+Append LSA                     : 5889 | -1
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2925
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:35:50.393Z
+
+ *** Applied Info. *** 
+Insert count                   : 204000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 275
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8613 | 9280
+Append LSA                     : 6524 | -1
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2866
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:36:05.499Z
+
+ *** Applied Info. *** 
+Insert count                   : 208000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 277
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8613 | 16224
+Append LSA                     : 7032 | -1
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2756
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:36:20.609Z
+
+ *** Applied Info. *** 
+Insert count                   : 212000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 283
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8614 | 8536
+Append LSA                     : 7540 | -1
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2653
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:36:35.796Z
+
+ *** Applied Info. *** 
+Insert count                   : 214000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 285
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8615 | 848
+Append LSA                     : 8175 | -1
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2593
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:36:50.938Z
+
+ *** Applied Info. *** 
+Insert count                   : 218000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 289
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8615 | 11264
+Append LSA                     : 8615 | 11264
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2482
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:37:06.130Z
+
+ *** Applied Info. *** 
+Insert count                   : 222000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 292
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8616 | 5312
+Append LSA                     : 8616 | 5312
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2374
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:37:21.271Z
+
+ *** Applied Info. *** 
+Insert count                   : 226000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 296
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8616 | 15728
+Append LSA                     : 8616 | 15728
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2264
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:37:36.457Z
+
+ *** Applied Info. *** 
+Insert count                   : 230000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 299
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8617 | 8040
+Append LSA                     : 8617 | 8040
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2157
+Estimated Delay                : - second(s)
+=== 2026-11-17T20:37:51.612Z
+
+ *** Applied Info. *** 
+Insert count                   : 234000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 303
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:16:34.000 PM 11/17/2026 (1794946594)
+Vol creation time              : 08:16:34.000 PM 11/17/2026 (1794946594)
+EOF LSA                        : 8619 | 6592
+Append LSA                     : 8619 | 6592
+HA server state                : standby
+HA promotion time              : 08:25:02.000 PM 11/17/2026 (1794947102)
+DB restore time                : 08:21:22.000 PM 11/17/2026 (1794946882)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 2047
+Estimated Delay                : - second(s)

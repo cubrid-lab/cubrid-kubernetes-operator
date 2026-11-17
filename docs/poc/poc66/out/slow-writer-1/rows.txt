@@ -1,0 +1,51 @@
+## 2026-11-17T18:15:07.582Z p66a-ha-0
+
+Time: 11/17/26 18:15:07.721 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 9882) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*): 14
+        min(id) : 1
+        max(id) : 14
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+ids:
+
+Time: 11/17/26 18:15:07.805 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 9905) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 
+## 2026-11-17T18:15:08.855Z p66a-ha-1
+
+Time: 11/17/26 18:15:08.939 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 5668) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*): 14
+        min(id) : 1
+        max(id) : 14
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+ids:
+
+Time: 11/17/26 18:15:09.017 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 5694) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 
+## 2026-11-17T18:15:09.077Z p66a-ha-2
+
+Time: 11/17/26 18:15:09.138 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 4975) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*): 14
+        min(id) : 1
+        max(id) : 14
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+ids:
+
+Time: 11/17/26 18:15:09.212 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 5000) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 

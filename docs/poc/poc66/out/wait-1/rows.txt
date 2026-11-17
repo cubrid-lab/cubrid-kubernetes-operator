@@ -1,0 +1,28 @@
+## 2026-11-17T20:10:25.039Z p66c-ha-0
+Error response from daemon: container 73456f7d463ded2976ece49e1121d43f6de1c256a6c113e3231bca5e61d6bbb4 is not running
+## 2026-11-17T20:10:36.177Z p66c-ha-1
+
+Time: 11/17/26 20:10:36.511 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 3762) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 364000
+        min(id)                 : 1002001
+        max(id)                 : 1366000
+        sum( cast(id as bigint)): 430976182000
+
+1 row selected. (0.115997 sec) Committed. (0.000000 sec) 
+## 2026-11-17T20:10:38.114Z p66c-ha-2
+
+Time: 11/17/26 20:10:38.179 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 3323) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+<00001> count(*)                : 118000
+        min(id)                 : 1002001
+        max(id)                 : 1120000
+        sum( cast(id as bigint)): 125198059000
+
+1 row selected. (0.035999 sec) Committed. (0.000000 sec) 

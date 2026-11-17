@@ -1,0 +1,17 @@
+2026-11-17T19:03:05.116Z p66a trial lane=p66a fault=drop hold=150 watch=600 intervention=copylogdb writer=lag image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T19:10:39.374Z p66a formed
+2026-11-17T19:11:41.213Z p66a heartbeat stop on ha-0: rc=0 @ cubrid heartbeat stop ++ cubrid heartbeat stop: success 
+2026-11-17T19:11:45.538Z p66a ha-1 master/active
+2026-11-17T19:11:45.721Z p66a ha-1 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+2026-11-17T19:11:55.813Z p66a create table t on ha-1: Execute OK. (6.803916 sec) Committed. (3.179960 sec)  
+2026-11-17T19:11:55.819Z p66a writer started on ha-1 while ha-0 is stopped
+2026-11-17T19:13:14.186Z p66a heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T19:13:14.270Z p66a ha-0 slave/standby
+2026-11-17T19:13:24.341Z p66a ha-0 applier for ha-1 before the cut: HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 146|13464.  
+2026-11-17T19:13:27.219Z p66a snapshot precut
+2026-11-17T19:13:28.903Z p66a cut issued (drop) ha-0=192.168.64.2 ha-1=192.168.64.3 ha-2=192.168.64.4
+2026-11-17T19:14:43.990Z p66a writer still running 60 s after the stop flag; killed
+2026-11-17T19:14:43.992Z p66a writer stopped
+2026-11-17T19:15:29.687Z p66a snapshot cut
+2026-11-17T19:15:58.919Z p66a healed
+2026-11-17T19:16:59.427Z p66a snapshot heal+60

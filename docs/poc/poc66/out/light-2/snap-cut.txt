@@ -1,0 +1,104 @@
+### 2026-11-17T18:35:04.058Z cut
+## p66b-ha-0 ss -tnpio (as cubrid, so -p names its processes)
+State    Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                                                                                                                                                                                                                                                    
+SYN-SENT 0      1       192.168.80.2:38818 192.168.80.3:1523 users:(("cub_admin",pid=1464,fd=6)) timer:(on,1.704ms,1)
+	 cubic rto:2000 backoff:1 mss:524 pmtu:1500 rcvmss:88 advmss:1460 cwnd:1 ssthresh:7 segs_out:2 lastsnd:542956908 lastrcv:542956908 lastack:542956908 app_limited unacked:1 retrans:1/1 lost:1 rcv_ssthresh:64240
+SYN-SENT 0      1       192.168.80.2:50588 192.168.80.4:1523 users:(("cub_admin",pid=1466,fd=6)) timer:(on,732ms,0)
+	 cubic rto:1000 mss:524 pmtu:1500 rcvmss:88 advmss:1460 cwnd:10 segs_out:1 lastsnd:542956908 lastrcv:542956908 lastack:542956908 app_limited unacked:1 rcv_ssthresh:64240                                         
+## p66b-ha-0 processes
+PID   ELAPSED COMMAND
+    6 12:02   {sleep} /usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity
+   94  7:59   cub_master
+ 1151  4:06   cub_server appdb
+ 1154  4:06   cub_pl appdb
+ 1464  4:02   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 -m sync appdb@p66b-ha-1
+ 1466  4:02   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 -m sync appdb@p66b-ha-2
+ 1468  4:02   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 --max-mem-size=500 appdb@localhost
+ 1470  4:02   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 --max-mem-size=500 appdb@localhost
+## p66b-ha-1 ss -tnpio (as cubrid, so -p names its processes)
+State Recv-Q Send-Q Local Address:Port  Peer Address:Port Process                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+ESTAB 0      0       192.168.80.3:57060 192.168.80.4:1523  users:(("cub_admin",pid=354,fd=6)) timer:(keepalive,115min,0)
+	 ts sack cubic wscale:7,7 rto:204 rtt:0.074/0.02 ato:40 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:10 bytes_sent:9578 bytes_acked:9579 bytes_received:3742076 segs_out:492 segs_in:2754 data_segs_out:136 data_segs_in:2643 send 1565405405bps lastsnd:3028 lastrcv:2404 lastack:2404 pacing_rate 3130810808bps delivery_rate 1158400000bps delivered:137 app_limited busy:52ms rcv_rtt:1 rcv_space:65624 rcv_ssthresh:1104296 minrtt:0.01 snd_wnd:64128
+ESTAB 0      0       192.168.80.3:1523  192.168.80.4:52260 users:(("cub_server",pid=92,fd=10)) timer:(keepalive,115min,0)
+	 ts sack cubic wscale:7,7 rto:204 rtt:0.048/0.03 ato:40 mss:1448 pmtu:1500 rcvmss:872 advmss:1448 cwnd:33 bytes_sent:3692924 bytes_acked:3692924 bytes_received:9578 segs_out:2717 segs_in:483 data_segs_out:2607 data_segs_in:136 send 7964000000bps lastsnd:136 lastrcv:1512 lastack:136 pacing_rate 15886628568bps delivery_rate 3962947368bps delivered:2608 busy:60ms rcv_space:14480 rcv_ssthresh:64088 minrtt:0.006 snd_wnd:850688                   
+## p66b-ha-1 processes
+PID   ELAPSED COMMAND
+    7 11:13   {sleep} /usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity
+   83  7:04   cub_master
+   92  7:02   cub_server appdb
+   95  7:02   cub_pl appdb
+  352  7:00   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-0 -m sync appdb@p66b-ha-0
+  354  7:00   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 -m sync appdb@p66b-ha-2
+  356  7:00   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-0 --max-mem-size=500 appdb@localhost
+  358  7:00   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 --max-mem-size=500 appdb@localhost
+ 1231  3:22   csql -u dba appdb@localhost
+## p66b-ha-2 ss -tnpio (as cubrid, so -p names its processes)
+State Recv-Q Send-Q Local Address:Port  Peer Address:Port Process                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+ESTAB 0      0       192.168.80.4:1523  192.168.80.3:57060 users:(("cub_server",pid=92,fd=15)) timer:(keepalive,115min,0)
+	 ts sack cubic wscale:7,7 rto:204 rtt:0.099/0.042 ato:40 mss:1448 pmtu:1500 rcvmss:872 advmss:1448 cwnd:33 bytes_sent:3742076 bytes_acked:3742076 bytes_received:9578 segs_out:2753 segs_in:492 data_segs_out:2643 data_segs_in:136 send 3861333333bps lastsnd:2484 lastrcv:3108 lastack:2484 pacing_rate 7703214104bps delivery_rate 1060507040bps delivered:2644 busy:112ms rcv_space:14480 rcv_ssthresh:64088 minrtt:0.006 snd_wnd:1090944
+ESTAB 0      0       192.168.80.4:52260 192.168.80.3:1523  users:(("cub_admin",pid=359,fd=6)) timer:(keepalive,115min,0)
+	 ts sack cubic wscale:7,7 rto:204 rtt:0.073/0.019 ato:40 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:10 bytes_sent:9578 bytes_acked:9579 bytes_received:3692924 segs_out:483 segs_in:2718 data_segs_out:136 data_segs_in:2607 send 1586849315bps lastsnd:1592 lastrcv:216 lastack:216 pacing_rate 3173698624bps delivery_rate 965333328bps delivered:137 app_limited busy:92ms rcv_rtt:1 rcv_space:82064 rcv_ssthresh:864084 minrtt:0.012 snd_wnd:64128
+## p66b-ha-2 processes
+PID   ELAPSED COMMAND
+    7 10:31   {sleep} /usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity
+   83  6:15   cub_master
+   92  6:14   cub_server appdb
+   95  6:14   cub_pl appdb
+  357  6:11   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-0 -m sync appdb@p66b-ha-0
+  359  6:11   cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 -m sync appdb@p66b-ha-1
+  361  6:11   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-0 --max-mem-size=500 appdb@localhost
+  363  6:11   cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 --max-mem-size=500 appdb@localhost
+## p66b-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+## p66b-ha-0 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current p66b-ha-0, state master)
+   Node p66b-ha-2 (priority 3, state unknown)
+    - score 32767
+    - missed heartbeat 2
+   Node p66b-ha-1 (priority 2, state unknown)
+    - score 32767
+    - missed heartbeat 2
+   Node p66b-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 94, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 1470, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/17/26 18:31:04.255
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 1468, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/17/26 18:31:04.249
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@p66b-ha-2:/home/cubrid/CUBRID/databases/appdb_p66b-ha-2 (pid 1466, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-2 -m sync appdb@p66b-ha-2 ] 
+    - registered-time   11/17/26 18:31:04.243
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@p66b-ha-1:/home/cubrid/CUBRID/databases/appdb_p66b-ha-1 (pid 1464, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p66b-ha-1 -m sync appdb@p66b-ha-1 ] 
+    - registered-time   11/17/26 18:31:04.237
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 1151, state registered_and_active)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/17/26 18:31:02.308
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+

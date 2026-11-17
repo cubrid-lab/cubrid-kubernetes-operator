@@ -1,0 +1,26 @@
+2026-11-17T20:20:36.378Z p66b trial lane=p66b fault=drop hold=150 watch=1500 intervention=none writer=working image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T20:30:12.106Z p66b formed
+2026-11-17T20:31:14.012Z p66b heartbeat stop on ha-0: rc=0 @ cubrid heartbeat stop ++ cubrid heartbeat stop: success 
+2026-11-17T20:31:24.633Z p66b ha-1 master/active
+2026-11-17T20:31:24.811Z p66b ha-1 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+2026-11-17T20:31:35.814Z p66b create table t on ha-1 (attempt 1): Execute OK. (7.207889 sec) Committed. (3.703943 sec)  
+2026-11-17T20:31:35.822Z p66b writer started on ha-1 while ha-0 is stopped
+2026-11-17T20:32:55.084Z p66b heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T20:32:55.210Z p66b ha-0 slave/standby
+2026-11-17T20:33:05.268Z p66b ha-0 applier for ha-1 after rejoin: HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 147|2144.  
+2026-11-17T20:33:11.368Z p66b applylogdb stop for ha-1 on ha-0 (before the cut, attempt 1): rc=0 @ cubrid heartbeat applylogdb @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:33:21.459Z p66b applylogdb start for ha-1 on ha-0 (before the cut, attempt 1): rc=0 @ cubrid heartbeat applylogdb @ applylogdb start ++ applylogdb start: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:34:24.118Z p66b ha-0 applier for ha-1 after rejoin: HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 149|13464.  
+2026-11-17T20:34:30.235Z p66b applylogdb stop for ha-1 on ha-0 (before the cut, attempt 2): rc=0 @ cubrid heartbeat applylogdb @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:34:40.492Z p66b applylogdb start for ha-1 on ha-0 (before the cut, attempt 2): rc=0 @ cubrid heartbeat applylogdb @ applylogdb start ++ applylogdb start: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:35:43.000Z p66b ha-0 applier for ha-1 after rejoin: HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 251|7256.  
+2026-11-17T20:35:49.435Z p66b applylogdb stop for ha-1 on ha-0 (before the cut, attempt 3): rc=0 @ cubrid heartbeat applylogdb @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:35:59.544Z p66b applylogdb start for ha-1 on ha-0 (before the cut, attempt 3): rc=0 @ cubrid heartbeat applylogdb @ applylogdb start ++ applylogdb start: success ++ cubrid heartbeat applylogdb: success 
+2026-11-17T20:37:07.514Z p66b ha-0 applier for ha-1 before the cut: HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 689|11208.  
+2026-11-17T20:37:08.031Z p66b snapshot precut
+2026-11-17T20:37:08.266Z p66b cut issued (drop) ha-0=192.168.80.2 ha-1=192.168.80.3 ha-2=192.168.80.4
+2026-11-17T20:38:23.393Z p66b writer still running 60 s after the stop flag; killed
+2026-11-17T20:38:23.400Z p66b writer stopped
+2026-11-17T20:39:08.892Z p66b snapshot cut
+2026-11-17T20:39:39.107Z p66b healed
+2026-11-17T20:40:39.645Z p66b snapshot heal+60

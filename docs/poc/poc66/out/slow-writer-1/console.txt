@@ -1,0 +1,19 @@
+2026-11-17T17:51:55.328Z p66a trial lane=p66a fault=drop hold=150 watch=600 intervention=copylogdb image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+2026-11-17T18:00:00.307Z p66a formed
+2026-11-17T18:01:02.360Z p66a heartbeat stop on ha-0: rc=0 @ cubrid heartbeat stop ++ cubrid heartbeat stop: success 
+2026-11-17T18:01:06.657Z p66a ha-1 master/active
+2026-11-17T18:01:15.720Z p66a create table t on ha-1: Execute OK. (6.311995 sec) Committed. (2.655997 sec)  
+2026-11-17T18:01:35.247Z p66a heartbeat start on ha-0: rc=0 @ applylogdb start ++ applylogdb start: success ++ HA processes start: success ++ cubrid heartbeat start: success 
+2026-11-17T18:01:35.332Z p66a ha-0 slave/standby
+2026-11-17T18:02:05.339Z p66a writer started on ha-1
+2026-11-17T18:02:25.799Z p66a snapshot precut
+2026-11-17T18:02:29.777Z p66a cut issued (drop) ha-0=192.168.64.2 ha-1=192.168.64.3 ha-2=192.168.64.4
+2026-11-17T18:02:45.756Z p66a writer stopped
+2026-11-17T18:04:31.166Z p66a snapshot cut
+2026-11-17T18:05:01.455Z p66a healed
+2026-11-17T18:06:01.902Z p66a snapshot heal+60
+2026-11-17T18:08:02.712Z p66a snapshot heal+180
+2026-11-17T18:15:04.502Z p66a snapshot end-of-watch
+2026-11-17T18:15:04.589Z p66a ha-0 active at end of watch; no intervention
+2026-11-17T18:15:09.277Z p66a rows read, logs kept
+2026-11-17T18:16:32.030Z p66a done
