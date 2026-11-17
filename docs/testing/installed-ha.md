@@ -1068,7 +1068,13 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
      (`incompleteSweeps`). When the cut-off member answers as an active
      master itself, or two members do, that is recorded
      (`targetClaimedActiveMasterAt`, `twoActiveMasterClaimsAt`): CUBRID's
-     view, which the Operator sees only in part;
+     view, which the Operator sees only in part. Next to each member's
+     classified role (`roles`: `active master`, `slave`, `other` or
+     `unread`), the sweep keeps CUBRID's own state for that member
+     (`states`): the node state of `HA-Node Info (current <member>, state
+     <state>)` and, when listed, the server process's state, such as
+     `to-be-master (server registered_and_to_be_active)` or `maintenance`;
+     for a member that could not be read, `unread:` and why;
    - reads `status.writeQuarantine` (each reason and revision, the start
      time and `enforcedTime`) and `status.lastWriteQuarantineRelease`
      (release time and method) for a quarantine it saw;
@@ -1081,6 +1087,15 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    settle: every member answers, CUBRID reports one master and two slaves, and
    any quarantine left is one only a person may release
    (`WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`).
+   When the wait ends without that, the reason names each member's raw
+   state (for example `ha-0: to-be-master (server
+   registered_and_to_be_active)`), and `settleWaitExpired` keeps what the
+   run last saw: each member's role and raw state, the last status and
+   reason of `Ready`, `PrimaryResolved`, `RoutingReady`, `HAReady` and
+   `ReplicationHealthy`, the quarantine in force, and why the wait ended
+   (`cause`: `settle bound reached`, or `run ended` when the run's signal,
+   timeout or lost Lease ended it first; the observation is then
+   `settle_wait_ended_by_run` rather than `settle_wait_expired`).
 6. It stops both clients and reads their histories into
    `LAB01/history.jsonl`, and applies the data rules to every member's rows,
    read directly with `csql` and not through a Broker, waiting up to
@@ -1103,6 +1118,30 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    `False` with `LogCopyStalled`, `ReplicationStalled` or `ApplyFailures`, is
    recorded with its reason (`stallReportedAt`, `stallReason`) and its delay
    from the heal (`stallReportedAfterHeal`).
+7. When the cluster did not settle, the data check and the health window
+   are not made, and S07 is blocked. Before the run namespace is deleted,
+   the run still reads every member's rows directly with `csql`, within two
+   minutes in all, and applies the data rules of the run's history to each
+   member on its own (`unsettledRowsSnapshot` in `record.json`, the full
+   report in `unsettled-rows.json`): per member, the rows it holds, the
+   acknowledged writes it lacks, and the operations whose rows contradict
+   the history (a failed or rolled-back write present, a row no client
+   wrote, one applied twice or with other values), each operation counted
+   once; and how many rows differ between the members read. The members
+   are read one after another, each within an equal share of what is left
+   of the two minutes, so a member that hangs, as one stuck in
+   `to-be-master` may, does not take the time of the members after it. A
+   member that could not be read in its share is recorded as unreadable,
+   with the error and no count, never as zero. These reads are `csql` reads
+   like the data check's, so a lost session among them is recorded under
+   `lostSessions` and counted in S07's `lostSessions` measurement. The
+   snapshot is always kept in `record.json`, and it is named in the reason
+   only when S07 is blocked because the cluster did not settle; a run that
+   fails on a never-event or a broken expectation keeps the reason of that
+   failure. It is never judged: it cannot make the run pass or fail, and a
+   never-event judged above still fails the run. The variant's `-timeout`
+   check counts these two minutes in place of `-data-check-within` when they
+   are longer.
 
 On every sweep the run also reads the manager Pod the cut names. Once it is
 gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
@@ -1200,17 +1239,19 @@ Evidence, under `S07/<variant>/`:
 
 - `record.json`: the member cut off and why, the move of the master before
   it (`masterMove`, `higher-rank-isolated` only), the manager Pod, the clock
-  offsets, every sweep with each member's role, the members the Operator
-  could not reach and the trigger, the quarantine's reasons and revisions,
+  offsets, every sweep with each member's role and raw heartbeat state, the
+  members the Operator could not reach and the trigger, the quarantine's reasons and revisions,
   the release, each change of the conditions and of the read-write path,
   every new-connection write with its UTC start and end on the run's clock,
-  its exit code and outcome, the established session, the settle, the data
-  check, the partition's rules and probes (`partition`), and the run's
+  its exit code and outcome, the established session, the settle (with
+  `settleWaitExpired` when it did not), the data check or, when the cluster
+  did not settle, `unsettledRowsSnapshot`, the partition's rules and probes (`partition`), and the run's
   observations in time order (`observed`);
 - `cut.json`: the cut's state alone, written before the injection and at
   its removal;
 - `timeline.jsonl`: the fault flow's steps;
-- `data-check.json` and `open-connection.jsonl`;
+- `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
+  instead of `data-check.json` when the cluster did not settle;
 - `clients/<client>.jsonl` when S07 ended before it read the clients.
 
 Beyond LAB01's, the account needs in the run namespace `update` on
@@ -4963,8 +5004,8 @@ and S12 variant other than `complete` and `exact` only those under
   clients wrote them.
 - with `-fault partition-master-isolated`, `partition-slave-isolated` or
   `partition-higher-rank-isolated`,
-  `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` and
-  `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
+  `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` (or
+  `unsettled-rows.json`) and `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
   lists them. The clients' and the new-connection writes' operations are in
   `LAB01/history.jsonl`.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
