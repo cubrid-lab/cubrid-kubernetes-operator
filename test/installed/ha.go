@@ -320,7 +320,7 @@ func (c HAConfig) validate() error {
 	if err := c.Config.validate(); err != nil {
 		return err
 	}
-	if !strings.Contains(c.WorkloadImage, "@sha256:") || !validPinnedImage(c.WorkloadImage, c.Commit) {
+	if !evidence.ValidDigestImage(c.WorkloadImage) {
 		return errors.New("the workload client image must be pinned by digest")
 	}
 	if !regexp.MustCompile(`^[A-Za-z0-9.-]+(:[0-9]+)?$`).MatchString(c.SeedEndpoint) ||
