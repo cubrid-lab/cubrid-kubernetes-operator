@@ -28,9 +28,17 @@ For a version tag such as `v0.1.0` and the candidate's full commit SHA:
 | A failed request, a server error, a refused token, a non-GitHub 404 or an answer it does not recognize | Retried, then refused; never read as absence |
 
 It reads every page of the release list, so an older release on a later page
-is not missed. It exits 0 for create and resume (and writes `state=` to
-`GITHUB_OUTPUT` when set), 1 for a refusal or an unknown answer, and 2 for an
-invalid tag or a commit that is not a full SHA.
+is not missed. A page is accepted only if it is a JSON array whose every entry
+is an object with a string tag name and a boolean draft flag; a truncated page
+or an entry such as `null` or a bare string makes the answer unknown. A list
+longer than 100 pages is not read to its end and is unknown too. It exits 0
+for create and resume (and writes `state=` to `GITHUB_OUTPUT` when set), 1 for
+a refusal or an unknown answer, and 2 for invalid input: a tag that is not
+`vMAJOR.MINOR.PATCH`, a commit that is not a full SHA, `ATTEMPTS` that is not
+a whole number of at least 1, or `RETRY_DELAY` that is not a number. Invalid
+input is not echoed, and values quoted from the API in a refusal are escaped,
+so a line break cannot start a workflow command of its own. The token reaches
+curl through a file only the runner user can read, not on its command line.
 
 GitHub lists drafts only to a token that can push to the repository. A token
 without that right sees no draft, so the script would report `create` while a
@@ -42,9 +50,12 @@ the release (`contents: write`).
 `go test ./test/release/` (part of `make test`) runs the script against a
 stand-in GitHub API in the test process. It covers each row of the table,
 a draft and a published release found only on the second page, a failure on
-the second page, transient errors followed by either answer, and invalid
-input. The stand-in fails the test on any request other than a GET with the
-expected token, and the test checks that the token is never printed.
+the second page, transient errors followed by either answer, malformed and
+truncated pages, an endless list, invalid input and values that carry a
+workflow command. Refusals must come from the first lookup, not after retries.
+The stand-in fails the test on any request other than a GET with the
+expected token, and the test checks that the token is neither printed nor on
+a curl command line.
 
 ## What this does not show
 
@@ -52,7 +63,10 @@ The answers of the real GitHub API are not observed here: the table follows
 GitHub's documented responses and the pinned release-please source. In
 particular, whether a draft stays invisible to a token without push rights,
 and the exact body of a 404 for a missing tag on this repository, are
-documented behavior, not a recorded run. The script does not check the
+documented behavior, not a recorded run. So is the draft-then-tag order itself:
+that GitHub creates the version's tag only when the draft is published, and
+not when the draft is created, has not been observed on this repository. The
+script does not check the
 release artifacts, the candidate freeze, the required scenario evidence, the
 license and API group gates, or that release-please opens its release PR with
 the GitHub App token so that CI runs on it. Those stay with issue #124, the

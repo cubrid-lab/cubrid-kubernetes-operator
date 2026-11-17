@@ -33,9 +33,12 @@
 #   EXPECTED_SHA  full commit SHA of the frozen release candidate
 #   GITHUB_TOKEN  token for the API
 #   API_URL       default https://api.github.com
-#   ATTEMPTS      default 3; RETRY_DELAY default 5 (seconds)
+#   ATTEMPTS      default 3, a whole number of at least 1
+#   RETRY_DELAY   default 5 (seconds)
 #   GITHUB_OUTPUT when set, receives state=create or state=resume
 # Exit codes: 0 create or resume, 1 refused or unknown, 2 invalid input.
+# Invalid input is not echoed: a value with a line break could otherwise carry
+# a workflow command into the log.
 set -euo pipefail
 
 : "${REPOSITORY:?}" "${TAG:?}" "${EXPECTED_SHA:?}" "${GITHUB_TOKEN:?}"
@@ -44,11 +47,19 @@ ATTEMPTS=${ATTEMPTS:-3}
 RETRY_DELAY=${RETRY_DELAY:-5}
 
 if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-  echo "::error::$TAG is not a release tag (vMAJOR.MINOR.PATCH)"
+  echo "::error::TAG is not a release tag (vMAJOR.MINOR.PATCH)"
   exit 2
 fi
 if ! [[ $EXPECTED_SHA =~ ^[0-9a-f]{40}$ ]]; then
-  echo "::error::$EXPECTED_SHA is not a full commit SHA"
+  echo "::error::EXPECTED_SHA is not a full commit SHA"
+  exit 2
+fi
+if ! [[ $ATTEMPTS =~ ^[1-9][0-9]{0,2}$ ]]; then
+  echo "::error::ATTEMPTS is not a whole number from 1 to 999"
+  exit 2
+fi
+if ! [[ $RETRY_DELAY =~ ^[0-9]{1,4}(\.[0-9]+)?$ ]]; then
+  echo "::error::RETRY_DELAY is not a number of seconds"
   exit 2
 fi
 command -v jq > /dev/null || {
@@ -56,8 +67,17 @@ command -v jq > /dev/null || {
   exit 2
 }
 
+# A release list longer than this is not read to its end: unknown.
+max_pages=100
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# The token goes to curl in a file only this user can read, not on its command
+# line, which other processes can see. printf is a shell builtin.
+(
+  umask 077
+  printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$work/auth"
+)
 
 # request prints the HTTP status of a GET and leaves the body in $work/body.
 # It prints 000 when no answer came (connection failure or timeout).
@@ -65,17 +85,18 @@ request() {
   local code
   : > "$work/body"
   code=$(curl -sS -o "$work/body" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
-    -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
+    -H "@$work/auth" -H 'Accept: application/vnd.github+json' \
     "$1" 2> "$work/err") || code=000
   printf '%s' "$code"
 }
 
 detail() {
-  printf '%s %s' "$(head -c 300 "$work/body" 2> /dev/null | tr -d '\n')" "$(head -c 300 "$work/err" | tr -d '\n')"
+  printf '%s %s' "$(head -c 300 "$work/body" 2> /dev/null | tr -d '\r\n')" "$(head -c 300 "$work/err" | tr -d '\r\n')"
 }
 
 # check prints create, resume, refuse:<reason> or unknown, with the reason for
-# unknown on stderr.
+# unknown on stderr. It runs in a command substitution, where errexit does not
+# stop it, so every step that can fail is checked here and fails as unknown.
 check() {
   local code tag_sha="" page=1 count n published target
   code=$(request "$API_URL/repos/$REPOSITORY/git/ref/tags/$TAG")
@@ -87,7 +108,11 @@ check() {
         echo unknown
         return
       fi
-      tag_sha=$(jq -r '.object.sha // "unknown"' "$work/body")
+      if ! tag_sha=$(jq -er '.object.sha | strings' "$work/body" 2> /dev/null); then
+        echo "tag lookup answered no object SHA: $(detail)" >&2
+        echo unknown
+        return
+      fi
       ;;
     404)
       if [ "$(jq -r '.message? // empty' "$work/body" 2> /dev/null)" != "Not Found" ]; then
@@ -106,19 +131,38 @@ check() {
   # Every page of releases, drafts included; keep those named TAG.
   : > "$work/matches"
   while :; do
-    code=$(request "$API_URL/repos/$REPOSITORY/releases?per_page=100&page=$page")
-    if [ "$code" != 200 ] || ! count=$(jq -e 'if type == "array" then length else error end' "$work/body" 2> /dev/null); then
-      echo "release list page $page answered $code: $(detail)" >&2
+    if [ "$page" -gt "$max_pages" ]; then
+      echo "the release list has more than $max_pages pages; it was not read to its end" >&2
       echo unknown
       return
     fi
-    jq -c --arg tag "$TAG" '.[] | select(.tag_name == $tag) | {draft, target_commitish}' "$work/body" >> "$work/matches"
+    code=$(request "$API_URL/repos/$REPOSITORY/releases?per_page=100&page=$page")
+    # Every entry must be a release object with a string tag name and a
+    # boolean draft flag; anything else is an answer it does not recognize.
+    if [ "$code" != 200 ] || ! count=$(jq -e '
+      if type == "array" and all(.[]; type == "object" and (.tag_name | type) == "string"
+        and (.draft | type) == "boolean")
+      then length else error end' "$work/body" 2> /dev/null); then
+      echo "release list page $page answered $code with a body it does not recognize: $(detail)" >&2
+      echo unknown
+      return
+    fi
+    if ! jq -c --arg tag "$TAG" '.[] | select(.tag_name == $tag) | {draft, target_commitish}' \
+      "$work/body" >> "$work/matches"; then
+      echo "could not select releases from page $page" >&2
+      echo unknown
+      return
+    fi
     [ "$count" -lt 100 ] && break
     page=$((page + 1))
   done
 
-  n=$(wc -l < "$work/matches")
-  published=$(jq -s 'map(select(.draft != true)) | length' "$work/matches")
+  if ! n=$(jq -s 'length' "$work/matches") ||
+    ! published=$(jq -s 'map(select(.draft == false)) | length' "$work/matches"); then
+    echo "could not count the releases named $TAG" >&2
+    echo unknown
+    return
+  fi
   if [ "$published" -gt 0 ]; then
     echo "refuse:$TAG is already published; a published version is never overwritten"
   elif [ -n "$tag_sha" ]; then
@@ -126,7 +170,11 @@ check() {
   elif [ "$n" -gt 1 ]; then
     echo "refuse:$n releases are named $TAG; a maintainer removes the extra drafts"
   elif [ "$n" -eq 1 ]; then
-    target=$(jq -r '.target_commitish // ""' "$work/matches")
+    if ! target=$(jq -er '.target_commitish | strings' "$work/matches"); then
+      echo "could not read the target of the draft of $TAG" >&2
+      echo unknown
+      return
+    fi
     if [ "$target" = "$EXPECTED_SHA" ]; then
       echo resume
     else
@@ -139,7 +187,7 @@ check() {
 
 attempt=1
 while :; do
-  verdict=$(check)
+  verdict=$(check) || verdict=unknown
   case $verdict in
     create | resume)
       if [ "$verdict" = create ]; then
@@ -154,7 +202,13 @@ while :; do
       exit 0
       ;;
     refuse:*)
-      echo "::error::${verdict#refuse:}"
+      # A reason quotes values from the API: escape them as workflow command
+      # data, so a line break in them cannot start a command of its own.
+      reason=${verdict#refuse:}
+      reason=${reason//%/%25}
+      reason=${reason//$'\r'/%0D}
+      reason=${reason//$'\n'/%0A}
+      echo "::error::$reason"
       exit 1
       ;;
   esac

@@ -49,6 +49,8 @@ const (
 	outResume    = "state=resume"
 	outUnknown   = "Could not tell"
 	outPublished = "already published"
+	// injected is a workflow command smuggled in after a line break.
+	injected = "\n::warning::injected"
 )
 
 // answer is one stand-in response.
@@ -65,6 +67,9 @@ type api struct {
 	pages    map[int][]answer
 	seen     map[string]int
 	problems []string
+	// endless answers every page that has no configured answer with a full
+	// page of other versions, so the list never ends.
+	endless bool
 }
 
 func (a *api) next(key string, list []answer) answer {
@@ -100,6 +105,9 @@ func (a *api) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		ans = a.next("page"+strconv.Itoa(page), a.pages[page])
 		if len(a.pages[page]) == 0 {
 			ans = answer{http.StatusOK, "[]"}
+			if a.endless {
+				ans = fullPage()[0]
+			}
 		}
 	default:
 		ans = answer{http.StatusNotFound, "unexpected path " + req.URL.Path}
@@ -115,18 +123,36 @@ func (a *api) count(key string) int {
 	return a.seen[key]
 }
 
-// run runs the script against url with TAG and EXPECTED_SHA and returns its
-// exit code, its output and what it wrote to GITHUB_OUTPUT.
-func run(t *testing.T, url, tag, expected string) (int, string, string) {
+// run runs the script against url with TAG, EXPECTED_SHA and the extra
+// environment entries, which override the defaults. It returns the exit code,
+// the output, what the script wrote to GITHUB_OUTPUT and the command lines
+// curl was started with.
+func run(t *testing.T, url, tag, expected string, extra ...string) (int, string, string, string) {
 	t.Helper()
 	_, here, _, _ := runtime.Caller(0)
 	script := filepath.Join(filepath.Dir(here), "..", "..", "hack", "release-version-check.sh")
-	outFile := filepath.Join(t.TempDir(), "github-output")
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "github-output")
+	// A curl in front of the real one records its arguments, to show that the
+	// token is not on any command line other processes can read.
+	realCurl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("curl is not installed")
+	}
+	argvLog := filepath.Join(dir, "curl-argv")
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + argvLog + "'\nexec '" + realCurl + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", script)
 	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"REPOSITORY=" + repository,
 		"TAG=" + tag,
 		"EXPECTED_SHA=" + expected,
@@ -136,17 +162,22 @@ func run(t *testing.T, url, tag, expected string) (int, string, string) {
 		"RETRY_DELAY=0",
 		"GITHUB_OUTPUT=" + outFile,
 	}
+	cmd.Env = append(cmd.Env, extra...)
+	// A script that never ends is killed at the deadline; its children must
+	// not keep the output open.
+	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
 	written, _ := os.ReadFile(outFile)
+	argv, _ := os.ReadFile(argvLog)
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		return 0, string(out), string(written)
+		return 0, string(out), string(written), string(argv)
 	case errors.As(err, &exit):
-		return exit.ExitCode(), string(out), string(written)
+		return exit.ExitCode(), string(out), string(written), string(argv)
 	default:
 		t.Fatalf("run the script: %v\n%s", err, out)
-		return -1, "", ""
+		return -1, "", "", ""
 	}
 }
 
@@ -187,6 +218,11 @@ func TestReleaseVersionCheck(t *testing.T) {
 		wantState string
 		// wantRefTries is the number of tag lookups expected, 0 to skip.
 		wantRefTries int
+		// env overrides the default environment.
+		env []string
+		// notOut must not appear in the output.
+		notOut  string
+		endless bool
 	}{
 		{name: "new version: no tag, no release", ref: absentTag, pages: map[int][]answer{1: list()},
 			wantOut: outCreate, wantState: outCreate, wantRefTries: 1},
@@ -201,26 +237,27 @@ func TestReleaseVersionCheck(t *testing.T) {
 			wantOut: outResume, wantState: outResume},
 		{name: "a published release of the version on the second page", ref: absentTag,
 			pages:    map[int][]answer{1: fullPage(), 2: list(release(version, false, sha))},
-			wantExit: 1, wantOut: outPublished},
+			wantExit: 1, wantRefTries: 1, wantOut: outPublished},
 		{name: "the version is already published", ref: tagAt(sha, "commit"),
 			pages:    map[int][]answer{1: list(release(version, false, sha))},
-			wantExit: 1, wantOut: outPublished},
+			wantExit: 1, wantRefTries: 1, wantOut: outPublished},
 		{name: "a draft of the version for another commit", ref: absentTag,
 			pages:    map[int][]answer{1: list(release(version, true, otherSHA))},
-			wantExit: 1, wantOut: "targets " + otherSHA},
+			wantExit: 1, wantRefTries: 1, wantOut: "targets " + otherSHA},
 		{name: "a draft of the version for a branch name", ref: absentTag,
 			pages:    map[int][]answer{1: list(release(version, true, "main"))},
-			wantExit: 1, wantOut: "targets main"},
+			wantExit: 1, wantRefTries: 1, wantOut: "targets main"},
 		{name: "two drafts of the version", ref: absentTag,
 			pages:    map[int][]answer{1: list(release(version, true, sha), release(version, true, sha))},
-			wantExit: 1, wantOut: "2 releases"},
+			wantExit: 1, wantRefTries: 1, wantOut: "2 releases"},
 		{name: "the tag exists at the same commit without a release", ref: tagAt(sha, "commit"),
-			pages: map[int][]answer{1: list()}, wantExit: 1, wantOut: "tag " + version + " already exists"},
+			pages:    map[int][]answer{1: list()},
+			wantExit: 1, wantOut: "tag " + version + " already exists", wantRefTries: 1},
 		{name: "the tag exists at another commit", ref: tagAt(otherSHA, "commit"),
 			pages:    map[int][]answer{1: list(release(version, true, sha))},
-			wantExit: 1, wantOut: "tag " + version + " already exists"},
+			wantExit: 1, wantOut: "tag " + version + " already exists", wantRefTries: 1},
 		{name: "an annotated tag", ref: tagAt(otherSHA, "tag"), pages: map[int][]answer{1: list()},
-			wantExit: 1, wantOut: "tag " + version + " already exists"},
+			wantExit: 1, wantOut: "tag " + version + " already exists", wantRefTries: 1},
 		{name: "tag lookup server error", ref: []answer{{http.StatusBadGateway, "bad gateway"}},
 			pages: map[int][]answer{1: list()}, wantExit: 1, wantOut: outUnknown, wantRefTries: 3},
 		{name: "tag lookup refused",
@@ -242,8 +279,41 @@ func TestReleaseVersionCheck(t *testing.T) {
 			ref:   []answer{{http.StatusBadGateway, "x"}, absentTag[0]},
 			pages: map[int][]answer{1: list()}, wantOut: outCreate, wantState: outCreate, wantRefTries: 2},
 		{name: "a transient error, then a published version",
-			ref:   []answer{{http.StatusBadGateway, "x"}, tagAt(sha, "commit")[0]},
-			pages: map[int][]answer{1: list(release(version, false, sha))}, wantExit: 1, wantOut: outPublished},
+			ref:      []answer{{http.StatusBadGateway, "x"}, tagAt(sha, "commit")[0]},
+			pages:    map[int][]answer{1: list(release(version, false, sha))},
+			wantExit: 1, wantOut: outPublished, wantRefTries: 2},
+		{name: "a page entry that is not an object, before a published release", ref: absentTag,
+			pages:    map[int][]answer{1: list(`"junk"`, release(version, false, sha))},
+			wantExit: 1, wantOut: outUnknown, wantRefTries: 3},
+		{name: "a null page entry", ref: absentTag, pages: map[int][]answer{1: list("null")},
+			wantExit: 1, wantOut: outUnknown},
+		{name: "page entries that are a string and a number", ref: absentTag,
+			pages:    map[int][]answer{1: list(`"`+version+`"`, "1")},
+			wantExit: 1, wantOut: outUnknown},
+		{name: "a release without a tag name", ref: absentTag,
+			pages:    map[int][]answer{1: list(`{"draft":false,"target_commitish":"` + sha + `"}`)},
+			wantExit: 1, wantOut: outUnknown},
+		{name: "a truncated page", ref: absentTag,
+			pages:    map[int][]answer{1: {{http.StatusOK, `[{"tag_name":"` + version + `","draft":fal`}}},
+			wantExit: 1, wantOut: outUnknown},
+		{name: "a release list that never ends", ref: absentTag, endless: true, env: []string{"ATTEMPTS=1"},
+			wantExit: 1, wantOut: "more than 100 pages", wantRefTries: 1},
+		{name: "attempts that are not a number", env: []string{"ATTEMPTS=x"}, ref: absentTag,
+			pages: map[int][]answer{1: list()}, wantExit: 2, wantOut: "ATTEMPTS"},
+		{name: "zero attempts", env: []string{"ATTEMPTS=0"}, ref: absentTag,
+			pages: map[int][]answer{1: list()}, wantExit: 2, wantOut: "ATTEMPTS"},
+		{name: "a retry delay that is not a number", env: []string{"RETRY_DELAY=soon"}, ref: absentTag,
+			pages: map[int][]answer{1: list()}, wantExit: 2, wantOut: "RETRY_DELAY"},
+		{name: "a tag that carries a workflow command", tag: version + injected, ref: absentTag,
+			pages: map[int][]answer{1: list()}, wantExit: 2, wantOut: "not a release tag",
+			notOut: injected},
+		{name: "a commit that carries a workflow command", expected: sha + injected, ref: absentTag,
+			pages: map[int][]answer{1: list()}, wantExit: 2, wantOut: "not a full commit SHA",
+			notOut: injected},
+		{name: "a draft target that carries a workflow command", ref: absentTag,
+			pages:    map[int][]answer{1: list(release(version, true, "main\n::warning::injected"))},
+			wantExit: 1, wantOut: "targets main%0A::warning::injected", wantRefTries: 1,
+			notOut: injected},
 		{name: "a version without the v prefix", tag: "0.1.0", ref: absentTag, pages: map[int][]answer{1: list()},
 			wantExit: 2, wantOut: "not a release tag"},
 		{name: "a short commit", expected: "0123456", ref: absentTag, pages: map[int][]answer{1: list()},
@@ -251,7 +321,7 @@ func TestReleaseVersionCheck(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			a := &api{ref: c.ref, pages: c.pages, seen: map[string]int{}}
+			a := &api{ref: c.ref, pages: c.pages, seen: map[string]int{}, endless: c.endless}
 			srv := httptest.NewServer(a)
 			t.Cleanup(func() {
 				srv.Close()
@@ -266,7 +336,7 @@ func TestReleaseVersionCheck(t *testing.T) {
 			if expected == "" {
 				expected = sha
 			}
-			code, out, written := run(t, srv.URL, tag, expected)
+			code, out, written, argv := run(t, srv.URL, tag, expected, c.env...)
 			if code != c.wantExit || !strings.Contains(out, c.wantOut) {
 				t.Fatalf("exit %d, want %d with %q; output:\n%s", code, c.wantExit, c.wantOut, out)
 			}
@@ -280,6 +350,12 @@ func TestReleaseVersionCheck(t *testing.T) {
 			}
 			if strings.Contains(out, token) {
 				t.Errorf("output holds the token:\n%s", out)
+			}
+			if strings.Contains(argv, token) {
+				t.Errorf("a curl command line holds the token:\n%s", argv)
+			}
+			if c.notOut != "" && strings.Contains(out, c.notOut) {
+				t.Errorf("output holds %q:\n%s", c.notOut, out)
 			}
 		})
 	}
