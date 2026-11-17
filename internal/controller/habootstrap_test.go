@@ -147,6 +147,9 @@ type fakeSeedClient struct {
 	pollErr error
 	// pollEdit changes what a poll answers.
 	pollEdit func(*instancemanager.Operation)
+	// startErr, when set, is what every start of a restore answers, and
+	// nothing is started.
+	startErr error
 }
 
 // forget makes every member answer as one whose operation store was lost or
@@ -235,6 +238,9 @@ func (f *fakeSeedClient) backupOp(key string) instancemanager.Operation {
 
 func (f *fakeSeedClient) StartRestore(_ context.Context, podName, _, key string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
 	f.restoreOn = append(f.restoreOn, podName)
+	if f.startErr != nil {
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, f.startErr)
+	}
 	if f.restoreKeys == nil {
 		f.restoreKeys = map[string]string{}
 	}
@@ -1570,6 +1576,8 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(seed.restoreOn).To(Equal([]string{"rseed-first-0"}))
 			Expect(seed.restoreReq.SeedFromMaster).To(BeEmpty())
 			Expect(seed.restoreReq.ExpectedClusterUID).To(BeEmpty(), "a recovery restores another cluster's backup")
+			Expect(seed.restoreReq.ExpectedMember).To(BeEmpty(),
+				"the recovery restore relies on no Instance Manager check, so it names no member (ADR-0013)")
 
 			By("the restore completes; the peers are still empty")
 			seed.recovered = instancemanager.OpCompleted

@@ -207,7 +207,14 @@ open one.
    and on the `CubridBackup`'s `Ready`, whose message names the member and
    the checks:
    - `InstanceManagerCapabilityMissing`: the member answered, without a
-     check. The remedy is to replace its Pod.
+     check. The remedy is to run an image with the Instance Manager of the
+     Operator's build on that member. A replaced Pod starts the image the
+     cluster already runs until another one is accepted (ADR-0009): point
+     `spec.image` at such an image if it names an older one, set the
+     annotation `database.cubrid.io/accept-image` on the cluster to exactly
+     that image (`spec.image`, or the Operator's default image when
+     `spec.image` is unset), then replace the Pod. After an Operator upgrade
+     this holds a cluster whose HA bootstrap has not seeded every member.
    - `InstanceManagerCapabilityUnverified`: the member answered, but not
      within the time an observation counts (15 seconds), or not readably, so
      the answer shows nothing.
