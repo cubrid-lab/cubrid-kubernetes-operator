@@ -1556,32 +1556,55 @@ func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev
 }
 
 // failedChild reports a failed write of one of the cluster's child objects
-// like failed. Before that, the members of an HA cluster whose StatefulSet
-// exists are observed, and the write quarantine is decided and enforced from
-// that observation (ADR-0005, section 8), so that a child write that keeps
-// failing, as one an admission webhook or a quota rejects, does not keep two
-// active masters or an unverified member that outranks the master from being
-// quarantined (#949). A cluster without a StatefulSet has no member to
-// observe; one in a recovery bootstrap is not observed here, as in a pass
-// without a failure. The status still reports the roles as not observed in
-// this pass: the observation serves the quarantine decision alone. A failed
-// observation or quarantine enforcement is
-// returned together with cause, even when failed would retry cause without an
-// error.
+// like failed. Before that, the members of an HA cluster are observed, and
+// the write quarantine is decided and enforced from that observation
+// (ADR-0005, section 8). A child write that keeps failing, as one an
+// admission webhook or a quota rejects, thus does not keep two active masters
+// or an unverified member that outranks the only master from being
+// quarantined (#949).
+//
+// The members are observed only when the cluster controls a StatefulSet of
+// its name: a new cluster has no member yet, and a StatefulSet of that name
+// that the cluster does not control is not its own. A cluster in a recovery
+// bootstrap, or in a namespace being deleted, is not observed here either, as
+// in a pass without a failure.
+//
+// The decision follows the same rules and uses the same complete observation
+// as a pass without a failure, so it may also release a quarantine,
+// automatically or on the release annotation. The read-write Brokers then
+// stay at zero until a pass gets past the child writes and runs the Broker
+// tier, which starts them only once the release is written.
+//
+// The status still reports the roles as not observed in this pass, Ready
+// keeps the reason of the failed write, and RoutingReady the reason of a
+// quarantine in force: the observation serves the quarantine decision alone.
+// LastResolvedPrimary therefore does not move forward in such passes. The
+// quarantine's own retry interval is replaced by the backoff of the returned
+// error, which clusterRateLimiter caps at haResyncInterval (10 s). That stays
+// within quarantineAnswerGap, the longest gap between two answers that still
+// count together towards a verification or a release.
+//
+// A failed StatefulSet read, observation or quarantine enforcement is returned
+// together with cause, even when failed would retry cause without an error.
+// When failed retries a young conflict without writing the status, the status
+// that holds the quarantine decision is written here.
 func (r *CubridClusterReconciler) failedChild(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string,
 	cause error) (ctrl.Result, error) {
 	var safety error
+	observed := false
 	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil && !recoveryActive(cluster) && !namespaceTerminating(cause) {
-		err := r.childClient().Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
+		sts := &appsv1.StatefulSet{}
+		err := r.childClient().Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, sts)
 		switch {
 		case apierrors.IsNotFound(err):
 		case err != nil:
 			safety = fmt.Errorf("read the StatefulSet to observe the members for the write quarantine: %w", err)
-		default:
+		case metav1.IsControlledBy(sts, cluster):
 			// Only the quarantine is kept from this observation. The roles,
 			// the primary and the observation times stay as a pass that did
 			// not observe them reports them (#340, #370), and the applier
 			// readings are not kept as the base of the next pass.
+			observed = true
 			reported := cluster.Status.DeepCopy()
 			_, quarantine := r.observeAndQuarantine(ctx, cluster)
 			safety = quarantine.err
@@ -1596,6 +1619,14 @@ func (r *CubridClusterReconciler) failedChild(ctx context.Context, cluster *data
 		}
 	}
 	res, err := r.failed(ctx, cluster, reason, cause)
+	if observed && err == nil {
+		// failed retries a young conflict without writing the status; the
+		// quarantine decided above is written all the same.
+		r.markRolesNotObserved(cluster, reason)
+		if werr := r.writeStatus(ctx, cluster); werr != nil {
+			safety = errors.Join(safety, werr)
+		}
+	}
 	if safety == nil {
 		return res, err
 	}
