@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -202,8 +203,33 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 		token := c.Status.MemberRebuildOffers[0].Token
 		Expect(token).NotTo(Equal(offers[0].Token), "a new Pod gets a new token")
 
-		By("the current token is accepted and its operation recorded before anything is restored")
+		By("a pass whose status write fails after accepting records nothing: the token stays current")
 		annotate(m2 + ":" + token)
+		drain(recorder)
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		failing := reconciler()
+		failing.Client = interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource {
+					return apierrors.NewServiceUnavailable("the status write fails in this test")
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		*clock = clock.Add(unverifiedResyncInterval)
+		_, err = failing.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).To(HaveOccurred())
+		c = stored()
+		Expect(c.Status.MemberRebuild).To(BeNil(), "no accepted request is stored")
+		Expect(c.Status.MemberRebuildOffers).To(HaveLen(1))
+		Expect(c.Status.MemberRebuildOffers[0].Token).To(Equal(token), "the token is not consumed")
+		Expect(annotated()).To(BeTrue(), "the annotation is left for the next pass")
+		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring(reasonMemberRebuildAccepted)),
+			"no acceptance is reported for a status that was not written")
+
+		By("the current token is accepted and its operation recorded before anything is restored")
 		pass(r)
 		c = stored()
 		rebuild := c.Status.MemberRebuild

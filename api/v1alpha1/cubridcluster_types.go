@@ -865,9 +865,10 @@ type CubridClusterStatus struct {
 	// master or slave answer from a Pod created no earlier than that claim,
 	// whose Pod UID did not change during the observation. A member whose
 	// current claim has another UID and is bound to a volume that no member
-	// was seen running the database on is the evidence that its data is
-	// expendable for a rebuild (memberRebuildOffers). A recorded member also
-	// counts as holding the database.
+	// was seen running the database on may be offered a rebuild
+	// (memberRebuildOffers). That is eligibility evidence only, not proof
+	// that the volume is empty: a volume the Operator never saw may hold
+	// data. A recorded member also counts as holding the database.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -881,7 +882,8 @@ type CubridClusterStatus struct {
 	// with an earlier token is ignored. Nothing is offered while a write
 	// quarantine is in force. A member that is the current primary, the last
 	// resolved primary, or whose claim or volume is one a member was seen
-	// running the database on is never offered
+	// running the database on is never offered. An offer says that the
+	// request may be made, not that the replacement storage is empty
 	// (docs/observability.md, "Rebuilding a member").
 	// +listType=map
 	// +listMapKey=member

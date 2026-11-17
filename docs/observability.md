@@ -1350,6 +1350,16 @@ The token is kept while the member's Pod, claim and volume, the source and
 the source's Pod stay the same, also across an Operator restart, and
 replaced by a new one as soon as any of them changes.
 
+**An offer is not proof that the storage is empty.** The Operator can only
+compare the claim and volume with what it saw holding the database. A
+replacement claim bound to a volume the Operator never saw, such as a
+pre-provisioned or retained volume from elsewhere that holds data, is still
+offered. The administrator stays responsible for providing empty storage,
+and the restore of an accepted request is not allowed to rely on the offer:
+before anything is written, the Instance Manager has to refuse to restore
+over a target that already holds a database, and the claim's and volume's
+owner and the cluster UID have to be checked again.
+
 **Requesting a rebuild.** Replace the member's claim first, outside the
 Operator: check that nothing on the old claim is needed, then delete the
 member's Pod and its claim `data-<member>`; the StatefulSet creates an empty
@@ -1386,6 +1396,23 @@ the **stored** offers:
   removes the annotation. An annotation that names the token of
   `status.memberRebuild` or `status.lastMemberRebuild` again is removed and
   changes nothing.
+
+**Interruptions between acceptance and the annotation's removal.** The
+acceptance exists only once the status that records it is written:
+
+- If that status write fails, or the Operator stops before it, nothing is
+  accepted. `status.memberRebuild` stays empty, the offer and its token stay
+  as they were, the annotation stays, and no `MemberRebuildAccepted` Event is
+  recorded. The next observation decides on the same annotation again and,
+  while the offer is unchanged, accepts it with a new operation ID; the
+  operation ID of the unwritten acceptance was never stored, so nothing can
+  run under it.
+- If the status was written and the Operator stops before the annotation is
+  removed, the next observation, in this or another Operator process, finds
+  the token consumed in the stored `status.memberRebuild` and removes the
+  annotation; the operation ID stays the stored one.
+- If the removal itself fails, the annotation stays inert, because its token
+  is consumed, and every later observation tries to remove it again.
 
 An accepted rebuild is withdrawn when a write quarantine starts, when the
 member answers as a master, when its Pod, claim or volume, the source or the
