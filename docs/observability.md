@@ -1284,7 +1284,9 @@ entrypoint starts the server. An HA member's password is not checked when it
 starts again; a changed value there is reported by `DBAPasswordRotationUnsupported`.
 This is not an implicit `Matches` result: the live client-mode check runs only
 on the ready primary, while no safe offline check of a stopped HA member has
-been established ([#894](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894)).
+been established: a standalone-mode login on a stopped HA slave wrote to its
+data volume and active log even when the password was refused
+([POC-65](poc/poc65/README.md); [#894](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/894)).
 
 A database that already has a password is not changed: the Instance Manager
 runs `csql -u dba -S <db> -c "SELECT 1"` on a pseudo-terminal, types the

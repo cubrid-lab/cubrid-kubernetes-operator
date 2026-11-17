@@ -1,0 +1,14 @@
+# 2026-11-17T02:42:10.661986635Z X poc65-hapw-slave bash -lc cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc65-hapw-slave, state slave)
+   Node poc65-hapw-slave (priority 2, state slave)
+   Node poc65-hapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 92, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-master (pid 2145, state registered)
+   Copylogdb appdb@poc65-hapw-master:/home/cubrid/CUBRID/databases/appdb_poc65-hapw-master (pid 3332, state registered)
+   Server appdb (pid 1887, state registered_and_standby)
+
+# rc=0 2026-11-17T02:42:10.749321374Z
