@@ -51,6 +51,13 @@ const (
 	testActive     = "registered_and_active"
 )
 
+// The workload client's node and its answer to a stop, in the tests that
+// finish a run that did not settle.
+const (
+	testClientNode = "node-c"
+	testStopped    = "stopped\n"
+)
+
 // heartbeatOutput is cubrid heartbeat status as a member prints it, with the
 // node state of the member itself and its server process's state; an empty
 // server state prints no server line, as after a stop.
@@ -381,7 +388,7 @@ func TestJudgeS07ReportsTheUnsettledSnapshotWithoutJudgingIt(t *testing.T) {
 // namespace is deleted; the run stays blocked and names the snapshot.
 func TestFinishS07ReadsTheRowsOfAClusterThatDidNotSettle(t *testing.T) {
 	h := s07SnapshotRun(t)
-	h.rec.Client = &imageIdentity{Pod: clientPodName, Node: "node-c"}
+	h.rec.Client = &imageIdentity{Pod: clientPodName, Node: testClientNode}
 	open := s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "acknowledged")
 	ledger := s07LedgerAnswers(map[string][]workload.Row{m0: {s07Row("c-1")}, m1: {s07Row("c-1")}}, m2, "")
 	h.Command = func(ctx context.Context, args ...string) (string, error) {
@@ -391,7 +398,7 @@ func TestFinishS07ReadsTheRowsOfAClusterThatDidNotSettle(t *testing.T) {
 		script := args[len(args)-1]
 		switch {
 		case strings.Contains(script, "echo stopped"):
-			return "stopped\n", nil
+			return testStopped, nil
 		case strings.Contains(script, "cat /tmp/"+s07OpenClient+".jsonl"):
 			return open, nil
 		}
@@ -400,7 +407,7 @@ func TestFinishS07ReadsTheRowsOfAClusterThatDidNotSettle(t *testing.T) {
 	issued := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	rec := s07Base(false)
 	rec.SettledAt, rec.SettleUnmet, rec.Data, rec.HealthReadings = nil, "CUBRID reports "+m0+": to-be-master", nil, 0
-	rec.FaultIssuedAt, rec.ClockOffsets = &issued, map[string]float64{"node-c": 0}
+	rec.FaultIssuedAt, rec.ClockOffsets = &issued, map[string]float64{testClientNode: 0}
 	result := &evidence.Scenario{}
 	got := h.finishS07(context.Background(), rec, result, func(r evidence.Result, format string,
 		args ...any) evidence.Scenario {

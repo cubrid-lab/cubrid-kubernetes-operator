@@ -1179,9 +1179,40 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
    only when S07 is blocked because the cluster did not settle; a run that
    fails on a never-event or a broken expectation keeps the reason of that
    failure. It is never judged: it cannot make the run pass or fail, and a
-   never-event judged above still fails the run. The variant's `-timeout`
-   check counts these two minutes in place of `-data-check-within` when they
-   are longer.
+   never-event judged above still fails the run.
+
+   After the rows, and still before the namespace is deleted, the run keeps
+   what CUBRID reports and logs on each member, so that the reason a member
+   stays `registered_and_to_be_active` is not lost with the namespace
+   (#716). Per member, under `S07/<variant>/engine-logs/<member>/`:
+   - `heartbeat-status-verbose.txt`: `cubrid heartbeat status -v`, run once
+     the cut is removed, as the diagnostic log bundle's heartbeat status is;
+   - `changemode.txt`: the server's HA mode from `cubrid changemode
+     appdb@localhost` with no mode, the read the identity check of
+     `test/sqlcheck` and S12's member state already use;
+   - `cubrid-log-listing.txt`: the listing of `$CUBRID/log` (the data
+     volume's `cubrid-log` directory) with the same command and the same list
+     of allowed files as the diagnostic log bundle;
+   - `cubrid-log/<file>`: the end of each HA log the listing names, newest
+     first and at most eight: the server's error log (`server/appdb.err`),
+     `cub_master`'s (`<host>_master.err`), each copier's
+     (`appdb@<peer>_copylogdb.err`) and each applier's
+     (`appdb@localhost_applylogdb_<peer>.err`). A kind of these four logs
+     that the listing does not show is recorded under `missing`; when the
+     listing itself could not be read, nothing is claimed missing.
+
+   Each command prints at most 1 MiB and each log keeps at most its newest
+   2,000 lines and 1 MiB, whole lines only; the capture reads at most
+   16 MiB in all, and a file past that bound is recorded as `not read`.
+   Everything stored passes the evidence redaction. The capture takes at
+   most two minutes in all, each member within an equal share of what is
+   left, as the rows snapshot does. `unsettledEngineLogs` in `record.json`
+   lists every source with its status (`collected`, `truncated`, `empty`,
+   `unavailable` with the error, or `not read` with the bound reached) and
+   its file. A source that could not be read never blocks cleanup, and the
+   capture never changes the verdict or its reason. The variant's
+   `-timeout` check counts the two minutes of the rows and the two of the
+   capture in place of `-data-check-within` when they are longer.
 8. With `-partition-manual-release` only, after the settle wait (settled or
    not) and before step 6, the run releases the quarantine itself when one
    only a person may release is in force, it is a generation the run saw,
@@ -1390,13 +1421,14 @@ Evidence, under `S07/<variant>/`:
   every new-connection write with its UTC start and end on the run's clock,
   its exit code and outcome, the established session, the settle (with
   `settleWaitExpired` when it did not), the data check or, when the cluster
-  did not settle, `unsettledRowsSnapshot`, the partition's rules and probes (`partition`), and the run's
+  did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`), and the run's
   observations in time order (`observed`);
 - `cut.json`: the cut's state alone, written before the injection and at
   its removal;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
-  instead of `data-check.json` when the cluster did not settle;
+  instead of `data-check.json`, and `engine-logs/<member>/`, when the
+  cluster did not settle;
   `rows-before-release.json` and `rows-after-release.json` with
   `-partition-manual-release` when the run set a token;
 - `clients/<client>.jsonl` when S07 ended before it read the clients.
