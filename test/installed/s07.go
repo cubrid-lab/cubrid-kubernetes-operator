@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -79,8 +80,12 @@ const (
 		"resolved primary"
 	// The read-write Brokers' access mode label value.
 	s07ReadWrite = "rw"
-	// readyCondition is the cluster's overall condition.
-	readyCondition = "Ready"
+	// readyCondition is the cluster's overall condition; haReadyCondition and
+	// replicationHealthyCondition are the ones that cover replication.
+	readyCondition              = "Ready"
+	haReadyCondition            = "HAReady"
+	replicationHealthyCondition = "ReplicationHealthy"
+	routingReadyCondition       = "RoutingReady"
 	// s07NoAnswer is the outcome of a new-connection write with no line in
 	// the client's history.
 	s07NoAnswer = "no answer"
@@ -242,7 +247,16 @@ type s07Data struct {
 	AcknowledgedMissing int            `json:"acknowledgedMissing"`
 	MissingByMember     map[string]int `json:"acknowledgedMissingByMember,omitempty"`
 	Diverged            int            `json:"diverged"`
-	File                string         `json:"file,omitempty"`
+	// LaggingByMember counts, on each slave, the rows the final master holds
+	// that the slave lacks: a slave behind or stalled, which the cluster
+	// reports through HAReady and ReplicationHealthy. ConflictingByMember
+	// counts, on each slave, the rows absent from the final master or held
+	// with other values: histories that diverged. MasterMissingAcknowledged
+	// counts the acknowledged writes the final master lacks.
+	LaggingByMember           map[string]int `json:"laggingByMember,omitempty"`
+	ConflictingByMember       map[string]int `json:"conflictingByMember,omitempty"`
+	MasterMissingAcknowledged int            `json:"masterMissingAcknowledged"`
+	File                      string         `json:"file,omitempty"`
 }
 
 // s07Record is the evidence of an S07 run besides the fault timeline.
@@ -348,14 +362,25 @@ type s07Record struct {
 	// HealthReadings counts the readings of the cluster in the health window
 	// after the data check, and ReadyWithoutQuarantineAt is when one first
 	// reported Ready with no quarantine; HealthyAtEnd is set then.
-	HealthReadings           int                `json:"healthReadings"`
-	ReadyWithoutQuarantineAt *time.Time         `json:"readyWithoutQuarantineAt,omitempty"`
-	HealthyAtEnd             bool               `json:"healthyAtEnd"`
-	Observed                 []faults.Step      `json:"observed"`
-	ClientsStopped           bool               `json:"clientsStopped"`
-	ClientsRead              bool               `json:"clientsRead"`
-	ClientHistories          []s04ClientHistory `json:"clientHistories,omitempty"`
-	Partition                *netfault.Record   `json:"partition,omitempty"`
+	HealthReadings           int        `json:"healthReadings"`
+	ReadyWithoutQuarantineAt *time.Time `json:"readyWithoutQuarantineAt,omitempty"`
+	// ReportedHealthyAt is when a reading in the health window first
+	// reported HAReady and ReplicationHealthy True with no quarantine: the
+	// cluster reported healthy, including its replication, which Ready does
+	// not cover. HealthyAtEnd is set then.
+	ReportedHealthyAt *time.Time `json:"reportedHealthyAt,omitempty"`
+	HealthyAtEnd      bool       `json:"healthyAtEnd"`
+	// StallReportedAt is when, after the cut was removed, the Operator first
+	// reported replication stalled (HAReady or ReplicationHealthy False with
+	// LogCopyStalled, ReplicationStalled or ApplyFailures), and StallReason
+	// what it reported.
+	StallReportedAt *time.Time         `json:"stallReportedAt,omitempty"`
+	StallReason     string             `json:"stallReason,omitempty"`
+	Observed        []faults.Step      `json:"observed"`
+	ClientsStopped  bool               `json:"clientsStopped"`
+	ClientsRead     bool               `json:"clientsRead"`
+	ClientHistories []s04ClientHistory `json:"clientHistories,omitempty"`
+	Partition       *netfault.Record   `json:"partition,omitempty"`
 	// mu serializes the observations and the record's writes, which the run's
 	// end can make while a step of the fault is still running; cut is the
 	// state in cut.json.
@@ -531,10 +556,12 @@ func s07NeverEvents(rec *s07Record) []string {
 		never = append(never, fmt.Sprintf("a %s quarantine, which only a person may release, was released %s",
 			rec.ReleaseReason, rec.ReleaseMethod))
 	}
-	if d := rec.Data; d != nil && d.Read && d.Diverged > 0 && rec.HealthyAtEnd {
-		never = append(never, fmt.Sprintf("the cluster reported Ready with no quarantine after the partition ended "+
-			"while the members held different data: %d row(s) differing between members, %d acknowledged "+
-			"write(s) missing", d.Diverged, d.AcknowledgedMissing))
+	if d := rec.Data; d != nil && d.Read && rec.HealthyAtEnd &&
+		(s07Sum(d.ConflictingByMember) > 0 || d.MasterMissingAcknowledged > 0) {
+		never = append(never, fmt.Sprintf("the cluster reported HAReady and ReplicationHealthy True with no "+
+			"quarantine after the partition ended while %d conflicting row(s) were on members other than the final "+
+			"master %s and the final master lacks %d acknowledged write(s)", s07Sum(d.ConflictingByMember),
+			rec.FinalMaster, d.MasterMissingAcknowledged))
 	}
 	if len(rec.ForeignTargets) > 0 {
 		never = append(never, "the run was about to cut Pods that are not its own: "+
@@ -690,12 +717,47 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 			"on master %s with %s", rec.Target.Pod, rec.Trigger, cmpOr(firstReason(rec), "recorded"), rec.FinalMaster,
 			cmpOr(rec.QuarantineAtEnd, "no quarantine left"))
 	}
-	if d := rec.Data; d.AcknowledgedMissing > 0 || d.Diverged > 0 {
-		v.Reason += fmt.Sprintf("; %d acknowledged write(s) are missing on some member and %d row(s) differ "+
-			"between members (reported: ADR-0005 expects writes acknowledged while a quarantine closes the path "+
-			"to be lost)", d.AcknowledgedMissing, d.Diverged)
-	}
+	v.Reason += s07DataNote(rec)
 	return v
+}
+
+// s07Sum adds the counts of a map.
+func s07Sum(counts map[string]int) int {
+	n := 0
+	for _, c := range counts {
+		n += c
+	}
+	return n
+}
+
+// s07DataNote reports, for a passing run, what the data check found that the
+// run does not fail on: slaves behind the final master, with whether the
+// Operator reported the stall, and conflicting rows or acknowledged writes
+// the final master lacks while the cluster did not report itself healthy.
+func s07DataNote(rec *s07Record) string {
+	d := rec.Data
+	var notes []string
+	for _, member := range slices.Sorted(maps.Keys(d.LaggingByMember)) {
+		reported := "the Operator did not report a stalled replication"
+		if rec.StallReportedAt != nil {
+			reported = "the Operator reported " + rec.StallReason
+			if rec.FaultRemovedAt != nil {
+				reported += fmt.Sprintf(" %s after the heal", rec.StallReportedAt.Sub(*rec.FaultRemovedAt).Round(
+					time.Second))
+			}
+		}
+		notes = append(notes, fmt.Sprintf("slave %s lacks %d row(s) the master holds (%s)", member,
+			d.LaggingByMember[member], reported))
+	}
+	if n := s07Sum(d.ConflictingByMember); n > 0 || d.MasterMissingAcknowledged > 0 {
+		notes = append(notes, fmt.Sprintf("%d conflicting row(s) on other members and %d acknowledged write(s) "+
+			"the final master lacks, reported while the cluster did not report its replication healthy",
+			n, d.MasterMissingAcknowledged))
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "; " + strings.Join(notes, "; ")
 }
 
 // s07Measurements are the times S07 records, as durations from the fault's
@@ -750,12 +812,16 @@ func s07Measurements(rec *s07Record) map[string]any {
 		m["establishedAcknowledgedAfterFault"] = s.AcknowledgedAfterFault
 		m["establishedAcknowledgedAfterPathClosed"] = s.AcknowledgedAfterClosed
 	}
+	since("stallReportedAfterHeal", rec.FaultRemovedAt, rec.StallReportedAt)
+	m["stallReason"] = cmpOr(rec.StallReason, evidence.Unknown)
 	m["acknowledgedMissing"], m["membersDiverged"] = evidence.Unknown, evidence.Unknown
 	if d := rec.Data; d != nil && d.Read {
 		m["acknowledgedMissing"], m["membersDiverged"] = d.AcknowledgedMissing, d.Diverged
 		if len(d.MissingByMember) > 0 {
 			m["acknowledgedMissingByMember"] = d.MissingByMember
 		}
+		m["laggingByMember"], m["conflictingByMember"] = d.LaggingByMember, d.ConflictingByMember
+		m["masterMissingAcknowledged"] = d.MasterMissingAcknowledged
 	}
 	return m
 }
@@ -966,31 +1032,10 @@ func (h *haRun) observeS07Path(ctx context.Context, rec *s07Record, now time.Tim
 		rec.ClusterReadsAfterGrace++
 	}
 	h.observeS07Quarantine(rec, cluster, now, cut)
-	for _, t := range []string{readyCondition, primaryResolvedCondition, "RoutingReady"} {
-		c := meta.FindStatusCondition(cluster.Status.Conditions, t)
-		status, reason := "Unknown", ""
-		if c != nil {
-			status, reason = string(c.Status), c.Reason
-		}
-		last := ""
-		for _, seen := range rec.Conditions {
-			if seen.Type == t {
-				last = seen.Status + "/" + seen.Reason
-			}
-		}
-		if last != status+"/"+reason {
-			rec.Conditions = append(rec.Conditions, s07Condition{T: now, Type: t, Status: status, Reason: reason})
-		}
-		if cut && afterGrace && t != readyCondition && status == string(metav1.ConditionTrue) {
-			never := fmt.Sprintf("the Operator reported %s True at %s while %s was cut off from it", t,
-				now.Format(time.RFC3339), rec.Target.Pod)
-			if !slices.ContainsFunc(rec.ResolvedWhileUncertain, func(s string) bool {
-				return strings.HasPrefix(s, "the Operator reported "+t+" True")
-			}) {
-				rec.ResolvedWhileUncertain = append(rec.ResolvedWhileUncertain, never)
-			}
-		}
+	if !cut {
+		noteS07Stall(rec, cluster, now)
 	}
+	observeS07Conditions(rec, cluster, now, cut && afterGrace)
 	path := h.readS07Path(ctx)
 	if n := len(rec.Path); n == 0 || rec.Path[n-1].Desired != path.Desired || rec.Path[n-1].Pods != path.Pods ||
 		rec.Path[n-1].Endpoints != path.Endpoints || rec.Path[n-1].ReadyEndpoints != path.ReadyEndpoints {
@@ -1019,6 +1064,39 @@ func (h *haRun) observeS07Path(ctx context.Context, rec *s07Record, now time.Tim
 		} else if rec.RWReopenedAt == nil {
 			rec.RWReopenedAt = &now
 			rec.note("rw_reopened", fmt.Sprintf("%d endpoint(s)", path.Endpoints))
+		}
+	}
+}
+
+// observeS07Conditions records each change of the conditions S07 reads, and
+// PrimaryResolved or RoutingReady True while mustNotResolve, as a never-event.
+func observeS07Conditions(rec *s07Record, cluster *databasev1alpha1.CubridCluster, now time.Time,
+	mustNotResolve bool) {
+	for _, t := range []string{readyCondition, primaryResolvedCondition, routingReadyCondition, haReadyCondition,
+		replicationHealthyCondition} {
+		c := meta.FindStatusCondition(cluster.Status.Conditions, t)
+		status, reason := "Unknown", ""
+		if c != nil {
+			status, reason = string(c.Status), c.Reason
+		}
+		last := ""
+		for _, seen := range rec.Conditions {
+			if seen.Type == t {
+				last = seen.Status + "/" + seen.Reason
+			}
+		}
+		if last != status+"/"+reason {
+			rec.Conditions = append(rec.Conditions, s07Condition{T: now, Type: t, Status: status, Reason: reason})
+		}
+		resolving := t == primaryResolvedCondition || t == routingReadyCondition
+		if mustNotResolve && resolving && status == string(metav1.ConditionTrue) {
+			never := fmt.Sprintf("the Operator reported %s True at %s while %s was cut off from it", t,
+				now.Format(time.RFC3339), rec.Target.Pod)
+			if !slices.ContainsFunc(rec.ResolvedWhileUncertain, func(s string) bool {
+				return strings.HasPrefix(s, "the Operator reported "+t+" True")
+			}) {
+				rec.ResolvedWhileUncertain = append(rec.ResolvedWhileUncertain, never)
+			}
 		}
 	}
 }
@@ -1605,10 +1683,13 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 			}
 		}
 	}
+	d.MasterMissingAcknowledged = d.MissingByMember[rec.FinalMaster]
 	rows, err := h.readRowsOf(ctx, dataTarget{members: h.members})
 	if err != nil {
+		d.Read, d.Error = false, "read the rows to compare with the final master: "+err.Error()
 		rec.note("unknown_outcomes_unresolved", err.Error())
 	} else {
+		d.LaggingByMember, d.ConflictingByMember = classifyS07Rows(rec.FinalMaster, rows)
 		present := map[string]bool{}
 		for _, member := range rows {
 			for _, row := range member {
@@ -1639,8 +1720,80 @@ func resolveS07Unknowns(probes []s07Probe, present map[string]bool) {
 	}
 }
 
+// s07ReportsHealthy reports whether the cluster says it is healthy,
+// replication included: HAReady and ReplicationHealthy True and no
+// quarantine. Ready alone does not cover replication.
+func s07ReportsHealthy(cluster *databasev1alpha1.CubridCluster) bool {
+	return cluster.Status.WriteQuarantine == nil &&
+		meta.IsStatusConditionTrue(cluster.Status.Conditions, haReadyCondition) &&
+		meta.IsStatusConditionTrue(cluster.Status.Conditions, replicationHealthyCondition)
+}
+
+// s07StallReport returns what the cluster reports of a stalled replication,
+// or "": HAReady or ReplicationHealthy False with LogCopyStalled,
+// ReplicationStalled or ApplyFailures.
+func s07StallReport(conditions []metav1.Condition) string {
+	var reported []string
+	for _, t := range []string{haReadyCondition, replicationHealthyCondition} {
+		c := meta.FindStatusCondition(conditions, t)
+		if c != nil && c.Status == metav1.ConditionFalse && slices.Contains(s07StallReasons, c.Reason) {
+			reported = append(reported, t+"=False/"+c.Reason)
+		}
+	}
+	return strings.Join(reported, "; ")
+}
+
+// s07StallReasons are the reasons of HAReady and ReplicationHealthy for a
+// slave that does not apply the master's log (docs/observability.md).
+var s07StallReasons = []string{"LogCopyStalled", "ReplicationStalled", "ApplyFailures"}
+
+// noteS07Stall records the first report of a stalled replication after the
+// cut was removed.
+func noteS07Stall(rec *s07Record, cluster *databasev1alpha1.CubridCluster, now time.Time) {
+	if rec.StallReportedAt != nil {
+		return
+	}
+	if stall := s07StallReport(cluster.Status.Conditions); stall != "" {
+		rec.StallReportedAt, rec.StallReason = &now, stall
+		rec.note("stall_reported", stall)
+	}
+}
+
+// classifyS07Rows compares each other member's rows with the final
+// master's: rows the master holds that the member lacks (lagging), and rows
+// the member holds that the master lacks or holds with other values
+// (conflicting).
+func classifyS07Rows(master string, rows map[string][]workload.Row) (lagging, conflicting map[string]int) {
+	lagging, conflicting = map[string]int{}, map[string]int{}
+	held := map[string]workload.Row{}
+	for _, r := range rows[master] {
+		held[r.OpID] = r
+	}
+	for member, memberRows := range rows {
+		if member == master {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, r := range memberRows {
+			seen[r.OpID] = true
+			if want, ok := held[r.OpID]; !ok || want != r {
+				conflicting[member]++
+			}
+		}
+		for id := range held {
+			if !seen[id] {
+				lagging[member]++
+			}
+		}
+	}
+	maps.DeleteFunc(lagging, func(_ string, n int) bool { return n == 0 })
+	maps.DeleteFunc(conflicting, func(_ string, n int) bool { return n == 0 })
+	return lagging, conflicting
+}
+
 // observeS07Health reads the cluster for s07HealthWindow and records
-// whether any reading reported Ready with no quarantine.
+// whether any reading reported it healthy (s07ReportsHealthy), whether one
+// reported Ready with no quarantine, and the first report of a stall.
 func (h *haRun) observeS07Health(ctx context.Context, rec *s07Record) {
 	deadline := time.Now().Add(s07HealthWindow)
 	for {
@@ -1648,11 +1801,16 @@ func (h *haRun) observeS07Health(ctx context.Context, rec *s07Record) {
 		err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster)
 		if err == nil {
 			rec.HealthReadings++
+			now := time.Now().UTC()
+			noteS07Stall(rec, cluster, now)
 			if cluster.Status.WriteQuarantine == nil && rec.ReadyWithoutQuarantineAt == nil &&
 				meta.IsStatusConditionTrue(cluster.Status.Conditions, readyCondition) {
-				now := time.Now().UTC()
-				rec.ReadyWithoutQuarantineAt, rec.HealthyAtEnd = &now, true
+				rec.ReadyWithoutQuarantineAt = &now
 				rec.note("ready_without_quarantine", "")
+			}
+			if rec.ReportedHealthyAt == nil && s07ReportsHealthy(cluster) {
+				rec.ReportedHealthyAt, rec.HealthyAtEnd = &now, true
+				rec.note("reported_healthy", "HAReady and ReplicationHealthy True with no quarantine")
 			}
 		}
 		if !time.Now().Before(deadline) || ctx.Err() != nil {

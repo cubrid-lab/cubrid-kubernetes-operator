@@ -313,22 +313,34 @@ func TestJudgeS07(t *testing.T) {
 		"a data check that could not read a member is blocked": {false, testS07Limits, func(r *s07Record) {
 			r.Data = &s07Data{Error: "ha-2: csql failed"}
 		}, evidence.Blocked, "data check"},
-		"members holding different data while the cluster reports healthy fail": {false, testS07Limits,
+		"conflicting rows while the cluster reports its replication healthy fail": {false, testS07Limits,
 			func(r *s07Record) {
-				r.Data = &s07Data{Read: true, AcknowledgedMissing: 12, MissingByMember: map[string]int{m1: 12},
-					Diverged: 4}
+				r.Data = &s07Data{Read: true, Diverged: 4, ConflictingByMember: map[string]int{m0: 4}}
 				r.HealthyAtEnd = true
-			}, evidence.Fail, "4 row(s) differing"},
-		"acknowledged writes lost on every member while the cluster reports healthy are reported": {false,
+			}, evidence.Fail, "4 conflicting row(s)"},
+		"a final master lacking acknowledged writes while the cluster reports healthy fails": {false,
 			testS07Limits, func(r *s07Record) {
-				r.Data = &s07Data{Read: true, AcknowledgedMissing: 12,
+				r.Data = &s07Data{Read: true, AcknowledgedMissing: 12, MasterMissingAcknowledged: 12,
 					MissingByMember: map[string]int{m0: 12, m1: 12, m2: 12}}
 				r.HealthyAtEnd = true
-			}, evidence.Pass, "12 acknowledged write(s) are missing"},
-		"acknowledged writes missing while the cluster is not Ready are reported": {false, testS07Limits,
+			}, evidence.Fail, "final master lacks 12"},
+		"a stalled slave lacking the master's rows while only Ready is True is reported": {true, testS07Limits,
 			func(r *s07Record) {
-				r.Data = &s07Data{Read: true, AcknowledgedMissing: 12, MissingByMember: map[string]int{m1: 12}}
-			}, evidence.Pass, "12 acknowledged write(s) are missing"},
+				r.Data = &s07Data{Read: true, AcknowledgedMissing: 1223, Diverged: 1223,
+					MissingByMember: map[string]int{m1: 1223}, LaggingByMember: map[string]int{m1: 1223}}
+				ready, stall := at(*r.FaultIssuedAt, 300), at(*r.FaultIssuedAt, 205)
+				r.ReadyWithoutQuarantineAt, r.StallReportedAt = &ready, &stall
+				r.StallReason = "HAReady=False/LogCopyStalled"
+			}, evidence.Pass, "lacks 1223 row(s) the master holds"},
+		"conflicting rows while the cluster reports replication stalled are reported": {false, testS07Limits,
+			func(r *s07Record) {
+				r.Data = &s07Data{Read: true, Diverged: 4, ConflictingByMember: map[string]int{m0: 4}}
+			}, evidence.Pass, "4 conflicting row(s)"},
+		"acknowledged writes the final master lacks while the cluster is not healthy are reported": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Data = &s07Data{Read: true, AcknowledgedMissing: 12, MissingByMember: map[string]int{m1: 12},
+					MasterMissingAcknowledged: 12}
+			}, evidence.Pass, "12 acknowledged write(s) the final master lacks"},
 		"a two-master quarantine released automatically fails": {false, testS07Limits, func(r *s07Record) {
 			v := at(*r.FaultIssuedAt, 180)
 			r.ReleaseSeenAt, r.ReleaseReason = &v, string(databasev1alpha1.WriteQuarantinedMultipleMasters)
@@ -452,7 +464,7 @@ func TestObserveS07PathCountsOnlyWhatItSees(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 17, 12, 0, 30, 0, time.UTC)
 	status := databasev1alpha1.CubridClusterStatus{Conditions: []metav1.Condition{condition("Ready", "False"),
-		condition("RoutingReady", "False"), condition("PrimaryResolved", "False")}}
+		condition(routingReadyCondition, "False"), condition("PrimaryResolved", "False")}}
 	h, _ := s07PathClient(t, status, 0, 2, 2)
 	rec := &s07Record{Target: imageIdentity{Pod: m0}}
 	h.observeS07Path(ctx, rec, now, true, true)
@@ -489,7 +501,7 @@ func TestObserveS07PathCountsOnlyWhatItSees(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
 		t.Fatal(err)
 	}
-	cluster.Status.Conditions = []metav1.Condition{condition("RoutingReady", "True")}
+	cluster.Status.Conditions = []metav1.Condition{condition(routingReadyCondition, "True")}
 	if err := c.Update(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
@@ -632,14 +644,30 @@ func TestObserveS07Health(t *testing.T) {
 	old := s07HealthWindow
 	s07HealthWindow = 50 * time.Millisecond
 	t.Cleanup(func() { s07HealthWindow = old })
-	status := databasev1alpha1.CubridClusterStatus{Conditions: []metav1.Condition{condition("Ready", "True")}}
+	// Ready says nothing of replication: with HAReady False for a stalled
+	// log copy the cluster does not report itself healthy, and the stall is
+	// recorded.
+	stalled := metav1.Condition{Type: haReadyCondition, Status: metav1.ConditionFalse, Reason: "LogCopyStalled"}
+	status := databasev1alpha1.CubridClusterStatus{Conditions: []metav1.Condition{condition("Ready", "True"),
+		stalled, {Type: replicationHealthyCondition, Status: metav1.ConditionFalse, Reason: "LogCopyStalled"}}}
 	h, _ := s07PathClient(t, status, 1, 1, 1)
 	h.cfg.Poll = 10 * time.Millisecond
 	rec := &s07Record{}
 	h.observeS07Health(context.Background(), rec)
-	if rec.HealthReadings < 2 || rec.ReadyWithoutQuarantineAt == nil || !rec.HealthyAtEnd {
-		t.Errorf("readings %d, ready at %v, healthy %v", rec.HealthReadings, rec.ReadyWithoutQuarantineAt,
-			rec.HealthyAtEnd)
+	if rec.HealthReadings < 2 || rec.ReadyWithoutQuarantineAt == nil || rec.HealthyAtEnd ||
+		rec.StallReportedAt == nil || !strings.Contains(rec.StallReason, "LogCopyStalled") {
+		t.Errorf("Ready with a stalled log copy: readings %d, ready at %v, healthy %v, stall %v %q",
+			rec.HealthReadings, rec.ReadyWithoutQuarantineAt, rec.HealthyAtEnd, rec.StallReportedAt, rec.StallReason)
+	}
+	status.Conditions = []metav1.Condition{condition("Ready", "True"), condition(haReadyCondition, "True"),
+		condition(replicationHealthyCondition, "True")}
+	h, _ = s07PathClient(t, status, 1, 1, 1)
+	h.cfg.Poll = 10 * time.Millisecond
+	rec = &s07Record{}
+	h.observeS07Health(context.Background(), rec)
+	if rec.ReportedHealthyAt == nil || !rec.HealthyAtEnd || rec.StallReportedAt != nil {
+		t.Errorf("HAReady and ReplicationHealthy True: healthy at %v (%v), stall %v", rec.ReportedHealthyAt,
+			rec.HealthyAtEnd, rec.StallReportedAt)
 	}
 	status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: "g1",
 		Reason: databasev1alpha1.WriteQuarantinedMasterChanged}
@@ -647,7 +675,7 @@ func TestObserveS07Health(t *testing.T) {
 	h.cfg.Poll = 10 * time.Millisecond
 	rec = &s07Record{}
 	h.observeS07Health(context.Background(), rec)
-	if rec.HealthReadings == 0 || rec.HealthyAtEnd {
+	if rec.HealthReadings == 0 || rec.HealthyAtEnd || rec.ReportedHealthyAt != nil {
 		t.Errorf("a quarantined cluster: readings %d, healthy %v", rec.HealthReadings, rec.HealthyAtEnd)
 	}
 }
@@ -681,5 +709,51 @@ func TestS07CutStateAndRemovalOnEnd(t *testing.T) {
 	stop()
 	if !rec.RemovedOnEnd || rec.RemoveOnEndError != "" {
 		t.Errorf("removed on end %v, error %q", rec.RemovedOnEnd, rec.RemoveOnEndError)
+	}
+}
+
+// A slave that lacks rows the master holds is behind; a row a slave holds
+// that the master lacks, or holds otherwise, is a conflict.
+func TestClassifyS07Rows(t *testing.T) {
+	row := func(id string, amount int) workload.Row {
+		return workload.Row{OpID: id, Client: "c", Seq: 1, Amount: amount}
+	}
+	rows := map[string][]workload.Row{
+		m0: {row("a", 1), row("b", 1), row("c", 1)},
+		m1: {row("a", 1)},
+		m2: {row("a", 1), row("b", 2), row("c", 1), row("d", 1)},
+	}
+	lagging, conflicting := classifyS07Rows(m0, rows)
+	if lagging[m1] != 2 || lagging[m2] != 0 || conflicting[m1] != 0 || conflicting[m2] != 2 || len(lagging) != 1 {
+		t.Errorf("lagging %v, conflicting %v", lagging, conflicting)
+	}
+}
+
+// The cluster reports itself healthy only with HAReady and
+// ReplicationHealthy True and no quarantine; a stall is read from either
+// condition with a replication reason.
+func TestS07ReportsHealthyAndStall(t *testing.T) {
+	cluster := &databasev1alpha1.CubridCluster{Status: databasev1alpha1.CubridClusterStatus{
+		Conditions: []metav1.Condition{condition("Ready", "True")}}}
+	if s07ReportsHealthy(cluster) {
+		t.Error("Ready alone was taken for a healthy cluster")
+	}
+	cluster.Status.Conditions = append(cluster.Status.Conditions, condition(haReadyCondition, "True"),
+		condition(replicationHealthyCondition, "True"))
+	if !s07ReportsHealthy(cluster) {
+		t.Error("HAReady and ReplicationHealthy True were not taken for a healthy cluster")
+	}
+	cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{Reason: "WriteQuarantinedMasterChanged"}
+	if s07ReportsHealthy(cluster) {
+		t.Error("a quarantined cluster was taken for a healthy one")
+	}
+	notResolved := []metav1.Condition{{Type: haReadyCondition, Status: metav1.ConditionFalse, Reason: "PrimaryUnresolved"}}
+	if got := s07StallReport(notResolved); got != "" {
+		t.Errorf("an unresolved primary read as a stall: %q", got)
+	}
+	stalled := []metav1.Condition{{Type: replicationHealthyCondition, Status: metav1.ConditionFalse,
+		Reason: "ReplicationStalled"}}
+	if got := s07StallReport(stalled); got != "ReplicationHealthy=False/ReplicationStalled" {
+		t.Errorf("stall %q", got)
 	}
 }

@@ -675,11 +675,16 @@ func (p *Partition) RemoveOnEnd(ctx context.Context, bound time.Duration, done f
 	wg.Go(func() {
 		select {
 		case <-stop:
+			// A context that ended as the watch was stopped still gets the
+			// removal: which of the two the select saw first is chance.
+			if ctx.Err() == nil {
+				return
+			}
 		case <-ctx.Done():
-			end, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
-			defer cancel()
-			done(p.RemoveDrops(end))
 		}
+		end, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+		defer cancel()
+		done(p.RemoveDrops(end))
 	})
 	return func() {
 		once.Do(func() { close(stop) })

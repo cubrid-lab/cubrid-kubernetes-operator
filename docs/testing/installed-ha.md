@@ -990,9 +990,21 @@ installed-ha-network-partition-slave-isolated` select the same runs.
    whose outcome the client could not know is resolved by those rows:
    `unknown-present` when its row is on some member, `unknown-absent`
    otherwise; an unknown one that could not be resolved counts as possibly
-   taken effect. Then, for 30 seconds, the run reads whether the cluster
-   reports `Ready` with no quarantine (`healthReadings`,
-   `readyWithoutQuarantineAt`).
+   taken effect. Each member's rows are compared with the final master's:
+   rows the master holds that a slave lacks are a slave behind or stalled
+   (`laggingByMember`); rows a slave holds that the master lacks, or holds
+   with other values, are conflicting histories (`conflictingByMember`); and
+   acknowledged writes the final master lacks are counted
+   (`masterMissingAcknowledged`). Then, for 30 seconds, the run reads
+   whether the cluster reports itself healthy: `HAReady` and
+   `ReplicationHealthy` `True` with no quarantine (`reportedHealthyAt`).
+   `Ready` alone does not cover replication (see the Conditions table of
+   [observability](../observability.md)); it is recorded too
+   (`readyWithoutQuarantineAt`). From the removal on, the first time the
+   Operator reports replication stalled, `HAReady` or `ReplicationHealthy`
+   `False` with `LogCopyStalled`, `ReplicationStalled` or `ApplyFailures`, is
+   recorded with its reason (`stallReportedAt`, `stallReason`) and its delay
+   from the heal (`stallReportedAfterHeal`).
 
 On every sweep the run also reads the manager Pod the cut names. Once it is
 gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
@@ -1013,9 +1025,10 @@ What it judges, in this order:
    kube-proxy), while the quarantine is still in force; a
    `WriteQuarantinedMultipleMasters` or `WriteQuarantinedMasterChanged`
    quarantine released by anything but a person; the cluster reporting
-   `Ready` with no quarantine in the health window while the members hold
-   different data; and an endpoint the faults would enter that is not the
-   run's own.
+   `HAReady` and `ReplicationHealthy` `True` with no quarantine in the health
+   window while a member holds conflicting rows or the final master lacks an
+   acknowledged write; and an endpoint the faults would enter that is not
+   the run's own.
 2. **Broken expectations fail S07:** the fault not seen removed; a trigger
    seen in two consecutive sweeps and no `status.writeQuarantine`; a
    quarantine recorded while the run never saw every read-write Broker Pod
@@ -1056,11 +1069,14 @@ at least `-partition-duration`.
 Acknowledged writes that a member lacks after the recovery are reported, not
 hidden: `acknowledgedMissing`, `acknowledgedMissingByMember` and
 `membersDiverged` in the measurements, and in the reason of a passing run.
-The ADR expects writes acknowledged around the start of a quarantine to be
-lost (section 8, "The quarantine limits the loss but does not prevent it"),
-so writes missing from every member alike are reported, not failed. Members
-that hold different data while the cluster reports `Ready` with no
-quarantine fail S07: the contract forbids reporting such a cluster healthy.
+A slave that lacks rows the master holds is behind, not a second history:
+it is reported with whether the Operator reported the stall, and does not
+fail S07. Conflicting rows, and acknowledged writes the final master lacks,
+are reported while the cluster does not report itself healthy (the ADR
+expects writes acknowledged around the start of a quarantine to be lost,
+section 8), and fail S07 when it reports `HAReady` and `ReplicationHealthy`
+`True` with no quarantine: the contract forbids reporting such a cluster
+healthy.
 
 Other measurements, from the cut's issue on the run's clock unless named:
 `faultConfirmedWithin`, `triggerObservedWithin`,
@@ -1102,9 +1118,32 @@ Beyond LAB01's, the account needs in the run namespace `update` on
 `list` on EndpointSlices; and `get` on the manager Pod in the Operator's
 namespace.
 
-The lane has not run on the lab yet. Its unit tests use fake clients and a
-model of the members' network namespaces; they are no evidence of CUBRID's
-or the Operator's behavior under a real cut.
+### First lab runs
+
+Both variants ran on the VM lab at `76ae5e2` on 2026-11-17 between 06:23
+and 06:44 UTC, with a 2-minute hold and every limit unset. The evidence is
+on the lab runner, in `partition-slave-isolated-76ae5e2-20261117T062313` and
+`partition-master-isolated-76ae5e2-20261117T063649`.
+
+- `slave-isolated`: no quarantine started, as required. After the cut was
+  removed at 06:31:17 UTC, the cut slave `ha-1` stayed at its pre-fault 642
+  rows while `ha-0` and `ha-2` held 1865: its log copier did not resume, the
+  engine behavior of POC-40, POC-41 and POC-42. The Operator reported
+  `HAReady` `False` with `LogCopyStalled` at 06:32:03 UTC, 46 seconds after
+  the heal, while `Ready` stayed `True`. That run judged the cluster healthy
+  on `Ready` and failed; the lane now judges `HAReady` and
+  `ReplicationHealthy`, and reports such a slave as behind.
+- `master-isolated`: blocked, no trigger seen. In the 2-minute symmetric cut
+  of the master no second member became an active master: `ha-0` stayed the
+  active master, and no acknowledged row was missing afterwards. Rules 1 and
+  2 of the quarantine were therefore not exercised on this lab. They need
+  another fault shape, such as a longer hold, an asymmetric cut, or cutting
+  off a member of higher rank than the master when the master is not the
+  first member; the lane does not implement one yet.
+
+Beyond these runs, the unit tests use fake clients and a model of the
+members' network namespaces; they are no evidence of CUBRID's or the
+Operator's behavior under a real cut.
 
 ## S11 complete
 

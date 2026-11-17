@@ -2476,8 +2476,11 @@ it needs more.
   and established-session SQL and the release separately, removes the fault
   however the run ends and checks every member's rows. It covers neither the
   `asymmetric` variant nor the persistence, release-token and return checks
-  above. It has not run on the lab yet; the limits above stay unset, so a run
-  is a baseline until they are set.
+  above. The limits above stay unset, so a run is a baseline until they are
+  set. Its first lab runs, on 2026-11-17 UTC, are recorded with the lane
+  ([first lab runs](installed-ha.md#first-lab-runs)): the control started no
+  quarantine, and a 2-minute symmetric cut of the master produced no second
+  active master, so the quarantine triggers still need another fault shape.
 
 ### S08: replication lag followed by repeated failures
 
