@@ -41,7 +41,9 @@ var legacyHAOptions = map[string]struct {
 	"installed-operator-failure-recovery-restart": {false, func(c *HAConfig) {
 		c.Fault = FaultOperatorRestart
 	}},
-	"installed-backup-complete": {true, func(*HAConfig) {}},
+	"installed-node-drain-slave-node":  {false, func(c *HAConfig) { c.Fault = FaultDrainSlaveNode }},
+	"installed-node-drain-master-node": {false, func(c *HAConfig) { c.Fault = FaultDrainMasterNode }},
+	"installed-backup-complete":        {true, func(*HAConfig) {}},
 	"installed-backup-missing-destination": {true, func(c *HAConfig) {
 		c.BackupMissingDestination = true
 	}},

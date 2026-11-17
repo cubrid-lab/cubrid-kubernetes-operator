@@ -103,7 +103,7 @@ func TestInstalledLanesMatchTheRegistry(t *testing.T) {
 		check(string(mode), lane, requirements)
 	}
 	checkHA("no option", testHAConfig(t))
-	for _, fault := range []string{FaultVMPowerOff, FaultOperatorRestart} {
+	for _, fault := range []string{FaultVMPowerOff, FaultOperatorRestart, FaultDrainSlaveNode, FaultDrainMasterNode} {
 		cfg := testHAConfig(t)
 		cfg.Fault = fault
 		checkHA(fault, cfg)
@@ -205,6 +205,10 @@ func TestSmokeRequirementsKeepLegacyDeclarations(t *testing.T) {
 	}
 }
 
+// newerHAKeys are the checks added after the 24-lane baseline below was
+// frozen; their plans are covered by their own tests.
+var newerHAKeys = []string{"installed-node-drain-slave-node", "installed-node-drain-master-node"}
+
 const plainHALegacyID = "LAB01"
 const plainHALane = "lab-installed-ha"
 const plainHASummaryFile = "summary.json"
@@ -221,6 +225,9 @@ func TestHALaneDeclarationsPreserveExistingPlans(t *testing.T) {
 	}
 	plans := make(map[string]snapshot, len(legacyHAOptions))
 	for key, legacy := range legacyHAOptions {
+		if slices.Contains(newerHAKeys, key) {
+			continue
+		}
 		cfg := testHAConfig(t)
 		if legacy.backup {
 			cfg.BackupBucket = testBackupBucket

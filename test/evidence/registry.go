@@ -118,6 +118,7 @@ const (
 	accessText      = "Instance Manager network isolation, token-checked requests, service-account permissions " +
 		"and a search for leaked credentials"
 	smokeText   = "Installed Operator standalone connection and SQL smoke"
+	drainText   = "Node drain and PodDisruptionBudget behavior"
 	haSmokeText = "Installed three-member HA and SQL smoke"
 )
 
@@ -181,7 +182,7 @@ var registry = scenarioRegistry{
 		{"S12", "installed-restore-new-cluster", restoreText, "s12-restore-into-a-new-cluster"},
 		{"S13", "cluster-deletion-retention", deletionText, "s13-deletion-and-retention"},
 		{"S14", "instance-manager-access-and-secret-protection", accessText, "s14-authentication-and-secrets"},
-		{"S15", "node-drain-disruption-policy", "Node drain and PodDisruptionBudget behavior",
+		{"S15", "node-drain-disruption-policy", drainText,
 			"s15-node-drain-and-poddisruptionbudget"},
 		{"LAB00", "installed-standalone-sql-smoke", smokeText, requiredAnchor},
 		{"LAB01", haSmokeKey, haSmokeText, requiredAnchor},
@@ -214,6 +215,10 @@ var registry = scenarioRegistry{
 		labResult("installed-ha-primary-vm-failure-power-off", "S04/power-off", vmFailureText+" - power off"),
 		labResult("installed-operator-failure-recovery-restart", "S06/restart",
 			operatorText+" - restart of the installed manager"),
+		labResult("installed-node-drain-slave-node", "S15/drain-slave-node",
+			drainText+" - drain of a slave's node, no spare node"),
+		labResult("installed-node-drain-master-node", "S15/drain-master-node",
+			drainText+" - drain of the master's node, no spare node"),
 
 		labResult(backupCompleteKey, "S11/complete", backupText+" - complete"),
 		labResult("installed-backup-missing-destination", "S11/missing-destination",
@@ -266,6 +271,8 @@ var registry = scenarioRegistry{
 		labLane("lab-installed-ha"),
 		labLane("lab-installed-ha-s04", "installed-ha-primary-vm-failure-power-off"),
 		labLane("lab-installed-ha-s06", "installed-operator-failure-recovery-restart"),
+		labLane("lab-installed-ha-s15-drain-slave-node", "installed-node-drain-slave-node"),
+		labLane("lab-installed-ha-s15-drain-master-node", "installed-node-drain-master-node"),
 		backupLane("lab-installed-ha-s11"),
 		backupLane("lab-installed-ha-s11-missing-destination", "installed-backup-missing-destination"),
 		backupLane("lab-installed-ha-s11-denied-credentials", "installed-backup-denied-credentials"),

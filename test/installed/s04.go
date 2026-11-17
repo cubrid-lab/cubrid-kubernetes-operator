@@ -558,17 +558,17 @@ func (h *haRun) endClients(ctx context.Context, rec *s04Record, result *evidence
 		}
 	}
 	if !rec.ClientsRead {
-		rec.ClientHistories = h.keepClientHistories(ctx, s04Clients)
+		rec.ClientHistories = h.keepClientHistories(ctx, s04Clients, s04ClientsDir)
 	}
 }
 
 // keepClientHistories reads each background client's history and keeps it,
-// as the client wrote it, under s04ClientsDir: runS04 calls it when it ended
-// before finishS04 read the histories, so before the namespace and the
+// as the client wrote it, under dir (s04ClientsDir for S04): runS04 calls it
+// when it ended before finishS04 read the histories, so before the namespace and the
 // client's files go. It goes on when ctx has ended, within its own bound. It
 // judges nothing and changes no result; a history it could not read or keep
 // is recorded with the reason.
-func (h *haRun) keepClientHistories(ctx context.Context, ids []string) []s04ClientHistory {
+func (h *haRun) keepClientHistories(ctx context.Context, ids []string, dir string) []s04ClientHistory {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s04HistoryLimit)
 	defer cancel()
 	kept := make([]s04ClientHistory, 0, len(ids))
@@ -580,7 +580,7 @@ func (h *haRun) keepClientHistories(ctx context.Context, ids []string) []s04Clie
 			kept = append(kept, k)
 			continue
 		}
-		file := s04ClientsDir + id + ".jsonl"
+		file := dir + id + ".jsonl"
 		if err := h.write(file, []byte(text)); err != nil {
 			k.CaptureError = "keep the history: " + err.Error()
 		} else {
