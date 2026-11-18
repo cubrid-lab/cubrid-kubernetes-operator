@@ -400,8 +400,29 @@ type quarantineInput struct {
 	// ReturnRequest is the member the return-to-service annotation asks to
 	// return, "" when none is asked or the annotation is ignored.
 	ReturnRequest string
+	// PendingSince are, by member, the Pod, container start and time of the
+	// first pass in this Operator process that found the member pending
+	// without a pass in between that did not (quarantineDecision.Pending).
+	// It is kept in memory, so the deferral stays bounded when the status
+	// that would record the member's verification cannot be written.
+	PendingSince map[string]pendingMark
 	// Nonce returns a new random value of at least 128 bits.
 	Nonce func() (string, error)
+}
+
+// pendingMark is when a member, in one Pod and container start, was first
+// and last found pending in an uninterrupted run of passes: passes no more
+// than quarantineAnswerGap apart.
+type pendingMark struct {
+	PodUID       string
+	RestartCount int32
+	Since, Last  time.Time
+}
+
+// continues reports whether the mark p of a member now in identity id still
+// runs at now.
+func (p pendingMark) continues(id memberIdentity, now time.Time) bool {
+	return p.PodUID == id.PodUID && p.RestartCount == id.RestartCount && now.Sub(p.Last) <= quarantineAnswerGap
 }
 
 // outOfServiceTaint is the taint node.kubernetes.io/out-of-service with the
@@ -450,6 +471,17 @@ type quarantineDecision struct {
 	// other members that are not verified, in ordinal order.
 	ActiveMasters []string
 	Unverified    []string
+	// Pending are the members of Unverified whose fresh non-master answer
+	// in this pass started their verification, from the Pod and container
+	// start of their recorded answers or with none recorded: only the second
+	// probe is missing, as on the first pass after the Operator did not
+	// observe the cluster for longer than quarantineAnswerGap. The last
+	// resolved primary is never pending, and a member stays pending for at
+	// most quarantinePendingLimit. Rule 2 does not start a quarantine on
+	// them alone in this pass (#931).
+	Pending []string
+	// PendingSince replaces quarantineInput.PendingSince for the next pass.
+	PendingSince map[string]pendingMark
 	// Fenced are the members that are not unverified because their node
 	// carries the out-of-service taint, in ordinal order.
 	Fenced []string
@@ -484,6 +516,13 @@ const (
 	// haResyncInterval: it shortens the time until a second active master
 	// starts a quarantine and until a quarantine is released.
 	unverifiedResyncInterval = 3 * time.Second
+	// quarantinePendingLimit is how long a member may stay pending: the
+	// passes unverifiedResyncInterval apart that give it the answer
+	// quarantineVerifyGap after its first, each with a probe that may wait
+	// roleProbeTimeout. A member not verified by then is named as any
+	// unverified member, also when the status that would record its
+	// answers cannot be written.
+	quarantinePendingLimit = unverifiedResyncInterval + quarantineVerifyGap + 2*roleProbeTimeout
 )
 
 // newQuarantineNonce returns 128 random bits, hex-encoded.
@@ -562,7 +601,10 @@ func ceilSecond(t time.Time) metav1.Time {
 // WriteQuarantinedMultipleMasters; exactly one active master M and an
 // unverified member that outranks M or is the last resolved primary start
 // one with WriteQuarantinedMemberUnverified, recording M and those members;
-// otherwise none starts, and a quarantine in force stays.
+// otherwise none starts, and a quarantine in force stays. When every member
+// rule 2 would name gave a fresh non-master answer in this pass and lacks only
+// the second probe (quarantineDecision.Pending), none starts yet: the next
+// pass verifies or names them.
 //
 // While a quarantine is in force, a new member that the rules would name, or
 // a recorded member removed from the cluster or found in another Pod or
@@ -583,22 +625,7 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 	for i, m := range in.Members {
 		ordinal[m] = i
 	}
-	// The members the rules name in this pass. Without the members' Pods
-	// only two active masters do.
-	var named []string
-	switch {
-	case len(d.ActiveMasters) == 0:
-	case len(d.ActiveMasters) == 1 && in.IdentitiesUnknown:
-	case len(d.ActiveMasters) == 1:
-		m := d.ActiveMasters[0]
-		for _, u := range d.Unverified {
-			if !exempt[u] && (ordinal[u] < ordinal[m] || u == in.LastResolvedPrimary) {
-				named = append(named, u)
-			}
-		}
-	default:
-		named = d.ActiveMasters
-	}
+	named, deferred := namedMembers(in, d, exempt, ordinal)
 	if in.Quarantine == nil {
 		q, err := startQuarantine(in, d.ActiveMasters, named)
 		switch {
@@ -607,6 +634,9 @@ func decideWriteQuarantine(in quarantineInput) (quarantineDecision, error) {
 		case q != nil && in.ReturnRequest != "":
 			d.ReturnWaiting = fmt.Sprintf("a %s quarantine started in this observation; the return is taken up "+
 				"after its release", q.Reason)
+		case q == nil && in.ReturnRequest != "" && deferred:
+			d.ReturnWaiting = "a member that outranks the active master or was the last resolved primary " +
+				"answered as no active master once and is probed again; the return is taken up after that"
 		case q == nil && in.ReturnRequest != "":
 			q, d.ReturnWaiting, err = startReturn(in, d.ActiveMasters)
 		}
@@ -665,6 +695,7 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 		d.Verifications = slices.Clone(in.Verifications)
 		d.Terminations = slices.Clone(in.Terminations)
 		d.MemberFences = slices.Clone(in.MemberFences)
+		d.PendingSince = in.PendingSince
 	}
 	for _, m := range in.Members {
 		o := in.Observations[m]
@@ -698,9 +729,40 @@ func verifyMembers(in quarantineInput) (quarantineDecision, map[string]bool) {
 			d.Fenced = append(d.Fenced, m)
 		default:
 			d.Unverified = append(d.Unverified, m)
+			if pendingMember(in, previous, m, answered) {
+				d.Pending = append(d.Pending, m)
+				id := in.Identities[m]
+				mark := pendingMark{PodUID: id.PodUID, RestartCount: id.RestartCount, Since: in.Now, Last: in.Now}
+				if p, ok := in.PendingSince[m]; ok && p.continues(id, in.Now) {
+					mark.Since = p.Since
+				}
+				if d.PendingSince == nil {
+					d.PendingSince = map[string]pendingMark{}
+				}
+				d.PendingSince[m] = mark
+			}
 		}
 	}
 	return d, verified
+}
+
+// pendingMember reports whether the unverified member m lacks only the
+// second probe (quarantineDecision.Pending): it gave a fresh non-master
+// answer in this pass (answered), it is not the last resolved primary, its
+// recorded answers, if any, come from the same Pod and container start (a
+// member in another one is unverified again, ADR-0005, section 8), and it has
+// not been pending for longer than quarantinePendingLimit.
+func pendingMember(in quarantineInput, previous map[string]databasev1alpha1.MemberVerification, m string,
+	answered bool) bool {
+	if !answered || m == in.LastResolvedPrimary {
+		return false
+	}
+	id := in.Identities[m]
+	if v, ok := previous[m]; ok && (v.PodUID != id.PodUID || v.RestartCount != id.RestartCount) {
+		return false
+	}
+	p, ok := in.PendingSince[m]
+	return !ok || !p.continues(id, in.Now) || in.Now.Sub(p.Since) <= quarantinePendingLimit
 }
 
 // renewFence is member m's fence record after a pass that saw the
@@ -906,6 +968,37 @@ func exemptionEndedForAll(in quarantineInput, rel *databasev1alpha1.WriteQuarant
 		}
 	}
 	return ""
+}
+
+// namedMembers is the members the rules name in this pass (decideWriteQuarantine),
+// and whether rule 2 is deferred because every member it would name is
+// pending. Without the members' Pods only two active masters are named.
+func namedMembers(in quarantineInput, d quarantineDecision, exempt map[string]bool,
+	ordinal map[string]int) (named []string, deferred bool) {
+	switch {
+	case len(d.ActiveMasters) == 0:
+	case len(d.ActiveMasters) == 1 && in.IdentitiesUnknown:
+	case len(d.ActiveMasters) == 1:
+		m := d.ActiveMasters[0]
+		for _, u := range d.Unverified {
+			if !exempt[u] && (ordinal[u] < ordinal[m] || u == in.LastResolvedPrimary) {
+				named = append(named, u)
+			}
+		}
+		// Members whose only missing evidence is the second probe do not
+		// start a quarantine on their own: each answered as no active master
+		// in this pass, and the next pass, unverifiedResyncInterval later,
+		// either verifies or names it (#931). A quarantine that starts for
+		// another member, or one in force, still names them.
+		if in.Quarantine == nil && len(named) > 0 && !slices.ContainsFunc(named, func(u string) bool {
+			return !slices.Contains(d.Pending, u)
+		}) {
+			return nil, true
+		}
+	default:
+		named = d.ActiveMasters
+	}
+	return named, false
 }
 
 // startQuarantine is the quarantine rules 1 and 2 start, or nil under rule 3.
@@ -1280,6 +1373,8 @@ type quarantineHold struct {
 	// the times of the answers to the nanosecond, which the status holds back
 	// for up to observationWriteInterval.
 	verifications []databasev1alpha1.MemberVerification
+	// pendingSince is the decision's PendingSince, for the next pass.
+	pendingSince map[string]pendingMark
 	// reportedUID is the generation whose other cluster UID was reported.
 	reportedUID string
 	// reportedRelease is the release annotation, with what was made of it,
@@ -1586,12 +1681,12 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		ExemptionOwned: state.exemptionOwner != "" &&
 			state.exemptionOwner == releaseTokenOf(cluster.Status.LastWriteQuarantineRelease),
 		Nodes: nodes, Fences: fences, MemberFences: cluster.Status.MemberFences, ReturnRequest: request,
-		Nonce: newQuarantineNonce,
+		PendingSince: state.pendingSince, Nonce: newQuarantineNonce,
 	})
 	if err != nil {
 		return stepResult{err: errors.Join(steps.err, fmt.Errorf("decide the write quarantine: %w", err))}
 	}
-	state.verifications = d.Verifications
+	state.verifications, state.pendingSince = d.Verifications, d.PendingSince
 	var releaseRetry time.Duration
 	d, releaseRetry = r.reconcileManualRelease(ctx, cluster, d, ids, unknown != nil, now)
 	cluster.Status.MemberVerifications = d.Verifications
@@ -1621,6 +1716,24 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	if d.Quarantine != nil {
 		r.holdQuarantine(cluster, d.Quarantine)
 	}
+	r.reportWriteQuarantineChange(ctx, cluster, d)
+	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
+		// steps.err holds only a failed Pod or Node read here.
+		d.Quarantine != nil || steps.err != nil || len(d.Pending) > 0 ||
+			(len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
+	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
+		steps.err = errors.Join(steps.err, err)
+	}
+	if q := cluster.Status.WriteQuarantine; q != nil {
+		r.holdQuarantine(cluster, q)
+	}
+	return steps
+}
+
+// reportWriteQuarantineChange emits events for starts, revisions and releases.
+// It does not decide the quarantine or change the Broker enforcement path.
+func (r *CubridClusterReconciler) reportWriteQuarantineChange(ctx context.Context,
+	cluster *databasev1alpha1.CubridCluster, d quarantineDecision) {
 	log := logf.FromContext(ctx)
 	switch d.Change {
 	case quarantineStarted, quarantineRevised:
@@ -1653,7 +1766,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		}
 		switch rel.Method {
 		case databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint:
-			var fenced []string
+			fenced := make([]string, 0, len(rel.FencedMembers))
 			for _, f := range rel.FencedMembers {
 				fenced = append(fenced, fmt.Sprintf("%s (node %s)", f.Name, f.NodeName))
 			}
@@ -1678,16 +1791,6 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 				quarantineReleaseInterval))
 		}
 	}
-	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
-		// steps.err holds only a failed Pod or Node read here.
-		d.Quarantine != nil || steps.err != nil || (len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
-	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
-		steps.err = errors.Join(steps.err, err)
-	}
-	if q := cluster.Status.WriteQuarantine; q != nil {
-		r.holdQuarantine(cluster, q)
-	}
-	return steps
 }
 
 // ownExemption records that this reconciler wrote the manual release that

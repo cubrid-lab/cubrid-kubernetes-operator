@@ -416,6 +416,59 @@ order on every pass:
    - The second is a cut-off former master, of any rank, that may go on
      accepting writes from Brokers or open sessions that still reach it
      (POC-52, POC-58).
+   - *Proposed by #931, pending maintainer review:* when no quarantine is in
+     force and every member this rule names is *pending*, the quarantine
+     does not start in this pass. A pending member gave a fresh,
+     authenticated, non-master answer in this pass and lacks only an answer
+     at least 2 s after its first one. It is not the last resolved primary,
+     and it has no recorded answers or recorded ones from the same Pod and
+     container start. No recorded answers is the case after an Operator
+     upgrade from a build that kept none, after an Operator absence longer
+     than the 30-second answer gap, and also after a pass in which the
+     member gave no usable answer while no quarantine started (for example
+     with no active master). Passes come 3 s apart while a member is
+     pending; the first pass whose answer from it is not a non-master answer
+     from the same Pod starts the quarantine. A member stays pending for at
+     most 15 s (the 3 s interval, the 2 s gap and two 5 s probe timeouts),
+     counted in the Operator's memory, so the bound holds when the status
+     that would record its answers cannot be written; after that it is
+     named as any unverified member. The 15 s bound is per Operator
+     process: a restart or a change of leader forgets it. When the status
+     was written, the next process reads the member's recorded first
+     answer and verifies or names it on its next pass, so nothing is
+     granted again. When the status cannot be written either, each new
+     process may defer once more for up to 15 s; an Operator that restarts
+     faster than that while it cannot write the status may defer rule 2
+     for as long as that lasts. Before #931 such an Operator started the
+     quarantine in memory and scaled the read-write Brokers to zero
+     without the status.
+     - **Exposure the deferral adds.** While a member is pending, the
+       read-write Brokers stay up beside the one active master M, and M
+       keeps acknowledging writes, as it did before the Operator's gap.
+       A pending member that becomes an active master before its second
+       probe is caught by rule 1 (two active masters) on that probe, at
+       most one pass (3 s plus a 5 s probe timeout) after it starts
+       claiming; until then a write can reach either master, as during any
+       pass interval. A pending member that stops answering is named by
+       rule 2 on that pass. Writes acknowledged by M in the deferral are
+       lost only if a later failover discards M's history, the case rule 2
+       exists to limit; the deferral lengthens that window by at most the
+       pending time. These are bounds from the code, not measurements: a
+       promotion or a partition between the two probes, with new and open
+       sessions through `-rw`, and an Operator restart while a member is
+       pending, are to be measured on the VM lab under #115 before the
+       amendment is accepted as verified. A member in another Pod or container
+     start than its recorded answers, the last resolved primary (a former
+     master's single slave answer is the transitional reading two probes
+     guard against), and a member that gave no usable answer are not
+     pending and start the quarantine at once. A quarantine that starts for
+     another member names the pending members with it, and a return to
+     service waits while the rule is deferred.
+     On the VM lab on 2026-11-17 UTC, the first pass after an Operator
+     upgrade closed a healthy cluster's write path for 24 s because its
+     first member, a slave beside master `ha-1`, had only one answer
+     (#931). That contradicts "a missing Operator observation is not, on its
+     own, a reason to quarantine" under *Negative* below.
 3. **Otherwise no quarantine starts.** That leaves the state reported, as
    today, through `PrimaryResolved`, `RoutingReady`, and `Ready` after
    60 s. It covers two cases:
