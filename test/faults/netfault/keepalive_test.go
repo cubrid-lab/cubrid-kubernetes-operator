@@ -349,6 +349,18 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 		{"a kernel without per-namespace keepalive", func(s *fakeSysctl) {
 			s.ns[testPods[slave1]].kernel = "4.9.0-11-amd64"
 		}, "4.13", false},
+		// The target has no connection to the master before the reset, and
+		// one appears later: nothing was reset, so the later one must not
+		// count as the connection made again under the new keepalive.
+		{"the target has no connection to the master before the reset", func(s *fakeSysctl) {
+			ns := s.ns[testPods[target]]
+			ns.sockets = slices.DeleteFunc(ns.sockets, func(sk fakeSocket) bool {
+				return sk.peer == testPods[slave1]+":1523"
+			})
+			// It appears on the second listing, after the one taken before the
+			// reset.
+			ns.pendingReconnect, ns.reconnectIn = []string{testPods[slave1] + ":1523"}, 2
+		}, "no connection to", false},
 		{"CUBRID does not connect again", func(s *fakeSysctl) { s.ns[testPods[target]].reconnectIn = -1 },
 			"no new connection", true},
 		{"the new connection has no keepalive timer", func(s *fakeSysctl) {

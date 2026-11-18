@@ -165,6 +165,8 @@ type KeepaliveRecord struct {
 // when its Pod started. So the run resets them (ss -K, which needs only
 // NET_ADMIN and a kernel with socket destroy support) and waits until a new
 // connection to the master shows a keepalive timer no longer than k.Time.
+// A target with no connection to the master's port before the reset stops
+// the step there, so a connection made later cannot count as the new one.
 // ss -K prints nothing and exits 0 when the kernel cannot destroy sockets,
 // so the reset is judged by the listing: a connection to the master listed
 // before it must be gone, and no connection listed before it ever counts as
@@ -212,17 +214,15 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	if err != nil {
 		return fail(err)
 	}
-	// before holds every local address listed to a member; expected those
-	// to the master, which the reset must take away.
 	var before, expected []string
-	for _, s := range sockets {
-		if host, _, _ := strings.Cut(s.Peer, ":"); slices.Contains(memberIPs, host) {
-			rec.SocketsBefore = append(rec.SocketsBefore, s)
-			before = append(before, s.Local)
-			if s.Peer == toMaster {
-				expected = append(expected, s.Local)
-			}
-		}
+	rec.SocketsBefore, before, expected = toMembers(sockets, memberIPs, toMaster)
+	// Without a connection to the master listed before the reset, nothing
+	// would be reset, and a connection made later, for a reason the run did
+	// not cause, would look like the one CUBRID made again. So the step stops
+	// before the reset instead of recording a reset that did not happen.
+	if len(expected) == 0 {
+		return fail(fmt.Errorf("%s had no connection to %s's port %s before the reset, so there is no "+
+			"connection to make again under the new keepalive", target.Name, master.Name, port))
 	}
 	// An IPv4 peer may be listed as IPv4-mapped on a dual-stack socket.
 	out, err := shellIn(ctx, env, target, KeepaliveContainer, fmt.Sprintf(": netfault sockets-reset %[1]s %[2]s\n"+
@@ -297,6 +297,24 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	return fail(fmt.Errorf("%s's new connections to %s's port %s do not use the new keepalive: %s", target.Name,
 		master.Name, port, strings.Join(timers, "; ")))
+}
+
+// toMembers returns the sockets to a member's address, their local
+// addresses (before) and the local addresses of those to the master
+// (expected), which the reset must take away.
+func toMembers(sockets []Socket, memberIPs []string, toMaster string) (toMember []Socket, before,
+	expected []string) {
+	toMember = []Socket{}
+	for _, s := range sockets {
+		if host, _, _ := strings.Cut(s.Peer, ":"); slices.Contains(memberIPs, host) {
+			toMember = append(toMember, s)
+			before = append(before, s.Local)
+			if s.Peer == toMaster {
+				expected = append(expected, s.Local)
+			}
+		}
+	}
+	return toMember, before, expected
 }
 
 // setKeepalive adds the keepalive container to the member's Pod, checks that

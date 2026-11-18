@@ -1148,7 +1148,10 @@ connection listed before the reset never counts as the new one, even when
 its old timer has since fired and shows a short time. The new connection is
 told apart by its addresses only, a local address not listed before the
 reset; the run does not read which process owns it (`note` in the record
-says so). Addresses are compared as IPv4 also when `ss` lists them
+says so). When the cut-off member has no connection to the master's port
+before the reset, the run stops before `ss -K`: nothing would be reset, and
+a connection made later, for a reason the run did not cause, would look
+like the one made again. Addresses are compared as IPv4 also when `ss` lists them
 IPv4-mapped.
 
 The values go away with the Pods' network namespaces when the run
@@ -1177,7 +1180,8 @@ connections to the members' port before the reset, those `ss -K` reported
 reset (`targetSocketsReset`, with each keepalive timer as `ss` printed it),
 and the connection made again (`targetReconnectedSocket`). When a Pod is
 not the run's own, the kernel is older than 4.13, a value cannot be written
-or read back, the kernel does not reset the connection, or CUBRID does not
+or read back, the cut-off member has no connection to the master's port
+before the reset, the kernel does not reset the connection, or CUBRID does not
 connect again with the new keepalive within the wait, S07 is blocked before
 any client starts and anything is cut, and the reason says which.
 
