@@ -1570,6 +1570,17 @@ form is under investigation in #985. Until it is independently verified,
 collect evidence and use the reviewed recovery decision path rather than
 attempting an in-place copier/applier restart.
 
+After a network partition in which the cut member outranks the active master,
+CUBRID can leave that member as heartbeat master with its server
+`registered_and_to_be_active` for as long as observed (at least 25 minutes on
+the VM lab). `Ready` is `False` with the write quarantine's reason, and
+`PrimaryResolved` and `HAReady` are `False` (`AmbiguousPrimaryObservation`).
+`ReplicationHealthy` may stay `True`, because the stuck copier belongs to the
+heartbeat master, so `LogCopyStalled` does not fire. The supported cause is a
+half-open `copylogdb` connection (#716); the Operator does not change TCP
+keepalive (backlog #982). Before any [manual release](#manual-release), compare
+the members' data: the Operator never picks a winner.
+
 ## Metrics
 
 Metrics describe what was observed. They do not decide by themselves whether
