@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,6 +72,170 @@ type lostSessionRecord struct {
 	Identity sqlcheck.IdentityResult `json:"identity"`
 	// ReRead says how the read made once more answered.
 	ReRead string `json:"reRead"`
+	// ServerAtPair is what the member printed in the background soon after the
+	// pair: "now <epoch seconds>" and "uptime <seconds>" of the member, read
+	// together first, then cub_server's identity ("cub_server <pid> <start
+	// time in clock ticks since boot>" and "ha_mode <mode>"), then "clk_tck
+	// <ticks per second>". It is one reading, not a comparison with the start
+	// of the step: csql calls are made from many places that know nothing of a
+	// step's start. The server's age at "now" is uptime - start/clk_tck. If it
+	// is less than now - At, the server started after the pair, so it
+	// restarted. A restart within the latency of the exec (about 0.2 s) after
+	// the pair can still be missed. "ha_mode ?" is expected on a standalone
+	// member, which has no HA mode.
+	ServerAtPair []string `json:"serverAtPair,omitempty"`
+	// ServerReadAt is when ServerAtPair was read.
+	ServerReadAt time.Time `json:"serverReadAt,omitzero"`
+	// ServerLogTail is the last lines of the member's newest server error log,
+	// read at ServerReadAt, to compare with the pair's time in At.
+	ServerLogTail []string `json:"serverLogTail,omitempty"`
+	// ServerReadError says why the fields above are missing or partial.
+	ServerReadError string `json:"serverReadError,omitempty"`
+}
+
+const (
+	// serverLogTailLines and serverLogLineWidth bound the log lines kept with a
+	// record: at most 40 lines of 400 characters each.
+	serverLogTailLines = 40
+	serverLogLineWidth = 400
+	// serverLogTailScript prints the last serverLogTailLines lines of the
+	// newest server error log of database $0, in the member's container.
+	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
+		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
+		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
+	// serverAgeScript prints the member's time and uptime from one moment, then
+	// the identity script, then the clock rate, from which the server's age
+	// follows. The time comes first so that nothing slow runs before it.
+	serverAgeScript = `echo "now $(date +%s.%N 2>/dev/null)"; echo "uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; ` +
+		sqlcheck.HAServerIdentityScript + `; echo "clk_tck $(getconf CLK_TCK 2>/dev/null)"`
+	// pairCaptureWait bounds the wait for reads still running when the suite
+	// ends. It stays well inside the grace period of the suite (1 minute), so
+	// that the verdict of concludeRun is not lost.
+	pairCaptureWait = 8 * time.Second
+)
+
+// pairCapture reads a member's server state when csql printed the pair. It is
+// nil, and nothing is read, outside a run of the e2e suite (BeforeSuite sets
+// it), so that the unit tests of the ledger make no kubectl call. It runs in
+// the background, never on the path of the call that printed the pair.
+var pairCapture atomic.Pointer[pairCaptureFunc]
+
+type pairCaptureFunc = func(ctx context.Context, namespace, pod, database string) pairServerState
+
+// pairServerState is what pairCapture read.
+type pairServerState struct {
+	identity, logTail []string
+	at                time.Time
+	err               string
+}
+
+// cut returns s cut at width characters.
+func cut(s string, width int) string {
+	if r := []rune(s); len(r) > width {
+		return string(r[:width])
+	}
+	return s
+}
+
+// boundLines splits out into trimmed non-empty lines, keeps the last limit of
+// them, and cuts each at width characters.
+func boundLines(out string, limit, width int) []string {
+	var lines []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	for i, line := range lines {
+		lines[i] = cut(line, width)
+	}
+	return lines
+}
+
+// readServerState reads cub_server's identity and the server log's tail on a
+// member, each bounded in time and size. A failed read is recorded, not
+// returned: it must not change the call's result.
+func readServerState(ctx context.Context, namespace, pod, database string) pairServerState {
+	var state pairServerState
+	read := func(script string, timeout time.Duration) (string, error) {
+		bounded, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return utils.RunQuiet(exec.CommandContext(bounded, "kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
+			"bash", "-c", script, database))
+	}
+	var problems []string
+	// The identity is read first: the age rule is only as good as the time
+	// between the pair and this read.
+	state.at = time.Now().UTC()
+	if out, err := read(serverAgeScript, 2*identityTimeout); err != nil {
+		problems = append(problems, "identity: "+err.Error())
+	} else {
+		state.identity = boundLines(out, 12, serverLogLineWidth)
+	}
+	if out, err := read(serverLogTailScript, identityTimeout); err != nil {
+		problems = append(problems, "server log: "+err.Error())
+	} else {
+		state.logTail = boundLines(out, serverLogTailLines, serverLogLineWidth)
+	}
+	state.err = cut(strings.Join(problems, "; "), serverLogLineWidth)
+	return state
+}
+
+// attach adds the server state read at the pair to a record, which may be nil.
+func (l *lostSessionLedger) attach(record *lostSessionRecord, state pairServerState) {
+	if record == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	record.ServerAtPair, record.ServerLogTail, record.ServerReadError = state.identity, state.logTail, state.err
+	record.ServerReadAt = state.at
+	l.store()
+}
+
+// capture reads the server state of a member in the background and attaches it
+// to record when it is done, so that the call that printed the pair is not
+// delayed: some checks are timed. The read does not end with the spec's
+// context, which may end first; it is bounded by its own timeouts (at most
+// 30 s). It can therefore outlive its spec and send a read-only
+// "cubrid changemode" to the member during the next one. A panic in it is
+// recorded as the read's error, not raised in a goroutine of the suite.
+func (l *lostSessionLedger) capture(ctx context.Context, record *lostSessionRecord, namespace, pod, database string) {
+	read := pairCapture.Load()
+	if read == nil || record == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	l.pending.Add(1)
+	go func() {
+		defer l.pending.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				l.attach(record, pairServerState{at: time.Now().UTC(),
+					err: cut(fmt.Sprintf("the read of the server state panicked: %v", r), serverLogLineWidth)})
+			}
+		}()
+		l.attach(record, (*read)(ctx, namespace, pod, database))
+	}()
+}
+
+// waitForCaptures waits for the reads still running, for at most limit, and
+// reports whether all of them are done.
+func (l *lostSessionLedger) waitForCaptures(limit time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		l.pending.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
 }
 
 // lostSessionLedger counts the pair over the whole run, for every caller of
@@ -81,6 +246,8 @@ type lostSessionRecord struct {
 type lostSessionLedger struct {
 	mu      sync.Mutex
 	records []*lostSessionRecord
+	// pending counts the background reads of the server state.
+	pending sync.WaitGroup
 	// reads and lost count by the labels of the step that made the call.
 	reads, lost map[string]int
 }
