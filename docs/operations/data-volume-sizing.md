@@ -29,7 +29,9 @@ For a cluster created by the current Operator, each member has one claim,
   log, one archive and a temporary archive that fills as it is written,
   three files per peer while replication is healthy;
 - **CUBRID's own troubleshooting logs** (`cubrid-log`), which rotate at
-  10 MiB per file, about 160 MiB on an HA member with two peers at most
+  10 MiB per file, about 160 MiB on an HA member with two peers. The `pl/`
+  logs and each utility's own `.err` file are not bounded; they stayed under
+  15 KB each when measured
   ([CUBRID's own log files](../observability.md#cubrids-own-log-files)).
 
 Every log file is `L` large, where `L` is a 32nd of the requested size,
@@ -74,8 +76,11 @@ base use = database size + (4 + 3 × peers) × L + 160 MiB of troubleshooting lo
 
 Compute `L` from the request you plan (a 32nd of it, between 20 and
 512 MiB), then check that the sum fits. Measure the log rate of your own
-workload: the master's archive files (`<db>_lgar*`) are each `L` large, so
-the rate is `L` times the number of archives created in an hour.
+workload: count the `ARCHIVE` entries in the master's `<db>_lginf` over an
+hour, or how far the archive number in its `<db>_lgarNNN` file name advances
+in an hour. Each archive is `L` large, so the rate is `L` times that count.
+Counting the archive files present does not work: each is removed within
+1.6 seconds of the creation of the next one in POC-67.
 
 **Worked example, derived from the single POC-67 run, not a guarantee.**
 Three members (two peers), a 128 MiB database, about 810 MiB of log an hour:
@@ -88,6 +93,9 @@ Three members (two peers), a 128 MiB database, about 810 MiB of log an hour:
 Only the 2Gi row was run; the 4Gi row is arithmetic, and its larger log
 files were not measured. Add your database's expected growth to the base
 use. A higher write rate shortens the stall a volume absorbs in proportion.
+The margin must also hold the archives the slave writes of its own log while
+it catches up: about 300 MiB after a 31-minute applier stall in POC-67. How
+this grows with a longer backlog was not measured.
 
 ## What to watch
 
@@ -123,11 +131,11 @@ use. A higher write rate shortens the stall a volume absorbs in proportion.
   and [Rebuilding a member](../observability.md#rebuilding-a-member). Do not
   restart the copier with `cubrid heartbeat ... stop/start` (#985).
 - **Older clusters are sized differently.** A cluster created before #670
-  has 512 MiB log files (a 2Gi HA member used about 1.7 GB before it kept any
-  archive), and one created between #849 and #856 keeps its troubleshooting
+  has 512 MiB log files (a 2Gi HA member on the lab used about 1.7 GB before it kept any
+  archive, as recorded in #666), and one created between #849 and #856 keeps its troubleshooting
   logs on a second 1Gi claim, `log-<cluster>-<ordinal>`.
 - **Not measured:** other write rates and volume sizes, applier stalls longer
-  than 34 minutes, restarts or failovers during a stall, and how much a
+  than 31 minutes (copier stalls longer than 34 minutes), restarts or failovers during a stall, and how much a
   member seeded with `restoreslave` after a long gap needs. Whether a
   long-lived member stays within its request over a long period is still
   being checked on the lab (#666).
