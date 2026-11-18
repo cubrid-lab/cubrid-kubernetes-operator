@@ -111,7 +111,8 @@ the original evidence directory and on `out/`.
 
 - **Archive rate.** The master created 31 archives (`appdb_lgar000` to `appdb_lgar030`, 4,094
   pages of 16 KiB each, 64 MiB) from 02:52:46 to 05:14:31, one every 279.6 to 290.3 s
-  (median 281.5 s), so this workload wrote about 13 archives, 820 MiB of log, an hour.
+  (median 281.3 s, mean 283.5 s), so this workload wrote about 13 archives, about 810 MiB of
+  log, an hour (64 MiB × 3,600 / 283.5 = 812.6).
 - **Every archive was removed.** `appdb_lginf` records 203 `REMOVE` lines in all
   (`out/summary/lginf.csv`), some of them covering a range of archives. 202 came within 1.6 s of
   the creation of an archive in the same directory, as POC-45 saw; the other one removed one
@@ -120,21 +121,23 @@ the original evidence directory and on `out/`.
   from 04:48), no member held more than 2 of its own archives and no copied-peer directory more
   than 1 archive.
 - **What a member's volume holds** (`out/summary/volume.csv`, last sample):
-  - its own database directory, 385 MiB and flat from 03:08 on: the 128 MiB database volume
-    (its size did not change) and four 64 MiB log files: `appdb_lgat`, `appdb_lgar_t` and two
-    of {an archive, a second archive, `appdb_lgar.removed`};
+  - its own database directory, at most 385 MiB from 03:08 on: the 128 MiB database volume
+    (its size did not change) and up to four 64 MiB log files: `appdb_lgat`, `appdb_lgar_t` and
+    two of {an archive, a second archive, `appdb_lgar.removed`}. Just after a removal it was
+    321 to 374 MiB (growth-1's last four samples, after the writes stopped, are 321 to 323 MiB);
   - each copied-peer directory, 130 to 190 MiB: `appdb_lgat` (64 MiB), one archive (64 MiB) and
     `appdb_lgar_t`, allocated as it fills (0 to 64 MiB);
   - the CUBRID log directory (copier, applier, utility and server logs): 0.1 to 0.3 MiB at the
     start, 2.0 to 3.1 MiB at the end, about 1 MiB an hour;
   - nothing in the backup or restore staging directories.
-- **Per member, from 03:08 to the stall** (and growth-0 to the end), the volume moved between
-  640 and 758 MiB, with the copied-peer directories' fill and the archive timing: growth-0 640.7
-  to 757.7, growth-1 640.3 to 737.1, growth-2 640.2 to 737.0 MiB. A new member started at 341
-  MiB. A least-squares line through the growth-0 samples from 03:08 to 05:20 rises 32 MiB an
+- **Per member, from 03:08, once all its log files existed, to the stall** (and growth-0 to the
+  end), the volume moved between 640 and 758 MiB, with the copied-peer directories' fill and the
+  archive timing: growth-0 640.7 to 757.7, growth-1 640.3 to 737.1, growth-2 640.2 to 737.0 MiB.
+  A new member started at 341 MiB, and the first 20 minutes, while the first archives and copies
+  were created, were 341 to 674 MiB. A least-squares line through the growth-0 samples from 03:08 to 05:20 rises 32 MiB an
   hour, less than one 64 MiB file over the run; the only part that grew steadily was the CUBRID
   log directory. No sample showed a log file that was kept.
-- **No node reported `DiskPressure`** in any of 34 samples; node disk use stayed at 4 to 12%.
+- **No node reported `DiskPressure`** in any of 34 samples; node disk use (`df` Use%) stayed at 4 to 13%.
 
 ### Replication stall and catch-up
 
@@ -144,18 +147,27 @@ the original evidence directory and on `out/`.
 | 04:08 | 761 | 1 | 2 | 1,195 | 3,462 | 1 |
 | 04:18 | 898 | 1 | 4 | 9,940 | 12,206 | 1 |
 | 04:28 | 1,033 | 1 | 6 | 18,585 | 20,851 | 1 |
-| 04:38 | 1,106 | 1 | 7 | 23,198 | 29,484 | 2 |
+| 04:38:55, after the resume | 1,106 | 1 | 7 | 23,198 | 29,484 | 2 |
 | 04:43 | 1,096 | 7 | 2 | 0 | 33,829 | 1 |
 | 04:48 | 719 | 1 | 1 | 0 | 38,165 | 1 |
 
-The cluster stayed `Ready=True` throughout. The Operator reported `ReplicationHealthy=False`,
-reason `ReplicationStalled`, in the samples from 04:08 to 04:33, `True` at 04:38, and `False`,
-reason `LogCopyStalled`, from 04:43 to the end (`out/summary/cluster.csv`).
+The cluster stayed `Ready=True` throughout. The Operator reported `ReplicationHealthy=False` and
+`HAReady=False`, reason `ReplicationStalled`, in the samples from 04:08 to 04:33, and `False`,
+reason `LogCopyStalled`, from 04:43 to the end (`out/summary/cluster.csv`). The 04:38:55 sample
+showed `ReplicationHealthy=True` and `HAReady=True` (`AppliersProgressing`) although growth-1's
+copier had exited with `-1024` 25 s earlier, 29,484 pages behind: one sample reported a healthy
+replication that was not.
 
 - **A slave whose applier stops keeps every copied archive** (growth-2). Its copy of the master's
-  log grew by one 64 MiB archive per master archive: from 131 MiB to 541 MiB, and its volume from
-  650 MiB to 1,106 MiB, 732 MiB an hour (least squares, 04:08 to 04:39), the master's log rate.
-  `ha_copy_log_max_archives=1` removed none of them while they were unapplied.
+  log grew by one 64 MiB archive per master archive: from 198 MiB at 04:08 to 538 MiB at 04:33,
+  and its volume from 761 to 1,100 MiB. A least-squares line through the fully stalled samples
+  (04:08 to 04:33) rises 811.6 MiB an hour for the volume and 811.2 for the copy directory, the
+  master's log rate. `ha_copy_log_max_archives=1` removed none of them while they were unapplied.
+- **The highest sample is not the peak.** growth-2's copy record (`appdb_lginf`) shows archive
+  022 of the master's log created at 04:36:42 and the first removal at 04:38:27, so it held 8
+  copied archives (015 to 022) for those 105 s, between two samples. Its volume then was probably
+  about 1,165 MiB (an estimate: the 04:33 sample of 1,100 MiB plus one 64 MiB archive), not
+  measured.
 - **Its catch-up succeeded.** After `SIGCONT` at 04:38:27, its applier went from 19,167 pages
   behind (04:39:31) to 0 at 04:42:35, about four minutes, while the writes went on. Its copied
   archives were removed at the next archives, and it ended with all 151 markers and the master's
@@ -178,25 +190,32 @@ reason `LogCopyStalled`, from 04:43 to the end (`out/summary/cluster.csv`).
   reported.
 - **The `cubrid heartbeat ... start` that followed made growth-1 skip the stall.** At 04:38:40
   `cubrid heartbeat copylogdb start appdb growth-0` registered a new copier with
-  `-L /home/cubrid/CUBRID/databases/appdb_growth-0`, a directory on the container's own
-  filesystem, not on the data volume; it started from the master's current log ("from 'na' to
-  'active'"). The `applylogdb start` at 04:38:50 registered a second applier on that directory,
+  `-L /home/cubrid/CUBRID/databases/appdb_growth-0`. That path is a volume the image declares
+  (`out/config/login-shell-check.txt`), mounted in the member from the node's root disk
+  (`/dev/vda1`, `out/extra/*-growth-1.txt`), not the data volume; the copier started from the
+  master's current log ("from 'na' to 'active'"). The `applylogdb start` at 04:38:50 registered a second applier on that directory,
   which started at LSA `95900|6152` (both appliers write
   `out/logs/growth-1-applylogdb-of-growth-0.err`; the second's lines are those of pid 12936; the
   two processes and the second copy are in `out/extra/` and
   `out/logs/growth-1-heartbeat-status-final.txt`). At the end, growth-1
-  held 117 of the 151 markers: ids 78 to 111, written from 04:05:40 to 04:38:42, the whole time
-  its copier was stopped, are missing; marker 77 (04:04:41) and 112 (04:39:43) onward are there.
-  `SUM(v)` matched the master, because later updates rewrote every `churn` row. The Operator's
-  conditions did not distinguish this from the stalled copy above. On growth-2, `cubrid heartbeat
+  held 117 of the 151 markers: ids 78 to 111, written from 04:05:40 to 04:38:42, from the freeze
+  of its copier until the second applier started (04:38:50), are missing; marker 77 (04:04:41)
+  and 112 (04:39:43) onward are there. So the slave silently lacked 34 committed rows that the
+  master holds (a diverged replica). `SUM(v)` matched the master, because later updates rewrote
+  every `churn` row. The Operator's conditions did not distinguish this from the stalled copy
+  above. On growth-2, `cubrid heartbeat
   applylogdb start` started an applier that printed its usage and was stopped again ("cubrid
   heartbeat applylogdb: fail"); growth-2's original applier carried on.
-- **Why the heartbeat commands used another directory** (observed in the image, not on the lab):
+- **Why the heartbeat commands used another directory** (observed in the image with local
+  Docker, not on the lab; `login-shell-check.sh`, output in `out/config/login-shell-check.txt`):
   the Pods set `CUBRID_DATABASES=/var/lib/cubrid/databases`, but the commands were run through a
   login shell (`bash -lc`, as POC-62, POC-65 and POC-66 did so that csql finds `databases.txt`),
   and the image's `~/.cubrid.sh` sets `CUBRID_DATABASES=$CUBRID/databases`. In the same image,
   `docker run -e CUBRID_DATABASES=/var/lib/cubrid/databases ... bash -c` printed
-  `/var/lib/cubrid/databases` and `bash -lc` printed `/home/cubrid/CUBRID/databases`.
+  `/var/lib/cubrid/databases` and `bash -lc` printed `/home/cubrid/CUBRID/databases`. That
+  explains the directory `start` used. **Why `stop` answered `success` yet stopped nothing is a
+  hypothesis:** that it looked for a process registered with the `/home/cubrid/...` path, found
+  none, and reported success anyway. The member's logs record no deregistration at 04:03:39.
 
 ### Data check (`out/datacheck.txt`, 05:34 UTC)
 
@@ -213,38 +232,41 @@ reason `LogCopyStalled`, from 04:43 to the end (`out/summary/cluster.csv`).
 1. **Archives are removed under the current settings.** With 64 MiB log files, each own and
    copied archive was removed at the creation of the next one, about every 4.7 minutes at this
    write rate, and no healthy member held more than 2 own archives or 1 copied archive per peer.
-2. **With replication healthy, a new 2Gi member's volume stayed between 640 and 758 MiB** over
-   150 minutes of about 820 MiB of log an hour: 385 MiB for its own database directory, 130 to
+2. **With replication healthy, a new 2Gi member's volume stayed between 640 and 758 MiB** from
+   03:08, once all its log files existed, under about 810 MiB of log an hour: at most 385 MiB for
+   its own database directory, 130 to
    190 MiB for each copied peer, and a CUBRID log directory that grew about 1 MiB an hour. That
    is 31 to 37% of the request; the 2Gi request was not approached. This matches the lab's
    low-write `logsize` reading (627 to 755 MiB) and does not depend on the write rate in this
    state, since every directory holds a fixed number of 64 MiB files.
-3. **A slave whose applier stops grows by the master's log rate**, here 732 MiB an hour, because
-   unapplied copies are never removed; catch-up then adds a burst of the slave's own archives
-   (+304 MiB at 04:43). A 34-minute applier stall peaked at 1,106 MiB, 54% of the request, and
-   caught up in about four minutes.
+3. **A slave whose applier stops grows by the master's log rate**, here about 810 MiB an hour,
+   because unapplied copies are never removed; catch-up then adds a burst of the slave's own
+   archives (+304 MiB at 04:43). In a 31-minute applier stall the highest sample was 1,106 MiB
+   (54% of the request); the unsampled peak, with 8 copied archives, was probably about 1,165 MiB
+   (57%, an estimate). It caught up in about four minutes.
 4. **A slave whose copier stops does not grow, and the master does not grow for it either; the
    master removes the archives it needs** (`force_remove_log_archives=y`). After 34 minutes, with
    the archive holding its next page removed 13 minutes into the stall, the copier could not
    resume (`-1024`), as in POC-45. Keeping the volume bounded and keeping a lagging slave
    recoverable pull in opposite directions under these settings.
-5. **`cubrid heartbeat copylogdb|applylogdb stop|start` run from a login shell in these Pods do
-   not act on the Operator's processes, and `start` silently skips data.** `stop` answered
-   `success` and stopped nothing; `start` created a second copier and applier on the container
-   filesystem from the master's current position, and the member lost 34 minutes of committed
-   rows without an error. This affects the recovery steps in `docs/observability.md` (restart the
-   copier with these commands) when they are run from a login shell.
+5. **`cubrid heartbeat copylogdb|applylogdb stop|start` run from a login shell in these Pods did
+   not act on the Operator's processes, and `start` left a diverged replica.** `stop` answered
+   `success` and stopped nothing; `start` created a second copier and applier on a directory
+   outside the data volume, from the master's current position. The slave silently lacked 34
+   committed rows that the master holds, and the Operator's conditions did not distinguish it
+   from a stalled copy. This affects the copier-restart steps in `docs/observability.md` when they
+   are run from a login shell (#985).
 
 ## Extrapolation (labeled; not measured)
 
-- At this write rate (about 820 MiB of log an hour), a member at the top of its healthy band
-  (about 760 MiB) whose applier is stalled reaches 2 GiB after about (2,048 − 760) / 732 ≈ 1.8
+- At this write rate (about 810 MiB of log an hour), a member at the top of its healthy band
+  (about 760 MiB) whose applier is stalled reaches 2 GiB after about (2,048 − 760) / 812 ≈ 1.6
   hours, sooner if the catch-up burst of its own archives (about 300 MiB here) falls before that.
   On `local-path`, which does not enforce the request, it would go on using the node's disk.
   The general form is the request minus about 760 MiB, divided by the master's log rate.
 - The healthy band is a fixed number of `log_volume_size` files: one database volume plus four
   log files of its own and three per copied peer (`lgat`, one archive, a filling `lgar_t`). With
-  two peers that is 128 + 10 × 64 = 768 MiB, which matches the observed maximum within a few MiB.
+  two peers that is 128 + 10 × 64 = 768 MiB, which matches the observed maximum (757.7 MiB) within about 10 MiB.
   This is an arithmetic reading of the files listed above, not a separate measurement.
 
 ## Hypotheses and what this does not show
