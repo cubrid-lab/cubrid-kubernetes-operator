@@ -205,7 +205,7 @@ sequenceDiagram
 | The backup controller watches only `CubridBackup` | Implemented | `CubridBackupReconciler.SetupWithManager` in [`cubridbackup_controller.go`](../../internal/controller/cubridbackup_controller.go) |
 | Target recorded before the start; one idempotency key per backup | Implemented, Design | `startBackup` and `idempotencyKey` in `cubridbackup_controller.go`; target choice in `selectBackupTarget`, [`backuptarget.go`](../../internal/controller/backuptarget.go); [ADR-0007](../adr/0007-backup-execution.md) |
 | Poll every 10 seconds; finished backups are skipped | Implemented | `backupPollAfter` and the `BackupPhaseCompleted`/`BackupPhaseFailed` check at the start of `CubridBackupReconciler.Reconcile`, `cubridbackup_controller.go` |
-| A real `CubridBackup` on an HA cluster completes and its artifact is verified independently | Observed (VM lab) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), row "Backup and restore": no Kind e2e test creates a `CubridBackup`; the backup and restore scenarios ran on the VM lab |
+| A real `CubridBackup` on an HA cluster completes and its artifact is verified independently | Observed (VM lab) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Backup (S11): complete and failed uploads" and "Restore (S12): exact, tampered, wrong target": no Kind e2e test creates a `CubridBackup`; the backup and restore scenarios ran on the VM lab |
 
 ## How the controllers reach the Instance Manager
 
@@ -241,8 +241,8 @@ sequenceDiagram
 | Primary resolved only from the current pass's fresh answers | Implemented, Design | `reconcileHAStatus` and `resolvePrimary` in `haresolve.go`; [ADR-0005](../adr/0005-failover-split-brain.md) section 3 |
 | Pod readiness follows `/readyz` only; `HAReady` is a separate Condition | Implemented, Design | the `ReadinessProbe` in `podSpec`, `cubridcluster_controller.go`; [docs/observability.md — Health model](../observability.md#health-model) |
 | The Conditions and what each reason means | Implemented | [docs/observability.md — Conditions](../observability.md#conditions) |
-| Rolling update planning exists, but automatic Pod replacement is switched off | Implemented | `reconcileRollingUpdate` and its `AutomaticReplacement` check in `update.go`; ROADMAP.md row "Hardening" |
-| An HA cluster bootstraps, replicates and reports one primary on the real image | Observed (Kind in CI) | ROADMAP.md row "HA and Broker" |
+| Rolling update planning exists, but automatic Pod replacement is switched off | Implemented | `reconcileRollingUpdate` and its `AutomaticReplacement` check in `update.go`; ROADMAP.md row "Rolling updates (S16, conditional)" |
+| An HA cluster bootstraps, replicates and reports one primary on the real image | Observed (Kind in CI) | ROADMAP.md row "Three-member HA and RW/RO access (S01–S02)" |
 
 ## Limits and assumptions
 

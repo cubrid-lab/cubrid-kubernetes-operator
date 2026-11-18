@@ -101,1070 +101,155 @@ restore workflow CR, broader engine/Kubernetes/CSI/architecture matrices and
 multi-zone/provider resilience are outside the initial delivery. New features
 remain proposals until scheduled; required validation takes precedence.
 
-Improvements that v0.1 validation shows are worth designing, but that v0.1
-does not require, are collected in #989 for the v0.2 design (maintainer
-decision, 2026-11-18 UTC). The required part of each stays on its v0.1 issue.
+Improvements found during v0.1 validation that v0.1 does not require are
+kept as individual issues whose body ends with `**Release:** backlog`
+([open backlog issues](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues?q=is%3Aissue+is%3Aopen+in%3Abody+%22Release%3A+backlog%22);
+maintainer decision, 2026-11-18 UTC). The required part of each stays on its
+v0.1 issue.
 
 ## Implementation and validation inventory
 
-Baseline: main `a6cadd0` (2026-10-05); review/update these rows when a relevant
-PR merges or candidate evidence arrives. The table records existing code and
-POC history, not live support certification.
+One row per v0.1 capability or area. **Level** is the highest evidence level
+reached, from `code`, `unit-envtest`, `Kind`, `VM-lab` to `candidate`, or
+`not run`, with its limits in brackets; no row is at `candidate` yet. A Kind
+or VM-lab entry is a run of the named steps, not a scenario pass unless it
+says so. **Open blockers** lists the open issues the evidence names; "none
+recorded; live check unowned" means a live check is still missing and no open
+issue owns it. `#126` (candidate qualification) applies to every row of a
+required scenario S00–S15. The run details live on the linked issues and PRs;
+the long-form narrative this table replaced is kept in the
+[ROADMAP at `5655948`][old-roadmap]. Review a row when a relevant PR merges or
+candidate evidence arrives.
 
-| Area | Existing implementation/evidence | Live Operator validation |
-|---|---|---|
-| Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | S00 runs in CI on Kind (linux/amd64): a standalone cluster on the real 11.4 image becomes Ready, answers SQL through `csql` and keeps a row across a Pod deletion. Its two read-write and two read-only Brokers point at the one server (#286): a client with a CUBRID driver in another namespace commits through `-rw`, reads the row through `-ro` and is refused a write there with `-581` (POC-33), and `BrokerReady`, `WriteEndpointReady`, `ReadEndpointReady` and `RoutingReady` (`StandaloneServerReady`) are `True`. One member only; no HA, backup or failure scenario, and no Broker or server failure of a standalone cluster |
-| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman, which was linux/amd64 under emulation: command output only, no timing evidence (start, stop, restart, recovery start); a database that carries the ownership marker, which the entrypoint neither creates over nor starts, is reported in the role answer and in `status.instances[].unfinishedDatabase` with an Event, as waiting for the next operation or refused (#315: unit/envtest; not run with the real image, on Kind or in the VM lab); CUBRID's own log files (`$CUBRID/log`) are in the directory `cubrid-log` of each member's data volume, mounted with a `subPath`, on a StatefulSet created by a current build, so a member has one claim (#856: unit/envtest; not yet run on a multi-node cluster); a StatefulSet created between #849 and #856 keeps its 1Gi log PVC per member (`log-<cluster>-<ordinal>`), and one created before #849 keeps them in the container; the entrypoint gives the server's error log a fixed name, sets `error_log_size` to 10 MiB and keeps the newest 20 per-start event logs, and the Broker keeps its logs in an emptyDir of at least 256Mi with `SQL_LOG_MAX_SIZE` 4096 KB, `ACCESS_LOG=OFF` and `error_log_size` 4 MiB (#252: unit/envtest and entrypoint tests on POC-35's observations; the fixed error log name on a standalone server, the bound on a real member and the Broker's emptyDir limit were not observed on Kind or the VM lab; in Docker, without the Operator, CUBRID rotated the server error log at 10 MiB, the Broker CAS error log at 4 MiB, and the CAS SQL and slow-query logs at `SQL_LOG_MAX_SIZE=4096`, whose unit is 1,000 bytes, #935; the HA process logs at 10 MiB and the Broker Pod's emptyDir limit on a real Pod remain unverified) | Runs as a non-root Pod under the restricted Pod Security Standard on Kind (S00). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest; the HA bootstrap on Kind seeds its members through them, see the HA row). S00 listed the files of `$CUBRID/log` before its Pod deletion and required each of them after it (#252); this passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc). It does not exercise the rotation bounds or a multi-node volume migration |
-| HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The HA bootstrap runs on Kind in CI with the real image: one member creates the database, the other two are seeded through object storage (a mock in CI) and join as slaves, one row replicates to both, and the cluster reports Ready with one primary. Two read-write and two read-only Brokers run as non-root Pods; a client with a CUBRID driver commits through `-rw`, reads the row through `-ro` and is refused a write there. Scenarios S01 and S02 of `docs/testing/scenario-contract.md` run on the same cluster with the JDBC workload client: a recorded history of 121 operations is checked against the rows of every member and of both Services, a write through `-ro` is refused by the read-only Broker itself (error `-581` on the pinned image, POC-22; a failure to reach it fails S01, #366), a schema change and rolled-back transactions replicate, and a replaced slave Pod holds everything again. Evidence: `summary.json` and the scenario files of the `E2E Tests` workflow. Scenario S03 runs there too, in three variants: the master Pod is deleted with a grace period, and without one both when the master is the first member and when it is not, while a client writes through `-rw`; one member is master afterwards, the client's writes are acknowledged again, and no acknowledged write is missing on any member; the run fails on two members reporting themselves active masters in two consecutive sweeps, during the failover and through the stable period, and on a new Pod or container restart of a member the fault did not touch (#368; the oracle is unit-tested, and no two-master state has been observed in this scenario). A slave takes over, except when the first member is deleted without a grace period: its Pod is back within a second and CUBRID makes it the master again (POC-19). Scenario S05 runs there in three variants: the Broker process of a read-write Broker Pod is killed, one read-write Broker Pod is deleted, and all of them are deleted, while four clients write; the Brokers come back, every client's writes are acknowledged again, no acknowledged write is missing and the master does not change. Scenario S06 runs there in both variants: the Operator Pod is killed while clients write, and the master Pod is deleted while the Operator's Deployment is scaled to zero; SQL is not interrupted by the restart, CUBRID fails over without the Operator, and the returning Operator names the new master and restarts no member. Scenario S14 runs there as well: every protected endpoint of the Instance Manager refuses a caller without the token, also one that claims a loopback origin in its headers, and the token is not shown in status, events, descriptions or logs. No VM failure and no live interruption of the bootstrap is covered |
-| Recovery and safety | State/role decision code; a `ReplicationHealthy` condition that reports a slave which has log pages waiting and applies nothing, or whose applier failed, which `HAReady` follows (unit/envtest, and a non-contract e2e step on Kind with the real image that puts a slave into the POC-21 state, `test/e2e/replication_stall_test.go`, #229, #352; `HAReady` follows the condition and nothing else acts on it, #249); `Ready` and `cubrid_cluster_ready` stay off while more than one fresh, correctly identified local active-master claim is observed, including claims with conflicting peer lists (#339: parser/HTTP unit tests and envtest; the engine occurrence remains unverified under #115 and #373), and a reconcile that ends before the roles are observed reports them `Unknown` instead of keeping an earlier primary (#340) (envtest for the conflicting claims; POC-50 produced two writable masters in Docker without the Operator: a member of higher priority than the active master lost heartbeats and both members acknowledged writes, and failovers there left members holding different acknowledged rows, also without that overlap, #392. On Kind with the Operator and Brokers, in three cuts in POC-51, no write through `-rw` reached the cut member, and in the one trial where its server was sampled active the Conditions reported two masters; after the cut ended, in one trial acknowledged rows diverged and in the other two the `-rw` client was refused while `Ready` stayed `True`, with the member behind in every trial, #702; in Docker in POC-52, `ha_ping_hosts`, which the Operator does not render, stopped an isolated member's promotion only with the ping target cut too and no `cubrid heartbeat status` ended before CUBRID's scoring pass, nothing the Operator renders stops such a promotion, and acknowledged writes were not on the final master after such failovers, #702); the HA bootstrap copies each member after the first peer from the member observed as master, with a backup taken on it, and waits while that master is not known (#281: unit/envtest, and the engine's behavior in POC-23; on the VM lab on 2026-11-04, in two scripted runs with Operator `16dbbf8`, every CUBRID process on the master was killed while the last member's seed backup ran on it, CUBRID made the first peer master 7 to 9 s later, the Operator waited (`SeedSourceNotResolved`) while the former master's Pod, deleted with no grace period once the new master was seen, started again as a slave, and then seeded the last member from the new master in round 1 (`SeedSourceChanged`), and in the second run a row written after `PeersSeeded` was on all three members; a change of master during a seed was produced in Docker without the Operator in POC-57: in all 16 trials the seed restore still ended `Completed` and the member joined as a slave that lacked acknowledged rows the new master held, with no failure count in the 8 trials where it joined after the takeover; since #768 the Operator keeps reading the roles until a member is recorded as seeded and, once a member that holds the database was observed as an active master, records it only after it is seen caught up with that source (warning after 10 minutes of waiting) and stops the bootstrap (`SeedSourceChangedDuringSeed`, `SeedSourceUnverified`) on a change of master or a reading gap of more than 30 s, and a member not recorded as seeded is never a backup standby: unit/envtest only, not run on Kind or the VM lab, #678; the catch-up rule was checked on the engine in Docker without the Operator in POC-59, reading the Instance Manager as the Operator does: at its first pass the member held every row acknowledged before the target in 4 of 4 trials, and a kill or stop of the master right after the pass left the member lacking no row the new master held in 12 of 12, while a kill before the member joined lost rows in 4 of 4; in 1 of 20 passing readings the applier was still behind the target, which the rule does not read, #771); `HAReady` is `False` with `MemberNotSeeded` while the HA bootstrap has created or restored the database and a member is not yet recorded as seeded, and so is `Ready` once every instance is ready, and `HAReady` and `Ready` are `False` with the bootstrap's failure reason once it is `Failed`, whatever the roles show, and a master not recorded as seeded is not taken for a backup (`MasterNotSeeded`) (#770: unit/envtest only, not run on Kind or the VM lab; reporting only); a restarted applier process does not inherit the age of a stall (#360: unit tests on POC-30; no applier restart has been produced on a cluster); the stall is judged by the applier's position in the copied log, which the Instance Manager reports, so a transaction held open on the master does not make a healthy slave look stalled, with the previous reading kept in the Operator's memory and a reported stall kept across an Operator restart; a reading without the position is judged by the counters, and backup target selection reads the same readings (#249: unit/envtest on the `applyinfo` readings of POC-48; `HAReady` now follows `ReplicationHealthy`: unit/envtest; the non-contract Kind step held a transaction open on the master for more than 90 s with both staying `True`, and the stalled-slave step required `HAReady` to turn `False` with it, then recover after Pod replacement; both passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc); nothing on the VM lab); a slave whose copy of the master's log has not grown for the window while the master's own log ends pages past it is reported as `LogCopyStalled` (#623: unit tests on the readings of POC-42, and one VM-lab run of POC-41's TCP 1523 cut with the installed Operator at `fb6f345`, which reported the stuck slave from the end of its 60-second window, 83 s after the cut, until a copier restart turned it `True` again, POC-42; nothing acts on it); a database member takes a member lock on its volume before it writes there and holds it for the container's whole life, and creates, starts and recovers nothing, and does not launch its Instance Manager, while another container of the member holds that lock, at any stage of its start, or another process still holds a CUBRID lock on the volume, such as the old container of a force-deleted Pod (#472, #475: unit and entrypoint tests, and containers of the real image on one Docker volume, POC-29 and POC-31, including a server start held open before its lock; not run on Kind or the VM lab); manual failover and split-brain POCs | S03 on Kind: while the Operator reported `PrimaryResolved` and `RoutingReady` as not `True` after a master Pod deletion, writes through `-rw` went on being acknowledged, which that build only reported. The write quarantine is implemented (#113): on two active masters, or one active master beside an unverified member that outranks it or was the last resolved primary, the Operator records a quarantine in status, keeps the read-write Broker Deployment at zero (also from the stored status after its restart), records it as enforced once no read-write Broker Pod or `-rw` endpoint remains, reports it in `Ready` and `RoutingReady`, and releases the unverified-member case automatically after two observations 10 s apart, and releases any quarantine on an administrator's annotation that names the stored quarantine's current one-time token, only beside exactly one active master, recording the consumed token before the read-write Brokers start, after which the accepted members do not start a new quarantine as unverified members while their Pods, container starts and the active master stay the same. A member that does not answer is not unverified while the node its Pod was last seen on carries the administrator's `node.kubernetes.io/out-of-service:NoExecute` taint, which the Operator only reads and never adds or removes; seen in two observations 10 s apart it releases the unverified-member case with the method `OutOfServiceTaint`, without making `PrimaryResolved`, `HAReady` or `RoutingReady` `True`; and the annotation `database.cubrid.io/return-to-service` starts a `WriteQuarantinedMemberReturning` barrier, held across Operator restarts, that is released only after the returning member answers as no active master in two observations 10 s apart, escalates to `WriteQuarantinedMasterChanged` on another active master, and is used once. Unit/envtest only, not run on Kind or the VM lab; the S04 harness does not add the taint or run the return yet. On Kind ([run 43524691052](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43524691052), one run, #113) a master Pod deleted with `--force` kept writes through `-rw` refused for 38.6 to 41.3 s (S03 abrupt) and 87.1 s (S06 absent-during-failover); those variants are now judged by `quarantined_failover_limit` (6 minutes). A member whose old Pod's termination the kubelet confirmed is no longer unverified while its new Pod starts (ADR-0005 section 8 amended by #870, accepted by the maintainer on 2026-11-14 UTC; unit/envtest only), so S03 graceful keeps the 30 s `failover_limit`, not yet re-measured. On the VM lab the Operator moved to main `66ab5ee` on 2026-11-17 UTC (cubrid-lab/terraform-zadara-k8s#98), and the installed standalone SQL smoke check (LAB00) passed on it (#122). Open findings of the managed write quarantine: the first pass after that upgrade quarantined a healthy HA cluster's write path for 24 s, because the Operator had not observed the cluster for longer than the 30 s answer gap and its master was not the first member (#931; the fix is in open PR #932, pending the maintainer's review of the ADR-0005 amendment); and a graceful master Pod deletion on Kind took 59.3 s against the 30 s `failover_limit`, because a write quarantine started after one missed role probe of the restarted former master (#938, open). The first VM-lab runs of a network partition lane (#943, open PR, not merged) showed: no quarantine for a cut lower-ranked slave (the control), no trigger when the master was cut, since no second master appeared, and, after the cut slave was healed, its log copy did not resume and the Operator reported `HAReady=False` (`LogCopyStalled`) 46 s after the heal; the lane's verdict on that control run was a harness error being fixed on #943, and the master-cut run ended `blocked`, so this is not an S07/S08 pass (#115). Cutting off the first-ranked master for 2 or 20 minutes on the VM lab produced no quarantine trigger: no second active master and no unverified member ranked above it appeared (2026-11-17 UTC, `blocked` as designed, #115). A third variant of the lane, `higher-rank-isolated`, cuts off a member that outranks the master, after moving the master off the first member by a graceful Pod deletion when it is there (chosen from POC-50 and POC-51). In its two VM-lab runs on 2026-11-17 UTC with Operator `66ab5ee`, the Operator started the first VM-lab write quarantine, `WriteQuarantinedMemberUnverified` (ADR-0005 section 8, rule 2), which closed the `-rw` path about 12 s after the cut was issued, with no write acknowledged after the path closed, and escalated it to `WriteQuarantinedMasterChanged` (manual-only release) at the heal. In the second run CUBRID then demoted the active master and left the cut higher-ranked member as heartbeat master (server `registered_and_to_be_active`), which lacked 50 acknowledged writes the other two members held: the failure of #702, reproduced on the VM lab. Both runs ended `blocked` (the cluster did not settle), not passed; no manual release was run, and a verified way to recover such writes or return mastership is not established (#115, #702). SQL quarantine on new and open connections (#115), rejoin and rebuild require #112–#118. The explicit rebuild request is decided as an annotation with a one-time token, as on the manual quarantine release, recorded on #117 on 2026-11-17 UTC; the request itself is implemented: the Operator records the data claim each member runs the database on, publishes a token in `status.memberRebuildOffers` only for a member on a replaced claim and volume beside a healthy primary among the other members and while no write quarantine is in force, refuses the current primary, the last resolved primary (a lost former primary cannot be rebuilt through this request) and a claim or volume that held the database, and records an accepted request with its operation ID in `status.memberRebuild` (unit/envtest only, not run on Kind or the VM lab). The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)) |
-| Network access | Per-cluster ingress NetworkPolicies for the DB and Broker Pods (generated objects checked in envtest) | S14 on Kind checks that the DB Pods drop connections to ports 9090 and 1523 from another namespace under Kind's network plugin, and the HA scenarios run with the policies in place. On the VM lab, one connection to a Broker port from another namespace was refused once (2026-10-21 run below); the DB ports and the lab's network plugin are not checked there |
-| Backup and restore | CubridBackup API/controller (object storage is the only destination with an execution path), Instance Manager artifact/restore paths, `restoreslave` when a member is seeded from a running master (POC-14), and a restore that fails while heartbeat runs without a confirmed role (#456) (unit/envtest); a member is not ready while its operation store keeps an end it could not write (#473: unit tests with an unwritable store directory; not run with a full volume on a cluster); a backup whose recorded operation its target no longer holds a record of ends `Failed` (`RecordedOperationLost`) after 30 minutes, bounded across operator restarts and never started again, and so does a recovery whose recorded restore operation its target no longer holds a record of, without a new attempt (#457: envtest with a client that answers the missing record; no operation store has been lost on a real member); a backup whose target answers `Completed` for an operation that is not the recorded backup operation, or without an artifact that names a manifest URI a recovery accepts, a manifest digest and the backup's database, ends `Failed` with `ArtifactUnverified`, records no artifact and is never started again (#841: envtest with a stand-in client; the manifest is not read, and no such answer has come from a real Instance Manager); a backup is taken on a standby only on fresh evidence that it applies the resolved primary's log without failures or a stall past the window, the one with the fewest pages waiting first, and not on one whose copy of that log was seen not growing for the window while pages of it waited, and only with evidence that its copy receives that log: its copy's end read in the same observation and, when the master's log end was not read, a copy grown past a stored reading younger than the window; a `PreferStandby` backup whose slave lacks only the master's log end waits for it for up to 30 s from the first reconcile that waited, kept in its status across requeues and Operator restarts, before it falls back to the master (#291: unit/envtest; the copy rule and the wait for the master's log end: unit tests and envtest with stand-in probers, no engine run; no long transaction, stuck applier, stuck copier or missed `applyinfo -r` has been produced on an engine for this choice); a restore refuses, before any download, registration or command, an artifact that is not a full backup, and a seed restore one not taken on the named master of the same cluster (#276: unit/envtest with fixture manifests; no real artifact of another source has been restored); a backup's manifest records the role its member reports when the backup starts; a request naming `master`, `slave` or `replica` fails before `backupdb`, after a 30 s wait, when the member reports another role or none, while a request naming `unknown` or no role records `unknown` when the role cannot be read; a backup that started as master, and every seed backup, is not uploaded when the role differs after `backupdb`, and a standby's backup is uploaded with its starting role and the change logged; a role change after that last reading is not excluded (#755: unit tests with a stand-in `cubrid heartbeat status` and envtest with a stand-in client; no failover has been produced during a backup); a backup's manifest records the engine version its member reads from `cubrid_rel`, a backup on a member whose engine is unknown or not of the declared series is refused before `backupdb`, and a seed restore names its target member, and the Instance Manager refuses a restore meant for another member (`expected-member` capability, #941: unit/envtest only, not run on Kind or the VM lab); a restore is refused unless the restoring member's engine, the declared version and the manifest's version are of one series, and data an earlier attempt restored is not taken over on an engine of another series; a seed backup, seed restore or recovery restore whose member was last observed running another series than `spec.version` waits as `EngineVersionMismatch` and uses up no attempt (#276, ADR-0011: unit tests with a stand-in `cubrid_rel` and envtest; not run with the real image, and no restore across patch versions of a series); `databases.txt` and ownership markers are replaced whole with file and directory syncs, and the manager's writes of `databases.txt` are serialized, also against the `cubrid createdb` of an HA bootstrap, which registers its database there itself (#298: a child process killed by the kernel inside the write leaves the earlier content, and a registration made while a stand-in createdb runs keeps both lines, unit tests; not run with the real createdb); operation records, already renamed into place, are also directory-synced, and a new record whose sync failed is removed (#298: unit test with an injected sync failure; no power loss has been produced); the leftover of a failed restore or bootstrap is unregistered while its marker still names the operation, then moved aside under `.reclaim-<db>` and removed there, so a removal stopped partway leaves nothing under the database's name for the next attempt to refuse (#298: unit tests with a removal stopped partway and each intermediate state; no crash has been produced); standalone restore requests for another configured database are refused before work, and completed-restore resume keeps its marker and data on that configuration mismatch (#301: unit tests; not run on a real database); a failed or cancelled backup that removes its staging only once no process holds a file in it, and keeps it unused when one still does after 30 s (#469: unit tests with a holder process outside the utility's group; not run against a real `cub_server`); manual engine POCs. The HA bootstrap's seeding runs `backupdb`, the upload and `restoreslave` on Kind against an S3 mock (see the HA row); only the Kind DBA password scenarios create a CubridBackup and a recovery bootstrap, of a standalone cluster (#831) and of an HA cluster, whose recovery also seeds the other members (#847, passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc)); on the VM lab, S11 `complete` takes a real CubridBackup after LAB01 and verifies its artifact independently, and S12 `exact` restores that artifact into a new cluster and checks it against the known point (see below) | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
-| Hardening | Readiness probes run at most one status command at a time, and concurrent requests share its answer (#301, #494: unit and race-detector tests, not exercised with a real kubelet on a cluster); a manager started with `--watch-namespace` caches and reconciles only that namespace (#498: envtest with a namespace-Role-only identity, primary and Secret watches; no live candidate rollout on the VM lab, and baseline/candidate orchestration and CRD compatibility are not covered); the manager caches only Secrets, Pods, PersistentVolumeClaims and the other namespaced kinds it writes with the operator's managed-by label, refuses to adopt an unlabeled `<cluster>-im-token` Secret or another unlabeled object of a name a cluster needs, and its generated role holds only the verbs it calls (#282: envtest, with a manager running under that role; memory is sampled on Kind and in the [dated reference-deployment record](docs/testing/reference-manager-memory.md), which pins the installed build and object counts without bounding peaks or selecting a new limit; no call path was exercised on a real cluster under the narrowed role); an object with a name a cluster needs that the cluster does not control is refused and left unchanged, on every path that writes a child object (#657: envtest; not run on Kind or the VM lab, so a real upgrade and garbage collection after a cluster is recreated are not shown); update sequencing, auth (a generated Instance Manager token per cluster, #270, and its rotation with an operator-side overlap that also moves clusters off the shared token of older versions, #324, and the report of a member that refuses the token apart from an unreachable one, #325: unit/envtest), metrics and Events code (the HA gauges of `docs/observability.md` are compared on Kind with the status they were taken from, in S03 after the new master is resolved and in the stalled-slave step while the stall is reported and after its repair, #253: these comparisons passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc)); a seed backup, a seed restore or a `CubridBackup` on the master is sent only to an Instance Manager whose `GET /v1/role` answer reports the checks the step relies on, and otherwise waits with `InstanceManagerCapabilityMissing` or `InstanceManagerCapabilityUnverified`, and the Instance Manager refuses a request field it does not know with `UnknownRequestField` (#733, ADR-0013: unit and envtest with a fake older manager; no run of two real builds against each other); a read-only observer that records a cluster's status, Events and the manager's Prometheus series from outside the cluster, and fails on a gauge that contradicts its Condition (#546: unit tests; two 5-minute runs on the VM lab against `ha` with the manager Pod deleted, [record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/546#issuecomment-6364673645); no S04, S06 or S07/S08 verdict yet); the members of an HA cluster are kept on separate nodes by a Pod anti-affinity on `kubernetes.io/hostname`, required for a new cluster and preferred for one whose StatefulSet or data PVC existed before, as recorded once in the annotation `database.cubrid.io/member-spread-default` unless `spec.placement.memberSpread` is set, and a `MemberPlacement` Condition reports members on one node, volumes that keep two members on one node and a member the scheduler found no node for (#596: envtest of the generated template and the condition; a non-contract e2e step on single-node Kind in which a new cluster leaves two members Pending with `MemberUnschedulable`; not run on the VM lab, so neither three members on three distinct nodes nor an upgraded cluster whose members share a node is shown yet); a standalone cluster may name its DBA password in a Secret with `spec.dbaPasswordSecretRef`: the DB container alone mounts the key, the StatefulSet is not created until the key resolves, `DBAPasswordSecretResolved` reports it, and the API refuses any later change of it (#803, #805: envtest; Kind e2e steps log in with the empty and the Secret's password in the DB container and through `-rw` and `-ro`, back the database up and restore it into a cluster whose Secret holds the source's password, which becomes Ready with the source's row, and into one whose Secret holds another password, whose restore fails (#819); they passed on Kind with CUBRID 11.4.7.1995 (run 43204254915); a Secret value that is no longer the database's DBA password is reported as `DBAPasswordRotationUnsupported` after a login check through the member's Instance Manager every 5 minutes (#824: unit tests with a stand-in csql on a real pseudo-terminal and envtest with a fake Instance Manager; csql's client-mode prompt, acceptance and refusal observed once on a CUBRID 11.4.7.1995 server in Docker, not through the Operator)); an HA cluster may name it too, every member's DB container mounts the key, the HA bootstrap member sets the password and the seeded members only check it (#834: envtest of the API, the Secret gate before any member or HA bootstrap starts, and the Pod template; a Kind e2e scenario that creates an HA cluster with the Secret, logs in on every member and through `-rw` and `-ro`, and reads a row written through `-rw` on every member, passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc); copylogdb replicated with a password set by hand through a standby restart and a failover on the VM lab, with no `-171` line ([#801 result](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/801), 2026-11-12 UTC), but a network cut, VM power loss and an HA cluster created by the Operator with the Secret were not run on the VM lab); a check of the DBA password on HA members before they start was examined and rejected, because a standalone open of the database writes to the stopped member even with a wrong password (POC-65, #937; decision recorded on #894 on 2026-11-17 UTC); a changed value on an HA cluster is reported as `DBAPasswordRotationUnsupported` after a login check through the Instance Manager of the resolved primary, asked only once the HA bootstrap admitted every member (#845: unit tests with a stand-in csql and envtest with a fake Instance Manager; a Kind e2e step that changes the Secret and puts it back passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc); it restarts the Operator after each mounted-file update to trigger the check, so it does not measure the 5-minute polling interval; not run on the VM lab); a Kind e2e step backs that HA cluster up and restores it into an HA cluster whose Secret holds the source's password, which must seed every member, become Ready with `HAReady` and `ReplicationHealthy` `True`, refuse the empty password and accept the Secret's on every member and through `-rw` and `-ro`, and into one whose Secret holds another password, whose restore is refused for its password on its first member without seeding another; the step observes that refusal and deletes the unsuccessful cluster before waiting for every retry to end (#847, passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc)) | Placement/retention/PDB, security and operational accuracy require #90–#92; the deletion of a standalone cluster with `retentionPolicy` `Retain` (the PVC kept and the cluster created again over it, the database not created again) and `Delete` (no PVC left) passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc) (S13 `retain`, `delete`, #615), judged by the scenario contract's configured Kind `delete_limit`; the VM-lab limit remains unset; an HA cluster created again over retained PVCs stops with `MemberHoldsDatabase` and is recovered by a manual procedure, run once by hand on the VM lab and with no Kind scenario (#798), and on the VM lab both policies were run once by hand on the `local-path` StorageClass, whose reclaim policy `Delete` removes a volume with its claim ([data retention](docs/operations/data-retention.md), #615); the token rotation and the move off a shared token are an e2e scenario on Kind (S14 `token-rotation`, `token-migration`, #343) and have not run in the VM lab, and a refused token has not been reported by real members; PodDisruptionBudgets of `maxUnavailable: 1` over the members of an HA cluster and each Broker access mode are generated (#613: envtest of the objects and of the API server's answer to an eviction for a status the test writes; [ADR-0012](docs/adr/0012-voluntary-disruption.md) was accepted on 2026-11-13 UTC, and no real drain, disruption controller or scheduler was exercised by that envtest, which left real-node and SQL validation to #614). On the VM lab, the node drain lane (#936) ran eight times on 2026-11-17 UTC against Operator `66ab5ee` in the lab's no-spare-node layout (three workers, `local-path` storage): the budget allowed one member eviction and refused a second (429) every time, the evicted member stayed `Pending` until the node was uncordoned, SQL went on through `-rw`, and no acknowledged row was missing. The VM-lab `drain_limit` and the S15 `failover_limit` are 1 minute, set from six baseline runs (#942), and two judged runs passed (#614, closed). A layout with a spare node and a whole-node `kubectl drain` are not covered; automatic Pod replacement for updates is switched off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition that the update planner checks, and the update planner does not read the PodDisruptionBudgets (code inspection of `cmd/main.go` and `internal/controller/update.go`) |
-| Release | Lint, unit/envtest and manager E2E workflows; `make test-lab`, an explicit lab entry point that runs one command while it holds the `cubrid-lab/campaign` Lease, on a pinned kubeconfig and context, and releases it only with uid and resourceVersion preconditions once the command's process group is empty (#441: unit tests with fake kubectl and a throwaway API server; on the VM lab it held the Lease for one LAB00 run and for one session of manual Pod replacements on 2026-10-21, and released it, [record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210); it renews the Lease every sixth of `LAB_DURATION`, stops the command when the Lease is lost, and escalates a repeated signal to SIGTERM and SIGKILL, #525: unit tests with fake kubectl; on the VM lab on 2026-10-23 it renewed the 60-second Lease through a 3-hour hold and three shorter runs and released it each time, records on [#122](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6364164038) and [#546](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/546#issuecomment-6364673645); losing the Lease was not exercised there); a read-only release version check that creates, resumes or refuses a release draft and fails closed has tests (#934), and no workflow calls it yet (#124) | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #122–#127; the demo (#128) is a post-v0.1 follow-up, not a release gate |
+**Where v0.1 stands** against the nine Required capabilities: none is at
+`candidate`. Single-node lifecycle (S00) and three-member HA with RW/RO access
+(S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
+Operator failures reach Kind and one VM-lab Operator restart; VM failure is not
+run. Write quarantine was seen in one Kind run of S03/S06; S07–S08 has no pass,
+and its VM-lab partition runs are blocked. Open safety defects: a cut
+higher-ranked member became heartbeat master without 50 acknowledged writes on
+the VM lab (#702), and healthy write paths were closed after an Operator
+restart (#931) and a graceful master deletion (#938). Rejoin and rebuild are
+`unit-envtest`. Backup and restore variants passed on the VM lab once or a few
+times each; one S12 `exact` run failed (#416). Retention, authentication and
+voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
+reach Kind.
+The reproducible, reviewed release is not run.
 
-The installed-Operator connection command (#489, under #122) creates a fresh
-namespace, checks declared and actual runtime identities, commits/reads SQL,
-and confirms UID-protected namespace cleanup. Its `lab-installed-smoke` / LAB00
-baseline [passed with recorded command and evidence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/489#issuecomment-6257627016)
-on a dedicated Kind v1.37.0/containerd 2.3.4 with CUBRID
-11.4.6.1963 and locally built images from main `20afeaa`; wrong-target,
-existing-namespace and SIGTERM/cleanup cases were also checked. Unit/race and
-API precondition tests cover its safety boundaries.
-
-The first recorded VM-lab LAB00 connection smoke
-[passed on 2026-10-19](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/492#issuecomment-6269706537)
-after a manual deployment of main `701b427deb22d7fc664ce00812db57bd7695a5a8`,
-using published development images from
-[run 39253773768](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39253773768).
-The manager deployed by the private GitOps owner was observed Running/Ready
-at digest `sha256:cff4fb2623ed7fd18250d4cb3ed763e648b70f9c6a572283c908a2c052668431`;
-the observed Instance Manager runtime matched
-`sha256:1b228d401e1b54942af098fd73da5c951e1a4fb5d9a7916af5b562300aa854cd`.
-The smoke ran from `2026-10-19T14:20:40.635937212Z` to
-`2026-10-19T14:21:46.805417516Z` on Kubernetes `v1.36.5+k3s1`, CUBRID
-`11.4.6.1963`, four Ready nodes and node-local `local-path` storage (not CSI).
-Both SQL commands produced clean outputs; LAB00 reported `pass`,
-`passed=true`, `problems=[]`, `cleanupSucceeded=true` and `neverEvents=[]`.
-The guarded lab launcher, private self-hosted workflow acceptance and
-new-node registry access remain under #80/#122. These connection results are
-separate from S00 installation or S00–S15 qualification, and do not establish
-CSI or VM-fault behavior. Namespace cleanup does not certify deletion of
-retained backend volumes.
-
-The three-member HA run with an installed Operator (`lab-installed-ha` /
-LAB01, [installed-ha.md](docs/testing/installed-ha.md), #546) creates an HA
-cluster in a fresh namespace, waits for a subset of S01's starting state,
-runs the SQL workload client and checks the data rules on every member and
-both Services. On 2026-10-24 it passed twice on the VM lab (manager
-`d6df2ac`, k3s `v1.36.5+k3s1`, CUBRID `11.4.6.1963`, `local-path`), once
-from the final harness commit; it needed the lab's object store to admit
-run namespaces (terraform-zadara-k8s #51), and a first attempt before that
-change failed at the seed upload. LAB01 injects no fault and is not an S01
-result at the VM-lab level.
-
-S06 `restart` runs on top of it (`lab-installed-ha-s06`, `-fault
-operator-restart`, #546): two clients write through `-rw` while the installed
-manager's Pod is deleted without a grace period, and the replacement must
-write a status of its own, under the leader Lease, naming the same master
-within `operator_resync_limit`. On 2026-10-24 it passed once on the VM lab
-from the reviewed harness: the replacement's status came 23.3 s after the
-fault, no client operation failed, no member restarted, and the data rules
-held; the observer ran alongside and found no contradictions. An earlier
-run passed before the Lease and clock checks existed, and one failed on the
-harness's own client-stop check, since fixed. One run is not a baseline, and
-the applier fail count, which the Kind step checks, is not checked there.
-
-S11 `complete` also runs on top of LAB01 (`lab-installed-ha-s11`,
-`-backup-bucket`, #88): after a marker row, a real `CubridBackup` writes to
-the lab's object store, and the run downloads the artifact through its own
-port-forward and client and checks the manifest digest, its identity and the
-sha256 and size of every object, and that neither credential appears in the
-backup's status, the manifest or the namespace's Events. On 2026-10-25 it
-passed four times on the VM lab (manager `d6df2ac`), the last from the merged
-harness: each backup was taken on a standby and `Completed` in about 12 s,
-with one object of 5,256,192 bytes verified. The Operator's logs were not
-checked for credentials in those runs, and the interrupted variants are not
-run. Since #621
-the manifest and `status.artifact.cubridVersion` carry the engine version the
-backup's member observed, and the run requires it to be the version
-`cubrid_rel` reported on the master, of the `spec.version` series; until the
-harness was changed to that, S11 failed on manager `fb6f345` (once, on
-2026-10-28). With the change it passed once on the VM lab on 2026-10-28
-(manager `fb6f345`): `Completed` on a standby in 12.0 s, both versions
-`11.4.6.1963`.
-
-Every S11 variant that takes a backup (`complete`, `missing-destination`,
-`denied-credentials`, `signature-mismatch` and `interrupted-upload`) now also
-searches, through `pods/log`, the installed Operator's log and the Instance
-Manager's log of the Pod the backup ran on for the seed Secret's keys and the
-variant's own keys (#616). A Pod that existed before the variant started is
-read from one minute before it, and a node clock skew over a minute is not
-measured; the member Pod of a cluster the variant created is read whole.
-Each read is bounded to 16 MiB per container instance and includes the
-previous instance of a restarted container. A key found fails the variant. A
-log that cannot be read, a read the bound truncated, and a container that
-restarted while its log was read block it. `pods/log` returns only the
-container's current log file, so a log the kubelet rotated within the window
-is searched only from the rotation onward; that is not reported as a
-truncation. The Operator's log before the window and the Instance Managers
-of other members are not searched. Unit tests cover it with a fake log
-source. On 2026-10-29 it ran on the VM lab (manager `fb6f345`) in three
-passing runs: S11 `interrupted-upload` and S11 `denied-credentials` with an
-earlier harness of the same change (`acba678`, which read every log from
-`sinceTime`), then S11 `signature-mismatch` with the final one (`f535c40`),
-each after S11 `complete`. Every S11 step read the manager's log (1,510 to
-13,695 bytes) and its backup member's log (2,796 to 8,094 bytes), none
-truncated, no container restarted, and no key was found; in the last run the
-new member `s11-signature-0` was read whole (6,217 bytes). The S11 lab
-results recorded before those runs in this section were made without the log
-search.
-
-S11 `missing-destination` follows S11 `complete` on the same run
-(`lab-installed-ha-s11-missing-destination`, `-backup-missing-destination`,
-#616): the run confirms with its own client that a bucket named after the run
-does not exist, requests a backup to it, and requires it `Failed` with
-`BackupFailed` and the Instance Manager's `upload failed: put <bucket>/...`
-within `backup_limit`, never `Completed` and without `status.artifact`, the
-bucket still absent at the end, the source unchanged and no credential in a
-status read or an Event; it deletes the `CubridBackup` it created. On
-2026-10-28 it passed once on the VM lab (manager `fb6f345`, after S11
-`complete` on the same run): the backup was `Running` and then `Failed` 12.0 s
-after the request, with the store's answer `The specified bucket does not
-exist` (SeaweedFS); the bucket was still absent with no object, no credential
-was in 5 statuses or 81 Events, and the run deleted its `CubridBackup`. One
-run is not a baseline; the target member's staging directory afterwards and
-the Operator's and Instance Manager's logs were not checked. Other invalid
-destinations and an interrupted upload are not covered. Since then the harness
-also reads the target member's backup staging directory after the failed
-upload, by name and size only: a staged file left there fails the variant
-unless a recorded process held it, and a directory that could not be read
-blocks it (#636). Unit tests cover it with fakes. On 2026-11-11 the variant
-passed again on the VM lab with that check (harness `95c20a8`, manager
-`ab23f02`, after LAB01 and S11 `complete` on the same run): the backup on the
-slave `ha-1` was `Failed` 12.0 s after the request with `The specified bucket
-does not exist`, and at 22:10:41 UTC, right after the run saw `Failed`, the
-member's staging directory for it was not there (0 files left). One run is
-not a baseline.
-
-S11 `denied-credentials` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-denied-credentials`, `-backup-denied-credentials`,
-#616): the run generates keys, confirms with its own client that the store
-refuses them, creates a standalone cluster whose object store Secret holds
-them, and requires its backup to the backup bucket `Failed` with
-`BackupFailed`, `upload failed: put <bucket>/...` and the store refusing the
-keys within `backup_limit`, never `Completed` and without `status.artifact`,
-nothing under its prefix at the end, the source unchanged and neither the
-seed nor the denied keys in a status read or an Event; it deletes the backup,
-the cluster and the Secret it created. It is lab-only. On 2026-10-29 it
-passed once on the VM lab (manager `fb6f345`, after S11 `complete` on the
-same run): SeaweedFS refused the generated keys to the run's own client, the
-standalone cluster was `Ready` 45 s after its creation, and its backup was
-`Running` and then `Failed` 12.0 s after the request, with the store's answer
-`The access key ID you provided does not exist in our records.`
-(`access-denied`); nothing was under the prefix at the end, no key was in 22
-statuses or 114 Events, and the deletions of the backup, the cluster and the
-Secret were accepted. One run is not a baseline; the target member's staging
-directory and the Operator's and Instance Manager's logs were not checked.
-Only an unknown access key was tested there; the seed Secret's access key
-with a wrong secret key is S11 `signature-mismatch`. The staging check
-described for S11 `missing-destination` applies to this variant and to
-S11 `signature-mismatch` and `interrupted-upload` too; on the VM lab it has
-run only with S11 `missing-destination`.
-
-S11 `signature-mismatch` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-signature-mismatch`, `-backup-signature-mismatch`,
-#616): it runs the steps of S11 `denied-credentials` with the seed Secret's
-access key with a wrong secret key, random and generated by the run, and
-requires the store to refuse them to the run's own
-client with `SignatureDoesNotMatch` before anything is created, and the
-upload's answer to carry that code's message; the backup's verdict, the
-checks at the end and the cleanup are the same. It is lab-only. On
-2026-10-29 it passed once on the VM lab (manager `fb6f345`, after S11
-`complete` on the same run): SeaweedFS refused the mismatched keys to the
-run's own client with `SignatureDoesNotMatch`, the standalone cluster was
-`Ready` 63 s after its creation, and its backup was `Running` and then
-`Failed` 12.0 s after the request, with the store's answer `The request
-signature we calculated does not match the signature you provided.`;
-nothing was under the prefix at the end, no key was in 28 statuses or 117
-Events, and the deletions of the backup, the cluster and the Secret were
-accepted. One run is not a baseline; the run's binary was built before the
-upload's answer was required to carry the code's message, and the answer it
-recorded does. A key without permission on the bucket is still not covered.
-
-S11 `interrupted-upload` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-interrupted-upload`, `-backup-interrupted-upload`,
-#616), in a run namespace that enforces Pod Security `privileged` with
-`warn` and `audit` at `restricted`: the run creates a standalone cluster with
-the run's own Secret, limits its member's traffic to the object store
-to 256 kbit/s from an ephemeral container in its Pod (to the Service's
-ClusterIP, or to the one ready endpoint of a headless Service such as the
-lab's), requests a
-backup to the backup bucket, and once 512 KiB have passed the limit resets
-that traffic in the Pod, confirmed by the reset rule's counter. The backup
-must end `Failed` with `BackupFailed` and `upload failed: ` within
-`backup_limit`, never `Completed` and without `status.artifact`, with no
-`manifest.json` under its prefix at the end (objects left there are recorded
-as a partial artifact), the source unchanged and no seed key in a status read
-or an Event; the run removes both faults and deletes the backup and the
-cluster it created. A backup that ends before the cut is confirmed, a fault
-not seen removed, and a store address that changed leave it blocked. It is
-lab-only. On 2026-10-29 it passed once on the VM lab (manager `fb6f345`,
-after S11 `complete` on the same run): the store was the headless endpoint
-`seaweedfs-0` at port 8333; 560,610 bytes had passed the limit (about
-32 KB/s) when the cut went in during `Uploading`, confirmed by 4 rejected
-packets; the backup was `Failed` 11.2 s after the cut and 33.0 s after the
-request, with the store client's retry answered `connect: connection
-refused` (`reset-or-refused`); nothing was under the prefix at the end, the
-backup was still `Failed` without an artifact after the faults were seen
-removed, no key was in 28 statuses or 118 Events, and the deletions of the
-backup and the cluster were accepted. One run is not a baseline. The reset
-is local to the member; a silent drop, a store that comes back during the
-backup and a multipart upload are not covered, nor are the member's staging
-directory and the Operator's and Instance Manager's logs.
-
-S11 `operator-restart` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-operator-restart`, `-backup-operator-restart`,
-#617): the run requests a second backup of the HA cluster to the backup
-bucket under its own prefix and, once a reading shows it `Running` or
-`Uploading` with an `operationRef`, deletes the installed manager's Pod
-without a grace period, as S12 `operator-restart` does. The replacement must
-run the same image and hold the leader Lease within `operator_resync_limit`;
-the backup must end `Completed` within `backup_limit`, with
-`status.completedAt` not before the second of the replacement's Lease
-`acquireTime` (otherwise the old manager, still running and holding the
-Lease, completed it, which blocks the variant), the same `operationRef`,
-target and role in every reading from the placing one on, an artifact that
-passes S11 `complete`'s verification, and exactly one attempt prefix with
-one manifest under the variant's prefix, also when listed again at the end;
-the source must be unchanged, and no key may be in a status read, the
-manifest, an Event, the deleted manager's log as read right before its
-deletion, the replacement's log or the target member's log. The manifest's
-`createdAt` is recorded against the deletion (`uploadStartedBeforeRestart`)
-as evidence, not a verdict. A backup that is not seen in progress with an
-operation before it ends leaves it blocked, and so does `Failed` with
-`RecordedOperationLost`, the documented escalation; `Failed` for another
-reason fails it. The run deletes its `CubridBackup` and leaves the artifact.
-The backup controller predicts `Completed` under the same operation: it
-records `operationRef` with `Running`, and a replacement only polls that
-operation. Unit tests cover it with fakes. On 2026-10-29 an earlier harness
-of the change, which placed the restart on `Running` only and had neither
-the `completedAt` check nor the second listing, passed once on the VM lab:
-`Running` with its operation on `ha-1` (a slave) was read at 11:29:23.34
-UTC, the manager Pod was deleted at 11:29:23.44, the replacement took the
-Lease at 11:29:59.446, and `Completed` was read at 11:29:59.80 with
-`completedAt` 11:29:59. The manifest's `createdAt` was 11:29:21, so the
-Instance Manager had started its upload before the restart: the replacement
-discovered and completed an operation already uploading, or done, there, not
-one restarted in the middle of `backupdb`. The current harness then passed
-once on the VM lab the same day (manager `fb6f345`): `Running` with its
-operation on `ha-1` (a slave) was read at 12:02:23.17 UTC, the manager Pod
-was deleted at 12:02:23.23, the replacement took the Lease at 12:02:44.686
-(24.4 s after the deletion), and `completedAt` was 12:02:44, so the
-replacement wrote `Completed`; one attempt prefix held the manifest and one
-object of 5,256,192 bytes, which verified, at both listings, and no key was
-in the old or new manager's log or `ha-1`'s. Its manifest's `createdAt` was
-12:02:21, again before the restart. Both runs therefore show a replacement
-completing an operation the old manager left unreported, and neither a
-restart during `backupdb`, which needs a backup that runs longer than the
-lab's. Two runs are not a baseline. The lab's manager is shared:
-deleting its Pod briefly pauses reconciliation of every other cluster and
-backup there.
-
-S11 `instance-manager-restart` also follows S11 `complete`, in a run of its
-own (`lab-installed-ha-s11-instance-manager-restart`,
-`-backup-instance-manager-restart`, #617), in a run namespace that enforces
-Pod Security `privileged` with `warn` and `audit` at `restricted`: the run
-creates a standalone cluster with the run's own Secret, limits its member's
-traffic to the object store to 256 kbit/s as S11 `interrupted-upload` does,
-requests a backup to the backup bucket, and once 512 KiB have passed the
-limit while the backup is `Running` or `Uploading` with an operation, kills
-the member's Instance Manager with `SIGKILL` as S12
-`instance-manager-restart` does, confirmed by the database container's end
-with exit code 137 on the same Pod. The limit stays until the backup ends.
-The backup must end `Failed` with `BackupFailed` and the Instance Manager's
-restart reason within `backup_limit`, never `Completed` and without
-`status.artifact`, under the same `operationRef` from the placing reading
-on, with no `manifest.json` under its prefix at the end (objects left there
-are recorded as a partial artifact); the member's container must restart
-exactly once, and a reading of the cluster after the restarted container
-was ready must show `Ready`, within the run's ready limit from the kill; a
-container that restarted before the kill, for another reason, leaves it
-blocked; the source and the installed manager must be unchanged, and no key may be
-in a status read, an Event, the manager's log or the member's log, the
-killed Instance Manager's previous container instance included. A backup
-that ends before the kill is placed, a kill that is not confirmed, and
-`Failed` with `RecordedOperationLost` leave it blocked; `Failed` for
-another reason fails it. The code predicts `Failed` for the restart: the
-manager fails every unfinished operation when it starts
-(`reconcileOnStart`), the Operator maps that onto the backup and never
-reconciles a `Failed` backup again, and the manifest is uploaded last. Unit
-tests cover it with fakes. On 2026-10-29 an earlier harness of the change,
-without the check of a restart before the kill, the from-kill ready bound
-and `readyTransitionAt`, passed once on the VM lab (manager `fb6f345`, after
-S11 `complete` on the same run): with 605,186 bytes through the limit and
-the backup `Uploading`, the Instance Manager of `s11-imrestart-0` was killed
-at 13:35:20.63 UTC (exit 137; the container's restart count was 0 before
-the kill and its instance had started at 13:33:29, before the request at
-13:34:59, so no earlier restart had ended the operation); the container was
-back 3.3 s later, the cluster read `Ready` 15.4 s after the kill, and the
-backup was `Failed` 15.4 s after the kill with `BackupFailed: manager
-restarted while operation was in progress`, under its one operation;
-nothing was under its prefix at the end, and no key was in the manager's
-log or in either instance of the member's log. One run is not a baseline,
-and the current harness has not run on the VM lab. A kill during
-`backupdb` itself and the member's staging directory (#636) are not
-covered.
-
-S11 `overlapping` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-overlapping`, `-backup-overlapping`, #617), in a run
-namespace that enforces Pod Security `privileged` with `warn` and `audit` at
-`restricted`: the run creates a standalone cluster with the run's own
-Secret, limits its member's traffic to the object store to 256 kbit/s as
-S11 `interrupted-upload` does, confirmed before the requests and kept until
-both backups ended, and requests two backups to the backup bucket back to
-back, each under a prefix of its own. Both target the one member, and the
-first upload takes minutes, so the second start meets the first's
-operation: a reading of it held with `InstanceManagerOperationInProgress`
-is required, and without one the variant is blocked. Both must end
-`Completed` within `backup_limit` (the default 15 minutes covers two
-uploads of about 5 MB, about 2.7 minutes each), each with its own
-`operationRef`, never shared and never replaced, an artifact that passes S11
-`complete`'s verification for that cluster, a manifest whose `operationID`
-is its own backup's, and exactly one attempt prefix with one manifest and no
-other object under its prefix, also when listed again at the end. The code
-predicts this: each backup has its own idempotency key and staging
-directory, the Instance Manager refuses the second start with `409
-OperationInProgress` while the first's operation runs, and the Operator
-holds the second on its recorded target and sends the start again until the
-member accepts it. The run reads the member's records of both operations:
-the second's `createdAt` must be at or after the first's `updatedAt`,
-written when it ended after its upload and staging cleanup, both by the
-member's clock; a record that cannot be read leaves the variant blocked.
-The limit must be seen removed. `Failed` for a conflict,
-`RecordedTargetNotStarted` or a staging failure is a never-event, and
-`Failed` for another reason fails it. The source and the installed manager
-must be unchanged, and no key may be in a status read, a manifest, an Event,
-the manager's log or the member's log. The run removes the limit, deletes
-both `CubridBackup`s and the cluster by UID, and leaves the artifacts. Two
-backups on different members at once are not exercised. Unit tests cover it
-with fakes. On 2026-10-29 the slowed standalone harness (`966e03f`)
-passed once on the VM lab (manager `fb6f345`, after S11 `complete` on the
-same run): both backups were requested at 15:38:23.7 UTC; at 15:38:26.7 the
-second was held with `InstanceManagerOperationInProgress` while the first
-was `Running`, and stayed `Pending` for about 2 min 45 s while the first
-uploaded through the limit; the member's records show the first operation
-ended at 15:41:11.0007 and the second created at 15:41:11.1030, 102 ms
-later, by the member's clock; the first was `Completed` 2 min 54 s and the
-second 5 min 39 s after the requests, each under its own operation, with
-one attempt prefix holding its manifest and one verified object of
-5,256,192 bytes; 10,613,240 bytes passed the limit in all. One run is not a
-baseline. The review fix made after it (the order must be judged before a
-pass, `d480fe8`) changes no path the run took.
-
-An earlier harness ran the two backups on the HA cluster, on the VM lab on
-2026-10-29 (manager `fb6f345`). Harness `6481923` passed once at 14:49 UTC
-under its earlier rule, which compared the second's `status.startedAt` with
-the first's manifest `createdAt`: both on `ha-1`, the second held with
-`InstanceManagerOperationInProgress`, completed in 12 s and 15 s. Harness
-`b498f91`, with the member's-clock rule, was blocked twice for lack of
-contention: at 15:03 UTC both were requested at 15:06:53.7, the member's
-records show the first operation ended at 15:06:55.53 and the second
-created at 15:06:55.59, and no reading showed a hold; at 15:13 UTC `a`
-completed within 3.0 s and `b` within 12.0 s, again without a hold. The
-Instance Manager accepts a start with 202 and runs it in the background,
-and the Operator needs a reconcile or two to record the target before it
-sends the start; the lab's HA database backs up in about 2 seconds, so the
-first operation had usually ended before the second's start arrived. That
-is why the lane moved to a slowed standalone cluster.
-
-S11 `operation-store-loss` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-operation-store-loss`, `-backup-operation-store-loss`,
-#457), in a run namespace that enforces Pod Security `privileged`, and
-needs a `-backup-limit` of at least 35 minutes (40 recommended). It reuses
-the steps of S11 `instance-manager-restart` on its own standalone cluster
-`s11-storeloss`. Once 512 KiB have passed the limit while the backup is
-`Running` or `Uploading` with an operation, one command in the member stops
-the Instance Manager with `SIGSTOP`, waits until all its threads are
-stopped, removes the backup's operation record (`<id>.json`
-and any `<id>.*.tmp`) from `IM_OPERATIONS_DIR`, and kills the Instance
-Manager with `SIGKILL`. The kill is confirmed by exit 137 on the same Pod,
-and the record's absence by listing the store once the cluster reads
-`Ready` again. The code predicts that the restarted Instance Manager
-answers the poll with 404 `operation not found`. The Operator should then
-show `RecordedOperationMissing`, keep the phase, and end the backup
-`Failed` with `RecordedOperationLost` once the record has been missing for
-30 minutes, without a new start. The run requires that outcome within
-`backup_limit`, with at least 30 minutes from `status.operationMissingSince`
-to `status.completedAt`. It also requires the same `operationRef`
-throughout, never `Completed` or `status.artifact`, no `manifest.json`
-under the prefix, one container restart, the source and the installed
-manager unchanged, and no key in statuses, Events or logs. A record still
-there after the restart, a fault the command refused, a restart before the
-fault, or a `backup_limit` that runs out while the backup still reads
-`RecordedOperationMissing` before the Operator's 30 minutes leaves it
-blocked. `Failed` for the restart reason, or for
-another reason, fails it. The member's backup staging directory is listed
-after the restart and at the end as evidence for #636, not judged. Unit
-tests cover it with fakes. On 2026-10-29 it passed twice on the VM lab
-(manager `fb6f345`, after S11 `complete` on the same run), once with an
-earlier harness of the change (`470f55b`, which checked only the main thread
-of the stopped Instance Manager) and once with the reviewed one (`1dab28d`).
-In the second run, with 560,612 bytes through the limit and the backup
-`Uploading`, the command removed `op-bfd729df….json` from the member's
-store and killed the Instance Manager at 17:52:24.93 UTC; the container was
-back 3.4 s later and the cluster read `Ready` 15.5 s after the kill; the
-store held no record of the operation after the restart; the restarted
-Instance Manager answered `404: operation not found`, the Operator set
-`operationMissingSince` 17:52:37 and the backup read `Uploading` with
-`RecordedOperationMissing` from 17:52:40.92; it ended `Failed` with
-`RecordedOperationLost` at 18:22:39.70, 30 min 2 s after
-`operationMissingSince`, under its one operation, with no new attempt,
-nothing under its prefix and no artifact. The killed operation's staging
-directory was gone after the restart and at the end, as
-`reclaimBackupStaging` predicts. The first run's figures were within a
-second of these. Two runs are not a baseline.
-
-S11 `graceful-stop` also follows S11 `complete`, in a run of its own
-(`lab-installed-ha-s11-graceful-stop`, `-backup-graceful-stop`, #277, with
-#468 and #469), in a run namespace that keeps Pod Security `restricted`:
-the run creates a standalone cluster `s11-gracefulstop` with the run's own
-Secret, starts a sampler in its member's database container (one exec
-session that prints the `cub*` processes, the files open below the backup
-staging root and the entries below it about every 100 ms) and follows the
-container's log, requests a backup, and at the first sampler reading that
-shows `backupdb` deletes the member's Pod with its grace period, so that
-its `preStop` hook stops the Instance Manager while `backupdb` runs. The
-code predicts `Failed` with `BackupFailed` and `the member is stopping:
-backupdb failed: ...`, without a kept staging: the stop cancels the
-backup, the cancellation kills `backupdb`'s process group, the failed
-backup waits until no process holds a staging file before it removes the
-staging and records the operation, and only then does the stop run
-`heartbeat stop` and `server stop`. The run requires that outcome within
-`backup_limit` under one operation, never `Completed` or
-`status.artifact`; no sampler reading at or after the first one without the
-operation's staging directory may show a process holding a file below the
-backup's staging destination; the member's log must hold `backupdb`'s
-`Command failed`, the operation's staging writer events, its `Operation
-failed` and then the shutdown's commands, in that order; no `manifest.json`
-under the prefix; the replacement Pod ready and the cluster `Ready` within
-the ready limit; the source and the installed manager unchanged; and no
-key in statuses, Events, the sampler's output or the logs. A `backupdb`
-never seen before the backup left `Running`, or a stop that reached the
-Instance Manager after `backupdb` had ended (an upload failure, or
-`backupdb`'s success in the log, with whatever `Completed`, artifact or
-manifest the backup then produced), leaves it blocked. The sampler cannot
-see a hold shorter than its interval, nor anything after the container
-ended. Unit tests cover it with fakes, and a Linux unit test runs the
-sampler script against a process holding a file. On 2026-10-29 the first
-harness of the change (`9ae6629`) ran once on the VM lab from 19:36 UTC
-(manager `fb6f345`), without filler data. `backupdb` took 615 ms and the
-sampler saw it 385 ms after the request. The deletion was sent 24 ms after
-that, but the stop reached the Instance Manager only after `backupdb` had
-succeeded, and the backup completed with its manifest. The staging
-directory was gone 767 ms after the deletion, with no holder after it. That
-run was a placement miss which the harness misjudged as a failure.
-
-The current harness classifies such a run as blocked. It grows a filler
-table in the cluster's database before the request (default 1024 MiB,
-`-backup-graceful-stop-filler-mb`) so that `backupdb` lasts for seconds. It
-records the time from the deletion to the first log line the stop caused,
-to show the `preStop` latency. Its first VM-lab run, at 2026-10-29
-20:00 UTC (`c2e31c3`), was blocked while it grew the filler, after about
-30 s, at about 196,608 rows. csql had printed `ERROR CODE = -199` and
-`-111` after a statement it had committed. A manual check on the lab
-(POC-44) found those statements' rows committed and the server unharmed,
-with the cause unknown. The filler now judges each statement by a row
-count read separately, runs a statement that added no row once more, and
-records the error text as `fillerExitErrors`. That harness (`4e9eb6d`)
-passed once on the VM lab on 2026-10-29 (manager `fb6f345`, after S11
-`complete` on the same run): the filler grew to 1,073,741 rows in 3 min 12
-s (one statement printed the exit error after committing); the sampler saw
-`backupdb` at 20:26:23.859 UTC, 440 ms after the request, and the member
-Pod's deletion was accepted 14 ms later; the member's log shows the stop
-172 ms after that, `backupdb` killed (`signal: killed`) as its first
-effect, then `Operation failed` for the backup's operation, `heartbeat
-stop` and `server stop`, in that order; the staging directory was gone at
-20:26:24.203, and no sampler reading after it (524 readings in all, about
-every 100 ms) showed a process holding a file under the staging root; the
-backup was `Failed` 11.6 s after the deletion with `the member is stopping:
-backupdb failed: … signal: killed`, without the kept-staging suffix, and
-nothing was under its prefix; the replacement member was `Ready` again 1 min
-39 s after the deletion. One run is not a baseline, the 100 ms sampling can
-miss a shorter holder, and `restoredb` and `restoreslave` under a graceful
-stop are not covered; for `restoreslave`, the harness has the placement
-`-restore-graceful-stop-at seeding` (#676), which has not been run on the
-VM lab.
-
-S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
-#121): after 20 more writes through the source, a new cluster restores S11's
-artifact with a seed Secret of its own, and the run requires `Ready` only after
-the bootstrap completed, one master by `cubrid heartbeat status`, each
-cluster's HA node list naming only its own members, the data rules on all
-three restored members and both Services against the history at the known
-point with no row written after the backup, S11's marker and a new write on
-every restored member, the source unchanged, and no credential in any status
-it read. On 2026-10-25 it ran seven times on the VM lab (manager `d6df2ac`):
-five passed, the last from the merged harness code; in the last three passes
-the restored cluster was `Ready` 2 min 40 s to 2 min 58 s after creation, as
-the run measures it. Two were blocked, not failed:
-after the data checks had held, a `csql` read on a restored member returned
-its row and then lost its session (`-199`, `-111`) 10 to 17 s after the
-restored cluster became ready, once on the master and once on a slave; the
-cause is unknown and tracked on #238 (POC-36 measured about 3% of plain `csql`
-reads aborted this way on a running slave). Since #575 the harness reads
-such a lost session once more and records it per scenario (`lostSessions`), so
-it no longer blocks a run. Interruptions and restarts during the restore, and
-the Operator's logs, are not covered.
-
-S12 `tampered` follows S12 `exact` on the same run
-(`lab-installed-ha-s12-tampered`, `-restore-tampered`, #121): a copy of S11's
-artifact with one byte of one object changed, the manifest unchanged, is
-checked by the run, and a new cluster created from it must end its bootstrap
-`Failed` with `RestoreFailed` naming that object's checksum mismatch within
-`restore_limit`, never `Ready` or `Complete`, with the source unchanged, S11's
-manifest still at its recorded digest and no credential in any status read;
-the copy is removed. On 2026-10-25 it ran three times on the VM lab (manager
-`d6df2ac`): the Operator refused the copy 1 min 12 s after creation, after
-three restore attempts, in both runs that reached it, and the last, from the
-merged harness, passed. The first was blocked by the lost session of #238 on a
-source member after the refusal, and in the second S12 `exact` was blocked by
-it, so `tampered` did not run. The refused cluster's volume afterwards, a
-changed manifest or a missing object, and the Operator's logs and Events are
-not covered.
-
-S12 `wrong-target` also follows S12 `exact` (`lab-installed-ha-s12-wrong-target`,
-`-restore-wrong-target`, #121): a third cluster is formed, takes a marker row
-and is deleted with its PVCs kept (`Retain`); a recovery cluster of the same
-name over those PVCs, naming S11's artifact, must end its bootstrap `Failed`
-with `RestoreFailed` and the Instance Manager's guard (`target ... already
-holds database ...; refusing to overwrite (ADR-0008)`) within `restore_limit`,
-never `Ready` or `Complete`, on the same PVCs, and its members must still hold
-the marker and not S11's. On 2026-10-25 it passed three times on the VM lab
-(manager `d6df2ac`), the last from the merged harness, refused in 1 min 3 s to
-1 min 24 s after three attempts; one earlier run was blocked in S12 `exact` by
-#238 before #575. An HA cluster created without a recovery over retained PVCs
-(S13 `retain` for HA) stops its bootstrap with `MemberHoldsDatabase` and
-`Ready=False` and never takes the members over (#817, #798). This was run once
-by hand on the VM lab on 2026-11-13 (Operator `e1316da`), together with the
-manual recovery of the rows into a cluster under another name
-([procedure](docs/operations/retained-volume-recovery.md)); there is no Kind
-or harness scenario for it. For a standalone cluster, S13 `retain` and `delete` were added to
-the Kind suite (#615). Their first CI run, on 2026-11-12, held every check
-and measured the deletion at 2.65 s (`retain`) and 2.45 s (`delete`), from
-which `delete_limit` was set to 1 minute on Kind.
-
-S12 `operator-restart`, a lab-only variant (`lab-installed-ha-s12-operator-restart`,
-`-restore-operator-restart`, #121), deletes the installed manager Pod without a
-grace period while another restored cluster is `Restoring`, and requires the
-replacement back within `operator_resync_limit`, the Operator to follow the
-operation recorded in `status.bootstrap.operationID` (no restore started again,
-`BootstrapReady` never `True` before `Complete`), the restore not already moved
-on when the replacement led, by a bound on the clock offset, and then what S12
-`exact` requires. On 2026-10-25 it passed twice on the VM lab (manager
-`d6df2ac`): the manager was back in 24 to 39 s, the next status showed the same
-operation in `SeedingReplicas` with no new attempt, and the restore completed
-about 2 minutes later. Of the other runs, one of the final harness was blocked
-in S12 `exact` by #238 (two lost sessions in a row on one member), and one
-failed in S12 `exact`: an acknowledged write through the read-write Service was
-not on one seeded slave within 2 minutes while the data rules had held there,
-the pattern of #416. A restart between the start of a restore and its status
-write and restarts at other points of the flow are not covered.
-
-S12 `instance-manager-restart`, a lab-only variant
-(`lab-installed-ha-s12-instance-manager-restart`,
-`-restore-instance-manager-restart`, #121), kills the Instance Manager of the
-restore's target member while another restored cluster is `Restoring`, which
-restarts that member's container on the same Pod and volume, and requires
-exactly one retry naming the manager's restart, a new operation that
-completes, one container restart, and then what S12 `exact` requires. On
-2026-10-26 it passed on the VM lab (manager `d6df2ac`): the container was back
-in 3.4 s, the Operator reported `manager restarted while operation was in
-progress; starting attempt 2 of 3`, and the new operation restored, seeded both
-peers and completed 3 min 26 s after creation. Whether the retry removed or
-took over the killed attempt's data is not read.
-
-Two more lab-only placements of that kill (`-restore-instance-manager-restart-at`,
-#121) passed on the VM lab on 2026-10-27. At `preparing` the target's Instance
-Manager was killed while the bootstrap was `Preparing`; one retry and a new
-operation completed, and the killed operation's own record held no restored
-artifact. That shows `restoredb` had not succeeded, not that it had not
-started: the Instance Manager reports `Restoring` before it verifies or
-downloads the backup (#598). At `seeding` the peer being seeded was killed;
-exactly one seed retry with a new seed operation completed, and the restore was
-not run again.
-
-Two further placements passed once each on the VM lab on 2026-11-04 with
-manager `16dbbf8`, each with LAB01, S11 `complete` and S12 `exact`. At
-`starting` (#682) the target's Instance Manager was killed 22 ms after its
-own record of the restore read `Starting`, after `restoredb` had succeeded:
-the killed record was `Failed` by the restart and held the restored manifest,
-one retry with a new operation completed and held the same manifest, and no
-reading showed `restoredb` running again. Equal records do not rule out a
-short second `restoredb` between readings; a kill after the start but before
-`Completed` is written leaves the same record and is taken as covered by it.
-At `seed-backup` the restored member's upload to the object store was limited
-to 256 kbit/s and its Instance Manager killed while its first seed backup was
-`Uploading` (541,818 bytes through the limit): the killed backup was `Failed`
-by the restart, exactly one `SeedBackupFailedRetrying` followed with a new
-seed backup, both peers were seeded and the restore was not run again; two
-earlier runs were blocked because the backup ended before the kill could be
-placed. Kills on a later peer's seed source are not covered.
-
-All three placements passed again on the VM lab between 2026-11-03 23:56 and
-2026-11-04 08:07 UTC with manager `16dbbf8`, which sizes each log file from
-the data volume (#670), each with LAB01, S11 `complete` and S12 `exact`. At
-`restoring` and `preparing` there was one retry with a new operation; at
-`seeding` one seed retry with a new seed operation and no new restore. The
-member was back within 3.3 to 4.6 s and the restored cluster Ready within
-2 min 41 s to 2 min 55 s. worker-3, whose memory the long-lived clusters
-filled, was cordoned for these runs. An earlier run with it schedulable placed
-all three members there, since database Pods request no memory (#596); the
-kernel killed `cub_server` and LAB01 never became Ready. The harness now
-refuses a run on such a node before creating anything (#672). Members the
-harness creates now declare memory and CPU requests (#701); no lab run has used
-them yet.
-
-S12 `graceful-stop`, a lab-only variant (`lab-installed-ha-s12-graceful-stop`,
-`-restore-graceful-stop`, #277), is the restore's side of S11
-`graceful-stop`. It restores S11's artifact
-into another new cluster, samples the restore's target as S11
-`graceful-stop` samples its member, and deletes the target's Pod with its
-grace period at the first reading that shows `restoredb`. The code predicts
-that the stop kills `restoredb`'s process group and waits for it, that
-`Restore` then removes the database directory and the staging, and that the
-operation is recorded `Failed` with `the member is stopping: restore failed:
-restoredb failed: ...` before `heartbeat stop` and `server stop`; the
-Operator then retries once (`RestoreFailedRetrying`) and the next attempt
-completes. The run requires that order in the target's log (`server stop`
-when logged) with `restoredb` killed, no CUBRID process holding a file of
-the restore once the sampler sees the database directory gone, both
-directories seen gone and neither in a reading taken after the operation was
-logged `Failed` (at least one such reading is required), exactly one retry
-naming the stop, and then what S12 `exact` requires; a stop that came after
-`restoredb` had ended blocks it, unless the restore itself failed. It
-uses S11's artifact without filler data, because POC-27 saw a `restoredb` of
-a 5 MB backup still running after 2 s. Unit tests cover it with fakes. On
-2026-10-29 an earlier harness of the change (`202e1c2`, without the
-requirements for a reading after the failure, the staging seen gone, the
-sampler's end and `restoredb` killed) passed once on the VM lab (manager
-`fb6f345`, after S12 `exact` on the same run), and its record meets those
-requirements: the sampler saw `restoredb` at 21:59:14.507 UTC and the
-deletion followed 22 ms later; the target's log shows `restoredb` ended
-`Command failed` with `signal: killed` after 285 ms (line 12), then
-`Operation failed` with `the member is stopping: restore failed: restoredb
-failed: signal: killed` (line 13, 21:59:14.972), `heartbeat stop` (14) and
-`server stop` (15); the database directory was seen gone at 21:59:14.802
-and the staging at 21:59:14.926, no CUBRID process held a file of either
-after that, and the two readings taken after the failure was logged showed
-neither, the sampler's output ending without an error after the shutdown's
-commands; the Operator retried once under a new operation, and the
-restored cluster was `Ready` 3 min 49 s after its creation and passed S12
-`exact`'s checks. So on the lab's disks `restoredb` of the 5 MB artifact
-gave the stop enough time without filler. One run is not a baseline.
-`restoreslave` under a graceful stop, a stop during the download or the
-start of the restored database, and an operation ended by its timeout are
-not covered.
-
-A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
-moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
-private GitOps repository (images from
-[run 39623042119](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39623042119),
-pulled by the nodes from the now public packages), on k3s `v1.36.5+k3s1`,
-CUBRID `11.4.6.1963` and node-local `local-path` storage (not CSI). One run
-each; LAB00 and the manual Pod replacements ran while `make test-lab` held
-the Lease:
-
-- LAB00 passed (`passed=true`, `problems=[]`, `cleanupSucceeded=true`).
-- The upgraded manager created the standalone Broker endpoints of #286 on an
-  existing cluster; a driver client in the cluster's namespace committed
-  through `-rw` and read through `-ro`. A client in another namespace was
-  refused (connection refused) by the `<cluster>-broker` NetworkPolicy, the
-  documented default, while a client in the cluster's namespace reached the
-  same Service. This is consistent with the policy being enforced on this
-  run; the network plugin is not identified. The `-ro` write refusal of S00
-  was not checked there.
-- Accepting a new Instance Manager image rolled both clusters' Brokers at
-  once; the DB Pods moved only when deleted by hand (#96). Deleting a slave
-  of the three-member HA cluster turned `PrimaryResolved` to
-  `PrimaryObservationIncomplete` for about 17 s and 23 s for the two
-  slaves deleted (2 s sampling), and back.
-- Deleting the master with a client committing every 0.5 s through `-rw`:
-  CUBRID promoted another member, the client saw two failed commits, about
-  1.1 s from the first failure to the next acknowledged commit (1.7 s
-  between acknowledgements), and all 438 acknowledged rows were on all three members, whose rows
-  were identical; neither failed row was anywhere. The Operator claimed
-  `RoutingReady` for the new master about 33 s after the deletion (2 s
-  sampling), while commits
-  through `-rw` were already acknowledged (quarantine reported, not
-  enforced, as in S03; #113).
-- A full backup with `PreferStandby` completed on a slave afterwards; it was
-  not restored.
-
-These are single manual runs, not scenario passes or recovery-time
-measurements, and they include no VM power loss, network fault, CSI
-storage or restore.
-
-Ordinary backup uploads (#337) use a fresh artifact directory for each upload,
-including a retry with a reset operation store; the returned manifest URI is
-recorded in the operation and backup status. Unit/race tests and a dedicated
-MinIO service built from release source `RELEASE.2025-10-15T17-29-55Z`
-verify separate concurrent attempts and preservation after an ambiguous
-manifest response. Explicit HA seed requests retain their stable location;
-legacy seed-operation adoption and unchanged restore paths are covered in
-envtest/unit tests. These results do not establish real CUBRID/PVC replacement,
-CSI or VM behavior; the integrated backup scenarios remain with #88.
-The [storage command, failure reproduction and verification record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347)
-identify the backend revision and the evidence level.
-
-The Instance Manager HTTP server bounds request headers, complete body reads,
-response writes and idle keep-alive connections while preserving the configured
-synchronous backup/shutdown budgets (#301; real TCP and unit/race-detector tests).
-[Bounded VM connection checks](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/301#issuecomment-6281330433)
-at `39b1cb6` (build [39353186855](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39353186855))
-on a standalone member with CUBRID `11.4.6.1963`, k3s `v1.36.5+k3s1` and
-node-local `local-path` storage (not CSI) observed incomplete-header closure at
-6.013 s, an incomplete-body HTTP 400 at 10.011 s (peer closure at 11.019 s;
-server duration 9.997 s), and idle keep-alive closure at 61.002 s. During the
-idle check, 21 other `/livez` requests kept the port-forward active. No case
-hit its client watchdog; the Ready Pod/container incarnation and pinned image
-remained stable, and the empty operation inventory stayed unchanged. On the
-previous image, the body check ended at its 18 s client-watchdog cutoff without
-an HTTP response or peer closure. A separate fresh LAB00 connection smoke
-passed on this VM environment. These results do not establish sustained load,
-a two-hour synchronous backup, VM-fault or CSI behavior, or S00–S15 qualification.
-
-Operation-store persistence failures (#299) have filesystem/HTTP injection tests
-for `RunningBackup`, `Downloading`, `Restoring`, `Creating` and restore's
-`Starting`, plus the restored-artifact and adoption-record writes. These
-complement the existing staging-claim, upload, HA heartbeat-start and
-terminal-settlement checks. With the record directory readable but unwritable,
-the attempted write is logged, the preceding disk record and ownership remain,
-and operation lookup and same-key replay return 500 while the failed end is only
-in memory. Repair, settlement and replay through a reopened store retain the
-same failed operation and recorded artifact without repeating commands or
-object-store work; failed adoption leaves the previous owner's data and marker
-unchanged. Guard-omission mutations verify the negative oracles. These are
-non-root unit/HTTP-handler tests with actual directory-permission failures and
-CLI/object-store fakes, not CUBRID, disk-full, power-loss or Pod/PVC-replacement
-validation. Directory durability and retention remain separate work under #298
-and #369.
+| Area | Level | Open blockers | Status and key evidence |
+|---|---|---|---|
+| Standalone lifecycle and SQL (S00) | Kind; VM-lab (smoke, no fault) | #122, #126 | S00 on Kind with the real 11.4 image: Ready, SQL through `csql`, a row kept across Pod deletion. `-rw`/`-ro` Brokers commit, read and refuse a `-ro` write with `-581` (#286, POC-33). Installed-Operator connection smoke (LAB00): [Kind][lab00-kind] (#489), [VM lab][lab00-vm] (#492). No HA, backup or fault |
+| Non-root Instance Manager runtime | Kind (S00); unit-envtest | none recorded; live check unowned | Non-root Pod under restricted Pod Security on Kind (S00). Ownership marker and `unfinishedDatabase` (#315): unit-envtest only. Member lock on the volume (#472, #475): unit and entrypoint tests and Docker (POC-29, POC-31). Neither runs on Kind or the VM lab |
+| CUBRID log files and size bounds | unit-envtest; Kind (persistence) | #252 | Logs in `cubrid-log` on the data volume (#856: unit-envtest, no multi-node run; older StatefulSets keep #849's log PVC). Rotation bounds unit-tested on POC-35; sizes seen in Docker without the Operator (#935). S00 log persistence passed in the [reviewed Kind run][kind-base]; bounds not seen on Kind or the VM lab |
+| Three-member HA and RW/RO access (S01–S02) | Kind; VM-lab (no fault) | #126 | Seeded via object storage (a mock on Kind). S01–S02: a 121-operation history checked on every member and Service; `-ro` write refused (`-581`, POC-22, #366). Installed-Operator HA run, no fault ([LAB01][installed-ha]): 2 VM-lab passes on 2026-10-24 (#546; object store, terraform-zadara-k8s #51); not an S01 result |
+| Pod and Broker failure (S03, S05) | Kind | #85, #126, #938 | S03 (3 variants; no two masters seen, #368; POC-19) and S05 (3 variants) run in CI on Kind. A graceful master deletion took 59.3 s against the 30 s `failover_limit` (#938). One [manual VM-lab master deletion][lab-20261021] on 2026-10-21: not a scenario pass |
+| Operator failure (S06) | Kind; VM-lab (1 run) | #85, #126 | Both variants run on Kind: SQL continues, CUBRID fails over without the Operator, and the returning Operator names the new master and restarts no member. S06 `restart` passed once on the VM lab on 2026-10-24: status 23.3 s after the fault, no failed client operation (#546). One run; applier fail count not checked there |
+| VM failure (S04) | not run | #85, #110, #126 | No VM power loss run yet. The read-only observer (#546) ran twice for 5 minutes against `ha` ([record][observer-546]); no S04, S06 or S07/S08 verdict |
+| Ambiguous primary detection | unit-envtest | #115 | Two fresh active-master claims keep `Ready` and `cubrid_cluster_ready` off (#339; engine occurrence unverified, #373). A reconcile that ends before the roles are read reports them `Unknown` instead of keeping an earlier primary (#340) |
+| Second writable master (engine behavior) | Kind (POC-51); Docker POCs | #115, #702 | Docker: a higher-priority member became a second writable master (POC-50, #392). Kind with the Operator, cuts: acknowledged rows diverged once; `-rw` refused while `Ready` stayed `True` twice (POC-51). Nothing the Operator renders stops such a promotion; acknowledged writes missing on the final master (POC-52) |
+| Replication health | unit-envtest; Kind (non-contract step) | none recorded; live check unowned | `ReplicationHealthy`/`HAReady` on a stalled slave or held transaction (#229, #249, #352; POC-48): pass in the [reviewed Kind run][kind-base]; nothing on the VM lab. Applier restart (#360): unit tests on POC-30, no cluster run. Nothing acts on the Condition |
+| Log copy stall report | VM-lab | none recorded; live check unowned | `LogCopyStalled` (#623; POC-41, POC-42): reported on the VM lab with `fb6f345` after a cut of TCP 1523, and after partition heals on [2026-11-17][part-20261117] (3 runs) and [2026-11-18][part-20261118]. Nothing acts on it |
+| HA bootstrap seed source | VM-lab (2 runs) | none recorded | Each later member is seeded from the member observed as master and waits while it is unknown (#281; POC-23). Two scripted VM-lab runs on 2026-11-04 killed the master mid-seed: the Operator waited, then seeded from the new master |
+| HA bootstrap catch-up rule | unit-envtest | none recorded; live check unowned (#768) | Docker: a member seeded across a master change joined lacking acknowledged rows in 16 of 16 trials (POC-57). Catch-up rule (#678, #768, #771) and `MemberNotSeeded` (#770): unit-envtest only. The rule does not read the applier, which was behind in 1 of 20 passing readings (POC-59) |
+| Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine on two active masters or an unverified member that outranks the master or was the last primary; one-time token release; out-of-service taint release; return-to-service barrier (#113; ADR-0005 section 8, amended by #870). Unit-envtest only, not on Kind or the VM lab; the S04 harness adds no taint |
+| Write quarantine on Kind (S03, S06) | Kind (1 run) | #126, #938 | Before #113, `-rw` writes went on while `PrimaryResolved` and `RoutingReady` were not `True` (S03). [One Kind run][kind-quarantine]: a forced master deletion refused `-rw` 38.6–41.3 s (S03 abrupt) and 87.1 s (S06), judged by `quarantined_failover_limit` (6 min). S03 graceful keeps the 30 s `failover_limit`, not yet re-measured |
+| Write quarantine after an Operator restart | VM-lab (1 observation) | #931, #932 | The VM-lab Operator moved to `66ab5ee` on 2026-11-17 (terraform-zadara-k8s#98; LAB00 passed, #122). Its first pass closed a healthy cluster's `-rw` for 24 s: unobserved over 30 s, master not the first member (#931). Fix #932 is pending the maintainer's review of the ADR-0005 amendment |
+| Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #716 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
+| Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
+| Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
+| Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
+| Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
+| Backup safeguards in code | unit-envtest | #291, #369 | Standby choice (#291), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
+| Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #126, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
+| Restore (S12): restarts and stops | VM-lab (1–2 runs each) | #89, #126 | `operator-restart`: 2 passes. Instance Manager kills at `restoring`, `preparing`, `seeding` (#598) and, with `16dbbf8` (#670), `starting` (#682; equal records do not rule out a short second `restoredb`) and `seed-backup` passed. `graceful-stop`: 1 pass, earlier harness (#277; seeding placement #676 not run) |
+| Lab run resources | VM-lab (1 failed run) | none recorded | All three members placed on one memory-filled worker failed: the kernel killed `cub_server` and LAB01 never became Ready, since database Pods requested no memory (#596). The harness now refuses such a node (#672). Members now declare requests (#701); no lab run has used them yet |
+| Retention and retained volumes (S13) | Kind; VM-lab (manual) | #90, #126 | Standalone `retain`/`delete` pass on Kind (#615; Kind `delete_limit` 1 minute, VM-lab limit unset). HA over retained PVCs stops with `MemberHoldsDatabase` (#817, #798); manual [recovery](docs/operations/retained-volume-recovery.md) and both [policies](docs/operations/data-retention.md) run once by hand on the VM lab |
+| Instance Manager auth and network policy (S14) | Kind; VM-lab (1 check) | #126; none recorded; live check unowned | Token per cluster (#270), rotation, migration (#324, #343): Kind only. Refused-token report (#325): unit-envtest, none produced. NetworkPolicies drop DB-port traffic from other namespaces on Kind. VM lab: one Broker port refused (2026-10-21); DB ports and network plugin unchecked |
+| DBA password Secret | Kind; VM-lab (manual copylogdb) | #801, #894 | Kind: standalone Secret, login, backup and restore (#803, #805, #819, #831; run 43204254915), HA (#834, #847) and its changed-value check (#845). Standalone changed-value check (#824): unit-envtest; csql seen only in Docker. VM lab: copylogdb with a password ([result][dba-801]). Pre-start check rejected (POC-65, #937, #894) |
+| Voluntary disruption (S15) | VM-lab (2 judged passes) | #90, #126 | PDBs (#613, [ADR-0012](docs/adr/0012-voluntary-disruption.md)). Drain lane (#936) ran 8 times on 2026-11-17: one eviction allowed, a second refused, no row missing. `drain_limit` 1 minute (#942); #614 closed. No spare-node layout or whole-node `kubectl drain` |
+| Member placement | unit-envtest; Kind (non-contract step) | #90 | Anti-affinity on `kubernetes.io/hostname` and `MemberPlacement` (#596): envtest and a single-node Kind step with `MemberUnschedulable`. Not on the VM lab: three members on three nodes and an upgraded cluster sharing a node not shown |
+| Conditions, Events and metrics | Kind; VM-lab (observer, 2 runs) | #92, #546 | HA gauges match status in S03 and the stall step (#253) in the [reviewed Kind run][kind-base]. Observer that fails on a contradicting gauge (#546): unit tests and two VM-lab runs. [Observability](docs/observability.md) |
+| Manager scope, RBAC and compatibility | unit-envtest | none recorded; live check unowned | One probe command at a time (#301, #494); `--watch-namespace` (#498); label-scoped cache and narrowed role (#282; [memory record][mem-282]); refused adoption (#657); capability checks (#733, ADR-0013). No live call path; baseline and candidate orchestration and CRD compatibility not covered |
+| Instance Manager HTTP and operation store | VM-lab (bounded checks) | #369 | Header, body and idle bounds (#301): [VM checks][http-301] at `39b1cb6` (build [39353186855][build-301]). Persistence failures (#299) and durability (#298): unit-envtest only. Retention: #369 |
+| Rolling updates (S16, conditional) | code | #96 | Automatic Pod replacement is off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition the update planner checks, and the planner reads no PDB. The 2026-10-21 lab run rolled both clusters' Brokers at once; DB Pods moved only by hand |
+| Lab and release tooling | unit-envtest; VM-lab | #80, #122, #124 | `make test-lab` holds the campaign Lease (#441, #525; [#122 record][lease-122], [#546 record][observer-546]); losing the Lease not exercised. Release version check (#934) is not called by a workflow yet (#124). Lab inventory: [Shared lab historical baseline](#shared-lab-historical-baseline) |
+| Reproducible validation and reviewed release | not run | #94, #95, #125, #126, #127 | Candidate artifacts, repeated runs, soak and non-author runbook reproduction (#122–#127). The demo (#128) is a post-v0.1 follow-up, not a release gate |
 
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
 A required scenario cannot pass through skipping, missing evidence, a timeout
 or unsuccessful fault injection. A unit test pass is not a live scenario pass.
 
+[old-roadmap]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/5655948883b93ee102423863a1a3da1fa1a2e0c1/ROADMAP.md#implementation-and-validation-inventory
+[kind-base]: #kind-evidence-reviewed-on-2026-11-16-utc
+[lab00-kind]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/489#issuecomment-6257627016
+[lab00-vm]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/492#issuecomment-6269706537
+[installed-ha]: docs/testing/installed-ha.md
+[lab-20261021]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210
+[observer-546]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/546#issuecomment-6364673645
+[lease-122]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6364164038
+[kind-quarantine]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43524691052
+[part-20261117]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115#issuecomment-6940988526
+[part-20261118]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115#issuecomment-6972668208
+[mem-282]: docs/testing/reference-manager-memory.md
+[minio-337]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347
+[dba-801]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/801
+[http-301]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/301#issuecomment-6281330433
+[build-301]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39353186855
+
 ### Kind evidence reviewed on 2026-11-16 UTC
 
-The reviewed [E2E run 43785499714](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714)
-used PR #898 head `ab3064b3035de25cb52a869621017079d785ac7a` and tested merge
-source [`fcd61108fa5f9851007a3b95a674bd0fa8bf36c3`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/tree/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3).
-Its [Ubuntu job log](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714/job/133032212566)
-records 53 of 53 test cases passing, with none skipped; the retained
-[`e2e-evidence` artifact 14191939489](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714/artifacts/14191939489)
-has ZIP SHA-256 `cef12d51a3291aa7a4c9bb3ecf7e4e33cbd55b5b197172784e1cf164d393a881`.
-Its `summary.json` identifies Kind/Kubernetes v1.37.0 and CUBRID
-11.4.7.1995-f39ab8c, with Operator image digest
+The release review's Kind baseline is [E2E run 43785499714][kind-run] (PR
+#898 head `ab3064b3035de25cb52a869621017079d785ac7a`, merge source
+[`fcd61108`][kind-src]): 53 of 53 test cases passed in the
+[Ubuntu job log][kind-log], none skipped. The [`e2e-evidence` artifact
+14191939489][kind-artifact] (ZIP SHA-256
+`cef12d51a3291aa7a4c9bb3ecf7e4e33cbd55b5b197172784e1cf164d393a881`) records
+Kind/Kubernetes v1.37.0, CUBRID 11.4.7.1995-f39ab8c, Operator image
 `sha256:e5a70ab97dda9d5a12dc5ab1e9ad79954fd72f6803362e68874fd4fd996f29d7`
-and observed CUBRID image
+and CUBRID image
 `docker.io/library/import-2026-11-16@sha256:1398ec46ba1831e27ccff1f25aa0daada2209263967112ac402a8d2695eacab9`.
+Its `junit.xml` holds 16 passing contract scenarios; the other steps are in
+the job log. Steps checked against source: [DBA password][e2e-dba],
+[standalone log persistence][e2e-s00], [retention][e2e-s13],
+[long transaction and stalled slave][e2e-stall], [metrics][e2e-metrics].
+One Kind run, not VM-fault or candidate qualification; it retains four
+`csql` lost sessions (#238). The earlier [failed run 43688936431][kind-failed]
+([artifact 14153071593][kind-failed-artifact]) stays failed with no data
+verdict; its second master change was a harness race fixed by #922 (#897).
+This does not establish SQL quarantine (#115) or replace #126/#127. Remote
+retention of these artifacts is not guaranteed.
 
-Coverage was checked against the individual steps and their source, not only
-the workflow conclusion: [DBA password creation, changed-Secret detection and restore](https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/dba_password_test.go),
-[standalone log persistence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/s00_test.go),
-[retention](https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/s13_test.go),
-and [long-transaction and stalled-slave checks](https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/replication_stall_test.go).
-These files and the [metrics comparison](https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/ha_metrics_test.go)
-are unchanged at main `9f67928`. The artifact's `junit.xml` records 16 passing
-contract scenarios, including both retention variants; it does not contain
-all 53 test cases. The other cited steps are in the job log, with the metrics
-samples in `S03/*/metrics.txt` and `replication-stall/metrics-*.txt`, and the
-stall outcome in `replication-stall/result.txt`.
-
-This is one Kind run, not VM-fault or release-candidate qualification. Its
-summary retains four `csql` lost-session read errors of unknown cause (#238).
-The earlier [failed run 43688936431](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43688936431)
-at `c71f3082c17c02c7964851d4a9fb9c85e96052c5` remains failed: its
-[artifact 14153071593](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43688936431/artifacts/14153071593)
-records abrupt first-member deletion (S03) failing because the master changed
-again, with no completed `data-check.json`. The second master change was a harness
-observation race, not an observed second election, and #922 fixed it (#897,
-closed 2026-11-17 UTC); the original run's data verdict stays permanently
-unavailable. The later pass does not establish complete SQL quarantine
-qualification (#115), or replace exact-candidate restore and independent runbook reproduction
-(#126/#127). These retained artifacts were available at review; their future
-remote retention is not guaranteed.
+[kind-run]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714
+[kind-src]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/tree/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3
+[kind-log]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714/job/133032212566
+[kind-artifact]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43785499714/artifacts/14191939489
+[e2e-dba]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/dba_password_test.go
+[e2e-s00]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/s00_test.go
+[e2e-s13]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/s13_test.go
+[e2e-stall]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/replication_stall_test.go
+[e2e-metrics]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/fcd61108fa5f9851007a3b95a674bd0fa8bf36c3/test/e2e/ha_metrics_test.go
+[kind-failed]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43688936431
+[kind-failed-artifact]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43688936431/artifacts/14153071593
 
 ### Shared lab historical baseline
 
-The [lab inventory](docs/testing/lab-inventory.md) records measurements from
-2026-10-15: k3s `v1.36.5+k3s1`, containerd `2.3.4-k3s1.36`, node-local
-`local-path` storage (not CSI), and locally imported images reported as built
-from `2c39873`. It records measurement scopes and unresolved inventory gaps;
-it does not qualify that configuration for v0.1.
-
-The inventory author reported one manual Pod-deletion run on 2026-10-13 at
-`2c39873`, with three promotable members: after `kubectl delete pod ha-0`,
-`ha-1` reported itself master after 13 s; `Ready=True` returned after 26 s,
-with `ha-0` a slave, and a row written on the new master was readable on
-`ha-0`. These are the observations of that single run, not a scenario pass,
-repeated recovery measurement or VM-failure evidence. The report supplied no
-scenario artifact set or independent transaction-history oracle.
-
-The 2026-10-15 record did not establish VM stop/start or return/recovery,
-network partitions, CSI behavior, an accessible provisioning/cleanup
-reproduction, off-node evidence retention or a target-identity fault guard.
-Those gaps remain tracked by #80/#122; neither the inventory nor the manual
-Pod deletion completes their acceptance conditions.
-
-## Two-maintainer start order
-
-| Work stream | First independently reviewable result | Handoff |
-|---|---|---|
-| Runtime | #97 non-root lifecycle, then #98 Pod wiring | #101 consumes a runnable authenticated image and Pod configuration |
-| Test contracts and infrastructure | #78 reference/reuse inventory, #79 scenario oracles, #104 fast-check failure propagation | #100 workload checks and #103 evidence use the agreed contracts |
-| Shared lab | #80 pinned inventory and reproducible provisioning | VM faults start only when controls and cleanup are verified |
-
-These are work streams, not three simultaneous assignments. With two
-maintainers, each chooses one available S/M issue, reviews the other's PR,
-and coordinates the next handoff. Each author owns implementation, tests and
-documentation. Dependencies mean the specific artifact listed in the issue;
-L/XL tracking issues are not implementation assignments. Full-lab runs are
-serialized. Follow [CONTRIBUTING.md](./CONTRIBUTING.md) for external intake,
-test-first exceptions and review rules.
-
----
-
-## Phase 0 — Architecture Decisions
-
-**Status:** Accepted
-
-- [x] Existing Operator review
-- [x] CUBRID HA semantic review
-- [x] Broker architecture ADR (#3 / ADR-0002)
-- [x] Instance Manager ADR (#10 / ADR-0003)
-- [x] Backup execution POC / ADR (#7 / ADR-0007)
-- [x] Restore semantic ADR (#8 / ADR-0008)
-- [x] Failover / split-brain ADR (#5 / ADR-0005)
-- [x] Join / rebuild ADR (#6 / ADR-0006)
-- [x] Compatibility target
-- [ ] API group ownership decision (#20) — pending (governance)
-
-### Exit Criteria
-
-```text
-All P0 ADRs accepted.
-No unresolved decision remains that changes the basic CRD,
-StatefulSet, Service, or Instance Manager architecture.
-```
-
----
-
-## Phase 1 — Foundation
-
-**Implementation:** Foundation code and CI are merged.
-**Live validation:** S00 (standalone cluster, real SQL, remote SQL through the
-`-rw` and `-ro` Broker Services, data kept across a Pod deletion) runs on Kind
-in CI. Nothing beyond one member is validated.
-
-- Kubebuilder scaffold
-- leader election
-- `CubridCluster` v1alpha1
-- CRD validation
-- reconciliation skeleton
-- single-node deployment
-- StatefulSet / Service / PVC
-- Conditions
-- envtest
-- E2E smoke harness (minikube locally, Kind in CI)
-- CI
-
----
-
-## Phase 2 — CUBRID HA
-
-**Implementation:** HA role discovery, Instance Manager and Broker model code
-are merged; manual CUBRID POCs are recorded in `docs/poc/RESULTS.md`.
-**Live validation:** Operator-driven formation of three members and the
-replication run on Kind in CI, as scenarios S01 and S02 of the scenario
-contract with a recorded workload, together with a master Pod deletion (S03),
-Broker failures (S05) and Operator failures (S06). A live interruption of the bootstrap remains
-unverified. RW/RO access through the Broker Services works on Kind in CI.
-
-- 1 master + 2 slaves
-- HA configuration
-- stable DNS identity
-- role discovery
-- Instance Manager
-- database-aware health
-- Broker model
-- current master discovery
-- failover observation
-- stable application endpoint
-
----
-
-## Phase 3 — Recovery Lifecycle
-
-**Implementation:** Recovery decision paths and ambiguous-primary detection
-are merged; engine failure/partition behavior has manual POC evidence.
-The test-only network faults for S07 and S08 are merged: a partition between
-members in one or both directions, and a delay to one peer, each confirmed by
-observed traffic and proven removed. They were run on the VM lab against a
-three-member cluster (#114, POC-39). That covers only the fault controls; how
-CUBRID and the Operator react to them is not yet run (#115).
-**Live validation:** SQL quarantine, real rejoin and explicit rebuild remain
-unverified (#86, #87).
-
-- Pod failure recovery
-- slave rejoin
-- PVC-loss rebuild
-- scale-out
-- network partition handling
-- split-brain detection
-- write-under-failure E2E
-
----
-
-## Phase 4 — Backup / Recovery
-
-**Implementation:** Backup API/controller, artifact handling and recovery
-bootstrap code are merged.
-**Live validation:** On the VM lab, S11 `complete` and S12 `exact`,
-`tampered`, `wrong-target`, `operator-restart` and `instance-manager-restart`
-passed (see above); a lost SQL
-session (#238) blocked S12 runs until the harness read it again (#575), and one
-S12 `exact` run failed on a seeded slave that applied nothing (#416). The
-interrupted backup and restore variants, restarts at other points of a
-restore, and the Operator's logs remain unverified (#88, #89, #121).
-
-- `CubridBackup`
-- backup execution implementation
-- artifact destination
-- backup validation
-- recovery bootstrap
-- restored dataset verification
-
----
-
-## Phase 5 — Production Hardening
-
-**Implementation:** Rolling sequencing, metrics, Events, authentication,
-member placement and disruption budget code are merged; retention work
-remains.
-**Live validation:** Hardening evidence is tracked by #90–#92 and #95.
-Compatible rolling updates remain conditional (#96).
-
-- PDB
-- topology spread
-- storage expansion
-- retention
-- rolling updates
-- observability
-- security hardening
-- compatibility CI matrix
-
----
+The [lab inventory](docs/testing/lab-inventory.md) records the lab as measured
+on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it does
+not qualify that configuration for v0.1. One manual Pod deletion on
+2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
+26 s, with `ha-0` a slave: a single run, not a scenario pass or VM-failure
+evidence, with no scenario artifact set or independent transaction-history
+oracle. The 2026-10-15 record did not establish VM stop/start or recovery,
+network partitions, CSI behavior, an accessible provisioning and cleanup
+reproduction, off-node evidence retention or a target-identity fault guard;
+these gaps remain with #80 and #122.
 
 ## Implementation Gate
 
-The gate below required all P0 ADRs accepted before the HA controller
-implementation started. It is now **satisfied** — architectural directions were accepted (including
-Accepted (POC-gated) decisions). This is not the release validation gate:
-
-```text
-[x] #1 HA topology
-[x] #2 database model
-[x] #3 Broker architecture
-[x] #4 hostname/DNS
-[x] #5 failover/split-brain
-[x] #6 join/rebuild
-[x] #7 backup POC
-[x] #8 restore semantics
-[x] #9 update/upgrade
-[x] #10 Instance Manager
-```
-
-Kubebuilder scaffold, CI, envtest, and Kind harness construction may
-start in parallel with Phase 0.
-
----
-
-## Historical architecture work order
-
-```text
-1. HA topology
-        ↓
-2. Database model
-        ↓
-3. Broker architecture
-        ↓
-4. hostname / DNS
-        ↓
-5. Instance Manager
-        ↓
-6. Failover / split-brain
-        ↓
-7. Join / rejoin / rebuild
-        ↓
-8. Backup POC
-        ↓
-9. Restore
-        ↓
-10. Update vs Upgrade
-        ↓
-11. CubridCluster API finalization
-        ↓
-12. Kubebuilder implementation
-```
-
-### Historical parallel tracks
-
-```text
-Track A — Architecture
-P0 ADRs
-
-Track B — Foundation
-Kubebuilder
-CI
-envtest
-E2E harness (minikube / Kind)
-
-Track C — CUBRID POCs
-Broker failover
-hostname
-backup
-rejoin
-```
-
----
-
-## MVP Success Scenario
-
-```text
-Create CubridCluster
-        ↓
-3-node CUBRID HA cluster becomes Ready (1 master + 2 slaves)
-        ↓
-Write monotonically increasing IDs
-        ↓
-Delete the current Primary Pod under write load
-        ↓
-CUBRID HA transitions to a new Primary
-        ↓
-Operator discovers the new Primary
-        ↓
-Write endpoint remains available
-        ↓
-Failed instance recovers and rejoins
-        ↓
-Data consistency is validated
-(acknowledged transactions, missing committed records,
-duplicate records, ordering anomalies, RTO)
-```
-
-The MVP is successful when this scenario can be reproduced automatically
-in an E2E test.
-
-The project does not promise "zero data loss" at this stage — it measures
-recovery behavior first.
+Satisfied: the P0 ADRs (#1–#10: HA topology, database model, Broker,
+hostname/DNS, failover/split-brain, join/rebuild, backup POC, restore,
+update/upgrade, Instance Manager) were accepted before the HA controller
+implementation started (including Accepted (POC-gated) decisions). This is
+not the release validation gate. The API group ownership decision (#20) is
+still open.

@@ -166,7 +166,7 @@ and direct database clients.
   [docs/observability.md](../observability.md#the-write-quarantine).
 - **No fencing.** The Operator does not call `/v1/shutdown`, and nothing sets
   the `FencingRequired` Condition (ADR-0005 section 2; ROADMAP.md row
-  "Hardening").
+  "Rolling updates (S16, conditional)").
 - **Rejoin and rebuild.** Verifying a former master's data before it rejoins,
   and rebuilding a member whose volume was lost, are designed in
   [ADR-0006](../adr/0006-node-join-rebuild.md) and tracked in
@@ -186,10 +186,10 @@ and direct database clients.
 | `Ready` stays `False` while more than one master is observed | Implemented | `setReady` in `cubridcluster_controller.go` |
 | `Ready` turns `False` (`PrimaryUnresolved`) once `PrimaryResolved` has been `False` for 60 seconds | Implemented (unit and envtest, with the reports POC-51 recorded; Kind with real CUBRID, after a cut was healed) | `setReady` and `primaryUnresolvedGrace` in `cubridcluster_controller.go`; #716 |
 | preStop hook runs `instance-manager shutdown`, which asks the local Instance Manager to stop CUBRID | Implemented, Design | `preStopShutdown` in `cubridcluster_controller.go`; `RequestShutdown` in [`operations.go`](../../internal/instancemanager/operations.go); [ADR-0003](../adr/0003-instance-manager.md) "Shutdown model" |
-| The master's Pod is deleted with and without a grace period; one member is master afterwards, client writes are acknowledged again, no acknowledged write is missing, and the former master returns and holds all data | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory) row "HA and Broker"; [scenario contract](../testing/scenario-contract.md), "S03: primary Pod termination" |
+| The master's Pod is deleted with and without a grace period; one member is master afterwards, client writes are acknowledged again, no acknowledged write is missing, and the former master returns and holds all data | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory) row "Pod and Broker failure (S03, S05)"; [scenario contract](../testing/scenario-contract.md), "S03: primary Pod termination" |
 | When the first member's Pod is deleted without a grace period it can be back within a second, and CUBRID makes it master again instead of promoting a slave | Observed (Kind and manual POC) | POC-19 in [docs/poc/RESULTS.md](../poc/RESULTS.md); scenario contract S03 |
-| CUBRID fails over without the Operator, and a restarted Operator names the new master without restarting a member | Observed (Kind in CI; one VM-lab run of the Operator restart) | ROADMAP.md row "HA and Broker" and the Operator restart paragraph; scenario contract "S06: Operator failure"; [ADR-0005](../adr/0005-failover-split-brain.md) section 7 |
-| Writes through `-rw` stay acknowledged while `RoutingReady` is not `True` | Observed (Kind in CI) | ROADMAP.md row "Recovery and safety"; [ADR-0005](../adr/0005-failover-split-brain.md) section 2 |
+| CUBRID fails over without the Operator, and a restarted Operator names the new master without restarting a member | Observed (Kind in CI; one VM-lab run of the Operator restart) | ROADMAP.md row "Operator failure (S06)"; scenario contract "S06: Operator failure"; [ADR-0005](../adr/0005-failover-split-brain.md) section 7 |
+| Writes through `-rw` stay acknowledged while `RoutingReady` is not `True` | Observed (Kind in CI) | ROADMAP.md row "Write quarantine on Kind (S03, S06)"; [ADR-0005](../adr/0005-failover-split-brain.md) section 2 |
 | While no member accepts read-write connections, a read-write Broker configured as the Operator writes it connects to a standby; a read there succeeds and can miss the client's own acknowledged write, and a write fails with `-581`, until the new master is active | Observed (manual POC in Docker; the lag was made on purpose) | POC-60 in [docs/poc/RESULTS.md](../poc/RESULTS.md); [#786](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/786) |
 
 ## Limits and assumptions

@@ -166,9 +166,9 @@ replication direction follows the elected CUBRID Master.
 | `-rw` and `-ro` select Broker Pods, never database Pods; two Brokers per access mode | Implemented, Design | `brokerReplicas`, `reconcileBrokerTier` and `reconcileBrokerService` in [`broker.go`](../../internal/controller/broker.go); [ADR-0002](../adr/0002-broker-routing.md) "Decision" and "As implemented" |
 | Brokers run `ACCESS_MODE=RW` or `RO`, and `databases.txt` lists every member's DNS name | Implemented | `memberDNSNames`, `generateBrokerConf`, `writeBrokerSection` and `generateBrokerDatabasesTxt` in [`broker_config.go`](../../internal/controller/broker_config.go) |
 | The Operator does not switch `-rw` between database Pods after a failover | Design, Implemented | ADR-0002 "Decision"; no `role=master` selector in `broker.go` |
-| A client commits through `-rw`, reads through `-ro`, and is refused a write through `-ro` with `-581` | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Foundation" (standalone) and "HA and Broker"; [scenario contract](../testing/scenario-contract.md), "S01: three-member HA with read-write and read-only access" |
-| Writes and schema changes replicate to every member | Observed (Kind in CI) | ROADMAP.md row "HA and Broker"; scenario contract "S02: normal replication" |
-| Losing one or all read-write Broker Pods, or the Broker process, recovers without a master change | Observed (Kind in CI) | ROADMAP.md row "HA and Broker"; scenario contract "S05: Broker failure" |
+| A client commits through `-rw`, reads through `-ro`, and is refused a write through `-ro` with `-581` | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Standalone lifecycle and SQL (S00)" and "Three-member HA and RW/RO access (S01–S02)"; [scenario contract](../testing/scenario-contract.md), "S01: three-member HA with read-write and read-only access" |
+| Writes and schema changes replicate to every member | Observed (Kind in CI) | ROADMAP.md row "Three-member HA and RW/RO access (S01–S02)"; scenario contract "S02: normal replication" |
+| Losing one or all read-write Broker Pods, or the Broker process, recovers without a master change | Observed (Kind in CI) | ROADMAP.md row "Pod and Broker failure (S03, S05)"; scenario contract "S05: Broker failure" |
 | Broker and routing Conditions | Implemented | [docs/observability.md — Conditions](../observability.md#conditions) |
 
 ## Limits and assumptions
