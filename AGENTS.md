@@ -214,7 +214,9 @@ creation because their issue events may not retrigger the workflow.
 4. **Verify actual labels:** fetch the saved GitHub issue after changes and
    check type, priority, size, evidence, duplicates and decision. Only then
    remove `status: needs triage`. Keep it for unresolved investigations,
-   incomplete evidence or pending ADR decisions.
+   incomplete evidence or pending ADR decisions. A valid issue the current
+   release does not require ends with `**Release:** backlog`; no status
+   label marks it.
 
 Never auto-assign priority or auto-clear triage based solely on label count.
 Kind evidence is not proof of VM-fault safety; no existing merge, test or
@@ -398,6 +400,7 @@ break runbooks/alerts that reference the old strings.
 | Present design and behaviour, no project phase or status | `DESIGN.md` |
 | Decisions and their reasons | `docs/adr/` (each ADR listed in `DESIGN.md` section 22 and `docs/adr/README.md`) |
 | Work to do and its evidence (lab runs, logs, measurements) | GitHub issues |
+| Improvements and ideas the current release does not require | One GitHub issue each, whose body ends with `**Release:** backlog` (no status label); not listed in `ROADMAP.md` or `DESIGN.md` until scheduled. `ROADMAP.md` links the search `is:issue is:open in:body "Release: backlog"` |
 | Observed CUBRID engine behaviour | `docs/poc/` |
 | Procedures | `docs/testing/`, `docs/operations/`, `docs/observability.md` |
 

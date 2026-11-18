@@ -678,7 +678,7 @@ Each label answers a different question; do not use one to express another.
 | `size:` | Expected effort | `size: S` |
 | `phase:` | Which roadmap area | `phase: 2-ha` |
 | `status: needs triage` | Metadata still needs a maintainer | — |
-| Release target | Whether a release includes it | The `**Release:**` line of the issue |
+| Release target | Whether a release includes it | The `**Release:**` line of the issue, e.g. `v0.1 required` or `backlog` |
 
 Release scope is decided in [ROADMAP.md](./ROADMAP.md#v01-scope). An issue
 states its target in one line at the end of the body, below a horizontal
