@@ -221,6 +221,28 @@ Never auto-assign priority or auto-clear triage based solely on label count.
 Kind evidence is not proof of VM-fault safety; no existing merge, test or
 release gate is weakened by this issue-intake procedure.
 
+## v0.1 work-intake gate (effective 2026-11-18)
+
+Before picking *any* implementation issue or adding a POC/test/helper, apply
+[the v0.1 scope intake freeze](CONTRIBUTING.md#v01-scope-intake-freeze-effective-2026-11-18).
+This check comes **before** the ordinary S/M issue selection and POC-first
+workflow below. A task being technically executable, priority-labelled or
+independently reviewable does not make it v0.1 work.
+
+- If an existing mandatory safety, recovery, security or release verdict is
+  blocked, cite that accepted gate and observed evidence; make the smallest
+  correction and rerun the affected existing check.
+- If the proposal is an optional design, new API/feature, extra POC/CI lane,
+  tool cleanup or post-v0.1 research, do not start implementation during
+  v0.1 stabilization. Record it only in its existing issue/backlog.
+- Do not turn each POC finding into an assigned implementation child or
+  upgrade an investigation hypothesis into an accepted release blocker.
+  Keep confirmed safety failures visible, preserve raw evidence and request
+  a maintainer decision when scope is disputed.
+- Keep required VM/SQL validation, final-head CI, human review and
+  acknowledged-data safety checks unchanged. If mandatory acceptance is
+  blocked, report No-Go rather than changing the oracle.
+
 ## Working on an Issue
 
 Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
