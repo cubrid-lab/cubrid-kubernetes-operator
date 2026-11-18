@@ -103,8 +103,12 @@ check-generated: controller-gen ## Fail if generated files, formatting or go.mod
 		exit 1; \
 	fi
 
+.PHONY: check-docs
+check-docs: ## Fail on project-phase or status wording in DESIGN.md, an ADR missing from an ADR index, or a ROADMAP.md over its size limits (hack/docs_rules_test.go; make test runs these tests too).
+	go test ./hack -run '^TestDocRules' -count=1
+
 .PHONY: verify
-verify: check-generated format-check vet lint test ## Run every non-E2E check: check-generated, format-check, vet, lint and test. CI runs it.
+verify: check-generated format-check vet lint check-docs test ## Run every non-E2E check: check-generated, format-check, vet, lint, check-docs and test. CI runs it.
 
 .PHONY: test
 test: vet setup-envtest ## Run tests. It does not regenerate or format: run make manifests generate fmt, or make check-generated.

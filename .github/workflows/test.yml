@@ -23,6 +23,29 @@ jobs:
     permissions:
       pull-requests: read
 
+  # The document rules check Markdown files, which the change classifier treats
+  # as documentation-only, so this job has no impact gate and runs on every
+  # pull request. make verify runs the same target.
+  docs:
+    permissions:
+      contents: read
+    name: Check document roles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check DESIGN.md wording, the ADR indexes and the ROADMAP.md limits
+        run: make check-docs
+
   test:
     needs: impact
     # Failure to classify changes must never skip a required check.
@@ -42,7 +65,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # make verify runs check-generated, format-check, vet, lint and test.
+      # make verify runs check-generated, format-check, vet, lint, check-docs and test.
       # None of them writes the workspace: check-generated regenerates CRDs,
       # RBAC and DeepCopy, runs go fmt and go mod tidy in a temporary copy, and
       # fails if the result differs from what is committed (#104, #535).

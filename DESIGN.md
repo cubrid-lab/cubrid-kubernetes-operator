@@ -2,8 +2,11 @@
 
 > A Kubernetes-native operator for running highly available CUBRID clusters.
 
-**Status:** Draft (rev. 2 — CUBRID-specific operational semantics added)
 **API Version:** `v1alpha1`
+
+This document describes how the operator is designed to behave. The release
+scope and the delivery and validation status of each capability are kept only
+in [ROADMAP.md](./ROADMAP.md).
 
 ---
 
@@ -37,10 +40,9 @@ CUBRID as a stateful database workload.
 
 A generic Kubernetes database-operator structure — declarative
 reconciliation, Conditions, envtest/Kind E2E — is necessary but not
-sufficient. Before implementation starts, the following
-**CUBRID-specific operational semantics** must be defined, because they
-shape the CRD, StatefulSet structure, Service structure, Instance
-Manager API, and controller state machine:
+sufficient. The following **CUBRID-specific operational semantics** shape
+the CRD, StatefulSet structure, Service structure, Instance Manager API,
+and controller state machine:
 
 1. CUBRID HA master / slave / replica semantics
 2. `ha_db_list` and the database lifecycle
@@ -52,8 +54,8 @@ Manager API, and controller state machine:
 8. Restore semantics
 9. The distinction between CUBRID engine upgrade and rolling updates
 
-These are tracked as P0 decisions in [ROADMAP.md](./ROADMAP.md) and
-[docs/adr/](./docs/adr/).
+Each of them is decided in an architecture decision record listed in
+Section 22.
 
 ---
 
@@ -126,7 +128,7 @@ The guiding statement for all design decisions in this project:
 
 ## 3. Non-Goals
 
-The first version will **NOT** attempt to provide:
+The operator does **NOT** provide:
 
 - a database management UI
 - SQL query management
@@ -137,7 +139,7 @@ The first version will **NOT** attempt to provide:
 - automatic database performance tuning
 - a replacement for CUBRID native HA
 - non-promotable replica nodes (`replicas` role) in `v1alpha1`
-- CUBRID engine version migration in the initial MVP
+- CUBRID engine version migration (Section 17)
 - in-place destructive restore of an active HA cluster in `v1alpha1`
 
 CUBRID native HA remains responsible for database-level replication and
@@ -277,7 +279,8 @@ current master becomes unavailable.
 
 A replication target that is not eligible for automatic promotion.
 
-Replica nodes are not supported in the initial MVP.
+The `v1alpha1` API does not support replica nodes: `topology.readReplicas`
+must be 0.
 
 ### Instance
 
@@ -361,7 +364,7 @@ Database names are immutable; removing a name is rejected/blocked and
 never auto-drops data (physical deletion is governed by storage
 retention, Section 14).
 
-### MVP Topology
+### Supported HA Topology
 
 ```text
 1 active master
@@ -374,14 +377,15 @@ Expressed in the CR as `topology.promotableMembers: 3` (pool listed in
 declares the pool size only — CUBRID heartbeat decides at runtime which
 member is master (see ADR-0001, issue #1).
 
-Rationale for excluding the replica role from the MVP:
+Rationale for excluding the replica role from `v1alpha1`:
 
 - slave and replica failover semantics differ
 - including replicas complicates routing, status, and backup-target
   semantics
 - a 3-node master + slaves topology is sufficient to validate the core
   HA operator features
-- the API can be extended later to add the replica role
+- the `topology.readReplicas` field leaves room to add the replica role
+  without an API break
 
 ### Hostnames and DNS
 
@@ -478,7 +482,7 @@ The single most important structural requirement:
 
 ## 8. CubridCluster API
 
-### 8.1 Spec (draft)
+### 8.1 Spec
 
 The samples in this section are the original proposal. The `v1alpha1`
 fields are those of the CRD (`api/v1alpha1/cubridcluster_types.go`). It has
@@ -544,7 +548,7 @@ spec:
     topologySpreadConstraints: []
 ```
 
-Not every option needs to be exposed from day one. The API principle:
+The API does not expose every option. Its principle:
 
 ```text
 Expose semantics, not every CUBRID configuration parameter.
@@ -560,7 +564,7 @@ topology.readReplicas      → ha_replica_list (ha_mode=replica); 0 in v1alpha1
 The spec never pins a master — CUBRID heartbeat decides at runtime.
 Decision: #1 (ADR-0001).
 
-### 8.2 Status (draft)
+### 8.2 Status
 
 ```yaml
 status:
@@ -629,10 +633,10 @@ One `CubridCluster` owns the complete topology.
 A separate CR should not be required for a standby or replica belonging
 to the same logical cluster.
 
-### 8.3 CubridBackup (draft)
+### 8.3 CubridBackup
 
 Represents a single (single-shot) backup operation. Per ADR-0007 (issue
-#7); scheduling is a future separate API.
+#7); it has no schedule, and scheduling is outside this API.
 
 ```yaml
 spec:
@@ -650,16 +654,15 @@ spec:
 
 The Instance Manager executes `backupdb` locally and uploads the artifact
 + `manifest.json` (the completion marker) to object storage; ADR-0006
-rebuild consumes that manifest. Final CRD fields are confirmed after the
-ADR-0007 POC.
+rebuild consumes that manifest. The CRD fields are those of
+`api/v1alpha1/cubridbackup_types.go`.
 
 ### 8.4 Restore
 
 For `v1alpha1`, recovery is a **bootstrap mode of a new CubridCluster**
 keyed by the object-storage `manifestUri` — **no separate `CubridRestore`
 CR** and no in-place restore (ADR-0008, issue #8; see Section 16). A
-higher-level `CubridRestore` workflow CR may be added later
-non-breakingly.
+higher-level `CubridRestore` workflow CR would not need an API break.
 
 ---
 
@@ -916,14 +919,14 @@ Possible conditions:
 
 These use `metav1.Condition`.
 
-### Implementation status (#14)
+### Pod readiness and cluster Conditions in the code (#14)
 
-Implemented: Pod `readinessProbe`/`livenessProbe` hit the Instance Manager
+Pod `readinessProbe`/`livenessProbe` hit the Instance Manager
 `/readyz` / `/livez` (port 9090, ADR-0003) — Pod readiness reflects
 DB-instance readiness only. `HAReady` is a **separate** cluster Condition,
-never wired into Pod readiness. HA role discovery is implemented (the
+never wired into Pod readiness. For HA role discovery the
 reconciler polls each member's `/v1/role` and aggregates safety-first,
-ADR-0005): when a role prober is configured `HAReady` reflects the resolved
+ADR-0005; when a role prober is configured `HAReady` reflects the resolved
 primary; when none is configured it is `Unknown` (reason
 `RoleDiscoveryDisabled`). The cluster's `Ready` follows the members'
 readiness, except that more than one authoritative master keeps it `False`
@@ -1190,8 +1193,8 @@ Reason=InstanceRebuilding
 A change such as adding a member (`promotableMembers: 3 → 4`) must **not**
 be treated as a plain StatefulSet scale operation; it enters the join
 state machine. ADR-0001 pins the v1alpha1 HA topology at exactly 3
-members, so **scale-out and live membership expansion are a future
-concern**; the v1alpha1 scope is pod-recreate (PVC intact) and PVC-loss
+members, so **scale-out and live membership expansion are outside
+`v1alpha1`**; it covers pod-recreate (PVC intact) and PVC-loss
 rebuild **within** the fixed 3-member topology.
 
 ### Decision (ADR-0006, issue #6)
@@ -1218,14 +1221,14 @@ increase is **not** sufficient to mark a member usable.
 - **Scale-down / member removal is out of v1alpha1 scope**
   (never shrink `ha_node_list` or delete PVCs; the proposed
   `Degraded/ScaleDownUnsupported` is not emitted).
-- **Future (when the topology bound is relaxed):** new-slave join /
+- **Intended design if the topology bound is relaxed:** new-slave join /
   scale-out via live `cubrid heartbeat reload` — append to `ha_node_list`,
   reload **slaves first, master last**, never a StatefulSet rolling
   restart (restarting the master could trigger failover, ADR-0005).
 
 This requires Instance Manager additions (idempotent config apply,
 `cubrid heartbeat reload`, HA start, config-hash reporting) beyond the
-ADR-0003 initial set. See ADR-0006 for the full state machines, conditions,
+set ADR-0003 first defined. See ADR-0006 for the full state machines, conditions,
 and POC/E2E checklist.
 
 ---
@@ -1251,9 +1254,8 @@ HA replication logs
 backup staging
 ```
 
-The initial API does not have to expose every volume separately, but
-controller logic and volume naming must be designed so volumes can be
-separated later.
+The API exposes one data volume. Controller logic and volume naming keep
+the others separable without an API break.
 
 ### Log Volume Size
 
@@ -1294,7 +1296,7 @@ backup space
 PVC capacity
 ```
 
-### Initial Support
+### Supported Storage
 
 - StorageClass
 - ReadWriteOnce
@@ -1320,23 +1322,23 @@ storage:
 
 Decision: #17.
 
-### Implementation status (#17)
+### Volumes in the code (#17)
 
-Implemented: a single `data` volume per instance (RWO, per-ordinal PVC via
+A single `data` volume per instance (RWO, per-ordinal PVC via
 the StatefulSet `volumeClaimTemplate`, `storageClassName` from
 `spec.storage.data`). `spec.storage.retentionPolicy` drives the
 StatefulSet `persistentVolumeClaimRetentionPolicy`: `whenDeleted` follows
 the policy (`Retain` default, `Delete` on request), while **`whenScaled`
 is always `Retain`** — ADR-0006 forbids implicit PVC deletion on
 scale-down. Separated volumes (active/archive logs, HA replication logs,
-backup staging) remain an internal design target; controller volume naming
-already isolates `data` so they can be split later without an API break.
+backup staging) are an internal design target; controller volume naming
+isolates `data` so they can be split without an API break.
 
 The size and the class of the data volume are fixed when the cluster is
 created: the operator does not resize or move volumes, and a StatefulSet's
 claim templates cannot be changed. The API refuses a later change of
 `spec.storage.data.size` or `storageClassName`, and a size that is not
-greater than zero (#305). Online resizing is not implemented.
+greater than zero (#305).
 
 ---
 
@@ -1358,8 +1360,8 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
 ```
 
 - **No Kubernetes Job** in the v1alpha1 critical path (RWO PVC + it would
-  duplicate the Instance Manager). Jobs are reserved for future
-  retention/verification/copy work.
+  duplicate the Instance Manager). Jobs are left for retention,
+  verification or copy work outside the backup path.
 - **Target eligibility:** a new HA selection requires a resolved primary,
   and every target, the master included, must be a member the HA bootstrap
   records as holding the database; a master that is not waits with
@@ -1397,7 +1399,7 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
   upload + checksum + `manifest.json`; restore/rebuild trust only a
   validated manifest.
 - **Full only, single-shot** in v1alpha1 (`level: Full` → CUBRID level 0;
-  scheduling is a future separate API).
+  scheduling is outside this API).
 - Backup state is reported separately from cluster/HA readiness
   (`CubridBackup.status`, condition `Ready`; the cluster has no
   `BackupReady` Condition).
@@ -1423,7 +1425,7 @@ For `v1alpha1`:
 For v1alpha1, recovery into a new CubridCluster is preferred.
 
 In-place restore of an active HA cluster is considered
-a separate destructive lifecycle operation and is out of MVP scope.
+a separate destructive lifecycle operation and is not supported.
 ```
 
 Model:
@@ -1462,7 +1464,7 @@ in-place restore** in v1alpha1.
 - `manifestUri` (not a `CubridBackup` CR name) is the canonical input so
   cross-namespace / cross-cluster / migration recovery works; restore uses
   the **new** cluster's object-storage credentials only.
-- **Implemented bootstrap gate:** the Operator keeps
+- **Bootstrap gate:** the Operator keeps
   `BootstrapReady=False` while restore, member seeding or HA
   configuration is incomplete. In
   [`reconcileRecoverySeeding`](internal/controller/bootstrap.go), recovery
@@ -1496,7 +1498,7 @@ ADR-0008 for the flow, CR surface, status, and POC checklist.
 
 Update and upgrade are distinct operations.
 
-### Rolling Update (MVP scope)
+### Rolling Update
 
 ```text
 compatible container image changes
@@ -1508,7 +1510,7 @@ OS/package layer update
 The operator must not rely only on StatefulSet rolling-update semantics;
 restarts follow a database-aware sequence.
 
-### Engine Upgrade (excluded from initial MVP)
+### Engine Upgrade (not supported)
 
 ```text
 CUBRID engine version migration
@@ -1518,9 +1520,9 @@ major/minor database upgrade
 ```
 
 Terminology rule: this project uses **"database-aware rolling updates"**
-(not "upgrades") for the MVP capability, and reserves "upgrade" for
-CUBRID engine version migration, which is a future, separately designed
-operation.
+(not "upgrades") for the update operation this section describes, and reserves "upgrade" for
+CUBRID engine version migration, which the operator does not perform and
+which needs its own design.
 
 ### Decision (ADR-0009, issue #9)
 
@@ -1566,7 +1568,7 @@ operation.
   Condition, and the planner does not read the PodDisruptionBudgets of
   ADR-0012, which limit evictions and not the Pod deletes of an update.
 
-**Non-goals (future engine-upgrade ADR):** engine version migration,
+**Non-goals (an engine upgrade needs its own ADR):** engine version migration,
 volume/on-disk format migration, cross-version HA, downgrade. See ADR-0009
 for classification, conditions, and the POC checklist.
 
@@ -1585,7 +1587,7 @@ observation feeds status, Events, metrics and logs; an unknown or stale value
 is never shown as healthy or as zero; the same change has the same name
 everywhere; and a reconcile that changes nothing says nothing.
 
-### Implementation status (#23)
+### Metrics, Events and logs in the code (#23)
 
 Custom gauges are registered on the controller-runtime metrics registry
 (exposed on the manager's metrics endpoint): eight per cluster
@@ -1594,9 +1596,8 @@ their labels in [docs/observability.md](docs/observability.md#metrics)
 (`internal/metrics/metrics.go`). No counter is defined. The
 reconciler emits Kubernetes Events via an `EventRecorder`
 (`ClusterReady` Normal; reconcile-failure Warnings), and logs each change of the status once per reconcile, with an Event for a change of the primary and of replication health (docs/observability.md, section "Transitions"). The manager logs JSON at info level by default. Role/HA/failover and
-backup/restore observation are implemented in the reconciler and Instance
-Manager (ADR-0003/0005/0006/0007/0008); richer per-operation metrics remain
-an incremental extension.
+backup/restore observation run in the reconciler and Instance
+Manager (ADR-0003/0005/0006/0007/0008); there are no per-operation metrics.
 
 Decision: #23.
 
@@ -1621,9 +1622,9 @@ Production defaults:
 The operator should avoid requiring `pods/exec` privileges wherever
 possible.
 
-### Implementation status (#18)
+### Pod security and credentials in the code (#18)
 
-Implemented: DB pods run under **Pod Security Standards "restricted"** —
+DB pods run under **Pod Security Standards "restricted"** —
 `runAsNonRoot`, `allowPrivilegeEscalation: false`, `seccompProfile:
 RuntimeDefault` (pod + container), and all Linux capabilities dropped
 (`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
@@ -1644,9 +1645,8 @@ never a request body. Per-cluster ingress NetworkPolicies admit only the
 operator to the Instance Manager port, only the cluster's own DB and Broker
 Pods to the database ports, and the configured clients to the Broker ports
 (README, "Network access"); they take effect only under a network plugin
-that enforces NetworkPolicy and do not encrypt traffic. mTLS and
-finer-grained least-privilege credentials remain incremental hardening
-(ADR-0003/0007).
+that enforces NetworkPolicy and do not encrypt traffic. The Instance
+Manager API does not use mTLS (ADR-0003/0007).
 
 Decision: #18.
 
@@ -1655,8 +1655,7 @@ Decision: #18.
 ## 20. Testing Strategy
 
 Testing is part of the product. envtest and E2E are treated as
-product components, not afterthoughts — the E2E harness starts in
-Phase 1, not Phase 5.
+product components, not afterthoughts.
 
 ### Cluster Providers
 
@@ -1686,7 +1685,7 @@ creates only Kind clusters.
 - PVC creation
 - Backup CR lifecycle
 
-### Kind E2E — Phase 1 skeleton
+### Kind E2E — single member
 
 ```text
 Kind cluster creation
@@ -1698,7 +1697,7 @@ PVC creation
 Ready Condition
 ```
 
-### Kind E2E — after HA
+### Kind E2E — HA
 
 ```text
 3-node startup
@@ -1750,8 +1749,8 @@ validate:
 - writable endpoint recovery time
 ```
 
-The project does **not** promise "zero data loss" in documentation at
-this stage. It measures first.
+The documentation does **not** promise "zero data loss": it reports what
+was measured.
 
 The most important invariant:
 
@@ -1761,182 +1760,52 @@ The most important invariant:
 
 ## 21. Compatibility
 
-| Component | MVP Target |
+| Component | Target |
 |---|---|
 | CUBRID | 11.4.x |
-| Kubernetes | TBD after envtest/Kind validation |
-| Architecture | amd64 initially |
+| Kubernetes | Recorded in [docs/compatibility.md](docs/compatibility.md) |
+| Architecture | amd64 |
 | Storage | CSI-backed PVC |
-| Access Mode | ReadWriteOnce initially |
+| Access Mode | ReadWriteOnce |
 | HA topology | 1 master + 2 slaves |
-| Non-promotable replica | Not supported in MVP |
+| Non-promotable replica | Not supported |
 
-Kubernetes version support is recorded only after the CI matrix is
-established, not asserted upfront.
+Kubernetes version support is recorded in
+[docs/compatibility.md](docs/compatibility.md) from executed runs, not
+asserted upfront.
 
 ---
 
-## 22. Open Decisions / ADRs
+## 22. Architecture Decision Records
 
-All decisions that would change the CRD, StatefulSet, Service, or
-Instance Manager architecture are made through ADRs before HA controller
-implementation:
+Decisions that would change the CRD, StatefulSet, Service, or Instance
+Manager architecture are made through ADRs:
 
 | ADR | Topic | Issue |
 |---|---|---|
-| [0001](./docs/adr/0001-ha-topology.md) | HA topology semantics | #1 |
+| [0001](./docs/adr/0001-ha-topology.md) | CUBRID HA topology semantics | #1 |
 | [0002](./docs/adr/0002-broker-routing.md) | Broker topology and RW/RO routing | #3 |
 | [0003](./docs/adr/0003-instance-manager.md) | Instance Manager architecture | #10 |
-| [0004](./docs/adr/0004-ha-hostname-dns.md) | HA hostname and DNS model | #4 |
+| [0004](./docs/adr/0004-ha-hostname-dns.md) | Stable HA hostname and DNS model | #4 |
 | [0005](./docs/adr/0005-failover-split-brain.md) | Failover and split-brain responsibility | #5 |
-| [0006](./docs/adr/0006-node-join-rebuild.md) | Node join / rejoin / rebuild | #6 |
+| [0006](./docs/adr/0006-node-join-rebuild.md) | Node join, rejoin, and rebuild | #6 |
 | [0007](./docs/adr/0007-backup-execution.md) | Backup execution model | #7 |
 | [0008](./docs/adr/0008-restore-semantics.md) | Restore semantics | #8 |
-| [0009](./docs/adr/0009-update-vs-upgrade.md) | Update vs upgrade | #9 |
+| [0009](./docs/adr/0009-update-vs-upgrade.md) | Rolling update vs engine upgrade | #9 |
+| [0010](./docs/adr/0010-database-lifecycle.md) | Database lifecycle and `ha_db_list` model | #2 |
+| [0011](./docs/adr/0011-engine-version-contract.md) | Engine image, declared version and image approval | #321 |
+| [0012](./docs/adr/0012-voluntary-disruption.md) | Voluntary disruption budgets and Broker placement | #613 |
+| [0013](./docs/adr/0013-operator-instance-manager-compatibility.md) | Compatibility between the Operator and existing Instance Managers | #322, #733 |
 
 See [docs/adr/README.md](./docs/adr/README.md) for the ADR process and
 template.
 
-### Implementation Gate
-
-HA controller implementation was to start only after all P0 decisions
-were accepted, with the Kubebuilder scaffold, CI, envtest and the Kind
-harness in parallel. The state of that gate is kept in
-[ROADMAP.md](ROADMAP.md#implementation-gate).
-
 ---
 
-## 23. MVP
+## 23. Release Scope
 
-The initial MVP targets one production scenario:
-
-**3-node CUBRID HA cluster**
-
-```text
-1 active master
-2 failover-capable slaves
-0 non-promotable replicas
-```
-
-Required capabilities:
-
-- CubridCluster CRD
-- 3-node HA deployment
-- Persistent storage
-- CUBRID native HA
-- Database-aware health
-- Primary discovery
-- Stable write endpoint
-- Pod failure recovery
-- Backup
-- Restore into a new cluster
-- Database-aware rolling update for compatible image/configuration changes
-- Prometheus metrics
-- E2E tests
-
-Not required for MVP:
-
-- UI
-- AI
-- Sharding
-- Multi-region
-- Multi-database engine support
-- Auto tuning
-- Replica (non-promotable) role
-- CUBRID engine version migration
-- In-place restore of an active HA cluster
-
----
-
-## 24. Demo Scenario
-
-```bash
-$ kubectl get cubridclusters
-
-NAME   PRIMARY   HA     READY   AGE
-prod   prod-0    true   True    5m
-```
-
-Delete the primary:
-
-```bash
-kubectl delete pod prod-0
-```
-
-Expected:
-
-```text
-Primary unavailable
-        ↓
-CUBRID HA transition
-        ↓
-New primary detected
-        ↓
-Write endpoint reconciled
-        ↓
-Application reconnects
-        ↓
-Failed node recovered
-```
-
-Result:
-
-```text
-NAME   PRIMARY   HA     READY   AGE
-prod   prod-1    true   True    9m
-```
-
-The test also validates:
-
-- RTO
-- data consistency (per the criteria in Section 20)
-- transaction availability
-- cluster recovery
-
----
-
-## 25. Success Criteria
-
-The project succeeds when the operator can demonstrate:
-
-```text
-Observe actual CUBRID database state
-        ↓
-Understand HA topology and node roles
-        ↓
-Coordinate Kubernetes lifecycle with CUBRID HA
-        ↓
-Recover safely from infrastructure failures
-        ↓
-Expose deterministic status and routing
-        ↓
-Validate recovery through reproducible E2E tests
-```
-
-Concretely:
-
-- declarative CUBRID cluster management
-- repeatable reconciliation
-- safe HA operation
-- automatic Kubernetes failure recovery
-- backup and restore validation
-- database-aware rolling updates
-- meaningful Kubernetes status and metrics
-- reproducible E2E failure tests
-
-The goal is **not** merely:
-
-> Run CUBRID inside Kubernetes.
-
-nor:
-
-> Create StatefulSet + Service + PVC.
-
-The goal is:
-
-> **Operate CUBRID safely using Kubernetes-native control-plane semantics
-> while preserving CUBRID-native database semantics.**
-
-This statement is the criterion against which every CRD, Controller,
-Instance Manager, Broker, and Backup/Restore design decision in this
-project is judged.
+This document describes design and present behaviour only. The capabilities
+a release requires and their completion evidence are in
+[ROADMAP.md](./ROADMAP.md#v01-scope); the demonstration is tracked on #128.
+The criterion every design decision is judged against is the guiding
+statement in Section 2.
