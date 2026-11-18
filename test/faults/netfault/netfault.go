@@ -185,6 +185,7 @@ func attach(ctx context.Context, env Env, e Endpoint, c corev1.EphemeralContaine
 		if err != nil {
 			return err
 		}
+		last := "no status reported for it"
 		for _, s := range pod.Status.EphemeralContainerStatuses {
 			switch {
 			case s.Name != c.Name:
@@ -193,10 +194,18 @@ func attach(ctx context.Context, env Env, e Endpoint, c corev1.EphemeralContaine
 			case s.State.Terminated != nil:
 				return fmt.Errorf("%s: the %s container ended: %s (exit code %d)", e.Name, c.Name,
 					s.State.Terminated.Reason, s.State.Terminated.ExitCode)
+			case s.State.Waiting != nil:
+				last = "waiting: " + s.State.Waiting.Reason + ": " + s.State.Waiting.Message
+				// The kubelet does not start a container whose configuration
+				// it refused until the spec changes, which an ephemeral
+				// container's cannot.
+				if s.State.Waiting.Reason == "CreateContainerConfigError" {
+					return fmt.Errorf("%s: the %s container cannot start: %s", e.Name, c.Name, last)
+				}
 			}
 		}
 		if err := env.pause(ctx, time.Since(start)); err != nil {
-			return fmt.Errorf("%s: the %s container did not start: %w", e.Name, c.Name, err)
+			return fmt.Errorf("%s: the %s container did not start (last seen %s): %w", e.Name, c.Name, last, err)
 		}
 	}
 }

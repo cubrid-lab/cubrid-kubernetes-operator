@@ -364,8 +364,12 @@ func checkKernel(release string) error {
 func keepaliveContainer(image string, lifetime time.Duration) corev1.EphemeralContainer {
 	return corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 		Name: KeepaliveContainer, Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"sleep", strconv.Itoa(max(int(lifetime/time.Second), 1))},
-		SecurityContext: &corev1.SecurityContext{Privileged: new(true), RunAsUser: new(int64(0))},
+		Command: []string{"sleep", strconv.Itoa(max(int(lifetime/time.Second), 1))},
+		// The member Pods set runAsNonRoot at Pod level, which a container
+		// inherits: one that runs as root must say false, or the kubelet
+		// refuses to start it with CreateContainerConfigError (POC-39).
+		SecurityContext: &corev1.SecurityContext{Privileged: new(true), RunAsUser: new(int64(0)),
+			RunAsNonRoot: new(false)},
 	}}
 }
 

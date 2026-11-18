@@ -294,6 +294,14 @@ func TestKeepaliveContainerIsPrivileged(t *testing.T) {
 			!*found[0].SecurityContext.Privileged || found[0].Image != Image {
 			t.Fatalf("%s: keepalive containers %+v", name, found)
 		}
+		// The member Pods run as non-root at Pod level; a container that
+		// runs as root must say runAsNonRoot false, or the kubelet refuses to
+		// start it (CreateContainerConfigError), as POC-39 found for the
+		// faults' container.
+		if sc := found[0].SecurityContext; sc.RunAsNonRoot == nil || *sc.RunAsNonRoot || sc.RunAsUser == nil ||
+			*sc.RunAsUser != 0 {
+			t.Errorf("%s: the keepalive container's security context %+v does not run as root", name, sc)
+		}
 		// The privileged process ends by itself instead of living as long as
 		// the Pod.
 		if cmd := found[0].Command; len(cmd) != 2 || cmd[0] != "sleep" {
@@ -374,6 +382,52 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 	}
 	if slices.ContainsFunc(s.scripts, func(sc string) bool { return strings.Contains(sc, "sockets-reset") }) {
 		t.Errorf("a connection was reset although a member's values were not set: %v", s.scripts)
+	}
+}
+
+// A keepalive container the kubelet cannot start ends the step with the
+// kubelet's reason and message: at once when it will not start without a
+// change (CreateContainerConfigError), and at the step's bound when it only
+// waits (ImagePullBackOff), instead of a bare "no time is left".
+func TestKeepaliveContainerThatDoesNotStart(t *testing.T) {
+	cases := []struct {
+		name  string
+		state corev1.ContainerState
+		limit time.Duration
+		want  []string
+		fast  bool
+	}{
+		{"its configuration is refused", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "CreateContainerConfigError", Message: "container's runAsUser breaks non-root policy"}},
+			time.Minute, []string{"CreateContainerConfigError", "breaks non-root policy"}, true},
+		{"its image is still being pulled", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "ImagePullBackOff", Message: "Back-off pulling image"}},
+			200 * time.Millisecond, []string{"did not start", "ImagePullBackOff", "Back-off pulling image"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeSysctl()
+			n := newFakeNet(testPods)
+			n.ephemeralState = map[string]corev1.ContainerState{KeepaliveContainer: tc.state}
+			env := testEnv(t, n)
+			env.Kubectl = s.kubectl
+			ctx, cancel := context.WithTimeout(context.Background(), tc.limit)
+			defer cancel()
+			start := time.Now()
+			rec, err := ShortenKeepalive(ctx, env, testKeepalive, []Endpoint{member(target)}, member(target),
+				member(slave1), time.Second)
+			if err == nil {
+				t.Fatal("a container that did not start was accepted")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) || !strings.Contains(rec.Unmet, w) {
+					t.Errorf("error %q, unmet %q, want %q", err, rec.Unmet, w)
+				}
+			}
+			if tc.fast && time.Since(start) > 5*time.Second {
+				t.Errorf("waited %s for a container that cannot start", time.Since(start))
+			}
+		})
 	}
 }
 

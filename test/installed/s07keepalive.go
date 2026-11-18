@@ -20,7 +20,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults/netfault"
 )
@@ -47,6 +52,28 @@ var (
 	// member's connection to the master again after the run reset it.
 	s07KeepaliveReconnect = 3 * time.Minute
 )
+
+// s07PodDiagnostic is what the run read about one member Pod after the
+// keepalive step failed: the keepalive container's status and the Pod's
+// Events.
+type s07PodDiagnostic struct {
+	Pod              string     `json:"pod"`
+	ContainerState   string     `json:"containerState,omitempty"`
+	ContainerReason  string     `json:"containerReason,omitempty"`
+	ContainerMessage string     `json:"containerMessage,omitempty"`
+	Events           []s07Event `json:"events,omitempty"`
+	Error            string     `json:"error,omitempty"`
+}
+
+// s07Event is one Event about a Pod.
+type s07Event struct {
+	T       time.Time `json:"t"`
+	Type    string    `json:"type"`
+	Reason  string    `json:"reason"`
+	Message string    `json:"message"`
+	Count   int32     `json:"count,omitempty"`
+	Field   string    `json:"fieldPath,omitempty"`
+}
 
 // validateS07Keepalive refuses -partition-keepalive without a partition that
 // cuts off a member other than the master, and a value the kernel would
@@ -101,22 +128,97 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 		return refuse(fmt.Errorf("the partition does not name the master %s: its connection cannot be made again",
 			rec.Master))
 	}
+	// The step's bound covers an image pull on a node that has not pulled
+	// the faults' image yet; a wait cut short by the run's own deadline
+	// would say nothing about the container.
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < s07KeepaliveBound {
+		return refuse(fmt.Errorf("only %s of the run's time is left, and the keepalive step needs %s",
+			time.Until(deadline).Round(time.Second), s07KeepaliveBound))
+	}
 	if err := h.s07KeepaliveMembers(ctx, rec, members); err != nil {
 		return refuse(err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, s07KeepaliveBound)
+	stepCtx, cancel := context.WithTimeout(ctx, s07KeepaliveBound)
 	defer cancel()
-	got, err := netfault.ShortenKeepalive(ctx, p.Env, k, members, p.Target, *master, s07KeepaliveReconnect)
+	got, err := netfault.ShortenKeepalive(stepCtx, p.Env, k, members, p.Target, *master, s07KeepaliveReconnect)
 	rec.mu.Lock()
 	rec.Keepalive = &got
 	rec.mu.Unlock()
 	if err != nil {
+		diagnostics := h.s07KeepaliveDiagnostics(ctx, members)
+		rec.mu.Lock()
+		rec.KeepaliveDiagnostics = diagnostics
+		rec.mu.Unlock()
 		return err
 	}
 	rec.note("keepalive_shortened", fmt.Sprintf("%s: %d members; %s's connection %s to %s made again",
 		k.Time, len(got.Members), p.Target.Name, got.Reconnected.Local, got.Reconnected.Peer))
 	return nil
 }
+
+// s07DiagnosticsBound bounds the reads after a failed keepalive step, which
+// may run after the step's own context ended.
+const s07DiagnosticsBound = 30 * time.Second
+
+// s07KeepaliveDiagnostics reads, for each member Pod, the keepalive
+// container's status and the Events about the Pod, best-effort. The API
+// error of the container's addition, if any, is already in the step's
+// record.
+func (h *haRun) s07KeepaliveDiagnostics(ctx context.Context, members []netfault.Endpoint) []s07PodDiagnostic {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s07DiagnosticsBound)
+	defer cancel()
+	events := &corev1.EventList{}
+	eventsErr := h.Client.List(ctx, events, client.InNamespace(h.cfg.Namespace))
+	diagnostics := make([]s07PodDiagnostic, 0, len(members))
+	for _, e := range members {
+		d := s07PodDiagnostic{Pod: e.Pod}
+		pod := &corev1.Pod{}
+		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: e.Namespace, Name: e.Pod}, pod); err != nil {
+			d.Error = "pod unread: " + err.Error()
+		}
+		for _, s := range pod.Status.EphemeralContainerStatuses {
+			if s.Name != netfault.KeepaliveContainer {
+				continue
+			}
+			switch {
+			case s.State.Running != nil:
+				d.ContainerState = "running"
+			case s.State.Terminated != nil:
+				d.ContainerState, d.ContainerReason, d.ContainerMessage = "terminated", s.State.Terminated.Reason,
+					s.State.Terminated.Message
+			case s.State.Waiting != nil:
+				d.ContainerState, d.ContainerReason, d.ContainerMessage = "waiting", s.State.Waiting.Reason,
+					s.State.Waiting.Message
+			}
+		}
+		if d.ContainerState == "" && d.Error == "" {
+			d.ContainerState = "no status reported"
+		}
+		if eventsErr != nil {
+			d.Error = strings.TrimPrefix(d.Error+"; events unread: "+eventsErr.Error(), "; ")
+		}
+		for _, ev := range events.Items {
+			if ev.InvolvedObject.Name != e.Pod || string(ev.InvolvedObject.UID) != e.UID {
+				continue
+			}
+			t := ev.LastTimestamp.Time
+			if t.IsZero() {
+				t = ev.EventTime.Time
+			}
+			d.Events = append(d.Events, s07Event{T: t.UTC(), Type: ev.Type, Reason: ev.Reason, Message: ev.Message,
+				Count: ev.Count, Field: ev.InvolvedObject.FieldPath})
+		}
+		slices.SortFunc(d.Events, func(a, b s07Event) int { return a.T.Compare(b.T) })
+		if len(d.Events) > s07DiagnosticEvents {
+			d.Events = d.Events[len(d.Events)-s07DiagnosticEvents:]
+		}
+		diagnostics = append(diagnostics, d)
+	}
+	return diagnostics
+}
+
+// s07DiagnosticEvents is how many of a Pod's latest Events are kept.
+const s07DiagnosticEvents = 20
 
 // s07KeepaliveMembers checks, before a privileged container goes into any
 // member Pod, that the run namespace's guard passes and that each Pod is
@@ -125,7 +227,12 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 // the run's member identities: after the move of the master its own, else
 // LAB01's.
 func (h *haRun) s07KeepaliveMembers(ctx context.Context, rec *s07Record, members []netfault.Endpoint) error {
-	if err := h.guard(ctx); err != nil {
+	// The run namespace is created enforcing Pod Security privileged for a
+	// partition fault (prepareNamespace), before LAB01; read it again, so
+	// that a namespace that would refuse the privileged container blocks the
+	// step with its level instead of an API error.
+	var podSecurity map[string]string
+	if err := h.privilegedNamespace(ctx, "-partition-keepalive", &podSecurity); err != nil {
 		return fmt.Errorf("check the run namespace before adding the keepalive container: %w", err)
 	}
 	identities := rec.MembersBefore

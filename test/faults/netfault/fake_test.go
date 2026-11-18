@@ -94,6 +94,9 @@ type fakeNet struct {
 	// uploads sends 1460 bytes of TCP from a Pod's IP to an address each
 	// time that Pod's rules are read, as an upload under way would.
 	uploads map[string]string
+	// ephemeralState, when set for a container's name, is the state the
+	// kubelet reports for it instead of running.
+	ephemeralState map[string]corev1.ContainerState
 
 	ignoreInject     bool // the inject command succeeds and installs nothing
 	extraRule        bool // the inject command also installs a rule for another address
@@ -634,9 +637,12 @@ func testEnv(t *testing.T, n *fakeNet) Env {
 				if !slices.ContainsFunc(stored.Status.EphemeralContainerStatuses, func(s corev1.ContainerStatus) bool {
 					return s.Name == added.Name
 				}) {
+					state := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+					if s, ok := n.ephemeralState[added.Name]; ok {
+						state = s
+					}
 					stored.Status.EphemeralContainerStatuses = append(stored.Status.EphemeralContainerStatuses,
-						corev1.ContainerStatus{Name: added.Name, State: corev1.ContainerState{
-							Running: &corev1.ContainerStateRunning{}}})
+						corev1.ContainerStatus{Name: added.Name, State: state})
 				}
 			}
 			return c.Status().Update(ctx, stored)

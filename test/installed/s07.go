@@ -488,6 +488,9 @@ type s07Record struct {
 	// member's keepalive values before and after, and the cut-off member's
 	// connection to the master made again under them.
 	Keepalive *netfault.KeepaliveRecord `json:"partitionKeepalive,omitempty"`
+	// KeepaliveDiagnostics is what the run read about each member Pod when
+	// the keepalive step failed.
+	KeepaliveDiagnostics []s07PodDiagnostic `json:"partitionKeepaliveDiagnostics,omitempty"`
 	// mu serializes the observations and the record's writes, which the run's
 	// end can make while a step of the fault is still running; cut is the
 	// state in cut.json. tokens are the release tokens of the run's

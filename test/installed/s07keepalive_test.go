@@ -26,6 +26,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -115,7 +117,129 @@ func keepaliveRun(t *testing.T) (*haRun, *haFixture) {
 		}
 	}
 	h.rec.OperatorAfter.Pods = []imageIdentity{{Pod: testManagerPodName, UID: testManagerPodName}}
+	setRunPodSecurity(t, f, podSecurityPrivileged)
 	return h, f
+}
+
+// setRunPodSecurity makes the run namespace enforce level, as the run
+// creates it for a partition fault.
+func setRunPodSecurity(t *testing.T, f *haFixture, level string) {
+	t.Helper()
+	ctx := context.Background()
+	ns := &corev1.Namespace{}
+	err := f.store.Get(ctx, client.ObjectKey{Name: f.cfg.Namespace}, ns)
+	if apierrors.IsNotFound(err) {
+		ns.Name, ns.Labels = f.cfg.Namespace, map[string]string{podSecurityEnforce: level}
+		if err := f.store.Create(ctx, ns); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ns.Labels == nil {
+		ns.Labels = map[string]string{}
+	}
+	ns.Labels[podSecurityEnforce] = level
+	if err := f.store.Update(ctx, ns); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// kubeletFailed is the reason of the kubelet's Event about a container it
+// could not create.
+const kubeletFailed = "Failed"
+
+// waitingKeepalive plays the API server and the kubelet for a keepalive
+// container that is admitted and never starts: its status waits with the
+// kubelet's reason, and the kubelet reports an Event about it.
+func waitingKeepalive(f *haFixture, reason, message string) func(context.Context, client.Client, *corev1.Pod) error {
+	return func(ctx context.Context, c client.Client, pod *corev1.Pod) error {
+		stored := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(pod), stored); err != nil {
+			return err
+		}
+		stored.Spec.EphemeralContainers = pod.Spec.EphemeralContainers
+		if err := c.Update(ctx, stored); err != nil {
+			return err
+		}
+		stored.Status.EphemeralContainerStatuses = []corev1.ContainerStatus{{Name: netfault.KeepaliveContainer,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: message}}}}
+		if err := c.Status().Update(ctx, stored); err != nil {
+			return err
+		}
+		return f.store.Create(ctx, &corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: pod.Name + ".keepalive", Namespace: pod.Namespace},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace,
+				UID: pod.UID, FieldPath: "spec.ephemeralContainers{" + netfault.KeepaliveContainer + "}"},
+			Reason: kubeletFailed, Message: "Error: " + message, Type: corev1.EventTypeWarning,
+			LastTimestamp: metav1.Now()})
+	}
+}
+
+// The run namespace is created enforcing Pod Security privileged for a
+// partition fault, before LAB01; the keepalive step still reads it and adds
+// no container to a namespace that would refuse it.
+func TestShortenS07KeepaliveNeedsAPrivilegedNamespace(t *testing.T) {
+	h, f := keepaliveRun(t)
+	setRunPodSecurity(t, f, podSecurityRestricted)
+	f.ephemeralAdded = func(context.Context, client.Client, *corev1.Pod) error {
+		t.Error("a container was added")
+		return errors.New("refused")
+	}
+	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m1}
+	err := h.shortenS07Keepalive(context.Background(), rec, keepalivePartition(t, h))
+	if err == nil || !strings.Contains(err.Error(), "Pod Security") {
+		t.Fatalf("error %v, want the namespace's Pod Security level", err)
+	}
+	if ephemeralWrites(f) != 0 {
+		t.Error("a container was added")
+	}
+}
+
+// With less of the run's time left than the step's bound, the container
+// could not be given the time to pull and start: the step refuses at once
+// and says so, instead of a wait cut short.
+func TestShortenS07KeepaliveNeedsItsWholeBound(t *testing.T) {
+	h, f := keepaliveRun(t)
+	f.ephemeralAdded = func(context.Context, client.Client, *corev1.Pod) error {
+		t.Error("a container was added")
+		return errors.New("refused")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	rec := &s07Record{Variant: s07HigherRankIsolated, Master: m1}
+	err := h.shortenS07Keepalive(ctx, rec, keepalivePartition(t, h))
+	if err == nil || !strings.Contains(err.Error(), "left") {
+		t.Fatalf("error %v, want the run's time left", err)
+	}
+}
+
+// A container that is admitted and never starts blocks S07 with the
+// kubelet's reason, and record.json keeps each member Pod's container status
+// and the Events about the Pod, so that the next lab failure is explained.
+func TestRunS07RecordsWhyTheKeepaliveContainerDidNotStart(t *testing.T) {
+	h, f := keepaliveRun(t)
+	f.ephemeralAdded = waitingKeepalive(f, "CreateContainerConfigError",
+		"container's runAsUser breaks non-root policy")
+	result := h.runS07(context.Background())
+	if result.Result != evidence.Blocked || !strings.Contains(result.Reason, "CreateContainerConfigError") {
+		t.Fatalf("result %s %q", result.Result, result.Reason)
+	}
+	rec := readS07Record(t, h)
+	i := slices.IndexFunc(rec.KeepaliveDiagnostics, func(d s07PodDiagnostic) bool { return d.Pod == m0 })
+	if i < 0 {
+		t.Fatalf("diagnostics %+v", rec.KeepaliveDiagnostics)
+	}
+	d := rec.KeepaliveDiagnostics[i]
+	if d.ContainerState != "waiting" || d.ContainerReason != "CreateContainerConfigError" ||
+		!strings.Contains(d.ContainerMessage, "non-root") {
+		t.Errorf("container status %+v", d)
+	}
+	if len(d.Events) != 1 || d.Events[0].Reason != kubeletFailed || !strings.Contains(d.Events[0].Message, "non-root") {
+		t.Errorf("events %+v", d.Events)
+	}
 }
 
 func keepalivePartition(t *testing.T, h *haRun) *netfault.Partition {

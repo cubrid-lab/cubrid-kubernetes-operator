@@ -1106,7 +1106,20 @@ system` for the same write. The run namespace already enforces Pod
 Security `privileged` for the partition, and adding an ephemeral container
 needs no permission beyond the partition's own. The Pod sysctls of the
 member Pods are not an option for this test: the Operator's StatefulSet
-owns that spec, and changing it would restart the members. The container
+owns that spec, and changing it would restart the members. Like
+`netfault`, it runs as root with `runAsNonRoot: false`: the member Pods set
+`runAsNonRoot` at Pod level, and a root container without that override is
+refused by the kubelet with `CreateContainerConfigError`. That was the
+cause of a blocked lab run on 2026-11-18 UTC, whose step ended only with
+`the netsysctl container did not start: no time is left for another
+observation`. A container the kubelet refuses that way now ends the step at
+once with the kubelet's reason and message, and a container that is still
+waiting at the bound is reported with its last waiting reason. When the
+step fails, `partitionKeepaliveDiagnostics` in `record.json` keeps each
+member Pod's `netsysctl` status (state, reason, message) and its latest
+Events. The step also reads the run namespace again and refuses one that
+does not enforce Pod Security `privileged`. It also refuses to start when
+less of the run's `-timeout` is left than its 7-minute bound. The container
 only sleeps, for the rest of the step's bound plus a minute (15 minutes at
 most), so the privileged process ends long before the Pod does; an
 ephemeral container cannot be removed from a Pod's spec, so the stopped
