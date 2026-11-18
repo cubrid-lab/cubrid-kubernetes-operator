@@ -40,6 +40,36 @@ func useCapture(t *testing.T, read pairCaptureFunc) {
 	t.Cleanup(func() { pairCapture.Store(previous) })
 }
 
+// A panic in the read is recorded as its error and the suite goes on.
+func TestPanicInTheReadIsRecorded(t *testing.T) {
+	ledger := freshLedger(t)
+	dir := t.TempDir()
+	useEvidenceDir(t, dir)
+	useCapture(t, func(context.Context, string, string, string) pairServerState {
+		panic(strings.Repeat("boom", 500))
+	})
+	run, _ := cannedKubectl(t, s00Answer{out: lostSession})
+	_, _ = runSQL(csqlRunner(context.Background(), "ns", "hab-1", "appdb", run), "SELECT 1;")
+	if !ledger.waitForCaptures(5 * time.Second) {
+		t.Fatal("the read did not finish")
+	}
+	records := lostRecords(t, dir)
+	if len(records) != 1 || !strings.Contains(records[0].ServerReadError, "panicked") ||
+		len(records[0].ServerReadError) > serverLogLineWidth {
+		t.Errorf("the records are %+v", records)
+	}
+}
+
+// The time and uptime are read before anything slow, and the log after the
+// identity, so that the age of the server is measured as close to the pair as
+// the exec allows.
+func TestServerAgeScriptReadsTheTimeFirst(t *testing.T) {
+	if !strings.HasPrefix(serverAgeScript, `echo "now `) || !strings.Contains(serverAgeScript, `echo "uptime `) ||
+		strings.Index(serverAgeScript, "uptime") > strings.Index(serverAgeScript, "changemode") {
+		t.Errorf("the script is %s", serverAgeScript)
+	}
+}
+
 // The log tail of a record keeps only the last lines, cuts the long ones and
 // drops blank ones, so that the record of one pair stays small.
 func TestServerLogTailIsBounded(t *testing.T) {

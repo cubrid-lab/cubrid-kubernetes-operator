@@ -72,15 +72,17 @@ type lostSessionRecord struct {
 	Identity sqlcheck.IdentityResult `json:"identity"`
 	// ReRead says how the read made once more answered.
 	ReRead string `json:"reRead"`
-	// ServerAtPair is cub_server's identity ("cub_server <pid> <start time in
-	// clock ticks since boot>" and "ha_mode <mode>"), then "uptime <seconds>"
-	// and "clk_tck <ticks per second>" of the member, read in the background
-	// soon after the pair, as the scripts printed them. It is one reading, not
-	// a comparison with the start of the step: csql calls are made from many
-	// places that know nothing of a step's start. The server's age at the read
-	// is uptime - start/clk_tck. If it is less than ServerReadAt - At, the
-	// server started after the pair, so it restarted. "ha_mode ?" is expected
-	// on a standalone member, which has no HA mode.
+	// ServerAtPair is what the member printed in the background soon after the
+	// pair: "now <epoch seconds>" and "uptime <seconds>" of the member, read
+	// together first, then cub_server's identity ("cub_server <pid> <start
+	// time in clock ticks since boot>" and "ha_mode <mode>"), then "clk_tck
+	// <ticks per second>". It is one reading, not a comparison with the start
+	// of the step: csql calls are made from many places that know nothing of a
+	// step's start. The server's age at "now" is uptime - start/clk_tck. If it
+	// is less than now - At, the server started after the pair, so it
+	// restarted. A restart within the latency of the exec (about 0.2 s) after
+	// the pair can still be missed. "ha_mode ?" is expected on a standalone
+	// member, which has no HA mode.
 	ServerAtPair []string `json:"serverAtPair,omitempty"`
 	// ServerReadAt is when ServerAtPair was read.
 	ServerReadAt time.Time `json:"serverReadAt,omitzero"`
@@ -101,12 +103,15 @@ const (
 	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
 		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
 		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
-	// serverAgeScript is the identity script with the member's uptime and clock
-	// rate, from which the server's age follows.
-	serverAgeScript = sqlcheck.HAServerIdentityScript +
-		`; echo "uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; echo "clk_tck $(getconf CLK_TCK 2>/dev/null)"`
-	// pairCaptureWait bounds the wait for reads still running when the suite ends.
-	pairCaptureWait = 60 * time.Second
+	// serverAgeScript prints the member's time and uptime from one moment, then
+	// the identity script, then the clock rate, from which the server's age
+	// follows. The time comes first so that nothing slow runs before it.
+	serverAgeScript = `echo "now $(date +%s.%N 2>/dev/null)"; echo "uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; ` +
+		sqlcheck.HAServerIdentityScript + `; echo "clk_tck $(getconf CLK_TCK 2>/dev/null)"`
+	// pairCaptureWait bounds the wait for reads still running when the suite
+	// ends. It stays well inside the grace period of the suite (1 minute), so
+	// that the verdict of concludeRun is not lost.
+	pairCaptureWait = 8 * time.Second
 )
 
 // pairCapture reads a member's server state when csql printed the pair. It is
@@ -162,16 +167,18 @@ func readServerState(ctx context.Context, namespace, pod, database string) pairS
 			"bash", "-c", script, database))
 	}
 	var problems []string
+	// The identity is read first: the age rule is only as good as the time
+	// between the pair and this read.
 	state.at = time.Now().UTC()
+	if out, err := read(serverAgeScript, 2*identityTimeout); err != nil {
+		problems = append(problems, "identity: "+err.Error())
+	} else {
+		state.identity = boundLines(out, 12, serverLogLineWidth)
+	}
 	if out, err := read(serverLogTailScript, identityTimeout); err != nil {
 		problems = append(problems, "server log: "+err.Error())
 	} else {
 		state.logTail = boundLines(out, serverLogTailLines, serverLogLineWidth)
-	}
-	if out, err := read(serverAgeScript, 2*identityTimeout); err != nil {
-		problems = append(problems, "identity: "+err.Error())
-	} else {
-		state.identity = boundLines(out, 10, serverLogLineWidth)
 	}
 	state.err = cut(strings.Join(problems, "; "), serverLogLineWidth)
 	return state
@@ -192,7 +199,10 @@ func (l *lostSessionLedger) attach(record *lostSessionRecord, state pairServerSt
 // capture reads the server state of a member in the background and attaches it
 // to record when it is done, so that the call that printed the pair is not
 // delayed: some checks are timed. The read does not end with the spec's
-// context, which may end first; it is bounded by its own timeouts.
+// context, which may end first; it is bounded by its own timeouts (at most
+// 30 s). It can therefore outlive its spec and send a read-only
+// "cubrid changemode" to the member during the next one. A panic in it is
+// recorded as the read's error, not raised in a goroutine of the suite.
 func (l *lostSessionLedger) capture(ctx context.Context, record *lostSessionRecord, namespace, pod, database string) {
 	read := pairCapture.Load()
 	if read == nil || record == nil {
@@ -202,6 +212,12 @@ func (l *lostSessionLedger) capture(ctx context.Context, record *lostSessionReco
 	l.pending.Add(1)
 	go func() {
 		defer l.pending.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				l.attach(record, pairServerState{at: time.Now().UTC(),
+					err: cut(fmt.Sprintf("the read of the server state panicked: %v", r), serverLogLineWidth)})
+			}
+		}()
 		l.attach(record, (*read)(ctx, namespace, pod, database))
 	}()
 }
