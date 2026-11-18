@@ -1716,6 +1716,24 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	if d.Quarantine != nil {
 		r.holdQuarantine(cluster, d.Quarantine)
 	}
+	r.reportWriteQuarantineChange(ctx, cluster, d)
+	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
+		// steps.err holds only a failed Pod or Node read here.
+		d.Quarantine != nil || steps.err != nil || len(d.Pending) > 0 ||
+			(len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
+	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
+		steps.err = errors.Join(steps.err, err)
+	}
+	if q := cluster.Status.WriteQuarantine; q != nil {
+		r.holdQuarantine(cluster, q)
+	}
+	return steps
+}
+
+// reportWriteQuarantineChange emits events for starts, revisions and releases.
+// It does not decide the quarantine or change the Broker enforcement path.
+func (r *CubridClusterReconciler) reportWriteQuarantineChange(ctx context.Context,
+	cluster *databasev1alpha1.CubridCluster, d quarantineDecision) {
 	log := logf.FromContext(ctx)
 	switch d.Change {
 	case quarantineStarted, quarantineRevised:
@@ -1773,17 +1791,6 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 				quarantineReleaseInterval))
 		}
 	}
-	steps.retry = quarantineRetry(d.Released != nil, releaseRetry,
-		// steps.err holds only a failed Pod or Node read here.
-		d.Quarantine != nil || steps.err != nil || len(d.Pending) > 0 ||
-			(len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
-	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
-		steps.err = errors.Join(steps.err, err)
-	}
-	if q := cluster.Status.WriteQuarantine; q != nil {
-		r.holdQuarantine(cluster, q)
-	}
-	return steps
 }
 
 // ownExemption records that this reconciler wrote the manual release that
