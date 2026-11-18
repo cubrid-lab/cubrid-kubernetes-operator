@@ -240,6 +240,10 @@ func (h *haRun) s07KeepaliveMembers(ctx context.Context, rec *s07Record, members
 		identities = rec.MasterMove.Members
 	}
 	for _, e := range members {
+		if e.Namespace != h.cfg.Namespace {
+			return fmt.Errorf("member Pod %s is in namespace %s, not the run namespace %s", e.Pod, e.Namespace,
+				h.cfg.Namespace)
+		}
 		pod, err := h.s07RunMember(ctx, e.Pod)
 		if err != nil {
 			return err

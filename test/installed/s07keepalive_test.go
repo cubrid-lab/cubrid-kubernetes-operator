@@ -63,8 +63,8 @@ func TestValidateS07PartitionKeepalive(t *testing.T) {
 	}
 	documented := keepaliveConfig(t)
 	documented.DataCheckWithin = 2 * time.Minute
-	if got := documented.s07StepBounds(); got != 41*time.Minute {
-		t.Errorf("the documented command's own bounds are %s, the guide says 41m", got)
+	if got := documented.s07StepBounds(); got != 41*time.Minute+20*time.Second {
+		t.Errorf("the documented command's own bounds are %s, the guide says 41m20s", got)
 	}
 	cfg.Timeout = cfg.s07StepBounds()
 	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "-timeout") {
@@ -293,6 +293,11 @@ func TestShortenS07KeepaliveEntersOnlyTheRunsOwnMembers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "does not belong to the HA StatefulSet"},
+		// A member's name in a shared namespace, such as the Operator's,
+		// names another Pod, which is never entered.
+		"a Pod in another namespace": {func(_ *haRun, _ *haFixture, p *netfault.Partition, _ *s07Record) {
+			p.Cuts[1].Peer.Namespace = "cubrid-operator-system"
+		}, "not the run namespace"},
 		"a Pod with another UID than the partition names": {func(_ *haRun, _ *haFixture, p *netfault.Partition,
 			_ *s07Record) {
 			p.Cuts[1].Peer.UID = "stale"

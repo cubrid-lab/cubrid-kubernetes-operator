@@ -1152,7 +1152,25 @@ says so). Addresses are compared as IPv4 also when `ss` lists them
 IPv4-mapped.
 
 The values go away with the Pods' network namespaces when the run
-namespace is deleted. `partitionKeepalive` in `record.json` keeps the
+namespace is deleted, and only then: nothing writes the old values back.
+After a partial failure, such as a blocked step, a cancelled run or a later
+failure of the cut, the members already set keep the shortened keepalive
+until the run's cleanup deletes their Pods; `record.json` names those
+members with their values after the write. If the cleanup itself fails,
+they last as long as those Pods.
+
+The option is a disruptive action of its own, before the partition: it
+writes three sysctls that apply to every new connection in each member
+Pod, and resets one established connection of the cut-off member's log
+copy. A lab campaign announcement for a run with `-partition-keepalive`
+must name both, next to the network cut. The run is not an unmodified
+baseline of the partition, and a shorter recovery seen with it is not a
+verified benefit until it is compared with runs without the option.
+
+`partitionKeepalive` in `record.json` keeps the version of `ss` it used
+(`ssVersion`; the pinned image has iproute2 6.15.0, which prints a timer
+under ten seconds as `4.304sec`, where iproute2 before 6.11 printed
+`4.304ms`; both are read as seconds), the
 values asked for, each member's kernel release (`kernelRelease`) and values
 before and after with the time they were seen set, the cut-off member's
 connections to the members' port before the reset, those `ss -K` reported
@@ -1168,7 +1186,7 @@ The option is refused without a partition fault and with
 adds 7 minutes to the steps' bounds in the `-timeout` check: 4 to add the
 container, which may pull its image, and 3 for the connection. With the
 10-minute move, a 10-minute settle and the other defaults, the variant's own
-bounds are 41 minutes, plus LAB01:
+bounds are 41 minutes and 20 seconds, plus LAB01:
 
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \

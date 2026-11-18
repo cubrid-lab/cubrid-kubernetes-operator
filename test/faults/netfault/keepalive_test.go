@@ -118,6 +118,8 @@ func (s *fakeSysctl) kubectl(ctx context.Context, args ...string) (string, error
 	switch op[2] {
 	case "addr":
 		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\n", ns.ip), nil
+	case "ss-version":
+		return "ss utility, iproute2-6.15.0\n", nil
 	case "kernel":
 		return ns.kernel + "\n", nil
 	case "keepalive-read":
@@ -254,6 +256,9 @@ func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *te
 		t.Errorf("reconnected %+v at %v, unmet %q", got, rec.ReconnectedAt, rec.Unmet)
 	}
 	// The connection is told apart by its addresses only: the record says so.
+	if rec.SSVersion != "ss utility, iproute2-6.15.0" {
+		t.Errorf("ss version %q", rec.SSVersion)
+	}
 	if !strings.Contains(rec.Note, "addresses") || !strings.Contains(rec.Note, "process") {
 		t.Errorf("note %q", rec.Note)
 	}
@@ -448,7 +453,36 @@ func TestKeepaliveValidate(t *testing.T) {
 	}
 }
 
-// ss prints a timer's time left in minutes, seconds and milliseconds.
+// The pinned netshoot image has iproute2 6.15.0 (`ss -V`: "ss utility,
+// iproute2-6.15.0"; apk iproute2-ss-6.15.0-r0). Since 6.11 it prints a timer
+// under ten seconds with milliseconds as <s>.<ms>sec; before 6.11 the same
+// value was printed as <s>.<ms>ms (Debian #1054044), which still means
+// seconds. The lines below are its real output, read locally with Docker on
+// 2026-11-18 UTC from sockets with keepalive times of 1, 5, 15, 65 and 7200
+// seconds; the lab printed 119min and 27sec in the same format.
+func TestParseSocketsFromThePinnedImage(t *testing.T) {
+	out := "0      0      127.0.0.1:44130 127.0.0.1:1523 timer:(keepalive,880ms,0)\n" +
+		"0      0      127.0.0.1:44212 127.0.0.1:1523 timer:(keepalive,4.304sec,0)\n" +
+		"0      0      127.0.0.1:35330 127.0.0.1:1523 timer:(keepalive,14sec,0)   \n" +
+		"0      0      127.0.0.1:35332 127.0.0.1:1523 timer:(keepalive,1min4sec,0)\n" +
+		"0      0      127.0.0.1:40742 127.0.0.1:1523 timer:(keepalive,119min,0)\n"
+	sockets, err := parseSockets(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []float64{0.88, 4.304, 14, 64, 119 * 60}
+	if len(sockets) != len(want) {
+		t.Fatalf("sockets %+v", sockets)
+	}
+	for i, sk := range sockets {
+		if sk.KeepaliveUnread || sk.KeepaliveLeftSeconds != want[i] {
+			t.Errorf("socket %d: %+v, want %v seconds left", i, sk, want[i])
+		}
+	}
+}
+
+// ss prints a timer's time left in minutes, seconds and milliseconds; the
+// legacy <s>.<ms>ms form of iproute2 before 6.11 means seconds.
 func TestParseSockets(t *testing.T) {
 	out := "0      0      10.42.3.189:48794 10.42.2.52:1523 timer:(keepalive,105min,0)\n" +
 		"0      0      10.42.3.189:48795 10.42.2.52:1523 timer:(keepalive,1min29sec,0)\n" +

@@ -197,8 +197,9 @@ func (c HAConfig) validateS07() error {
 // s07StepBounds is the longest S07 may take after LAB01 by the bounds of its
 // own steps: the move of the master for higher-rank-isolated only, the
 // shortened keepalive of -partition-keepalive, the settle wait of
-// -partition-settle, and the release's steps with -partition-manual-release. When the cluster does not settle, the rows
-// snapshot and the engine log capture take the data check's place.
+// -partition-settle, and the release's steps with -partition-manual-release.
+// When the cluster does not settle, the rows snapshot and the engine log
+// capture take the data check's place.
 func (c HAConfig) s07StepBounds() time.Duration {
 	bounds := s07PrepareBound + c.PartitionHold + s07ConfirmSlack + s07CleanupBound + c.s07Settle() +
 		max(c.DataCheckWithin, s07SnapshotBound+s07EngineLogCaptureBound()) + c.s07ReleaseBounds()

@@ -149,6 +149,7 @@ type KeepaliveRecord struct {
 	ReconnectedAt *time.Time        `json:"reconnectedSeenAt,omitempty"`
 	Unmet         string            `json:"unmet,omitempty"`
 	Note          string            `json:"note"`
+	SSVersion     string            `json:"ssVersion,omitempty"`
 }
 
 // ShortenKeepalive sets k in each member's network namespace and reads the
@@ -202,6 +203,11 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	port := strconv.Itoa(master.Port)
 	toMaster := normalAddr(master.IP) + ":" + port
+	version, err := shellIn(ctx, env, target, KeepaliveContainer, ": netfault ss-version\nss -V")
+	if err != nil {
+		return fail(fmt.Errorf("read the ss version: %w", err))
+	}
+	rec.SSVersion = strings.TrimSpace(version)
 	sockets, err := readSockets(ctx, env, target, master.Port)
 	if err != nil {
 		return fail(err)
@@ -409,8 +415,11 @@ func readSockets(ctx context.Context, env Env, e Endpoint, port int) ([]Socket, 
 
 var (
 	keepaliveTimer = regexp.MustCompile(`timer:\(keepalive,([^,]*),\d+\)`)
-	// ss prints a timer's time left as [<m>min][<s>sec | <s>.<ms>ms | <ms>ms].
-	ssTime = regexp.MustCompile(`^(?:(\d+)min)?(?:(\d+)sec|(\d+)\.(\d{3})ms|(\d+)ms)?$`)
+	// ss prints a timer's time left as [<m>min][<s>sec | <s>.<ms>sec | <ms>ms]
+	// since iproute2 6.11, which the pinned image has (6.15.0); before 6.11
+	// it printed <s>.<ms>ms for <s>.<ms>sec (Debian #1054044). Both mean
+	// seconds and milliseconds.
+	ssTime = regexp.MustCompile(`^(?:(\d+)min)?(?:(\d+)sec|(\d+)\.(\d{3})(?:sec|ms)|(\d+)ms)?$`)
 )
 
 // parseSockets reads `ss -tnoH state established`: receive and send queue,
