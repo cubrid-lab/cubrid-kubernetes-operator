@@ -324,6 +324,56 @@ issue, reviewer, claim, provenance, durable evidence and review trigger are
 identified, and document the **keep/archive/remove** choice. Actual deletion
 requires a separate, path-scoped, reviewed change with preserved proof.
 
+## v0.1 scope intake freeze (effective 2026-11-18)
+
+The maintainers directed a **feature and speculative design intake freeze** for
+v0.1 from 2026-11-18; see [the decision on #954](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/954#issuecomment-6971118767).
+The 2026-11-29 recovery/safety Go/No-Go checkpoint is not a permission to
+start new v0.1 features. The 2026-12-27 release target remains conditional on
+the existing mandatory evidence. This is an **execution-priority constraint**,
+not a release-contract waiver.
+
+Before assigning, implementing or promoting new work onto the v0.1 critical
+path, the maintainer and implementer must answer in the **existing owning
+issue**:
+
+1. Which **already accepted v0.1 scenario, safety/security invariant or
+   release gate** is currently blocked?
+2. What **observed failure, source evidence or missing required verdict**
+   proves the blocker? Distinguish an untested hypothesis from a reproduced
+   defect.
+3. What is the **smallest sufficient change** and current owner? Can the
+   current issue or existing verification harness cover it without another
+   child issue, new framework or broad refactor?
+4. Which **specific regression, real SQL/VM run or independent review**
+   establishes completion, and what remains outside v0.1?
+
+**Proceed** with release-blocking correctness and security fixes, already
+required rejoin/rebuild and backup/restore, required scenarios and repetitions,
+candidate provenance, minimum runbook/release corrections and safe evidence
+retention. A hazardous runbook instruction may be made conservative while its
+replacement awaits independent verification.
+
+**Defer implementation** of new CRD/API/features, architecture redesign,
+optional POCs, new diagnostic/CI/testing frameworks, non-blocking cleanup,
+and post-v0.1 research. Keep a genuinely new safety finding visible and
+triaged; a new issue or POC does **not** automatically become an approved
+v0.1 implementation task. If an existing issue owns the behavior, update that
+issue rather than opening duplicates. A proposed scope exception needs an
+explicit maintainer decision and a link to the blocked acceptance gate.
+
+Do not weaken any existing required scenario, measured time/data oracle,
+acknowledged-write preservation check, managed write-quarantine boundary,
+actual VM failure, 24-hour soak, independent runbook reproduction, or
+independent human review/final-head CI. A blocked mandatory requirement
+produces a **No-Go** or a separately reviewed explicit support-scope decision,
+never a silently accepted failure. Do not delete historical negative evidence
+to reduce PR size; archival/removal follows the provenance rules above.
+
+This section governs new work selection alongside the normal small-PR,
+issue-assignment and review rules below; it does not transfer an owner's task
+or authorize the agent to merge its own unreviewed PR.
+
 ## Two-maintainer coordination
 
 - Each maintainer has one implementation issue in progress by default.
