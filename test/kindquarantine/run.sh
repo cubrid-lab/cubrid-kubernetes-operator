@@ -124,8 +124,38 @@ preflight() {
 		exit 2
 		;;
 	esac
+	# The context name alone can be renamed: every node must also be a Kind node.
+	local providers
+	providers=$(k get nodes -o 'jsonpath={range .items[*]}{.spec.providerID}{"\n"}{end}')
+	if [ -z "$providers" ] || grep -qv '^kind://' <<<"$providers"; then
+		echo "refusing context $ctx: a node's providerID does not start with kind://" >&2
+		exit 2
+	fi
 	note "context $ctx, manager $MANAGER_IMG, Instance Manager $IM_IMG, source $(git -C "$REPO" rev-parse HEAD)"
+	note "script sha256 $(sha256sum "$0" | cut -d' ' -f1); uncommitted changes: $(git -C "$REPO" status --porcelain | tr '\n' ' ')"
 	k get nodes -o wide >"$EVIDENCE_DIR/nodes.txt"
+}
+
+# Set while a fault the script made is in place, for cleanup.
+SILENCED=""
+DENIED=""
+SCOPED=""
+WATCHER=""
+
+stop_watcher() {
+	[ -n "$WATCHER" ] && kill "$WATCHER" 2>/dev/null
+	WATCHER=""
+}
+
+# cleanup runs on every exit: it removes what is still in place, so that a
+# stopped or failed run does not leave the cluster silenced, refusing the
+# Operator's writes or with a namespace-scoped manager.
+cleanup() {
+	trap - EXIT INT TERM
+	stop_watcher
+	[ -n "$SILENCED" ] && heal "$SILENCED"
+	[ -n "$DENIED" ] && allow_networkpolicy_writes
+	[ -n "$SCOPED" ] && unscope_operator
 }
 
 deploy_operator() {
@@ -268,6 +298,7 @@ silence() {
 	ip=$(k -n "$OP_NS" get pod "$op" -o 'jsonpath={.status.podIP}')
 	attach_netfault || return 1
 	note "silencing $SILENT towards the Operator Pod $op ($ip)"
+	SILENCED=$1
 	k -n "$NS" exec "$SILENT" -c netfault -- sh -c \
 		"iptables -w 5 -N QC_SILENT 2>/dev/null; iptables -w 5 -F QC_SILENT && \
 		 iptables -w 5 -A QC_SILENT -d $ip/32 -j DROP && \
@@ -275,12 +306,19 @@ silence() {
 		 iptables-save -c -t filter" >"$EVIDENCE_DIR/$1-silence-rules.txt" 2>&1
 }
 
+# heal removes the drop. It first saves the rules with their counters, and
+# sets DROPPED to the packets the drop discarded: 0 means the member was never
+# silent towards the acting manager, so its check did not take place.
 heal() {
 	note "removing the drop in $SILENT"
 	k -n "$NS" exec "$SILENT" -c netfault -- sh -c \
 		"iptables-save -c -t filter; while iptables -w 5 -D OUTPUT -j QC_SILENT 2>/dev/null; do :; done; \
 		 iptables -w 5 -F QC_SILENT 2>/dev/null; iptables -w 5 -X QC_SILENT 2>/dev/null; true" \
 		>"$EVIDENCE_DIR/$1-heal-rules.txt" 2>&1
+	SILENCED=""
+	DROPPED=$(sed -n 's/^\[\([0-9]*\):[0-9]*\] -A QC_SILENT -d .* -j DROP$/\1/p' "$EVIDENCE_DIR/$1-heal-rules.txt" | head -1)
+	DROPPED=${DROPPED:-0}
+	result "$1: packets dropped towards the manager while silenced: $DROPPED"
 }
 
 # quarantine_state prints one line for the record of each poll.
@@ -300,8 +338,11 @@ watch_quarantine() {
 # checks what enforces it.
 expect_quarantine() {
 	local check=$1 silenced=$2 ok=0 started
-	if wait_for "$check: WriteQuarantinedMemberUnverified in status" "$QUARANTINE_LIMIT" \
-		"[ \"\$(field '{.status.writeQuarantine.reason}')\" = WriteQuarantinedMemberUnverified ]"; then
+	# Only a quarantine that started at or after the silence counts: one from
+	# before it, such as a restarted manager's first passes, shows nothing.
+	if wait_for "$check: WriteQuarantinedMemberUnverified in status, started after the silence" "$QUARANTINE_LIMIT" \
+		"[ \"\$(field '{.status.writeQuarantine.reason}')\" = WriteQuarantinedMemberUnverified ] && \
+		 [ \"\$(date -u -d \"\$(field '{.status.writeQuarantine.startTime}')\" +%s)\" -ge $silenced ]"; then
 		started=$(field '{.status.writeQuarantine.startTime}')
 		result "$check: quarantine started at $started, $(($(date -u -d "$started" +%s) - silenced))s after the silence"
 	else
@@ -438,6 +479,7 @@ spec:
       matchLabels: {kubernetes.io/metadata.name: $NS}
 EOF
 	sleep 5
+	DENIED=1
 	k -n "$NS" patch cubridcluster "$CLUSTER" --type=json -p \
 		'[{"op":"add","path":"/spec/networkPolicy/clients/-","value":{"namespaceSelector":{"matchLabels":{"qc-extra-client":"true"}}}}]' \
 		>>"$LOG" 2>&1
@@ -447,20 +489,29 @@ allow_networkpolicy_writes() {
 	note "removing the admission policy and the extra Broker client"
 	k delete validatingadmissionpolicybinding,validatingadmissionpolicy qc-deny-operator-networkpolicy-writes \
 		--ignore-not-found >>"$LOG" 2>&1
-	k -n "$NS" patch cubridcluster "$CLUSTER" --type=json -p '[{"op":"remove","path":"/spec/networkPolicy/clients/1"}]' \
-		>>"$LOG" 2>&1
+	if [ -n "$DENIED" ]; then
+		k -n "$NS" patch cubridcluster "$CLUSTER" --type=json -p '[{"op":"remove","path":"/spec/networkPolicy/clients/1"}]' \
+			>>"$LOG" 2>&1
+	fi
+	DENIED=""
 }
 
-denials() { k -n "$OP_NS" logs "deployment/$OP_DEPLOY" -c manager --tail=-1 2>/dev/null | grep -c 'qc-deny-operator-networkpolicy-writes'; }
+# denials counts the refused NetworkPolicy writes. Each one is logged twice,
+# as "Failed to write an object" and as controller-runtime's "Reconciler
+# error"; only the first is counted, so the count is one per refused pass.
+denials() {
+	k -n "$OP_NS" logs "deployment/$OP_DEPLOY" -c manager --tail=-1 2>/dev/null |
+		grep 'qc-deny-operator-networkpolicy-writes' | grep -c 'Failed to write an object'
+}
 
 # stop_child_write_denied undoes what child-write-denied set up when it stops
 # early, so that the next check starts without its faults.
 stop_child_write_denied() {
-	heal child-write-denied
+	stop_watcher
+	[ -n "$SILENCED" ] && heal child-write-denied
 	allow_networkpolicy_writes
 	k -n "$STORE_NS" logs sql-session >"$EVIDENCE_DIR/child-write-denied/sql-session.jsonl" 2>&1
 	k -n "$STORE_NS" delete pod sql-session --ignore-not-found --wait=false >>"$LOG" 2>&1
-	[ -n "${WATCHER:-}" ] && kill "$WATCHER" 2>/dev/null
 	wait_for "child-write-denied: cluster settled after stopping early" 600 settled
 }
 
@@ -519,11 +570,22 @@ check_child_write_denied() {
 	k -n "$STORE_NS" exec sql-session -- touch /tmp/stop >>"$LOG" 2>&1
 	sleep 5
 	k -n "$STORE_NS" logs sql-session >"$EVIDENCE_DIR/$c/sql-session.jsonl" 2>&1
-	kill "$WATCHER" 2>/dev/null
+	stop_watcher
 	snapshot "$c/4-settled"
 	summarize_sql "$c"
-	[ "$ok" = 0 ] && result "$c: PASS" || result "$c: FAIL"
-	return "$ok"
+	verdict "$c" "$ok"
+}
+
+# verdict prints a check's outcome. A drop that discarded no packet means the
+# member never went silent towards the acting manager: the check did not take
+# place, whatever the status showed.
+verdict() {
+	if [ "${DROPPED:-0}" = 0 ]; then
+		result "$1: BLOCKED the drop discarded no packet, so $SILENT was never silent towards the acting manager"
+		return 1
+	fi
+	[ "$2" = 0 ] && result "$1: PASS" || result "$1: FAIL"
+	return "$2"
 }
 
 summarize_sql() {
@@ -542,6 +604,7 @@ summarize_sql() {
 # docs/operations/watch-namespace.md describes. Nodes are then unreadable.
 scope_operator() {
 	note "binding the manager to the cluster's namespace only"
+	SCOPED=1
 	k apply -f - >>"$LOG" 2>&1 <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -570,6 +633,17 @@ node_read_refusals() {
 		grep 'Fenced no member by an out-of-service taint' | grep -ci forbidden
 }
 
+# unscope_operator restores the cluster-wide manager that deploy_operator
+# installed: make deploy brings back the ClusterRoleBinding and the
+# Deployment's arguments without --watch-namespace.
+unscope_operator() {
+	note "restoring the cluster-wide manager"
+	k -n "$NS" delete rolebinding qc-manager --ignore-not-found >>"$LOG" 2>&1
+	(cd "$REPO" && make deploy IMG="$MANAGER_IMG") >>"$LOG" 2>&1
+	k -n "$OP_NS" rollout status "deployment/$OP_DEPLOY" --timeout=5m >>"$LOG" 2>&1
+	SCOPED=""
+}
+
 check_node_read_forbidden() {
 	local c=node-read-forbidden silenced ok=0
 	note "=== $c (#948)"
@@ -586,6 +660,7 @@ check_node_read_forbidden() {
 	snapshot "$c/1-before-silence"
 	watch_quarantine "$c"
 	silence "$c" || {
+		stop_watcher
 		result "$c: BLOCKED could not silence $SILENT"
 		return 1
 	}
@@ -606,15 +681,16 @@ check_node_read_forbidden() {
 	heal "$c"
 	expect_release "$c" || ok=1
 	wait_for "$c: cluster settled after the release" 600 settled || ok=1
-	kill "$WATCHER" 2>/dev/null
+	stop_watcher
 	snapshot "$c/3-settled"
-	[ "$ok" = 0 ] && result "$c: PASS" || result "$c: FAIL"
-	return "$ok"
+	verdict "$c" "$ok"
 }
 
 main() {
 	local rc=0
 	preflight
+	trap cleanup EXIT
+	trap 'exit 130' INT TERM
 	deploy_operator || {
 		result "BLOCKED the manager could not be deployed"
 		exit 1

@@ -57,10 +57,13 @@ KUBECONFIG="$PWD/qc.kubeconfig" MANAGER_IMG=example.com/cubrid-kubernetes-operat
 kind delete cluster --name quarantine-checks
 ```
 
-The script refuses a kubectl context whose name does not start with `kind-`
-and an `EVIDENCE_DIR` that is not empty. `CHECKS` selects the checks (both by
-default, `child-write-denied` first, because `node-read-forbidden` leaves the
-manager namespace-scoped). It needs the images above on the Kind node; the
+The script refuses an `EVIDENCE_DIR` that is not empty, and a kubectl
+context whose name does not start with `kind-` or that has a node whose
+`providerID` does not start with `kind://`. `CHECKS` selects the checks (both
+by default, `child-write-denied` first). When the script exits, for whatever
+reason, it removes whatever is still in place: the drop, the admission
+policy and the extra Broker client. It also restores the cluster-wide manager
+that `node-read-forbidden` scoped to the namespace. It needs the images above on the Kind node; the
 SQL client installs `pycubrid` from PyPI. With Docker's containerd image
 store, `kind load` can fail for the multi-platform helper images with
 `content digest ... not found`; `docker save --platform linux/amd64 <image> |
@@ -73,9 +76,14 @@ These are manual checks: no CI job runs them.
 
 `EVIDENCE_DIR` receives `results.txt` (one line per measured result,
 `PASS`/`FAIL`/`BLOCKED`), `run.log`, a quarantine timeline sampled every 2 s
-per check (`<check>-timeline.txt`), the iptables rules before and after,
-and for each step the CubridCluster, objects, events, `cubrid heartbeat
-status` of each member and the manager log. `child-write-denied/sql-session.jsonl`
+per check (`<check>-timeline.txt`), the iptables rules before and after.
+The rules saved at the heal carry the drop's packet counter: a check whose
+drop discarded no packet is `BLOCKED`, because the member was never silent
+towards the acting manager. A quarantine counts only if it started no
+earlier than the silence. The run log records the script's SHA-256 and any
+uncommitted change in the repository. For each step, `EVIDENCE_DIR` also
+keeps the CubridCluster, objects, events, `cubrid heartbeat status` of each
+member and the manager log. `child-write-denied/sql-session.jsonl`
 holds every write of the SQL session with its UTC time and error.
 
 ## What these checks do not show
@@ -92,33 +100,67 @@ real network partition, which need the VM lab.
 
 These were manual runs on one disposable Kind node (Kubernetes v1.37.0), with
 images built from `0fc966b6`, which already contains #960 and #962. The raw
-evidence is kept outside the repository, in
-`~/lab-evidence/kind-quarantine-*` on the maintainer workstation that ran it.
-`kind-quarantine-ENVIRONMENT.txt` there lists every attempt and the host
-workarounds. The host was shared and under heavy IO wait, so the timings
-below are not baselines.
+evidence is kept outside the repository, in `~/lab-evidence/kind-quarantine-*`
+on the machine that ran it. `kind-quarantine-ENVIRONMENT.txt` there lists
+every attempt and the host workarounds; #948 and #949 carry a summary of the
+results and timelines. The host was shared and under heavy IO wait, so the
+timings below are not baselines.
 
 To get the cluster up on that host, the Kind node boot wait was raised,
 etcd ran on tmpfs, `fs.inotify.max_user_instances` was raised to 512 for the
 run, and the multi-platform helper images were imported with `ctr` instead of
 `kind load`. None of this changes what the checks exercise.
 
-**child-write-denied (#949): pass.** Evidence:
-`kind-quarantine-20261118T063247Z/child-write-denied`.
+**How the passing runs relate to each other.**
 
-- The admission policy refused the Operator's update of the `qc-broker`
-  NetworkPolicy in every pass: 4 refusals before the silence, 26 in the
-  whole check. `Ready` stayed `False` with reason `NetworkPolicyReconcileFailed`.
-- `qc-0` was silenced at 06:33:40 UTC. The `WriteQuarantinedMemberUnverified`
-  quarantine started at 06:33:46 UTC, in a pass that also logged the refused
-  NetworkPolicy write (both share one reconcile ID). It recorded master
-  `qc-1` and member `qc-0`.
-- The read-write Broker Deployment was at zero, and `-rw` had no endpoint,
-  9 s later. `RoutingReady` carried the quarantine reason, and `Ready` still
-  carried the refused write.
-- After the heal, the quarantine was released automatically at 06:35:26 UTC.
-  The read-write Brokers stayed at zero while the writes were still refused.
-  They came back (2/2) once the admission policy was removed.
+- The cluster was formed once, by the attempt `20261118T060549Z`. That
+  attempt never silenced a member: its fault container could not start.
+- It was then restored by hand: the admission policy and the extra Broker
+  client were removed, the SQL client deleted, and the cluster-wide manager
+  redeployed with `make deploy`. The fault container's image was also
+  repaired on the node.
+- The two later runs, `20261118T063247Z` and `20261118T064109Z`, reused that
+  cluster. Before the second, the cluster-wide manager was restored by hand
+  again.
+
+**Script changes after these runs.** The script that produced the runs below
+is older than the one in this directory. After a review, the script was
+changed without being run again on Kind:
+
+- refusals are counted once per pass;
+- a check is `BLOCKED` when the drop discarded no packet;
+- a quarantine must start no earlier than the silence;
+- whatever is still in place is removed when the script exits;
+- the context must have only `kind://` nodes;
+- the run log records the script's hash.
+
+The counts below are recomputed from the raw files with the same rules. Each
+drop's packet counter is in `<check>-heal-rules.txt`.
+
+**child-write-denied (#949): pass.** Evidence:
+`kind-quarantine-20261118T063247Z/child-write-denied` and
+`child-write-denied-timeline.txt`.
+
+- **Refused writes.** The admission policy refused the Operator's update of
+  the `qc-broker` NetworkPolicy once in every pass: 2 refusals before the
+  silence (06:33:37 and 06:33:39 UTC), 16 in the whole check.
+  - Each refusal is logged twice by the manager, as `Failed to write an
+    object` and as `Reconciler error`. The script that ran counted both, and
+    reported 4 and 26.
+  - `Ready` stayed `False` with reason `NetworkPolicyReconcileFailed`.
+- **Quarantine.** `qc-0` was silenced at 06:33:40 UTC, and the drop
+  discarded 137 packets. The `WriteQuarantinedMemberUnverified` quarantine
+  started at 06:33:46 UTC, with master `qc-1` and member `qc-0`. The pass
+  that started it (reconcile `76f900b6`) also logged the refused write.
+- **Enforcement.** The read-write Broker Deployment was at zero from the
+  06:33:47 sample. `-rw` had no endpoint by 06:33:59 UTC. `RoutingReady`
+  carried the quarantine reason, and `Ready` still carried the refused write.
+- **Release.** After the heal, the quarantine was released automatically at
+  06:35:26 UTC.
+  - The read-write Brokers were still at zero at the next sample, 2 s after
+    the release, before the admission policy was removed (06:35:29 UTC).
+  - They were back at 2/2 at 06:35:32 UTC, and `-rw` had endpoints again at
+    06:35:51 UTC.
 - **SQL session.** One `pycubrid` connection through `-rw` wrote a row and
   committed about every 2 to 4 s.
   - The last acknowledged write was at 06:33:47.463 UTC.
@@ -126,15 +168,24 @@ run, and the multi-platform helper images were imported with `ctr` instead of
     `connection lost during receive`. Every later write on that session
     failed with `connection is closed`.
   - New connections while the quarantine was in force failed with
-    `failed to connect to CUBRID broker`. One attempt hung about 130 s
-    before failing.
-  - The master `qc-1` holds rows 1 to 12, so the write whose answer was lost
-    (row 12) was committed. At 07:18 UTC both slaves held the same 12 rows.
-    On this host the slaves were still behind at 06:44 UTC, and applied the
-    rows later.
-  - The session did not write again after the release. No new connection
-    was made after the Brokers returned, so a write through the restored
-    `-rw` was not checked in this run.
+    `failed to connect to CUBRID broker`.
+  - The record has no entry from 06:33:56 to 06:36:06 UTC. The client was
+    hung for about 130 s in one new connection attempt, which then failed;
+    the client stopped one second later. So the client did not write again
+    after the release because it was hung, not because writes were refused.
+    A write through the restored `-rw` was not checked.
+  - The master `qc-1` holds rows 1 to 12. So the write whose answer was lost
+    (row 12) was committed.
+- **Replication.** This was checked by hand, outside the script, after the
+  checks.
+  - At 06:44 UTC the slaves did not have the table yet.
+  - At 06:45 UTC a probe table `qc_apply_probe` with one row was written on
+    `qc-1` with `csql`.
+  - At 07:18 UTC all three members held the same 12 rows. The query was
+    `select via, count(*), max(id) from qc_session_1794983589 group by via`
+    on each member (`replication-after-probe.txt`).
+  - Whether the probe write or time made the slaves catch up was not
+    determined.
 
 **node-read-forbidden (#948): pass on the second attempt.** Evidence:
 `kind-quarantine-20261118T064109Z`.
@@ -142,10 +193,11 @@ run, and the multi-platform helper images were imported with `ctr` instead of
 - `kubectl auth can-i get nodes` as the manager's ServiceAccount answered
   `no`. Pods and Deployments in `qc-ha` were allowed, and `cubridclusters`
   in other namespaces were not.
-- `qc-0` was silenced at 06:42:44 UTC. The `WriteQuarantinedMemberUnverified`
-  quarantine started at 06:42:52 UTC, with master `qc-1` and member `qc-0`.
-  The read-write Brokers were at zero, and `-rw` had no endpoint, by
-  06:43:03 UTC.
+- `qc-0` was silenced at 06:42:44 UTC, towards the Lease holder
+  (10.244.0.37); the drop discarded 115 packets. The
+  `WriteQuarantinedMemberUnverified` quarantine started at 06:42:52 UTC, with
+  master `qc-1` and member `qc-0`. The read-write Brokers were at zero, and
+  `-rw` had no endpoint, by 06:43:03 UTC.
 - Every pass logged `Fenced no member by an out-of-service taint: a Node
   could not be read`, with `nodes "quarantine-checks-control-plane" is
   forbidden: User "system:serviceaccount:...:controller-manager" cannot get
@@ -153,18 +205,24 @@ run, and the multi-platform helper images were imported with `ctr` instead of
 - The quarantine was still in force 30 s later. It was released
   automatically at 06:43:54 UTC, after the heal.
 
-The first attempt (`kind-quarantine-20261118T063247Z/node-read-forbidden`)
-never reached the scenario. After the manager rollout, the script silenced
-the replaced manager Pod (10.244.0.27) instead of the new Lease holder
-(10.244.0.31), so `qc-0` kept answering the manager that was acting. No Node
-read was attempted, because `qc-0` answered. The script now silences the
-Pod that holds the leader-election Lease, and waits for the new manager to
-settle first.
+**The first node-read-forbidden attempt** (in
+`kind-quarantine-20261118T063247Z/node-read-forbidden`) printed `PASS
+quarantine enforced`, then FAIL. It never reached the scenario:
 
-That attempt still shows one behavior worth noting. When the manager starts
-while the master is not `qc-0`, it starts a `WriteQuarantinedMemberUnverified`
-quarantine on its first pass, because it has no two answers from `qc-0` yet.
-It releases it about 20 s later:
+- After the manager rollout, the script silenced the replaced manager Pod
+  (10.244.0.27) instead of the new Lease holder (10.244.0.31). The drop
+  discarded 0 packets, and `qc-0` kept answering the manager that was acting.
+- No Node read was attempted, because `qc-0` answered.
+- The quarantine it saw was the new manager's own start-up quarantine,
+  described below.
+- The current script would report this attempt as `BLOCKED`. The quarantine
+  started at 06:36:56 UTC, after the silence at 06:36:39 UTC, so only the
+  packet counter tells the two apart.
+
+**Start-up quarantine.** When the manager starts while the master is not
+`qc-0`, its first pass starts a `WriteQuarantinedMemberUnverified`
+quarantine, because it has no two answers from `qc-0` yet. It releases it
+about 20 s later:
 
 - first attempt: 06:36:56 to 06:37:17 UTC;
 - second attempt: 06:41:55 to 06:42:15 UTC.
