@@ -57,7 +57,8 @@ var designStatusPatterns = []struct {
 	{regexp.MustCompile(`(?i)\bphase[\s-]*([0-9]+|one|two|three|four|five)\b`), reasonProjectPhase},
 	{regexp.MustCompile(`(?i)\b(later|earlier|next|future|first|initial)\s+phase\b`), reasonProjectPhase},
 	{regexp.MustCompile(`(?i)\bnot\s+(yet\s+)?implemented\b|\bunimplemented\b`), reasonImplStatus},
-	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(supported|available|done|wired|built|validated)\b|\bnot\s+\w+\s+yet\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(supported|available|done|wired|built|validated)\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\bnot\s+\w+\s+yet\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\b(added|done|implemented|supported)\s+later\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\bimplementation\s+(status|gate)\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\b(is|are|was|were|been)\s+planned\b|\bplanned\s+for\b`), "planned work"},
@@ -174,17 +175,21 @@ const (
 // its number of lines, its size in bytes, and the length in characters of
 // each table row.
 func roadmapViolations(text string) []string {
+	const moveEvidence = "move evidence to the linked issues"
 	var out []string
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	if len(lines) > roadmapMaxLines {
-		out = append(out, fmt.Sprintf("ROADMAP.md has %d lines, more than %d; move evidence to the linked issues", len(lines), roadmapMaxLines))
+		out = append(out, fmt.Sprintf("ROADMAP.md has %d lines, more than %d; %s",
+			len(lines), roadmapMaxLines, moveEvidence))
 	}
 	if len(text) > roadmapMaxBytes {
-		out = append(out, fmt.Sprintf("ROADMAP.md has %d bytes, more than %d; move evidence to the linked issues", len(text), roadmapMaxBytes))
+		out = append(out, fmt.Sprintf("ROADMAP.md has %d bytes, more than %d; %s",
+			len(text), roadmapMaxBytes, moveEvidence))
 	}
 	for i, line := range lines {
 		if n := utf8.RuneCountInString(line); strings.HasPrefix(line, "| ") && n > roadmapMaxRowRune {
-			out = append(out, fmt.Sprintf("ROADMAP.md:%d: table row has %d characters, more than %d; link the evidence instead", i+1, n, roadmapMaxRowRune))
+			out = append(out, fmt.Sprintf("ROADMAP.md:%d: table row has %d characters, more than %d; %s",
+				i+1, n, roadmapMaxRowRune, moveEvidence))
 		}
 	}
 	return out
