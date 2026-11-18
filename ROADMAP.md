@@ -46,7 +46,10 @@ are work streams, not permission to run all at once.
 
 Post-v0.1 research (#955–#958), speculative new architecture/API work and
 optional harness/CI enhancements do not enter the v0.1 execution queue merely
-because they can be built now. Retain genuine defect evidence, especially
+because they can be built now. Improvements that v0.1 validation shows are worth
+designing, but that v0.1 does not require, are collected in #989 for the v0.2
+design (maintainer decision, 2026-11-18 UTC); the required part of each stays
+on its v0.1 issue. Retain genuine defect evidence, especially
 failed safety runs, without multiplying duplicate issues or erasing history.
 A new blocker needs a direct link to an already accepted gate and a maintainer
 decision. Unpassed mandatory scenarios remain **No-Go**, not an implicit
