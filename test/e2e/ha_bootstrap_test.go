@@ -429,7 +429,19 @@ spec:
 
 			By("reading on each slave")
 			for _, peer := range peers {
-				Eventually(func() error {
+				// When the read times out, what the slave and the other
+				// slave report is kept before the spec fails with the
+				// unchanged message (#416). A passing read waits for nothing.
+				control := peers[0]
+				if peer == peers[0] {
+					control = peers[1]
+				}
+				rowCaptureFailure(func() {
+					text := captureFromCluster(context.Background(), haNamespace, database, peer, control,
+						append([]string{first}, peers...))
+					_, _ = fmt.Fprintf(GinkgoWriter, "%s\n", text)
+					writeScenarioFile("ha-bootstrap/row-not-replicated-"+peer+".txt", []byte(text))
+				}).Eventually(func() error {
 					return readS00Row(csqlInPod(context.Background(), haNamespace, peer, database), marker)
 				}, 3*time.Minute, 3*time.Second).Should(Succeed(), peer)
 			}
