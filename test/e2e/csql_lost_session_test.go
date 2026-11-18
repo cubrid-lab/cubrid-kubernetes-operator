@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,17 +72,22 @@ type lostSessionRecord struct {
 	Identity sqlcheck.IdentityResult `json:"identity"`
 	// ReRead says how the read made once more answered.
 	ReRead string `json:"reRead"`
-	// ServerAtPair is cub_server's identity (pid, start time in clock ticks,
-	// HA mode) read on the member right after the pair, as the identity script
-	// printed it. It is a single reading at the pair's time, not a comparison
-	// with the start of the step: csql calls are made from many places that
-	// know nothing of a step's start. A pid or start time that differs from
-	// another record of the same member in the same step shows a restart.
+	// ServerAtPair is cub_server's identity ("cub_server <pid> <start time in
+	// clock ticks since boot>" and "ha_mode <mode>"), then "uptime <seconds>"
+	// and "clk_tck <ticks per second>" of the member, read in the background
+	// soon after the pair, as the scripts printed them. It is one reading, not
+	// a comparison with the start of the step: csql calls are made from many
+	// places that know nothing of a step's start. The server's age at the read
+	// is uptime - start/clk_tck. If it is less than ServerReadAt - At, the
+	// server started after the pair, so it restarted. "ha_mode ?" is expected
+	// on a standalone member, which has no HA mode.
 	ServerAtPair []string `json:"serverAtPair,omitempty"`
+	// ServerReadAt is when ServerAtPair was read.
+	ServerReadAt time.Time `json:"serverReadAt,omitzero"`
 	// ServerLogTail is the last lines of the member's newest server error log,
-	// read right after the pair, to compare with the pair's time in At.
+	// read at ServerReadAt, to compare with the pair's time in At.
 	ServerLogTail []string `json:"serverLogTail,omitempty"`
-	// ServerReadError says why the two fields above are missing or partial.
+	// ServerReadError says why the fields above are missing or partial.
 	ServerReadError string `json:"serverReadError,omitempty"`
 }
 
@@ -92,20 +98,38 @@ const (
 	serverLogLineWidth = 400
 	// serverLogTailScript prints the last serverLogTailLines lines of the
 	// newest server error log of database $0, in the member's container.
-	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0"*.err 2>/dev/null | head -n 1); ` +
+	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
 		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
 		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
+	// serverAgeScript is the identity script with the member's uptime and clock
+	// rate, from which the server's age follows.
+	serverAgeScript = sqlcheck.HAServerIdentityScript +
+		`; echo "uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; echo "clk_tck $(getconf CLK_TCK 2>/dev/null)"`
+	// pairCaptureWait bounds the wait for reads still running when the suite ends.
+	pairCaptureWait = 60 * time.Second
 )
 
 // pairCapture reads a member's server state when csql printed the pair. It is
 // nil, and nothing is read, outside a run of the e2e suite (BeforeSuite sets
-// it), so that the unit tests of the ledger make no kubectl call.
-var pairCapture func(ctx context.Context, namespace, pod, database string) pairServerState
+// it), so that the unit tests of the ledger make no kubectl call. It runs in
+// the background, never on the path of the call that printed the pair.
+var pairCapture atomic.Pointer[pairCaptureFunc]
+
+type pairCaptureFunc = func(ctx context.Context, namespace, pod, database string) pairServerState
 
 // pairServerState is what pairCapture read.
 type pairServerState struct {
 	identity, logTail []string
+	at                time.Time
 	err               string
+}
+
+// cut returns s cut at width characters.
+func cut(s string, width int) string {
+	if r := []rune(s); len(r) > width {
+		return string(r[:width])
+	}
+	return s
 }
 
 // boundLines splits out into trimmed non-empty lines, keeps the last limit of
@@ -121,9 +145,7 @@ func boundLines(out string, limit, width int) []string {
 		lines = lines[len(lines)-limit:]
 	}
 	for i, line := range lines {
-		if r := []rune(line); len(r) > width {
-			lines[i] = string(r[:width])
-		}
+		lines[i] = cut(line, width)
 	}
 	return lines
 }
@@ -140,17 +162,18 @@ func readServerState(ctx context.Context, namespace, pod, database string) pairS
 			"bash", "-c", script, database))
 	}
 	var problems []string
+	state.at = time.Now().UTC()
 	if out, err := read(serverLogTailScript, identityTimeout); err != nil {
 		problems = append(problems, "server log: "+err.Error())
 	} else {
 		state.logTail = boundLines(out, serverLogTailLines, serverLogLineWidth)
 	}
-	if out, err := read(sqlcheck.HAServerIdentityScript, 2*identityTimeout); err != nil {
+	if out, err := read(serverAgeScript, 2*identityTimeout); err != nil {
 		problems = append(problems, "identity: "+err.Error())
 	} else {
 		state.identity = boundLines(out, 10, serverLogLineWidth)
 	}
-	state.err = strings.Join(problems, "; ")
+	state.err = cut(strings.Join(problems, "; "), serverLogLineWidth)
 	return state
 }
 
@@ -162,7 +185,41 @@ func (l *lostSessionLedger) attach(record *lostSessionRecord, state pairServerSt
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	record.ServerAtPair, record.ServerLogTail, record.ServerReadError = state.identity, state.logTail, state.err
+	record.ServerReadAt = state.at
 	l.store()
+}
+
+// capture reads the server state of a member in the background and attaches it
+// to record when it is done, so that the call that printed the pair is not
+// delayed: some checks are timed. The read does not end with the spec's
+// context, which may end first; it is bounded by its own timeouts.
+func (l *lostSessionLedger) capture(ctx context.Context, record *lostSessionRecord, namespace, pod, database string) {
+	read := pairCapture.Load()
+	if read == nil || record == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	l.pending.Add(1)
+	go func() {
+		defer l.pending.Done()
+		l.attach(record, (*read)(ctx, namespace, pod, database))
+	}()
+}
+
+// waitForCaptures waits for the reads still running, for at most limit, and
+// reports whether all of them are done.
+func (l *lostSessionLedger) waitForCaptures(limit time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		l.pending.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
 }
 
 // lostSessionLedger counts the pair over the whole run, for every caller of
@@ -173,6 +230,8 @@ func (l *lostSessionLedger) attach(record *lostSessionRecord, state pairServerSt
 type lostSessionLedger struct {
 	mu      sync.Mutex
 	records []*lostSessionRecord
+	// pending counts the background reads of the server state.
+	pending sync.WaitGroup
 	// reads and lost count by the labels of the step that made the call.
 	reads, lost map[string]int
 }

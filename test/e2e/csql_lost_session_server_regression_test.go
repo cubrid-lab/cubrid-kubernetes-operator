@@ -24,61 +24,116 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 )
+
+// useCapture installs read as the capture of the server state, and restores the
+// earlier one when the test ends.
+func useCapture(t *testing.T, read pairCaptureFunc) {
+	t.Helper()
+	previous := pairCapture.Load()
+	pairCapture.Store(&read)
+	t.Cleanup(func() { pairCapture.Store(previous) })
+}
 
 // The log tail of a record keeps only the last lines, cuts the long ones and
 // drops blank ones, so that the record of one pair stays small.
 func TestServerLogTailIsBounded(t *testing.T) {
 	var out strings.Builder
 	for i := range 100 {
-		out.WriteString("Time: line " + strings.Repeat("x", i) + "\n\n")
+		out.WriteString("Time: line " + strings.Repeat("é", i) + "\n\n")
 	}
 	lines := boundLines(out.String(), serverLogTailLines, 20)
 	if len(lines) != serverLogTailLines {
 		t.Fatalf("%d lines, want %d", len(lines), serverLogTailLines)
 	}
 	for _, line := range lines {
-		if len([]rune(line)) > 20 {
-			t.Errorf("line of %d characters", len(line))
+		if n := utf8.RuneCountInString(line); n > 20 {
+			t.Errorf("line of %d characters", n)
 		}
 	}
 	if got := boundLines("a\n\n  b  \n", 5, 20); len(got) != 2 || got[1] != "b" {
 		t.Errorf("short output gives %q", got)
 	}
+	if got := cut(strings.Repeat("x", 1000), serverLogLineWidth); len(got) != serverLogLineWidth {
+		t.Errorf("an error of %d characters is kept", len(got))
+	}
 }
 
-// A pair on a member gets the server state read right after it, in the file,
-// without changing the call's result or making another csql call.
-func TestPairRecordsTheServerState(t *testing.T) {
-	freshLedger(t)
+// A pair on a member gets the server state read after it, in the file, and the
+// read does not delay the call: the capture waits for the call to return, so a
+// capture made on the call's path would never finish and the call would hang.
+func TestPairRecordsTheServerStateOffTheCallsPath(t *testing.T) {
+	ledger := freshLedger(t)
 	dir := t.TempDir()
 	useEvidenceDir(t, dir)
-	reads := 0
-	pairCapture = func(_ context.Context, namespace, pod, database string) pairServerState {
-		reads++
-		if namespace != "ns" || pod != "hab-1" || database != "appdb" {
-			t.Errorf("read of %s/%s/%s", namespace, pod, database)
-		}
-		return pairServerState{identity: []string{"cub_server 41 1234", "ha_mode active"},
-			logTail: []string{"Time: 11/18/26 10:00:00.000 - a line"}, err: "identity: timed out"}
-	}
-	t.Cleanup(func() { pairCapture = nil })
+	release := make(chan struct{})
+	reads := make(chan string, 4)
+	useCapture(t, func(_ context.Context, namespace, pod, database string) pairServerState {
+		<-release
+		reads <- namespace + "/" + pod + "/" + database
+		return pairServerState{identity: []string{"cub_server 41 1234", "ha_mode active", "uptime 99.5", "clk_tck 100"},
+			logTail: []string{"Time: 11/18/26 10:00:00.000 - a line"}, at: time.Now().UTC(), err: "identity: timed out"}
+	})
 	run, calls := cannedKubectl(t, s00Answer{out: lostSession}, s00Answer{out: cleanRead})
 	sql := csqlRunner(context.Background(), "ns", "hab-1", "appdb", run)
-	if _, err := runSQL(sql, "SELECT 1;"); err == nil {
-		t.Error("the pair was accepted")
+	returned := make(chan error, 1)
+	go func() {
+		_, err := runSQL(sql, "SELECT 1;")
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Error("the pair was accepted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call waited for the read of the server state")
 	}
 	if _, err := runSQL(sql, "SELECT 1;"); err != nil {
 		t.Error(err)
 	}
+	close(release)
+	if !ledger.waitForCaptures(5 * time.Second) {
+		t.Fatal("the read did not finish")
+	}
 	records := lostRecords(t, dir)
-	if len(records) != 1 || reads != 1 || *calls != 2 {
-		t.Fatalf("%d records, %d reads, %d calls", len(records), reads, *calls)
+	if len(records) != 1 || len(reads) != 1 || *calls != 2 || <-reads != "ns/hab-1/appdb" {
+		t.Fatalf("%d records, %d reads, %d calls", len(records), len(reads), *calls)
 	}
 	got := records[0]
-	if len(got.ServerAtPair) != 2 || got.ServerAtPair[0] != "cub_server 41 1234" || len(got.ServerLogTail) != 1 ||
-		got.ServerReadError != "identity: timed out" {
+	if len(got.ServerAtPair) != 4 || got.ServerAtPair[0] != "cub_server 41 1234" || len(got.ServerLogTail) != 1 ||
+		got.ServerReadError != "identity: timed out" || got.ServerReadAt.IsZero() {
 		t.Errorf("the record is %+v", got)
+	}
+}
+
+// On the guarded path the rule's findings and the server state end up in the
+// same record, whichever of the two is written last.
+func TestGuardedReadRecordsTheRuleAndTheServerState(t *testing.T) {
+	ledger := freshLedger(t)
+	dir := t.TempDir()
+	useEvidenceDir(t, dir)
+	useCapture(t, func(context.Context, string, string, string) pairServerState {
+		return pairServerState{identity: []string{"cub_server 77 123456"}, logTail: []string{"a line"}, at: time.Now().UTC()}
+	})
+	run, calls := cannedKubectl(t, s00Answer{out: lostSession}, s00Answer{out: cleanRead})
+	result, err := fakeMember(run, sameServer()).read(sqlcheck.ReadRowQuery, sqlcheck.RowCheck(s00TestMarker))
+	if err != nil || result.Out != cleanRead || *calls != 2 {
+		t.Fatalf("%d calls, %+v, error %v", *calls, result, err)
+	}
+	if !ledger.waitForCaptures(5 * time.Second) {
+		t.Fatal("the read did not finish")
+	}
+	records := lostRecords(t, dir)
+	if len(records) != 1 || records[0].Identity != sqlcheck.IdentityUnchanged ||
+		records[0].ReRead != sqlcheck.ReReadAnswered || len(records[0].ServerAtPair) != 1 ||
+		len(records[0].ServerLogTail) != 1 {
+		t.Errorf("the records are %+v", records)
 	}
 }
 
@@ -87,13 +142,44 @@ func TestPairWithoutCaptureHasNoServerFields(t *testing.T) {
 	freshLedger(t)
 	dir := t.TempDir()
 	useEvidenceDir(t, dir)
+	previous := pairCapture.Swap(nil)
+	t.Cleanup(func() { pairCapture.Store(previous) })
 	run, _ := cannedKubectl(t, s00Answer{out: lostSession})
 	_, _ = runSQL(csqlRunner(context.Background(), "ns", "hab-1", "appdb", run), "SELECT 1;")
 	data, err := os.ReadFile(filepath.Join(dir, lostSessionsFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "serverAtPair") || strings.Contains(string(data), "serverLogTail") {
-		t.Errorf("the file has server fields: %s", data)
+	for _, field := range []string{"serverAtPair", "serverLogTail", "serverReadAt", "serverReadError"} {
+		if strings.Contains(string(data), field) {
+			t.Errorf("the file has %s: %s", field, data)
+		}
+	}
+}
+
+// A credential in a log line is removed by the evidence writer, as in every
+// other evidence file.
+func TestServerLogTailIsRedacted(t *testing.T) {
+	freshLedger(t)
+	dir := t.TempDir()
+	useEvidenceDir(t, dir)
+	const secret = "hunter2-not-a-real-password"
+	old := redactor
+	redactor = evidence.NewRedactor(secret)
+	t.Cleanup(func() { redactor = old })
+	useCapture(t, func(context.Context, string, string, string) pairServerState {
+		return pairServerState{logTail: []string{"connect failed password=" + secret}, at: time.Now().UTC()}
+	})
+	run, _ := cannedKubectl(t, s00Answer{out: lostSession})
+	_, _ = runSQL(csqlRunner(context.Background(), "ns", "hab-1", "appdb", run), "SELECT 1;")
+	if !csqlLedger.waitForCaptures(5 * time.Second) {
+		t.Fatal("the read did not finish")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, lostSessionsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) || !strings.Contains(string(data), "serverLogTail") {
+		t.Errorf("the file is %s", data)
 	}
 }

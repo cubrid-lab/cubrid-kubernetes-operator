@@ -58,9 +58,7 @@ func watchedCSQL(ctx context.Context, namespace, pod, database string, run func(
 		out, err := run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
 			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, database+"@localhost", sql))
 		csqlLedger.observe(pod, sql, out, func(record *lostSessionRecord) {
-			if pairCapture != nil {
-				csqlLedger.attach(record, pairCapture(ctx, namespace, pod, database))
-			}
+			csqlLedger.capture(ctx, record, namespace, pod, database)
 			if seen != nil {
 				seen(record)
 			}
