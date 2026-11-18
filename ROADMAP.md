@@ -101,6 +101,10 @@ restore workflow CR, broader engine/Kubernetes/CSI/architecture matrices and
 multi-zone/provider resilience are outside the initial delivery. New features
 remain proposals until scheduled; required validation takes precedence.
 
+Improvements that v0.1 validation shows are worth designing, but that v0.1
+does not require, are collected in #989 for the v0.2 design (maintainer
+decision, 2026-11-18 UTC). The required part of each stays on its v0.1 issue.
+
 ## Implementation and validation inventory
 
 Baseline: main `a6cadd0` (2026-10-05); review/update these rows when a relevant
