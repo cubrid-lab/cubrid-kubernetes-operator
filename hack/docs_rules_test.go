@@ -58,7 +58,8 @@ var designStatusPatterns = []struct {
 	{regexp.MustCompile(`(?i)\b(later|earlier|next|future|first|initial)\s+phase\b`), reasonProjectPhase},
 	{regexp.MustCompile(`(?i)\bnot\s+(yet\s+)?implemented\b|\bunimplemented\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(supported|available|done|wired|built|validated)\b`), reasonImplStatus},
-	{regexp.MustCompile(`(?i)\bnot\s+\w+\s+yet\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\bnot\s+(supported|available|implemented|built|wired|done|validated)\s+yet\b`),
+		reasonImplStatus},
 	{regexp.MustCompile(`(?i)\b(added|done|implemented|supported)\s+later\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\bimplementation\s+(status|gate)\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\b(is|are|was|were|been)\s+planned\b|\bplanned\s+for\b`), "planned work"},
@@ -282,6 +283,7 @@ func TestDocRulesStatusWordingRejectsSeededExamples(t *testing.T) {
 		"The Kind e2e runs on kind v0.33.0 and `kindest/node:v1.37.0`.",
 		"Release Drafter keeps a release draft up to date.",
 		"The release is persisted before Brokers restart on a later pass;",
+		"The Operator waits while the master is not ready yet.",
 		"```yaml\n      phase: Created\n```",
 	}
 	for _, line := range allowed {
