@@ -125,10 +125,15 @@ candidate evidence arrives.
 `candidate`. Single-node lifecycle (S00) and three-member HA with RW/RO access
 (S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
 Operator failures reach Kind and one VM-lab Operator restart; VM failure is not
-run. Write quarantine reaches Kind; its VM-lab partition runs are blocked.
-Rejoin and rebuild are `unit-envtest`. Backup and restore variants passed on
-the VM lab once or a few times each. Retention, authentication and voluntary
-disruption reach Kind or VM-lab with gaps. Conditions and metrics reach Kind.
+run. Write quarantine was seen in one Kind run of S03/S06; S07–S08 has no pass,
+and its VM-lab partition runs are blocked. Open safety defects: a cut
+higher-ranked member became heartbeat master without 50 acknowledged writes on
+the VM lab (#702), and healthy write paths were closed after an Operator
+restart (#931) and a graceful master deletion (#938). Rejoin and rebuild are
+`unit-envtest`. Backup and restore variants passed on the VM lab once or a few
+times each; one S12 `exact` run failed (#416). Retention, authentication and
+voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
+reach Kind.
 The reproducible, reviewed release is not run.
 
 | Area | Level | Open blockers | Status and key evidence |
@@ -142,16 +147,17 @@ The reproducible, reviewed release is not run.
 | VM failure (S04) | not run | #85, #110, #126 | No VM power loss run yet. The read-only observer (#546) ran twice for 5 minutes against `ha` ([record][observer-546]); no S04, S06 or S07/S08 verdict |
 | Ambiguous primary detection | unit-envtest | #115 | Two fresh active-master claims keep `Ready` and `cubrid_cluster_ready` off (#339; engine occurrence unverified, #373). A reconcile that ends before the roles are read reports them `Unknown` instead of keeping an earlier primary (#340) |
 | Second writable master (engine behavior) | Kind (POC-51); Docker POCs | #115, #702 | Docker: a higher-priority member became a second writable master (POC-50, #392). Kind with the Operator, cuts: acknowledged rows diverged once; `-rw` refused while `Ready` stayed `True` twice (POC-51). Nothing the Operator renders stops such a promotion; acknowledged writes missing on the final master (POC-52) |
-| Replication health | unit-envtest; Kind (non-contract step); VM-lab (1 run) | none recorded; live check unowned | `ReplicationHealthy`/`HAReady` on a stalled slave or held transaction (#229, #249, #352; POC-48): pass in the [reviewed Kind run][kind-base]. Applier restart (#360): unit tests on POC-30, no cluster run. `LogCopyStalled` (#623; POC-41, POC-42): one VM-lab run. Nothing acts on them |
+| Replication health | unit-envtest; Kind (non-contract step) | none recorded; live check unowned | `ReplicationHealthy`/`HAReady` on a stalled slave or held transaction (#229, #249, #352; POC-48): pass in the [reviewed Kind run][kind-base]; nothing on the VM lab. Applier restart (#360): unit tests on POC-30, no cluster run. Nothing acts on the Condition |
+| Log copy stall report | VM-lab | none recorded; live check unowned | `LogCopyStalled` (#623; POC-41, POC-42): reported on the VM lab with `fb6f345` after a cut of TCP 1523, and after partition heals on [2026-11-17][part-20261117] (3 runs) and [2026-11-18][part-20261118]. Nothing acts on it |
 | HA bootstrap seed source | VM-lab (2 runs) | none recorded | Each later member is seeded from the member observed as master and waits while it is unknown (#281; POC-23). Two scripted VM-lab runs on 2026-11-04 killed the master mid-seed: the Operator waited, then seeded from the new master |
 | HA bootstrap catch-up rule | unit-envtest | none recorded; live check unowned (#768) | Docker: a member seeded across a master change joined lacking acknowledged rows in 16 of 16 trials (POC-57). Catch-up rule (#678, #768, #771) and `MemberNotSeeded` (#770): unit-envtest only. The rule does not read the applier, which was behind in 1 of 20 passing readings (POC-59) |
 | Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine on two active masters or an unverified member that outranks the master or was the last primary; one-time token release; out-of-service taint release; return-to-service barrier (#113; ADR-0005 section 8, amended by #870). Unit-envtest only, not on Kind or the VM lab; the S04 harness adds no taint |
 | Write quarantine on Kind (S03, S06) | Kind (1 run) | #126, #938 | Before #113, `-rw` writes went on while `PrimaryResolved` and `RoutingReady` were not `True` (S03). [One Kind run][kind-quarantine]: a forced master deletion refused `-rw` 38.6–41.3 s (S03 abrupt) and 87.1 s (S06), judged by `quarantined_failover_limit` (6 min). S03 graceful keeps the 30 s `failover_limit`, not yet re-measured |
 | Write quarantine after an Operator restart | VM-lab (1 observation) | #931, #932 | The VM-lab Operator moved to `66ab5ee` on 2026-11-17 (terraform-zadara-k8s#98; LAB00 passed, #122). Its first pass closed a healthy cluster's `-rw` for 24 s: unobserved over 30 s, master not the first member (#931). Fix #932 is pending the maintainer's review of the ADR-0005 amendment |
 | Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #716 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
-| Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became master lacking 50 acknowledged writes. Both `blocked` |
+| Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
 | Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
-| Backup (S11): complete and failed uploads | VM-lab (1–5 runs each) | #88, #126 | `complete`: 4 passes on 2026-10-25, 1 on 2026-10-28 with the engine version check (#621). `missing-destination`: passed 2026-10-28 (logs not checked), 2026-11-11 with the staging check (#636). `denied-credentials`, `signature-mismatch`, `interrupted-upload`: 1 pass each on 2026-10-29, with the log search (#616) |
+| Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
 | Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
 | Backup safeguards in code | unit-envtest | #291, #369 | Standby choice (#291), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
 | Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #126, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
@@ -183,6 +189,7 @@ or unsuccessful fault injection. A unit test pass is not a live scenario pass.
 [observer-546]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/546#issuecomment-6364673645
 [lease-122]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6364164038
 [kind-quarantine]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43524691052
+[part-20261117]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115#issuecomment-6940988526
 [part-20261118]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115#issuecomment-6972668208
 [mem-282]: docs/testing/reference-manager-memory.md
 [minio-337]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347
