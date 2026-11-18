@@ -18,8 +18,9 @@ package hack
 
 // These tests check the document roles of AGENTS.md, "Where each kind of text
 // belongs" (#991): DESIGN.md describes present behaviour only, so project
-// phase and status wording fails, and every ADR file must be listed in both
-// ADR indexes. `make check-docs` runs them; `make verify` and CI run that.
+// phase and status wording fails, every ADR file must be listed in both ADR
+// indexes, and ROADMAP.md stays within its size limits. `make check-docs`
+// runs them; `make verify` and CI run that.
 
 import (
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const repoRoot = ".."
@@ -159,11 +161,33 @@ func adrIndexViolations(adrFiles []string, design, readme string) []string {
 	return out
 }
 
-// roadmapViolations is the place for the ROADMAP.md rules of #991, such as a
-// limit on its size or on the rows of a table. It checks nothing: those limits
-// are defined together with the ROADMAP.md restructure, which fills it in.
-func roadmapViolations(_ string) []string {
-	return nil
+// The ROADMAP.md limits of #991 keep it a short page of scope and status per
+// capability; evidence belongs on the linked issues. A table row is a line
+// that starts with "| "; a reference-style link definition is not a row.
+const (
+	roadmapMaxLines   = 300
+	roadmapMaxBytes   = 32000
+	roadmapMaxRowRune = 400
+)
+
+// roadmapViolations returns one message per ROADMAP.md limit it exceeds:
+// its number of lines, its size in bytes, and the length in characters of
+// each table row.
+func roadmapViolations(text string) []string {
+	var out []string
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	if len(lines) > roadmapMaxLines {
+		out = append(out, fmt.Sprintf("ROADMAP.md has %d lines, more than %d; move evidence to the linked issues", len(lines), roadmapMaxLines))
+	}
+	if len(text) > roadmapMaxBytes {
+		out = append(out, fmt.Sprintf("ROADMAP.md has %d bytes, more than %d; move evidence to the linked issues", len(text), roadmapMaxBytes))
+	}
+	for i, line := range lines {
+		if n := utf8.RuneCountInString(line); strings.HasPrefix(line, "| ") && n > roadmapMaxRowRune {
+			out = append(out, fmt.Sprintf("ROADMAP.md:%d: table row has %d characters, more than %d; link the evidence instead", i+1, n, roadmapMaxRowRune))
+		}
+	}
+	return out
 }
 
 func readRepoFile(t *testing.T, path string) string {
@@ -291,6 +315,27 @@ func TestDocRulesADRIndexRejectsSeededExamples(t *testing.T) {
 	for name, c := range cases {
 		if len(adrIndexViolations(files, c.design, c.readme)) == 0 {
 			t.Errorf("%s: passed the ADR index rule", name)
+		}
+	}
+}
+
+// A ROADMAP.md at each limit passes; one line, one byte or one character of a
+// table row more fails. A long reference-style link definition is not a row.
+func TestDocRulesRoadmapRejectsSeededExamples(t *testing.T) {
+	row := "| " + strings.Repeat("x", roadmapMaxRowRune-2)
+	linkDef := "[old-roadmap]: https://example.com/" + strings.Repeat("y", roadmapMaxRowRune)
+	atLimit := strings.Repeat("line\n", roadmapMaxLines-2) + row + "\n" + linkDef + "\n"
+	if v := roadmapViolations(atLimit); len(v) != 0 {
+		t.Fatalf("a ROADMAP.md within the limits failed: %v", v)
+	}
+	cases := map[string]string{
+		"too many lines": atLimit + "line\n",
+		"too many bytes": strings.Repeat("x", roadmapMaxBytes+1) + "\n",
+		"an over-long table row (counted in characters)": strings.Replace(atLimit, row, row+"é", 1),
+	}
+	for name, text := range cases {
+		if len(roadmapViolations(text)) == 0 {
+			t.Errorf("%s: passed the ROADMAP.md rule", name)
 		}
 	}
 }

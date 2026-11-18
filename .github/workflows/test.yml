@@ -43,7 +43,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check DESIGN.md wording and the ADR indexes
+      - name: Check DESIGN.md wording, the ADR indexes and the ROADMAP.md limits
         run: make check-docs
 
   test:

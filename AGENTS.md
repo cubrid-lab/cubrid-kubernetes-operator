@@ -405,8 +405,10 @@ break runbooks/alerts that reference the old strings.
 | Procedures | `docs/testing/`, `docs/operations/`, `docs/observability.md` |
 
 `make check-docs` (part of `make verify`, and run by CI on every PR) fails on
-project-phase or status wording in `DESIGN.md` and on an ADR missing from
-either ADR index. Its pattern list is in `hack/docs_rules_test.go`.
+project-phase or status wording in `DESIGN.md`, on an ADR missing from
+either ADR index, and on a `ROADMAP.md` longer than 300 lines or 32,000 bytes
+or with a table row longer than 400 characters. Its pattern list and limits
+are in `hack/docs_rules_test.go`.
 
 ## CLI Commands Cheat Sheet
 
