@@ -62,6 +62,9 @@ func laneConfig(t *testing.T, options ...string) HAConfig {
 			field.SetInt(int64(time.Hour))
 		}
 	}
+	// -partition-keepalive is refused without a partition fault, and selects
+	// no lane of its own.
+	cfg.PartitionKeepalive = 0
 	cfg.BackupBucket, cfg.ObjectStoreService = "backups", "object-store/store:8333"
 	cfg.ResyncLimit, cfg.LeaderLease = time.Hour, "leader"
 	for _, option := range options {

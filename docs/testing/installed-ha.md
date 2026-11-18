@@ -1071,6 +1071,133 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   -fault partition-higher-rank-isolated -partition-settle 20m -partition-manual-release -timeout 75m'
 ```
 
+**Shorter TCP keepalive before the cut.** A third opt-in option,
+`-partition-keepalive <duration>`, tests the hypothesis of
+[#982](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/982):
+on the VM lab on 2026-11-17 UTC the higher-ranked member's log copy
+process (`copylogdb`) waited on a TCP connection to the old master's
+server that the other side no longer had, with the kernel's keepalive
+timer at 105 minutes
+([#716](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/716)).
+With the option, after the master was moved and before the clients start
+and anything is cut, the run:
+
+1. checks that the run namespace is still the run's own and that each
+   member Pod is controlled by the run's HA StatefulSet, with the UID the
+   partition and the run's member identities name, before it adds anything;
+2. adds an ephemeral container named `netsysctl` to each member Pod and,
+   from it, reads the node's kernel release (`uname -r`, refused before
+   4.13, the first release whose keepalive values are per network
+   namespace), writes `net.ipv4.tcp_keepalive_time` (the option, whole
+   seconds under 2 hours), `tcp_keepalive_intvl` (10 seconds) and
+   `tcp_keepalive_probes` (3) under `/proc/sys/net/ipv4`, then reads the
+   three values back. They are per network namespace, which every container
+   of the Pod shares, so CUBRID's connections in that Pod get them; the
+   node and other Pods are not touched;
+3. on the member it will cut off, resets the established TCP connections
+   to the master's port 1523 (`ss -K`), which the log copy uses, and waits
+   up to three minutes for CUBRID to connect again with a keepalive timer
+   no longer than the option.
+
+The `netsysctl` container is privileged because the container runtime
+mounts `/proc/sys` read-only in every other container: the `netfault`
+container, with `NET_ADMIN` and `NET_RAW` only, gets `Read-only file
+system` for the same write. The run namespace already enforces Pod
+Security `privileged` for the partition, and adding an ephemeral container
+needs no permission beyond the partition's own. The Pod sysctls of the
+member Pods are not an option for this test: the Operator's StatefulSet
+owns that spec, and changing it would restart the members. Like
+`netfault`, it runs as root with `runAsNonRoot: false`: the member Pods set
+`runAsNonRoot` at Pod level, and a root container without that override is
+refused by the kubelet with `CreateContainerConfigError`. That was the
+cause of a blocked lab run on 2026-11-18 UTC, whose step ended only with
+`the netsysctl container did not start: no time is left for another
+observation`. A container the kubelet refuses that way now ends the step at
+once with the kubelet's reason and message, and a container that is still
+waiting at the bound is reported with its last waiting reason. When the
+step fails, `partitionKeepaliveDiagnostics` in `record.json` keeps each
+member Pod's `netsysctl` status (state, reason, message) and its latest
+Events. The step also reads the run namespace again and refuses one that
+does not enforce Pod Security `privileged`. It also refuses to start when
+less of the run's `-timeout` is left than its 7-minute bound. The container
+only sleeps, for the rest of the step's bound plus a minute (15 minutes at
+most), so the privileged process ends long before the Pod does; an
+ephemeral container cannot be removed from a Pod's spec, so the stopped
+`netsysctl` stays listed there.
+
+The reset in step 3 is needed, and it is why the values are set after the
+move rather than before it. Linux arms a connection's keepalive timer with
+the namespace's values when the connection is made, and reads them again
+only when that timer fires; a connection made before the write keeps its
+old schedule, up to 2 hours, until its current timer first fires. The
+cut-off member's log copy connects to the master as soon as its Pod
+starts, which, after the move, is the first member's new Pod with a new
+network namespace: no value written before the move reaches it, and none
+can be written before that connection is made. So the run makes that
+connection again. The reset itself is a change before the cut: CUBRID's
+log copy sees its connection end and connects again, as after a short
+network failure. The connections to the other member, and the other
+members' own connections, keep the schedule they were made with until
+their current timer first fires.
+
+`ss -K` prints nothing and exits 0 when the kernel cannot destroy sockets,
+so the run judges the reset by listing the connections again: a connection
+to the master listed before the reset that is still listed blocks the run
+with a message naming the kernel's socket destroy support, and a
+connection listed before the reset never counts as the new one, even when
+its old timer has since fired and shows a short time. The new connection is
+told apart by its addresses only, a local address not listed before the
+reset; the run does not read which process owns it (`note` in the record
+says so). When the cut-off member has no connection to the master's port
+before the reset, the run stops before `ss -K`: nothing would be reset, and
+a connection made later, for a reason the run did not cause, would look
+like the one made again. Addresses are compared as IPv4 also when `ss` lists them
+IPv4-mapped.
+
+The values go away with the Pods' network namespaces when the run
+namespace is deleted, and only then: nothing writes the old values back.
+After a partial failure, such as a blocked step, a cancelled run or a later
+failure of the cut, the members already set keep the shortened keepalive
+until the run's cleanup deletes their Pods; `record.json` names those
+members with their values after the write. If the cleanup itself fails,
+they last as long as those Pods.
+
+The option is a disruptive action of its own, before the partition: it
+writes three sysctls that apply to every new connection in each member
+Pod, and resets one established connection of the cut-off member's log
+copy. A lab campaign announcement for a run with `-partition-keepalive`
+must name both, next to the network cut. The run is not an unmodified
+baseline of the partition, and a shorter recovery seen with it is not a
+verified benefit until it is compared with runs without the option.
+
+`partitionKeepalive` in `record.json` keeps the version of `ss` it used
+(`ssVersion`; the pinned image has iproute2 6.15.0, which prints a timer
+under ten seconds as `4.304sec`, where iproute2 before 6.11 printed
+`4.304ms`; both are read as seconds), the
+values asked for, each member's kernel release (`kernelRelease`) and values
+before and after with the time they were seen set, the cut-off member's
+connections to the members' port before the reset, those `ss -K` reported
+reset (`targetSocketsReset`, with each keepalive timer as `ss` printed it),
+and the connection made again (`targetReconnectedSocket`). When a Pod is
+not the run's own, the kernel is older than 4.13, a value cannot be written
+or read back, the cut-off member has no connection to the master's port
+before the reset, the kernel does not reset the connection, or CUBRID does not
+connect again with the new keepalive within the wait, S07 is blocked before
+any client starts and anything is cut, and the reason says which.
+
+The option is refused without a partition fault and with
+`partition-master-isolated`, where the cut-off member is the master. It
+adds 7 minutes to the steps' bounds in the `-timeout` check: 4 to add the
+container, which may pull its image, and 3 for the connection. With the
+10-minute move, a 10-minute settle and the other defaults, the variant's own
+bounds are 41 minutes and 20 seconds, plus LAB01:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated -partition-keepalive 30s -partition-settle 10m -timeout 60m'
+```
+
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
 installed-ha-network-partition-higher-rank-isolated` select the same runs.
@@ -1448,7 +1575,8 @@ Evidence, under `S07/<variant>/`:
   every new-connection write with its UTC start and end on the run's clock,
   its exit code and outcome, the established session, the settle (with
   `settleWaitExpired` when it did not), the data check or, when the cluster
-  did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`), and the run's
+  did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`),
+  the keepalive set with `-partition-keepalive` (`partitionKeepalive`), and the run's
   observations in time order (`observed`);
 - `cut.json`: the cut's state alone, written before the injection and at
   its removal;

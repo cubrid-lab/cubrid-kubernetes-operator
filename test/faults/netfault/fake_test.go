@@ -94,6 +94,9 @@ type fakeNet struct {
 	// uploads sends 1460 bytes of TCP from a Pod's IP to an address each
 	// time that Pod's rules are read, as an upload under way would.
 	uploads map[string]string
+	// ephemeralState, when set for a container's name, is the state the
+	// kubelet reports for it instead of running.
+	ephemeralState map[string]corev1.ContainerState
 
 	ignoreInject     bool // the inject command succeeds and installs nothing
 	extraRule        bool // the inject command also installs a rule for another address
@@ -597,7 +600,7 @@ func testPod(namespace, name, ip string) *corev1.Pod {
 }
 
 // testEnv returns an Env over a fake client holding the members' Pods and
-// the manager's, and over fakeNet. Adding the ephemeral container starts it
+// the manager's, and over fakeNet. Adding an ephemeral container starts it
 // at once.
 func testEnv(t *testing.T, n *fakeNet) Env {
 	t.Helper()
@@ -630,9 +633,18 @@ func testEnv(t *testing.T, n *fakeNet) Env {
 			if err := c.Update(ctx, stored); err != nil {
 				return err
 			}
-			stored.Status.EphemeralContainerStatuses = append(stored.Status.EphemeralContainerStatuses,
-				corev1.ContainerStatus{Name: Container, State: corev1.ContainerState{
-					Running: &corev1.ContainerStateRunning{}}})
+			for _, added := range pod.Spec.EphemeralContainers {
+				if !slices.ContainsFunc(stored.Status.EphemeralContainerStatuses, func(s corev1.ContainerStatus) bool {
+					return s.Name == added.Name
+				}) {
+					state := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+					if s, ok := n.ephemeralState[added.Name]; ok {
+						state = s
+					}
+					stored.Status.EphemeralContainerStatuses = append(stored.Status.EphemeralContainerStatuses,
+						corev1.ContainerStatus{Name: added.Name, State: state})
+				}
+			}
 			return c.Status().Update(ctx, stored)
 		}}).Build()
 	return Env{Client: c, Kubectl: n.kubectl, Poll: 5 * time.Millisecond, Reserve: 300 * time.Millisecond}

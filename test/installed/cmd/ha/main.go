@@ -111,6 +111,12 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S07: after the settle wait, when a quarantine only a person may release is in force on the run's own "+
 			"cluster, set a stale release token, which must be ignored, then the current one, and measure the "+
 			"return to service; off by default. Counted in the -timeout check")
+	flags.DurationVar(&cfg.PartitionKeepalive, "partition-keepalive", 0,
+		"S07: before the cut, set TCP keepalive in every member Pod's network namespace to this idle time, with "+
+			"a 10s interval and 3 probes, through a privileged ephemeral container, read it back, and reset the "+
+			"cut-off member's connection to the master so that CUBRID makes it again under the new values; "+
+			"whole seconds under 2h, not with partition-master-isolated; 0, the default, leaves the kernel's "+
+			"values. A value that cannot be applied blocks the run. Counted in the -timeout check")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,
