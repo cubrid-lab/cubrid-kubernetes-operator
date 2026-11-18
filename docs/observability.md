@@ -1535,25 +1535,41 @@ already recorded keeps it, and is still started there.
    `Final LSA` equals it. On the master, `cubrid applyinfo -r localhost <db>`
    shows an `EOF LSA` on a later page. `cubrid heartbeat status` on the slave
    still lists its `Copylogdb` and `Applylogdb` as `registered`.
-2. Restart the slave's copier for the master's log, on the slave:
-   `cubrid heartbeat copylogdb stop <db> <master>`, then
-   `cubrid heartbeat copylogdb start <db> <master>`. In POC-41 the new
-   copier connected about a minute after the stop and copied again; a
-   `SIGTERM` to the stuck copier did not end it, and a restart of the applier
-   alone did not resume copying.
-3. Watch the Condition turn `True` (`AppliersProgressing`, with the Event
-   `ReplicationRecovered`) once the copy
-   grows, and `copyDelayedPages` fall. In POC-41 the applier then had to be
-   restarted as well (`cubrid heartbeat applylogdb stop <db> <master>` and
-   `start`) before every row arrived; whether that step is needed was not
-   determined, so check the slave's rows against the master's before
-   relying on it.
+2. **Do not restart `copylogdb` or `applylogdb` with the generic
+   `cubrid heartbeat ... stop/start` commands.** The historical POC-41
+   observed copier recovery after a restart in one test setup, but it did
+   not establish a safe command for this Operator's database container.
+   In POC-67 ([#985](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/985)),
+   a login shell reset `CUBRID_DATABASES`; `stop` reported success without
+   stopping the processes, and `start` created **second** copier/applier
+   processes using a path outside the expected data mount. That slave
+   silently lacked 34 rows committed on the master. Neither the exact
+   non-login-shell procedure nor safe in-place recovery has been verified.
+   Do not substitute manual signals or delete logs/PVCs as a workaround.
+3. **Preserve data and verify a recovery decision before reusing the
+   slave.** Record `cubrid heartbeat status`, the master/slave
+   `cubrid applyinfo` readings and the actual mounted log paths, keeping
+   the original PVC/logs and failed SQL evidence. Compare primary keys and
+   row values with direct SQL on the master and each reachable member.
+   `ReplicationHealthy=True`, `AppliersProgressing`, decreasing lag
+   or a successful process command is **not proof** that acknowledged
+   rows converged. If archives needed by the copier are already removed,
+   restarting cannot recreate them. Consult [ADR-0006](./adr/0006-node-join-rebuild.md)
+   and the [retained-volume recovery guide](./operations/retained-volume-recovery.md)
+   for the documented limits and a maintainer-reviewed, explicitly
+   authorized rejoin or replacement-storage rebuild decision. These are
+   **not automatic repairs**; do not overwrite potentially diverged data
+   or release write quarantine without the existing safety checks.
 
-This was seen after a loss of TCP port 1523 between the master and the
-slaves lasting 90 to 110 seconds, on one lab and one engine build
-(POC-41). It is not a general CUBRID guarantee, and its cause is a
-hypothesis there. If the copy does not grow after a copier restart, treat
-the slave as one that needs a rebuild (ADR-0006).
+The original POC-41 observed the stall after TCP port 1523 was blocked
+between master and slaves for 90–110 seconds, in one lab and one engine
+build. Its recovery steps remain *historical observations*, not currently
+verified operating instructions. POC-67 additionally showed that a copier
+can miss required archives during a prolonged stall and that changing
+the shell environment can create duplicate processes. The safe command
+form is under investigation in #985. Until it is independently verified,
+collect evidence and use the reviewed recovery decision path rather than
+attempting an in-place copier/applier restart.
 
 ## Metrics
 
