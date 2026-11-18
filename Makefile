@@ -104,7 +104,7 @@ check-generated: controller-gen ## Fail if generated files, formatting or go.mod
 	fi
 
 .PHONY: check-docs
-check-docs: ## Fail on project-phase or status wording in DESIGN.md, or on an ADR missing from an ADR index (hack/docs_rules_test.go).
+check-docs: ## Fail on project-phase or status wording in DESIGN.md, or on an ADR missing from an ADR index (hack/docs_rules_test.go; make test runs these tests too).
 	go test ./hack -run '^TestDocRules' -count=1
 
 .PHONY: verify

@@ -662,8 +662,7 @@ rebuild consumes that manifest. The CRD fields are those of
 For `v1alpha1`, recovery is a **bootstrap mode of a new CubridCluster**
 keyed by the object-storage `manifestUri` — **no separate `CubridRestore`
 CR** and no in-place restore (ADR-0008, issue #8; see Section 16). A
-higher-level `CubridRestore` workflow CR may be added later
-non-breakingly.
+higher-level `CubridRestore` workflow CR would not need an API break.
 
 ---
 
@@ -1521,7 +1520,7 @@ major/minor database upgrade
 ```
 
 Terminology rule: this project uses **"database-aware rolling updates"**
-(not "upgrades") for the supported capability, and reserves "upgrade" for
+(not "upgrades") for the update operation this section describes, and reserves "upgrade" for
 CUBRID engine version migration, which the operator does not perform and
 which needs its own design.
 
@@ -1806,6 +1805,7 @@ template.
 ## 23. Release Scope
 
 This document describes design and present behaviour only. The capabilities
-a release requires, its demonstration scenario and its success criteria are
-in the release scope of [ROADMAP.md](./ROADMAP.md). The criterion every
-design decision is judged against is the guiding statement in Section 2.
+a release requires and their completion evidence are in
+[ROADMAP.md](./ROADMAP.md#v01-scope); the demonstration is tracked on #128.
+The criterion every design decision is judged against is the guiding
+statement in Section 2.

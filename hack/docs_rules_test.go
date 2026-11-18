@@ -32,41 +32,93 @@ import (
 
 const repoRoot = ".."
 
+const (
+	reasonProjectPhase = "a project phase"
+	reasonImplStatus   = "implementation status"
+	reasonReleaseScope = "release scope"
+	reasonDocStatus    = "document status"
+)
+
 // designStatusPatterns is the list of project-phase and status wording that
-// DESIGN.md must not contain. Matching is case-insensitive and per line.
-// There is no escape: status belongs in ROADMAP.md, so a matching sentence is
-// reworded as present behaviour or a non-goal, or dropped. The patterns are
-// narrow on purpose, so that API terms such as the `phase` status field,
-// `status.currentPrimary` or a planned failover still pass.
+// DESIGN.md must not contain. Matching is case-insensitive and per paragraph:
+// the lines of a prose paragraph are joined, so a phrase split by line
+// wrapping still matches; a heading, a table row and each line of a fenced
+// code block are matched on their own. There is no escape: status belongs in
+// ROADMAP.md, so a matching sentence is reworded as present behaviour or a
+// non-goal, or dropped. The patterns are narrow on purpose, so that API terms
+// such as the `phase` status field, `status.currentPrimary`, a planned
+// failover or a three-part tool version such as `kind v0.33.0` still pass.
 var designStatusPatterns = []struct {
 	pattern *regexp.Regexp
 	reason  string
 }{
-	{regexp.MustCompile(`(?i)\bphase\s+[0-9]`), "a numbered project phase"},
-	{regexp.MustCompile(`(?i)\b(later|earlier|next|future|first|initial)\s+phase\b`), "a relative project phase"},
-	{regexp.MustCompile(`(?i)\bnot\s+(yet\s+)?implemented\b`), "implementation status"},
-	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(supported|available|done|wired|built|validated)\b`), "implementation status"},
-	{regexp.MustCompile(`(?i)\bimplementation\s+(status|gate)\b`), "implementation status"},
+	{regexp.MustCompile(`(?i)\bphase[\s-]*([0-9]+|one|two|three|four|five)\b`), reasonProjectPhase},
+	{regexp.MustCompile(`(?i)\b(later|earlier|next|future|first|initial)\s+phase\b`), reasonProjectPhase},
+	{regexp.MustCompile(`(?i)\bnot\s+(yet\s+)?implemented\b|\bunimplemented\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(supported|available|done|wired|built|validated)\b|\bnot\s+\w+\s+yet\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\b(added|done|implemented|supported)\s+later\b`), reasonImplStatus},
+	{regexp.MustCompile(`(?i)\bimplementation\s+(status|gate)\b`), reasonImplStatus},
 	{regexp.MustCompile(`(?i)\b(is|are|was|were|been)\s+planned\b|\bplanned\s+for\b`), "planned work"},
-	{regexp.MustCompile(`(?i)\b(TODO|FIXME|TBD)\b`), "an open work marker"},
-	{regexp.MustCompile(`(?i)\bMVP\b`), "release scope"},
-	{regexp.MustCompile(`(?i)\bv0\.[0-9]+`), "a release version"},
-	{regexp.MustCompile(`(?i)\b(initial|first)\s+(release|version)\b`), "release scope"},
-	{regexp.MustCompile(`(?i)\b(later|future|next|upcoming)\s+(release|version)\b`), "release scope"},
-	{regexp.MustCompile(`(?i)\bmilestone\b`), "release scope"},
-	{regexp.MustCompile(`(?i)\bdraft\b`), "document status"},
-	{regexp.MustCompile(`(?i)\*\*status:`), "a document status header"},
-	{regexp.MustCompile(`(?i)\bat\s+this\s+stage\b`), "project status"},
+	{regexp.MustCompile(`(?i)\b(TODO|FIXME|TBD|WIP)\b`), "an open work marker"},
+	{regexp.MustCompile(`(?i)\bMVP\b`), reasonReleaseScope},
+	{regexp.MustCompile(`(?i)\bv0\.[0-9]+(?:\.?[^.0-9]|\.?$)`), "a release version"},
+	{regexp.MustCompile(`(?i)\b(initial|first)\s+(release|version)\b`), reasonReleaseScope},
+	{regexp.MustCompile(`(?i)\b(later|future|next|upcoming)\s+(release|version)\b`), reasonReleaseScope},
+	{regexp.MustCompile(`(?i)\bmilestone\b`), reasonReleaseScope},
+	{regexp.MustCompile(`(?i)\(draft\)|\bdraft\s+(design|document|proposal|spec|version)\b`), reasonDocStatus},
+	{regexp.MustCompile(`(?i)\*\*status:`), reasonDocStatus},
+	{regexp.MustCompile(`(?i)\bat\s+this\s+stage\b`), reasonDocStatus},
 }
 
-// designStatusViolations returns one message per DESIGN.md line that contains
-// project-phase or status wording.
+type designParagraph struct {
+	line int // line number of the paragraph's first line
+	text string
+}
+
+// designParagraphs splits Markdown into the units the wording rule matches:
+// prose paragraphs with their lines joined by a space, and headings, table
+// rows and fenced code lines one by one.
+func designParagraphs(text string) []designParagraph {
+	var out []designParagraph
+	var cur []string
+	start := 0
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, designParagraph{start, strings.Join(cur, " ")})
+			cur = nil
+		}
+	}
+	inFence := false
+	for i, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "```"):
+			flush()
+			inFence = !inFence
+		case inFence, strings.HasPrefix(t, "#"), strings.HasPrefix(t, "|"):
+			flush()
+			out = append(out, designParagraph{i + 1, line})
+		case t == "":
+			flush()
+		default:
+			if len(cur) == 0 {
+				start = i + 1
+			}
+			cur = append(cur, t)
+		}
+	}
+	flush()
+	return out
+}
+
+// designStatusViolations returns one message per pattern that matches a
+// DESIGN.md paragraph, naming the paragraph's first line.
 func designStatusViolations(text string) []string {
 	var out []string
-	for i, line := range strings.Split(text, "\n") {
+	for _, para := range designParagraphs(text) {
 		for _, p := range designStatusPatterns {
-			if m := p.pattern.FindString(line); m != "" {
-				out = append(out, fmt.Sprintf("DESIGN.md:%d: %q is %s; status belongs in ROADMAP.md", i+1, m, p.reason))
+			if m := p.pattern.FindString(para.text); m != "" {
+				out = append(out, fmt.Sprintf("DESIGN.md:%d: %q is %s; status belongs in ROADMAP.md", para.line, m, p.reason))
 			}
 		}
 	}
@@ -179,6 +231,13 @@ func TestDocRulesStatusWordingRejectsSeededExamples(t *testing.T) {
 		"### 8.1 Spec (draft)",
 		"**Status:** Draft (rev. 2)",
 		"The project does not promise zero data loss at this stage.",
+		"Phase one adds the broker tier.",
+		"The phase-2 harness covers failover.",
+		"Point-in-time restore is unimplemented.",
+		"Scale-out is not supported yet.",
+		"A workflow CR may be added later.",
+		"WIP: restore flow.",
+		"A higher-level workflow CR may be added\nlater without an API break.",
 	}
 	for _, line := range rejected {
 		if len(designStatusViolations(line)) == 0 {
@@ -191,6 +250,10 @@ func TestDocRulesStatusWordingRejectsSeededExamples(t *testing.T) {
 		"**explicit planned-failover intent** → fail over to an updated slave →",
 		"restore initial master → validate → configure HA master → seed slaves",
 		"[ROADMAP.md](ROADMAP.md) owns implementation and validation status.",
+		"The Kind e2e runs on kind v0.33.0 and `kindest/node:v1.37.0`.",
+		"Release Drafter keeps a release draft up to date.",
+		"The release is persisted before Brokers restart on a later pass;",
+		"```yaml\n      phase: Created\n```",
 	}
 	for _, line := range allowed {
 		if v := designStatusViolations(line); len(v) != 0 {
