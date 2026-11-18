@@ -377,7 +377,7 @@ make generate   # Regenerate DeepCopy methods
 ```
 make lint-fix   # Auto-fix code style
 make test       # Run unit tests
-make verify     # check-generated, format-check, vet, lint and test, as CI runs them
+make verify     # check-generated, format-check, vet, lint, check-docs and test, as CI runs them
 ```
 
 **When a feature graduates from planned to implemented:**
@@ -389,6 +389,21 @@ docs for the feature name plus `later phase`, `not implemented`, `Phase`, `TODO`
 and any old status-bearing strings (e.g. a renamed condition reason) and fix
 them in the same PR — stale "not implemented" docs cause duplicate work and
 break runbooks/alerts that reference the old strings.
+
+### Where each kind of text belongs
+
+| Text | Place |
+|---|---|
+| Release scope, dates and the status of each capability | `ROADMAP.md`, the only place for status |
+| Present design and behaviour, no project phase or status | `DESIGN.md` |
+| Decisions and their reasons | `docs/adr/` (each ADR listed in `DESIGN.md` section 22 and `docs/adr/README.md`) |
+| Work to do and its evidence (lab runs, logs, measurements) | GitHub issues |
+| Observed CUBRID engine behaviour | `docs/poc/` |
+| Procedures | `docs/testing/`, `docs/operations/`, `docs/observability.md` |
+
+`make check-docs` (part of `make verify`, and run by CI on every PR) fails on
+project-phase or status wording in `DESIGN.md` and on an ADR missing from
+either ADR index. Its pattern list is in `hack/docs_rules_test.go`.
 
 ## CLI Commands Cheat Sheet
 

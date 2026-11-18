@@ -88,7 +88,7 @@ make manifests generate fmt   # regenerate CRDs/RBAC/DeepCopy and format after A
 go mod tidy       # tidy go.mod/go.sum after import or dependency changes
 make check-generated   # fail if generated files, formatting or go.mod/go.sum are not committed
 make format-check # fail if a Go file is not gofmt-formatted
-make verify       # check-generated, format-check, vet, lint and test (CI runs this)
+make verify       # check-generated, format-check, vet, lint, check-docs and test (CI runs this)
 make run          # run the operator against your current kubecontext
 make test-e2e     # Kind-based e2e (isolated cluster)
 ```
@@ -444,7 +444,7 @@ separate safety/SQL/VM acceptance criteria.
 - One logical change per PR; keep the diff focused and explain the motivation
   in the PR description.
 - GitHub Actions CI must pass the applicable build and `make verify` checks
-  (check-generated, format-check, vet, lint and test) plus selected E2E.
+  (check-generated, format-check, vet, lint, check-docs and test) plus selected E2E.
   Local `make build` and `make verify` are recommended; report any local runs,
   results and checks not run with reasons. CI remains the authoritative record.
 - Add or update tests for behavior changes.
@@ -459,7 +459,8 @@ separate safety/SQL/VM acceptance criteria.
   is ignored. It never writes the working tree, but it compares the working
   tree with the git index, so run it on a clean checkout or after committing.
 - Update the relevant ADR/`DESIGN.md`/`ROADMAP.md` when behavior or decisions
-  change.
+  change. Which document holds which kind of text is in
+  [AGENTS.md — Where each kind of text belongs](./AGENTS.md#where-each-kind-of-text-belongs).
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the
   title.
 - Close a sub-issue from its PR with `Closes #123` only when the PR meets the
