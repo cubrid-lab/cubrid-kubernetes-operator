@@ -102,9 +102,9 @@ multi-zone/provider resilience are outside the initial delivery. New features
 remain proposals until scheduled; required validation takes precedence.
 
 Improvements found during v0.1 validation that v0.1 does not require are
-kept as individual issues labelled
-[`status: backlog`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues?q=is%3Aopen+label%3A%22status%3A+backlog%22)
-(maintainer decision, 2026-11-18 UTC). The required part of each stays on its
+kept as individual issues whose body ends with `**Release:** backlog`
+([open backlog issues](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues?q=is%3Aissue+is%3Aopen+in%3Abody+%22Release%3A+backlog%22);
+maintainer decision, 2026-11-18 UTC). The required part of each stays on its
 v0.1 issue.
 
 ## Implementation and validation inventory
