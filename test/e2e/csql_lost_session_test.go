@@ -71,6 +71,98 @@ type lostSessionRecord struct {
 	Identity sqlcheck.IdentityResult `json:"identity"`
 	// ReRead says how the read made once more answered.
 	ReRead string `json:"reRead"`
+	// ServerAtPair is cub_server's identity (pid, start time in clock ticks,
+	// HA mode) read on the member right after the pair, as the identity script
+	// printed it. It is a single reading at the pair's time, not a comparison
+	// with the start of the step: csql calls are made from many places that
+	// know nothing of a step's start. A pid or start time that differs from
+	// another record of the same member in the same step shows a restart.
+	ServerAtPair []string `json:"serverAtPair,omitempty"`
+	// ServerLogTail is the last lines of the member's newest server error log,
+	// read right after the pair, to compare with the pair's time in At.
+	ServerLogTail []string `json:"serverLogTail,omitempty"`
+	// ServerReadError says why the two fields above are missing or partial.
+	ServerReadError string `json:"serverReadError,omitempty"`
+}
+
+const (
+	// serverLogTailLines and serverLogLineWidth bound the log lines kept with a
+	// record: at most 40 lines of 400 characters each.
+	serverLogTailLines = 40
+	serverLogLineWidth = 400
+	// serverLogTailScript prints the last serverLogTailLines lines of the
+	// newest server error log of database $0, in the member's container.
+	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0"*.err 2>/dev/null | head -n 1); ` +
+		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
+		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
+)
+
+// pairCapture reads a member's server state when csql printed the pair. It is
+// nil, and nothing is read, outside a run of the e2e suite (BeforeSuite sets
+// it), so that the unit tests of the ledger make no kubectl call.
+var pairCapture func(ctx context.Context, namespace, pod, database string) pairServerState
+
+// pairServerState is what pairCapture read.
+type pairServerState struct {
+	identity, logTail []string
+	err               string
+}
+
+// boundLines splits out into trimmed non-empty lines, keeps the last limit of
+// them, and cuts each at width characters.
+func boundLines(out string, limit, width int) []string {
+	var lines []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	for i, line := range lines {
+		if r := []rune(line); len(r) > width {
+			lines[i] = string(r[:width])
+		}
+	}
+	return lines
+}
+
+// readServerState reads cub_server's identity and the server log's tail on a
+// member, each bounded in time and size. A failed read is recorded, not
+// returned: it must not change the call's result.
+func readServerState(ctx context.Context, namespace, pod, database string) pairServerState {
+	var state pairServerState
+	read := func(script string, timeout time.Duration) (string, error) {
+		bounded, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return utils.RunQuiet(exec.CommandContext(bounded, "kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
+			"bash", "-c", script, database))
+	}
+	var problems []string
+	if out, err := read(serverLogTailScript, identityTimeout); err != nil {
+		problems = append(problems, "server log: "+err.Error())
+	} else {
+		state.logTail = boundLines(out, serverLogTailLines, serverLogLineWidth)
+	}
+	if out, err := read(sqlcheck.HAServerIdentityScript, 2*identityTimeout); err != nil {
+		problems = append(problems, "identity: "+err.Error())
+	} else {
+		state.identity = boundLines(out, 10, serverLogLineWidth)
+	}
+	state.err = strings.Join(problems, "; ")
+	return state
+}
+
+// attach adds the server state read at the pair to a record, which may be nil.
+func (l *lostSessionLedger) attach(record *lostSessionRecord, state pairServerState) {
+	if record == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	record.ServerAtPair, record.ServerLogTail, record.ServerReadError = state.identity, state.logTail, state.err
+	l.store()
 }
 
 // lostSessionLedger counts the pair over the whole run, for every caller of

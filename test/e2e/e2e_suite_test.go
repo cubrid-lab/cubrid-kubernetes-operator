@@ -82,6 +82,7 @@ var _ = BeforeSuite(func() {
 	// the same redaction as the evidence files. Installed here, not before
 	// RunSpecs, which needs Ginkgo's own writer.
 	utils.SetRedaction(func(text string) string { return string(redactor.Redact([]byte(text))) })
+	pairCapture = readServerState
 	// Before anything is built: a run whose evidence would be mixed with an
 	// earlier run's is not started (#310).
 	// AfterSuite still runs after a refusal, but writes nothing there.
@@ -112,6 +113,7 @@ var _ = BeforeSuite(func() {
 // The gate judges the scenarios this process recorded, so it assumes one
 // Ginkgo process: with -p each process would judge only its own scenarios.
 var _ = AfterSuite(func() {
+	pairCapture = nil
 	err := concludeRun()
 	// Undeploying removes the CRDs; on a cluster that is not the suite's own
 	// it would delete that cluster's CubridClusters.
