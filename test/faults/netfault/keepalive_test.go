@@ -59,7 +59,12 @@ type fakeSysctlNS struct {
 	pendingSinceReset     int
 	keepaliveOnReconnect  bool
 	readOnly, ignoreWrite bool
-	ignoreDestroy         bool
+	// ignoreDestroy: ss -K prints nothing and exits 0, and the sockets stay,
+	// as on a kernel that answers SOCK_DESTROY with EOPNOTSUPP. rearmOld
+	// shows every socket with a short keepalive timer, as an old socket
+	// whose first expiry came after the write.
+	ignoreDestroy, rearmOld bool
+	kernel                  string
 }
 
 // fakeSysctl answers the keepalive container's commands.
@@ -75,7 +80,7 @@ func newFakeSysctl() *fakeSysctl {
 	s := &fakeSysctl{podIP: testPods, execIn: map[string]string{}, ns: map[string]*fakeSysctlNS{}}
 	for _, ip := range testPods {
 		s.ns[ip] = &fakeSysctlNS{ip: ip, time: 7200, intvl: 75, probes: 9, nextPort: 50000,
-			keepaliveOnReconnect: true, reconnectIn: 1}
+			keepaliveOnReconnect: true, reconnectIn: 1, kernel: "5.15.0-203-generic"}
 	}
 	// The cut-off member copies the master's log over a connection made
 	// before the run changed anything, armed with the 2-hour default; and
@@ -113,6 +118,8 @@ func (s *fakeSysctl) kubectl(ctx context.Context, args ...string) (string, error
 	switch op[2] {
 	case "addr":
 		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\n", ns.ip), nil
+	case "kernel":
+		return ns.kernel + "\n", nil
 	case "keepalive-read":
 		return fmt.Sprintf("%d\n%d\n%d\n", ns.time, ns.intvl, ns.probes), nil
 	case "keepalive-write":
@@ -142,20 +149,26 @@ func (s *fakeSysctl) kubectl(ctx context.Context, args ...string) (string, error
 				ns.pendingReconnect = nil
 			}
 		}
+		if ns.rearmOld {
+			for i := range ns.sockets {
+				ns.sockets[i].keepalive = "25sec"
+			}
+		}
 		return ns.ss(""), nil
 	case "sockets-reset":
 		m := socketsResetArg.FindStringSubmatch(first)
 		peer := m[1] + ":" + m[2]
-		out := ns.ss(peer)
-		if !ns.ignoreDestroy {
-			ns.sockets = slices.DeleteFunc(ns.sockets, func(sk fakeSocket) bool {
-				if sk.peer == peer {
-					ns.pendingReconnect, ns.pendingSinceReset = append(ns.pendingReconnect, peer), 0
-					return true
-				}
-				return false
-			})
+		if ns.ignoreDestroy {
+			return "", nil
 		}
+		out := ns.ss(peer)
+		ns.sockets = slices.DeleteFunc(ns.sockets, func(sk fakeSocket) bool {
+			if sk.peer == peer {
+				ns.pendingReconnect, ns.pendingSinceReset = append(ns.pendingReconnect, peer), 0
+				return true
+			}
+			return false
+		})
 		return out, nil
 	}
 	return "", fmt.Errorf("unexpected script %q", script)
@@ -197,6 +210,17 @@ func shorten(t *testing.T, s *fakeSysctl, wait time.Duration) (KeepaliveRecord, 
 		wait)
 }
 
+// requireKeepaliveSet checks a member read with the kernel's defaults before
+// the write and want after it, on a kernel with per-namespace keepalive.
+func requireKeepaliveSet(t *testing.T, m KeepaliveMember, want KeepaliveValues) {
+	t.Helper()
+	if m.Before == nil || *m.Before != (KeepaliveValues{Time: 7200, Interval: 75, Probes: 9}) ||
+		m.After == nil || *m.After != want || m.SetAt == nil || m.Error != "" || m.UID != "uid-"+m.Name ||
+		m.Kernel != "5.15.0-203-generic" {
+		t.Errorf("member %+v", m)
+	}
+}
+
 // Every member's namespace gets the new values, read back afterwards; the
 // cut-off member's connection to the master is reset, and the connection
 // CUBRID makes again carries a keepalive timer within the new time. The
@@ -215,10 +239,7 @@ func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *te
 		t.Fatalf("members %+v", rec.Members)
 	}
 	for _, m := range rec.Members {
-		if m.Before == nil || *m.Before != (KeepaliveValues{Time: 7200, Interval: 75, Probes: 9}) ||
-			m.After == nil || *m.After != want || m.SetAt == nil || m.Error != "" || m.UID != "uid-"+m.Name {
-			t.Errorf("member %+v", m)
-		}
+		requireKeepaliveSet(t, m, want)
 	}
 	if rec.Target != target || rec.Master != slave1 {
 		t.Errorf("target %q, master %q", rec.Target, rec.Master)
@@ -231,6 +252,10 @@ func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *te
 	if got == nil || got.Peer != testPods[slave1]+":1523" || got.Local == rec.Reset[0].Local ||
 		got.KeepaliveLeftSeconds <= 0 || got.KeepaliveLeftSeconds > 30 || rec.ReconnectedAt == nil || rec.Unmet != "" {
 		t.Errorf("reconnected %+v at %v, unmet %q", got, rec.ReconnectedAt, rec.Unmet)
+	}
+	// The connection is told apart by its addresses only: the record says so.
+	if !strings.Contains(rec.Note, "addresses") || !strings.Contains(rec.Note, "process") {
+		t.Errorf("note %q", rec.Note)
 	}
 	if ns := s.ns[testPods[target]]; !slices.ContainsFunc(ns.sockets, func(sk fakeSocket) bool {
 		return sk.local == testPods[target]+":48800"
@@ -267,7 +292,15 @@ func TestKeepaliveContainerIsPrivileged(t *testing.T) {
 		}
 		if len(found) != 1 || found[0].SecurityContext == nil || found[0].SecurityContext.Privileged == nil ||
 			!*found[0].SecurityContext.Privileged || found[0].Image != Image {
-			t.Errorf("%s: keepalive containers %+v", name, found)
+			t.Fatalf("%s: keepalive containers %+v", name, found)
+		}
+		// The privileged process ends by itself instead of living as long as
+		// the Pod.
+		if cmd := found[0].Command; len(cmd) != 2 || cmd[0] != "sleep" {
+			t.Errorf("%s: the keepalive container runs %q, want a bounded sleep", name, cmd)
+		} else if secs, err := strconv.Atoi(cmd[1]); err != nil || secs <= 0 ||
+			secs > int(keepaliveLifetime.Seconds()) {
+			t.Errorf("%s: the keepalive container sleeps %q, want at most %s", name, cmd[1], keepaliveLifetime)
 		}
 	}
 }
@@ -290,6 +323,19 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 		{"the kernel does not reset the connection", func(s *fakeSysctl) {
 			s.ns[testPods[target]].ignoreDestroy = true
 		}, "still open after the reset", false},
+		// ss -K prints nothing and exits 0 when the kernel answers
+		// SOCK_DESTROY with EOPNOTSUPP: the old socket is still listed.
+		{"ss -K prints nothing and the old socket stays", func(s *fakeSysctl) {
+			s.ns[testPods[target]].ignoreDestroy = true
+		}, "ss -K reported none reset", false},
+		// The old socket's first expiry came after the write, so it shows a
+		// short timer; it is still not a new connection.
+		{"the old socket re-arms with a short timer", func(s *fakeSysctl) {
+			s.ns[testPods[target]].ignoreDestroy, s.ns[testPods[target]].rearmOld = true, true
+		}, "still open after the reset", false},
+		{"a kernel without per-namespace keepalive", func(s *fakeSysctl) {
+			s.ns[testPods[slave1]].kernel = "4.9.0-11-amd64"
+		}, "4.13", false},
 		{"CUBRID does not connect again", func(s *fakeSysctl) { s.ns[testPods[target]].reconnectIn = -1 },
 			"no new connection", true},
 		{"the new connection has no keepalive timer", func(s *fakeSysctl) {
@@ -307,7 +353,9 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 			if rec.Unmet == "" || !strings.Contains(rec.Unmet, tc.want) {
 				t.Errorf("unmet %q, want %q", rec.Unmet, tc.want)
 			}
-			if (rec.ResetAt != nil) != (tc.reset || tc.want == "still open after the reset") {
+			destroy := strings.Contains(tc.name, "reset the connection") || strings.Contains(tc.name, "ss -K") ||
+				strings.Contains(tc.name, "re-arms")
+			if (rec.ResetAt != nil) != (tc.reset || destroy) {
 				t.Errorf("reset at %v", rec.ResetAt)
 			}
 			if rec.Reconnected != nil {
@@ -353,12 +401,14 @@ func TestParseSockets(t *testing.T) {
 		"0      0      10.42.3.189:48796 10.42.2.52:1523 timer:(keepalive,5.123ms,0)\n" +
 		"0      0      10.42.3.189:48797 10.42.2.52:1523 timer:(keepalive,123ms,1)\n" +
 		"0      0      10.42.3.189:48798 10.42.2.52:1523 timer:(on,200ms,0)\n" +
-		"0      0      10.42.3.189:48799 10.42.2.52:1523\n"
+		"0      0      10.42.3.189:48799 10.42.2.52:1523\n" +
+		"0      0      [::ffff:10.42.3.189]:48800 [::ffff:10.42.2.52]:1523 timer:(keepalive,-1sec,0)\n" +
+		"0      0      10.42.3.189:48801 10.42.2.52:1523 timer:(keepalive,soon,0)\n"
 	sockets, err := parseSockets(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []float64{105 * 60, 89, 5.123, 0.123, 0, 0}
+	want := []float64{105 * 60, 89, 5.123, 0.123, 0, 0, 0, 0}
 	if len(sockets) != len(want) {
 		t.Fatalf("sockets %+v", sockets)
 	}
@@ -369,6 +419,14 @@ func TestParseSockets(t *testing.T) {
 	}
 	if sockets[4].Keepalive != "" || sockets[5].Keepalive != "" || sockets[0].Keepalive != "105min" {
 		t.Errorf("timers %+v", sockets)
+	}
+	// An IPv4-mapped address compares as the IPv4 one; an overdue timer has
+	// no time left; one that cannot be read is kept as printed and marked.
+	if sockets[6].Local != "10.42.3.189:48800" || sockets[6].Keepalive != "-1sec" || sockets[6].KeepaliveUnread {
+		t.Errorf("mapped or overdue socket %+v", sockets[6])
+	}
+	if sockets[7].Keepalive != "soon" || !sockets[7].KeepaliveUnread {
+		t.Errorf("socket with an unreadable timer %+v", sockets[7])
 	}
 	if _, err := parseSockets("garbage\n"); err == nil {
 		t.Error("a line that is not a socket was accepted")

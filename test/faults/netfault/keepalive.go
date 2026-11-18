@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -33,10 +34,29 @@ import (
 // a member Pod's network namespace. It is privileged: the container runtime
 // mounts /proc/sys read-only in any other container, so the faults' own
 // container, with NET_ADMIN only, cannot write net.ipv4.tcp_keepalive_*
-// (#982). It runs the faults' image and only sleeps; like the faults'
-// container, it cannot be removed, and the values it sets go away with the
-// Pod's network namespace.
+// (#982). It runs the faults' image and only sleeps, for no longer than the
+// step that uses it (keepaliveLifetime at most), so the privileged process
+// does not live as long as the Pod. The stopped container stays listed in
+// the Pod's spec, which cannot drop an ephemeral container; the values it set
+// go away with the Pod's network namespace.
 const KeepaliveContainer = "netsysctl"
+
+// keepaliveLifetime bounds how long the keepalive container sleeps: the
+// rest of the step's context, plus keepaliveMargin, and this when the
+// context has no deadline.
+var keepaliveLifetime = 15 * time.Minute
+
+const keepaliveMargin = time.Minute
+
+// minKeepaliveKernel is the first Linux release whose tcp_keepalive_* are per
+// network namespace (4.13); on an older kernel a write from one Pod would
+// change the node's value.
+var minKeepaliveKernel = [2]int{4, 13}
+
+// reconnectedNote says what the reconnected connection rests on.
+const reconnectedNote = "the reconnected connection is identified by its addresses only: an established connection " +
+	"from the cut-off member to the master's port with a local address that was not listed before the reset; the " +
+	"process that owns it is not read"
 
 // The kernel's bounds on the keepalive values (MAX_TCP_KEEPIDLE,
 // MAX_TCP_KEEPINTVL, MAX_TCP_KEEPCNT), and its default keepalive time, which
@@ -95,6 +115,7 @@ type KeepaliveMember struct {
 	Name   string           `json:"member"`
 	Pod    string           `json:"pod"`
 	UID    string           `json:"podUID"`
+	Kernel string           `json:"kernelRelease,omitempty"`
 	Before *KeepaliveValues `json:"before,omitempty"`
 	After  *KeepaliveValues `json:"after,omitempty"`
 	SetAt  *time.Time       `json:"setAt,omitempty"`
@@ -108,6 +129,7 @@ type Socket struct {
 	Peer                 string  `json:"peer"`
 	Keepalive            string  `json:"keepaliveTimer,omitempty"`
 	KeepaliveLeftSeconds float64 `json:"keepaliveLeftSeconds,omitempty"`
+	KeepaliveUnread      bool    `json:"keepaliveTimerUnread,omitempty"`
 }
 
 // KeepaliveRecord is what ShortenKeepalive did: the values asked for, each
@@ -126,6 +148,7 @@ type KeepaliveRecord struct {
 	Reconnected   *Socket           `json:"targetReconnectedSocket,omitempty"`
 	ReconnectedAt *time.Time        `json:"reconnectedSeenAt,omitempty"`
 	Unmet         string            `json:"unmet,omitempty"`
+	Note          string            `json:"note"`
 }
 
 // ShortenKeepalive sets k in each member's network namespace and reads the
@@ -141,14 +164,20 @@ type KeepaliveRecord struct {
 // when its Pod started. So the run resets them (ss -K, which needs only
 // NET_ADMIN and a kernel with socket destroy support) and waits until a new
 // connection to the master shows a keepalive timer no longer than k.Time.
-// The connections to the other members are left as they are.
+// ss -K prints nothing and exits 0 when the kernel cannot destroy sockets,
+// so the reset is judged by the listing: a connection to the master listed
+// before it must be gone, and no connection listed before it ever counts as
+// the new one. The new one is told apart by its addresses only, not by the
+// process that owns it. The connections to the other members are left as
+// they are. Each member's kernel release is read and recorded, and one older
+// than 4.13, whose keepalive values are not per namespace, is refused.
 //
 // Any step that does not hold returns an error that says why, and the
 // record keeps what was seen.
 func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpoint, target, master Endpoint,
 	wait time.Duration) (KeepaliveRecord, error) {
 	rec := KeepaliveRecord{Requested: k.values(), Container: KeepaliveContainer, Members: []KeepaliveMember{},
-		Target: target.Name, Master: master.Name, SocketsBefore: []Socket{}, Reset: []Socket{}}
+		Target: target.Name, Master: master.Name, SocketsBefore: []Socket{}, Reset: []Socket{}, Note: reconnectedNote}
 	fail := func(err error) (KeepaliveRecord, error) {
 		rec.Unmet = err.Error()
 		return rec, err
@@ -156,8 +185,12 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	if err := k.Validate(); err != nil {
 		return fail(err)
 	}
+	lifetime := keepaliveLifetime
+	if deadline, ok := ctx.Deadline(); ok {
+		lifetime = min(time.Until(deadline)+keepaliveMargin, keepaliveLifetime)
+	}
 	for _, e := range members {
-		m, err := setKeepalive(ctx, env, e, k)
+		m, err := setKeepalive(ctx, env, e, k, lifetime)
 		rec.Members = append(rec.Members, m)
 		if err != nil {
 			return fail(err)
@@ -165,21 +198,30 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	memberIPs := make([]string, 0, len(members))
 	for _, e := range members {
-		memberIPs = append(memberIPs, e.IP)
+		memberIPs = append(memberIPs, normalAddr(e.IP))
 	}
 	port := strconv.Itoa(master.Port)
-	toMaster := master.IP + ":" + port
+	toMaster := normalAddr(master.IP) + ":" + port
 	sockets, err := readSockets(ctx, env, target, master.Port)
 	if err != nil {
 		return fail(err)
 	}
+	// before holds every local address listed to a member; expected those
+	// to the master, which the reset must take away.
+	var before, expected []string
 	for _, s := range sockets {
 		if host, _, _ := strings.Cut(s.Peer, ":"); slices.Contains(memberIPs, host) {
 			rec.SocketsBefore = append(rec.SocketsBefore, s)
+			before = append(before, s.Local)
+			if s.Peer == toMaster {
+				expected = append(expected, s.Local)
+			}
 		}
 	}
+	// An IPv4 peer may be listed as IPv4-mapped on a dual-stack socket.
 	out, err := shellIn(ctx, env, target, KeepaliveContainer, fmt.Sprintf(": netfault sockets-reset %[1]s %[2]s\n"+
-		"ss -K -tnoH state established '( dst %[1]s and dport = :%[2]s )'", master.IP, port))
+		"ss -K -tnoH state established '( ( dst %[1]s or dst [::ffff:%[1]s] ) and dport = :%[2]s )'",
+		master.IP, port))
 	if err != nil {
 		return fail(fmt.Errorf("reset %s's connections to %s's port %s: %w", target.Name, master.Name, port, err))
 	}
@@ -188,13 +230,9 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	if rec.Reset, err = parseSockets(out); err != nil {
 		return fail(fmt.Errorf("%s: %w", target.Name, err))
 	}
-	var reset []string
-	for _, s := range rec.Reset {
-		reset = append(reset, s.Local)
-	}
 	deadline := time.Now().Add(wait)
 	var seen []Socket
-	for checked := false; ; checked = true {
+	for {
 		start := time.Now()
 		sockets, err := readSockets(ctx, env, target, master.Port)
 		if err != nil {
@@ -204,11 +242,20 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 		for _, s := range sockets {
 			switch {
 			case s.Peer != toMaster:
-			case slices.Contains(reset, s.Local) && !checked:
-				return fail(fmt.Errorf("%s's connection %s to %s is still open after the reset: the kernel may "+
-					"not support destroying sockets (CONFIG_INET_DIAG_DESTROY)", target.Name, s.Local, toMaster))
-			case slices.Contains(reset, s.Local):
-			case s.Keepalive != "" && s.KeepaliveLeftSeconds <= k.Time.Seconds():
+			case slices.Contains(expected, s.Local):
+				// ss -K prints nothing and exits 0 when the kernel answers
+				// SOCK_DESTROY with EOPNOTSUPP, so the listing decides.
+				printed := fmt.Sprintf("ss -K reported %d reset", len(rec.Reset))
+				if len(rec.Reset) == 0 {
+					printed = "ss -K reported none reset"
+				}
+				return fail(fmt.Errorf("%s's connection %s to %s is still open after the reset (%s): the kernel "+
+					"may not support destroying sockets (CONFIG_INET_DIAG_DESTROY)", target.Name, s.Local, toMaster,
+					printed))
+			case slices.Contains(before, s.Local):
+				// A connection listed before the reset is never the new one,
+				// whatever its timer shows.
+			case s.Keepalive != "" && !s.KeepaliveUnread && s.KeepaliveLeftSeconds <= k.Time.Seconds():
 				at := time.Now().UTC()
 				rec.Reconnected, rec.ReconnectedAt = &s, &at
 				return rec, nil
@@ -231,9 +278,13 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	var timers []string
 	for _, s := range seen {
-		if s.Keepalive == "" {
+		switch {
+		case s.Keepalive == "":
 			timers = append(timers, s.Local+" has no keepalive timer")
-		} else {
+		case s.KeepaliveUnread:
+			timers = append(timers, fmt.Sprintf("%s has a keepalive timer %q that could not be read", s.Local,
+				s.Keepalive))
+		default:
 			timers = append(timers, fmt.Sprintf("%s has a keepalive timer of %s, longer than %s", s.Local,
 				s.Keepalive, k.Time))
 		}
@@ -245,17 +296,26 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 // setKeepalive adds the keepalive container to the member's Pod, checks that
 // it is in the Pod's network namespace, and writes k there, reading the
 // values before and after.
-func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive) (KeepaliveMember, error) {
+func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive, lifetime time.Duration) (KeepaliveMember,
+	error) {
 	m := KeepaliveMember{Name: e.Name, Pod: e.Pod, UID: e.UID}
 	fail := func(err error) (KeepaliveMember, error) {
 		m.Error = err.Error()
 		return m, err
 	}
-	if err := attach(ctx, env, e, keepaliveContainer(env.image())); err != nil {
+	if err := attach(ctx, env, e, keepaliveContainer(env.image(), lifetime)); err != nil {
 		return fail(err)
 	}
 	if err := checkNamespaceIn(ctx, env, e, KeepaliveContainer); err != nil {
 		return fail(err)
+	}
+	out, err := shellIn(ctx, env, e, KeepaliveContainer, ": netfault kernel\nuname -r")
+	if err != nil {
+		return fail(err)
+	}
+	m.Kernel = strings.TrimSpace(out)
+	if err := checkKernel(m.Kernel); err != nil {
+		return fail(fmt.Errorf("%s: %w", e.Name, err))
 	}
 	before, err := readKeepalive(ctx, env, e)
 	if err != nil {
@@ -263,7 +323,7 @@ func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive) (Keepal
 	}
 	m.Before = &before
 	want := k.values()
-	out, err := shellIn(ctx, env, e, KeepaliveContainer, fmt.Sprintf(
+	out, err = shellIn(ctx, env, e, KeepaliveContainer, fmt.Sprintf(
 		": netfault keepalive-write %d %d %d\n"+
 			"{ echo %[1]d > %[4]s && echo %[2]d > %[5]s && echo %[3]d > %[6]s; } 2>&1",
 		want.Time, want.Interval, want.Probes, keepaliveSysctlTime, keepaliveSysctlInterval, keepaliveSysctlProbes))
@@ -283,10 +343,28 @@ func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive) (Keepal
 	return m, nil
 }
 
-func keepaliveContainer(image string) corev1.EphemeralContainer {
+var kernelRelease = regexp.MustCompile(`^(\d+)\.(\d+)`)
+
+// checkKernel refuses a kernel release older than minKeepaliveKernel, or one
+// it cannot read.
+func checkKernel(release string) error {
+	m := kernelRelease.FindStringSubmatch(release)
+	if m == nil {
+		return fmt.Errorf("unexpected kernel release %q: per-namespace TCP keepalive cannot be confirmed", release)
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	if major < minKeepaliveKernel[0] || (major == minKeepaliveKernel[0] && minor < minKeepaliveKernel[1]) {
+		return fmt.Errorf("kernel %s is older than %d.%d, the first with per-namespace TCP keepalive: a write "+
+			"would change the node's value", release, minKeepaliveKernel[0], minKeepaliveKernel[1])
+	}
+	return nil
+}
+
+func keepaliveContainer(image string, lifetime time.Duration) corev1.EphemeralContainer {
 	return corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 		Name: KeepaliveContainer, Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"tail", "-f", "/dev/null"},
+		Command:         []string{"sleep", strconv.Itoa(max(int(lifetime/time.Second), 1))},
 		SecurityContext: &corev1.SecurityContext{Privileged: new(true), RunAsUser: new(int64(0))},
 	}}
 }
@@ -348,20 +426,47 @@ func parseSockets(out string) ([]Socket, error) {
 		if errors.Join(err1, err2) != nil {
 			return nil, fmt.Errorf("unexpected ss line %q", line)
 		}
-		s := Socket{Local: fields[2], Peer: fields[3]}
+		s := Socket{Local: normalAddrPort(fields[2]), Peer: normalAddrPort(fields[3])}
 		if m := keepaliveTimer.FindStringSubmatch(line); m != nil {
+			// A timer that cannot be read is kept as printed and marked; it
+			// never counts as the new keepalive.
 			left, err := ssSeconds(m[1])
-			if err != nil {
-				return nil, fmt.Errorf("ss line %q: %w", line, err)
-			}
-			s.Keepalive, s.KeepaliveLeftSeconds = m[1], left
+			s.Keepalive, s.KeepaliveLeftSeconds, s.KeepaliveUnread = m[1], left, err != nil
 		}
 		sockets = append(sockets, s)
 	}
 	return sockets, nil
 }
 
+// normalAddrPort writes an address and port the same way whichever form ss
+// printed: an IPv4-mapped IPv6 address as its IPv4 address. One that does
+// not parse is kept as it is.
+func normalAddrPort(text string) string {
+	ap, err := netip.ParseAddrPort(text)
+	if err != nil {
+		return text
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()).String()
+}
+
+// normalAddr is normalAddrPort for an address alone.
+func normalAddr(text string) string {
+	a, err := netip.ParseAddr(text)
+	if err != nil {
+		return text
+	}
+	return a.Unmap().String()
+}
+
+// ssSeconds reads a timer's time left; an overdue timer, which ss prints
+// with a leading minus, has none.
 func ssSeconds(text string) (float64, error) {
+	if strings.HasPrefix(text, "-") {
+		if _, err := ssSeconds(text[1:]); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
 	m := ssTime.FindStringSubmatch(text)
 	if m == nil {
 		return 0, fmt.Errorf("unexpected timer %q", text)

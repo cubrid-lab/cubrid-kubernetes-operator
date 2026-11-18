@@ -1082,14 +1082,19 @@ timer at 105 minutes
 With the option, after the master was moved and before the clients start
 and anything is cut, the run:
 
-1. adds an ephemeral container named `netsysctl` to each member Pod and,
-   from it, writes `net.ipv4.tcp_keepalive_time` (the option, whole
+1. checks that the run namespace is still the run's own and that each
+   member Pod is controlled by the run's HA StatefulSet, with the UID the
+   partition and the run's member identities name, before it adds anything;
+2. adds an ephemeral container named `netsysctl` to each member Pod and,
+   from it, reads the node's kernel release (`uname -r`, refused before
+   4.13, the first release whose keepalive values are per network
+   namespace), writes `net.ipv4.tcp_keepalive_time` (the option, whole
    seconds under 2 hours), `tcp_keepalive_intvl` (10 seconds) and
    `tcp_keepalive_probes` (3) under `/proc/sys/net/ipv4`, then reads the
    three values back. They are per network namespace, which every container
    of the Pod shares, so CUBRID's connections in that Pod get them; the
    node and other Pods are not touched;
-2. on the member it will cut off, resets the established TCP connections
+3. on the member it will cut off, resets the established TCP connections
    to the master's port 1523 (`ss -K`), which the log copy uses, and waits
    up to three minutes for CUBRID to connect again with a keepalive timer
    no longer than the option.
@@ -1101,33 +1106,49 @@ system` for the same write. The run namespace already enforces Pod
 Security `privileged` for the partition, and adding an ephemeral container
 needs no permission beyond the partition's own. The Pod sysctls of the
 member Pods are not an option for this test: the Operator's StatefulSet
-owns that spec, and changing it would restart the members.
+owns that spec, and changing it would restart the members. The container
+only sleeps, for the rest of the step's bound plus a minute (15 minutes at
+most), so the privileged process ends long before the Pod does; an
+ephemeral container cannot be removed from a Pod's spec, so the stopped
+`netsysctl` stays listed there.
 
-The reset in step 2 is needed, and it is why the values are set after the
+The reset in step 3 is needed, and it is why the values are set after the
 move rather than before it. Linux arms a connection's keepalive timer with
 the namespace's values when the connection is made, and reads them again
 only when that timer fires; a connection made before the write keeps its
-old schedule, up to 2 hours, until then. The cut-off member's log copy
-connects to the master as soon as its Pod starts, which, after the move,
-is the first member's new Pod with a new network namespace: no value
-written before the move reaches it, and none can be written before that
-connection is made. So the run makes that connection again. The reset
-itself is a change before the cut: CUBRID's log copy sees its connection
-end and connects again, as after a short network failure. The connections
-to the other member, and the other members' own connections, keep the
-schedule they were made with.
+old schedule, up to 2 hours, until its current timer first fires. The
+cut-off member's log copy connects to the master as soon as its Pod
+starts, which, after the move, is the first member's new Pod with a new
+network namespace: no value written before the move reaches it, and none
+can be written before that connection is made. So the run makes that
+connection again. The reset itself is a change before the cut: CUBRID's
+log copy sees its connection end and connects again, as after a short
+network failure. The connections to the other member, and the other
+members' own connections, keep the schedule they were made with until
+their current timer first fires.
+
+`ss -K` prints nothing and exits 0 when the kernel cannot destroy sockets,
+so the run judges the reset by listing the connections again: a connection
+to the master listed before the reset that is still listed blocks the run
+with a message naming the kernel's socket destroy support, and a
+connection listed before the reset never counts as the new one, even when
+its old timer has since fired and shows a short time. The new connection is
+told apart by its addresses only, a local address not listed before the
+reset; the run does not read which process owns it (`note` in the record
+says so). Addresses are compared as IPv4 also when `ss` lists them
+IPv4-mapped.
 
 The values go away with the Pods' network namespaces when the run
-namespace is deleted; the `netsysctl` container, like `netfault`, stays in
-each member Pod and only sleeps. `partitionKeepalive` in `record.json`
-keeps the values asked for, each member's values before and after with the
-time they were seen set, the cut-off member's connections to the members'
-port before the reset, those reset (`targetSocketsReset`, with each
-keepalive timer as `ss` printed it), and the connection made again
-(`targetReconnectedSocket`). When a value cannot be written or read back,
-the kernel does not reset the connection, or CUBRID does not connect
-again with the new keepalive within the wait, S07 is blocked before
-anything is cut, and the reason says which.
+namespace is deleted. `partitionKeepalive` in `record.json` keeps the
+values asked for, each member's kernel release (`kernelRelease`) and values
+before and after with the time they were seen set, the cut-off member's
+connections to the members' port before the reset, those `ss -K` reported
+reset (`targetSocketsReset`, with each keepalive timer as `ss` printed it),
+and the connection made again (`targetReconnectedSocket`). When a Pod is
+not the run's own, the kernel is older than 4.13, a value cannot be written
+or read back, the kernel does not reset the connection, or CUBRID does not
+connect again with the new keepalive within the wait, S07 is blocked before
+any client starts and anything is cut, and the reason says which.
 
 The option is refused without a partition fault and with
 `partition-master-isolated`, where the cut-off member is the master. It

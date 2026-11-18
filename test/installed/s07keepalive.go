@@ -91,12 +91,18 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 		}
 	}
 	k := h.cfg.s07Keepalive()
-	if master == nil {
-		err := fmt.Errorf("the partition does not name the master %s: its connection cannot be made again", rec.Master)
+	refuse := func(err error) error {
 		rec.mu.Lock()
 		rec.Keepalive = &netfault.KeepaliveRecord{Target: p.Target.Name, Master: rec.Master, Unmet: err.Error()}
 		rec.mu.Unlock()
 		return err
+	}
+	if master == nil {
+		return refuse(fmt.Errorf("the partition does not name the master %s: its connection cannot be made again",
+			rec.Master))
+	}
+	if err := h.s07KeepaliveMembers(ctx, rec, members); err != nil {
+		return refuse(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, s07KeepaliveBound)
 	defer cancel()
@@ -109,5 +115,36 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 	}
 	rec.note("keepalive_shortened", fmt.Sprintf("%s: %d members; %s's connection %s to %s made again",
 		k.Time, len(got.Members), p.Target.Name, got.Reconnected.Local, got.Reconnected.Peer))
+	return nil
+}
+
+// s07KeepaliveMembers checks, before a privileged container goes into any
+// member Pod, that the run namespace's guard passes and that each Pod is
+// controlled by the run's HA StatefulSet, itself the HA cluster's, with the
+// UID the partition names and, when the run recorded one for it, the UID of
+// the run's member identities: after the move of the master its own, else
+// LAB01's.
+func (h *haRun) s07KeepaliveMembers(ctx context.Context, rec *s07Record, members []netfault.Endpoint) error {
+	if err := h.guard(ctx); err != nil {
+		return fmt.Errorf("check the run namespace before adding the keepalive container: %w", err)
+	}
+	identities := rec.MembersBefore
+	if rec.MasterMove != nil && len(rec.MasterMove.Members) > 0 {
+		identities = rec.MasterMove.Members
+	}
+	for _, e := range members {
+		pod, err := h.s07RunMember(ctx, e.Pod)
+		if err != nil {
+			return err
+		}
+		if string(pod.UID) != e.UID {
+			return fmt.Errorf("member Pod %s has UID %s, not %s as the partition names it", e.Pod, pod.UID, e.UID)
+		}
+		for _, id := range identities {
+			if id.Pod == e.Pod && id.UID != e.UID {
+				return fmt.Errorf("member Pod %s has UID %s, not %s as the run recorded it", e.Pod, e.UID, id.UID)
+			}
+		}
+	}
 	return nil
 }
