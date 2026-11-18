@@ -26,6 +26,32 @@ cannot displace required safety and recovery work. If required evidence is
 missing, report a blocked release or narrower experimental result rather than
 waiving a mandatory scenario to meet the date.
 
+### v0.1 execution focus — intake frozen 2026-11-18
+
+**Decision:** [#954 maintainer direction](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/954#issuecomment-6971118767)
+starts the v0.1 **feature/design intake freeze on 2026-11-18**, ahead of the
+November 29 recovery/safety checkpoint. This does not alter the accepted
+v0.1 support claim, required scenarios, validation evidence, release date
+target, or review gates. [CONTRIBUTING.md](./CONTRIBUTING.md#v01-scope-intake-freeze-effective-2026-11-18)
+defines the mandatory four-question work-intake test.
+
+**Work in order:** (1) verified HA/write safety and availability regressions,
+including controlled network partitions and data histories (#702, #716,
+#115, #931); (2) accepted retained-data rejoin and explicit PVC-loss rebuild
+with SQL data checks (#116–#118); (3) required actual VM failure, backup/restore,
+storage bounds and candidate qualification (#110, #88–#89, #666, #126);
+(4) independent runbook verification and final release evidence (#125, #127,
+#94). Respect prerequisites, assignees and serialized lab authorization; these
+are work streams, not permission to run all at once.
+
+Post-v0.1 research (#955–#958), speculative new architecture/API work and
+optional harness/CI enhancements do not enter the v0.1 execution queue merely
+because they can be built now. Retain genuine defect evidence, especially
+failed safety runs, without multiplying duplicate issues or erasing history.
+A new blocker needs a direct link to an already accepted gate and a maintainer
+decision. Unpassed mandatory scenarios remain **No-Go**, not an implicit
+narrowing of the release.
+
 ## v0.1 scope
 
 ### Required
