@@ -308,8 +308,9 @@ specs in `internal/controller/im_capability_test.go`, which stand in an older
 manager with a fake that reports no capabilities. The same-build path runs in
 the Kind end-to-end job. Nothing was run with two real builds: a skew test
 needs a build of one side held fixed while the other changes, and the
-repository has none (`ROADMAP.md`, Hardening, records that baseline and
-candidate orchestration and CRD compatibility are not covered).
+repository has none (`ROADMAP.md`, row "Manager scope, RBAC and compatibility",
+records that baseline and candidate orchestration and CRD compatibility are
+not covered).
 
 ## Revisit When
 

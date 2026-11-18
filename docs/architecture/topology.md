@@ -182,8 +182,8 @@ Validation rules for the member count are in
 | Member alias Services give each member its short HA name | Implemented, Design | `reconcileMemberServices` in [`memberservice.go`](../../internal/controller/memberservice.go); [ADR-0004](../adr/0004-ha-hostname-dns.md) |
 | Two read-write and two read-only Broker Pods in separate Deployments behind `-rw`/`-ro` | Implemented, Design | `brokerReplicas` and `reconcileBrokerTier` in [`broker.go`](../../internal/controller/broker.go); [ADR-0002](../adr/0002-broker-routing.md) |
 | Ports: Broker 33000/33001, server 1523, Instance Manager 9090, heartbeat 59901/UDP | Implemented | `brokerRWPort` and `brokerROPort` in [`broker_config.go`](../../internal/controller/broker_config.go); `cubridServerPort` and `instanceManagerPort` in `cubridcluster_controller.go`; `haHeartbeatPort` in [`memberservice.go`](../../internal/controller/memberservice.go) |
-| A standalone cluster and a three-member HA cluster become Ready on the real image | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Foundation" and "HA and Broker" |
-| Three-member HA with an installed Operator on the VM lab | Observed (VM lab, recorded runs) | ROADMAP.md, the installed HA run paragraph; [docs/testing/installed-ha.md](../testing/installed-ha.md) |
+| A standalone cluster and a three-member HA cluster become Ready on the real image | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Standalone lifecycle and SQL (S00)" and "Three-member HA and RW/RO access (S01–S02)" |
+| Three-member HA with an installed Operator on the VM lab | Observed (VM lab, recorded runs) | ROADMAP.md row "Three-member HA and RW/RO access (S01–S02)" (installed-Operator HA run, LAB01); [docs/testing/installed-ha.md](../testing/installed-ha.md) |
 
 ## Limits and assumptions
 
@@ -198,7 +198,7 @@ Validation rules for the member count are in
   failover or split-brain prevention. See
   [Network access](../operations/network-access.md).
 - Multi-zone layouts are not shown because the Operator does not manage them
-  (ROADMAP.md, "Hardening"). **PDB resource identities** are shown in the
+  (ROADMAP.md, "v0.1 scope", "Future"). **PDB resource identities** are shown in the
   control path, but actual node placement and allowed evictions are not:
   members are placed as in [Member placement](../operations/member-placement.md),
   and Brokers prefer distinct nodes; see

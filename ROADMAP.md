@@ -110,42 +110,63 @@ v0.1 issue.
 ## Implementation and validation inventory
 
 One row per v0.1 capability or area. **Level** is the highest evidence level
-reached, from `code`, `unit-envtest`, `Kind`, `VM-lab` to `candidate`, with
-its limits; no row is at `candidate` yet. A Kind or VM-lab entry is a run of
-the named steps, not a scenario pass unless it says so. The run details live
-on the linked issues and PRs; the long-form narrative this table replaced is
-kept in the [ROADMAP at `5655948`][old-roadmap]. Review a row when a relevant
-PR merges or candidate evidence arrives.
+reached, from `code`, `unit-envtest`, `Kind`, `VM-lab` to `candidate`, or
+`not run`, with its limits in brackets; no row is at `candidate` yet. A Kind
+or VM-lab entry is a run of the named steps, not a scenario pass unless it
+says so. **Open blockers** lists the open issues the evidence names; "none
+recorded; live check unowned" means a live check is still missing and no open
+issue owns it. `#126` (candidate qualification) applies to every row of a
+required scenario S00–S15. The run details live on the linked issues and PRs;
+the long-form narrative this table replaced is kept in the
+[ROADMAP at `5655948`][old-roadmap]. Review a row when a relevant PR merges or
+candidate evidence arrives.
+
+**Where v0.1 stands** against the nine Required capabilities: none is at
+`candidate`. Single-node lifecycle (S00) and three-member HA with RW/RO access
+(S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
+Operator failures reach Kind and one VM-lab Operator restart; VM failure is not
+run. Write quarantine reaches Kind; its VM-lab partition runs are blocked.
+Rejoin and rebuild are `unit-envtest`. Backup and restore variants passed on
+the VM lab once or a few times each. Retention, authentication and voluntary
+disruption reach Kind or VM-lab with gaps. Conditions and metrics reach Kind.
+The reproducible, reviewed release is not run.
 
 | Area | Level | Open blockers | Status and key evidence |
 |---|---|---|---|
-| Standalone lifecycle and SQL (S00) | Kind; VM-lab smoke | #122, #126 | S00 in CI on the real 11.4 image: Ready, SQL through `csql`, a row kept across Pod deletion. Remote `-rw`/`-ro` Brokers commit, read and refuse a `-ro` write with `-581` (#286, POC-33). LAB00 smoke: [Kind][lab00-kind] (#489), [VM lab][lab00-vm] (#492). No HA, backup or failure scenario |
-| Non-root Instance Manager runtime | Kind (S00) | — | Non-root Pod under restricted Pod Security on Kind. Ownership marker and `unfinishedDatabase` (#315), member lock on the volume (#472, #475; POC-29, POC-31): unit, entrypoint and Docker only, not on Kind or the VM lab |
-| CUBRID log files and size bounds | unit-envtest; Kind (persistence) | #252 | Logs in `cubrid-log` on the data volume (#856; older StatefulSets keep #849's log PVC). Rotation bounds unit-tested on POC-35, sizes seen in Docker (#935). S00 log persistence passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc); bounds not seen on Kind or the VM lab |
-| Three-member HA and RW/RO access (S01–S02) | Kind; VM-lab (no fault) | #126 | S01–S02 on Kind: 121-operation history checked on every member and Service; `-ro` write refused (`-581`, POC-22, #366). VM-lab [LAB01][installed-ha] passed twice on 2026-10-24 (#546; object store change terraform-zadara-k8s #51); not an S01 result |
-| Pod and Broker failure (S03, S05) | Kind | #85, #938 | S03 (3 variants; no two masters seen, #368; POC-19) and S05 (3 variants) run in CI on Kind. A graceful master deletion took 59.3 s against the 30 s `failover_limit` (#938). One [manual VM-lab master deletion][lab-20261021] on 2026-10-21; not a scenario pass |
-| Operator failure (S06) | Kind; VM-lab (1 run) | #85 | Both variants run on Kind. S06 `restart` passed once on the VM lab on 2026-10-24: status 23.3 s after the fault, no failed client operation (#546). One run is not a baseline |
-| VM failure (S04) | not run | #110, #85 | No VM power loss run yet. The read-only observer (#546) ran twice for 5 minutes against `ha` ([record][observer-546]); no S04, S06 or S07/S08 verdict |
-| Ambiguous primary and replication health | unit-envtest; Kind step | #702, #115 | Two-master claims keep `Ready` off (#339); unread roles `Unknown` (#340). `ReplicationHealthy`/`HAReady` (#229, #249, #352, #360; POC-48) passed in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc). `LogCopyStalled` (#623; POC-41/42): one VM-lab run. Two writable masters: POC-50–52, #392, #373 |
-| HA bootstrap seeding safety | VM-lab (#281); unit-envtest | — | Seed from the observed master (#281): two scripted VM-lab runs on 2026-11-04 with a master killed mid-seed. Seed-source change and catch-up rule (#678, #768; POC-57, POC-59, #771) and `MemberNotSeeded` (#770): unit/envtest only |
-| Write quarantine: implementation and Kind (S07–S08) | Kind (1 run); unit-envtest | #86, #115, #931, #932, #716 | Quarantine, token release, out-of-service taint, return barrier (#113; ADR-0005 section 8, amended by #870): unit/envtest. [Kind run][kind-quarantine]: `-rw` refused 38.6–87.1 s after a forced master deletion. A restart closed a healthy cluster's `-rw` for 24 s (#931; fix #932) |
-| Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #702 | Operator `66ab5ee` since 2026-11-17 (terraform-zadara-k8s#98, #122). Lane #943 (#114 controls): cut slave and cut master, no trigger. `higher-rank-isolated`, 2 runs: quarantine closed `-rw` in about 12 s; one run reproduced #702, 50 acknowledged writes missing. All `blocked` |
-| Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118 | Explicit rebuild request (annotation with one-time token, decided on #117 on 2026-11-17 UTC) is implemented, unit/envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
-| Backup (S11): complete and failed uploads | VM-lab (1–5 runs each) | #88, #126 | `complete` passed (#88, engine version #621). `missing-destination` (staging check #636), `denied-credentials`, `signature-mismatch`, `interrupted-upload` passed once each on 2026-10-28/29 (#616), with the credential log search. Not baselines |
-| Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88 | `operator-restart`, `instance-manager-restart`, `overlapping` (#617), `operation-store-loss` (#457), `graceful-stop` (#277, #468, #469; filler error POC-44) passed on 2026-10-29. No restart during `backupdb` itself; not baselines |
+| Standalone lifecycle and SQL (S00) | Kind; VM-lab (smoke, no fault) | #122, #126 | S00 on Kind with the real 11.4 image: Ready, SQL through `csql`, a row kept across Pod deletion. `-rw`/`-ro` Brokers commit, read and refuse a `-ro` write with `-581` (#286, POC-33). Installed-Operator connection smoke (LAB00): [Kind][lab00-kind] (#489), [VM lab][lab00-vm] (#492). No HA, backup or fault |
+| Non-root Instance Manager runtime | Kind (S00); unit-envtest | none recorded; live check unowned | Non-root Pod under restricted Pod Security on Kind (S00). Ownership marker and `unfinishedDatabase` (#315): unit-envtest only. Member lock on the volume (#472, #475): unit and entrypoint tests and Docker (POC-29, POC-31). Neither runs on Kind or the VM lab |
+| CUBRID log files and size bounds | unit-envtest; Kind (persistence) | #252 | Logs in `cubrid-log` on the data volume (#856: unit-envtest, no multi-node run; older StatefulSets keep #849's log PVC). Rotation bounds unit-tested on POC-35; sizes seen in Docker without the Operator (#935). S00 log persistence passed in the [reviewed Kind run][kind-base]; bounds not seen on Kind or the VM lab |
+| Three-member HA and RW/RO access (S01–S02) | Kind; VM-lab (no fault) | #126 | Seeded via object storage (a mock on Kind). S01–S02: a 121-operation history checked on every member and Service; `-ro` write refused (`-581`, POC-22, #366). Installed-Operator HA run, no fault ([LAB01][installed-ha]): 2 VM-lab passes on 2026-10-24 (#546; object store, terraform-zadara-k8s #51); not an S01 result |
+| Pod and Broker failure (S03, S05) | Kind | #85, #126, #938 | S03 (3 variants; no two masters seen, #368; POC-19) and S05 (3 variants) run in CI on Kind. A graceful master deletion took 59.3 s against the 30 s `failover_limit` (#938). One [manual VM-lab master deletion][lab-20261021] on 2026-10-21: not a scenario pass |
+| Operator failure (S06) | Kind; VM-lab (1 run) | #85, #126 | Both variants run on Kind: SQL continues, CUBRID fails over without the Operator, and the returning Operator names the new master and restarts no member. S06 `restart` passed once on the VM lab on 2026-10-24: status 23.3 s after the fault, no failed client operation (#546). One run; applier fail count not checked there |
+| VM failure (S04) | not run | #85, #110, #126 | No VM power loss run yet. The read-only observer (#546) ran twice for 5 minutes against `ha` ([record][observer-546]); no S04, S06 or S07/S08 verdict |
+| Ambiguous primary detection | unit-envtest | #115 | Two fresh active-master claims keep `Ready` and `cubrid_cluster_ready` off (#339; engine occurrence unverified, #373). A reconcile that ends before the roles are read reports them `Unknown` instead of keeping an earlier primary (#340) |
+| Second writable master (engine behavior) | Kind (POC-51); Docker POCs | #115, #702 | Docker: a higher-priority member became a second writable master (POC-50, #392). Kind with the Operator, cuts: acknowledged rows diverged once; `-rw` refused while `Ready` stayed `True` twice (POC-51). Nothing the Operator renders stops such a promotion; acknowledged writes missing on the final master (POC-52) |
+| Replication health | unit-envtest; Kind (non-contract step); VM-lab (1 run) | none recorded; live check unowned | `ReplicationHealthy`/`HAReady` on a stalled slave or held transaction (#229, #249, #352; POC-48): pass in the [reviewed Kind run][kind-base]. Applier restart (#360): unit tests on POC-30, no cluster run. `LogCopyStalled` (#623; POC-41, POC-42): one VM-lab run. Nothing acts on them |
+| HA bootstrap seed source | VM-lab (2 runs) | none recorded | Each later member is seeded from the member observed as master and waits while it is unknown (#281; POC-23). Two scripted VM-lab runs on 2026-11-04 killed the master mid-seed: the Operator waited, then seeded from the new master |
+| HA bootstrap catch-up rule | unit-envtest | none recorded; live check unowned (#768) | Docker: a member seeded across a master change joined lacking acknowledged rows in 16 of 16 trials (POC-57). Catch-up rule (#678, #768, #771) and `MemberNotSeeded` (#770): unit-envtest only. The rule does not read the applier, which was behind in 1 of 20 passing readings (POC-59) |
+| Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine on two active masters or an unverified member that outranks the master or was the last primary; one-time token release; out-of-service taint release; return-to-service barrier (#113; ADR-0005 section 8, amended by #870). Unit-envtest only, not on Kind or the VM lab; the S04 harness adds no taint |
+| Write quarantine on Kind (S03, S06) | Kind (1 run) | #126, #938 | Before #113, `-rw` writes went on while `PrimaryResolved` and `RoutingReady` were not `True` (S03). [One Kind run][kind-quarantine]: a forced master deletion refused `-rw` 38.6–41.3 s (S03 abrupt) and 87.1 s (S06), judged by `quarantined_failover_limit` (6 min). S03 graceful keeps the 30 s `failover_limit`, not yet re-measured |
+| Write quarantine after an Operator restart | VM-lab (1 observation) | #931, #932 | The VM-lab Operator moved to `66ab5ee` on 2026-11-17 (terraform-zadara-k8s#98; LAB00 passed, #122). Its first pass closed a healthy cluster's `-rw` for 24 s: unobserved over 30 s, master not the first member (#931). Fix #932 is pending the maintainer's review of the ADR-0005 amendment |
+| Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #716 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
+| Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became master lacking 50 acknowledged writes. Both `blocked` |
+| Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
+| Backup (S11): complete and failed uploads | VM-lab (1–5 runs each) | #88, #126 | `complete`: 4 passes on 2026-10-25, 1 on 2026-10-28 with the engine version check (#621). `missing-destination`: passed 2026-10-28 (logs not checked), 2026-11-11 with the staging check (#636). `denied-credentials`, `signature-mismatch`, `interrupted-upload`: 1 pass each on 2026-10-29, with the log search (#616) |
+| Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
 | Backup safeguards in code | unit-envtest | #291, #369 | Standby choice (#291), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
-| Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
-| Restore (S12): restarts and stops | VM-lab (1–2 runs each) | #89 | `operator-restart` passed twice; Instance Manager kills at `restoring`, `preparing`, `seeding` (#598), `starting` (#682) and `seed-backup` passed with `16dbbf8` (#670, #672, #596, #701); `graceful-stop` passed once (#277; seeding placement #676 not run) |
-| Retention and retained volumes (S13) | Kind; VM-lab (manual) | #90 | Standalone `retain`/`delete` pass on Kind (#615, `delete_limit` 1 minute). HA over retained PVCs stops with `MemberHoldsDatabase` (#817, #798); manual [recovery](docs/operations/retained-volume-recovery.md) and both [policies](docs/operations/data-retention.md) run once by hand on the VM lab |
-| Instance Manager auth and network policy (S14) | Kind; VM-lab (1 check) | — | Per-cluster token (#270), rotation and migration (#324, #343) and refused-token report (#325) on Kind; not on the VM lab. NetworkPolicies drop DB ports from another namespace on Kind; one Broker port refused on the VM lab on 2026-10-21 |
-| DBA password Secret | Kind; VM-lab (manual copylogdb) | #801, #894 | Standalone (#803, #805, #819, #824, #831; Kind run 43204254915) and HA (#834, #845, #847) passed on Kind. copylogdb with a password through a restart and failover on the VM lab ([#801 result][dba-801]). Pre-start check rejected (POC-65, #937, #894) |
-| Voluntary disruption (S15) | VM-lab (2 judged passes) | #90 | PDBs (#613, [ADR-0012](docs/adr/0012-voluntary-disruption.md)). Drain lane (#936) ran 8 times on 2026-11-17: one eviction allowed, a second refused, no row missing. `drain_limit` 1 minute (#942); #614 closed. No spare-node layout or whole-node `kubectl drain` |
-| Member placement | unit-envtest; Kind step | #90 | Anti-affinity on `kubernetes.io/hostname` and `MemberPlacement` (#596): envtest and a single-node Kind step with `MemberUnschedulable`. Not on the VM lab: three members on three nodes not shown |
-| Conditions, Events and metrics | Kind | #92, #546 | HA gauges match status in S03 and the stall step (#253) in the [reviewed Kind run](#kind-evidence-reviewed-on-2026-11-16-utc). Observer that fails on a contradicting gauge (#546): unit tests and two VM-lab runs. [Observability](docs/observability.md) |
-| Manager scope, RBAC and compatibility | unit-envtest | — | One probe command at a time (#301, #494); `--watch-namespace` (#498); label-scoped cache and narrowed role (#282; [memory record](docs/testing/reference-manager-memory.md)); refused adoption (#657); capability checks (#733, ADR-0013) |
-| Instance Manager HTTP and operation store | VM-lab (bounded checks) | #369 | Header, body and idle bounds (#301): [VM checks][http-301] at `39b1cb6` (build [39353186855][build-301]). Persistence failures (#299) and durability (#298): unit/HTTP tests only. Retention: #369 |
-| Rolling updates (S16, conditional) | code | #96 | Automatic Pod replacement is off until its gates exist (#96, #197, #198); the update planner reads no PDB. The 2026-10-21 lab run rolled both clusters' Brokers at once and moved DB Pods only by hand |
-| Lab and release tooling | unit; VM-lab | #80, #122, #124 | `make test-lab` holds the campaign Lease (#441, #525; [#122 record][lease-122], [#546 record][observer-546]). Release version check (#934) is not called by a workflow yet (#124). Lab inventory: [Shared lab historical baseline](#shared-lab-historical-baseline) |
+| Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #126, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
+| Restore (S12): restarts and stops | VM-lab (1–2 runs each) | #89, #126 | `operator-restart`: 2 passes. Instance Manager kills at `restoring`, `preparing`, `seeding` (#598) and, with `16dbbf8` (#670), `starting` (#682; equal records do not rule out a short second `restoredb`) and `seed-backup` passed. `graceful-stop`: 1 pass, earlier harness (#277; seeding placement #676 not run) |
+| Lab run resources | VM-lab (1 failed run) | none recorded | All three members placed on one memory-filled worker failed: the kernel killed `cub_server` and LAB01 never became Ready, since database Pods requested no memory (#596). The harness now refuses such a node (#672). Members now declare requests (#701); no lab run has used them yet |
+| Retention and retained volumes (S13) | Kind; VM-lab (manual) | #90, #126 | Standalone `retain`/`delete` pass on Kind (#615; Kind `delete_limit` 1 minute, VM-lab limit unset). HA over retained PVCs stops with `MemberHoldsDatabase` (#817, #798); manual [recovery](docs/operations/retained-volume-recovery.md) and both [policies](docs/operations/data-retention.md) run once by hand on the VM lab |
+| Instance Manager auth and network policy (S14) | Kind; VM-lab (1 check) | #126; none recorded; live check unowned | Token per cluster (#270), rotation, migration (#324, #343): Kind only. Refused-token report (#325): unit-envtest, none produced. NetworkPolicies drop DB-port traffic from other namespaces on Kind. VM lab: one Broker port refused (2026-10-21); DB ports and network plugin unchecked |
+| DBA password Secret | Kind; VM-lab (manual copylogdb) | #801, #894 | Kind: standalone Secret, login, backup and restore (#803, #805, #819, #831; run 43204254915), HA (#834, #847) and its changed-value check (#845). Standalone changed-value check (#824): unit-envtest; csql seen only in Docker. VM lab: copylogdb with a password ([result][dba-801]). Pre-start check rejected (POC-65, #937, #894) |
+| Voluntary disruption (S15) | VM-lab (2 judged passes) | #90, #126 | PDBs (#613, [ADR-0012](docs/adr/0012-voluntary-disruption.md)). Drain lane (#936) ran 8 times on 2026-11-17: one eviction allowed, a second refused, no row missing. `drain_limit` 1 minute (#942); #614 closed. No spare-node layout or whole-node `kubectl drain` |
+| Member placement | unit-envtest; Kind (non-contract step) | #90 | Anti-affinity on `kubernetes.io/hostname` and `MemberPlacement` (#596): envtest and a single-node Kind step with `MemberUnschedulable`. Not on the VM lab: three members on three nodes and an upgraded cluster sharing a node not shown |
+| Conditions, Events and metrics | Kind; VM-lab (observer, 2 runs) | #92, #546 | HA gauges match status in S03 and the stall step (#253) in the [reviewed Kind run][kind-base]. Observer that fails on a contradicting gauge (#546): unit tests and two VM-lab runs. [Observability](docs/observability.md) |
+| Manager scope, RBAC and compatibility | unit-envtest | none recorded; live check unowned | One probe command at a time (#301, #494); `--watch-namespace` (#498); label-scoped cache and narrowed role (#282; [memory record][mem-282]); refused adoption (#657); capability checks (#733, ADR-0013). No live call path; baseline and candidate orchestration and CRD compatibility not covered |
+| Instance Manager HTTP and operation store | VM-lab (bounded checks) | #369 | Header, body and idle bounds (#301): [VM checks][http-301] at `39b1cb6` (build [39353186855][build-301]). Persistence failures (#299) and durability (#298): unit-envtest only. Retention: #369 |
+| Rolling updates (S16, conditional) | code | #96 | Automatic Pod replacement is off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition the update planner checks, and the planner reads no PDB. The 2026-10-21 lab run rolled both clusters' Brokers at once; DB Pods moved only by hand |
+| Lab and release tooling | unit-envtest; VM-lab | #80, #122, #124 | `make test-lab` holds the campaign Lease (#441, #525; [#122 record][lease-122], [#546 record][observer-546]); losing the Lease not exercised. Release version check (#934) is not called by a workflow yet (#124). Lab inventory: [Shared lab historical baseline](#shared-lab-historical-baseline) |
 | Reproducible validation and reviewed release | not run | #94, #95, #125, #126, #127 | Candidate artifacts, repeated runs, soak and non-author runbook reproduction (#122–#127). The demo (#128) is a post-v0.1 follow-up, not a release gate |
 
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
@@ -154,6 +175,7 @@ A required scenario cannot pass through skipping, missing evidence, a timeout
 or unsuccessful fault injection. A unit test pass is not a live scenario pass.
 
 [old-roadmap]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/blob/5655948883b93ee102423863a1a3da1fa1a2e0c1/ROADMAP.md#implementation-and-validation-inventory
+[kind-base]: #kind-evidence-reviewed-on-2026-11-16-utc
 [lab00-kind]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/489#issuecomment-6257627016
 [lab00-vm]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/492#issuecomment-6269706537
 [installed-ha]: docs/testing/installed-ha.md
@@ -161,6 +183,8 @@ or unsuccessful fault injection. A unit test pass is not a live scenario pass.
 [observer-546]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/546#issuecomment-6364673645
 [lease-122]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6364164038
 [kind-quarantine]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43524691052
+[part-20261118]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115#issuecomment-6972668208
+[mem-282]: docs/testing/reference-manager-memory.md
 [minio-337]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347
 [dba-801]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/801
 [http-301]: https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/301#issuecomment-6281330433
@@ -208,13 +232,17 @@ on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it does
 not qualify that configuration for v0.1. One manual Pod deletion on
 2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
 26 s, with `ha-0` a slave: a single run, not a scenario pass or VM-failure
-evidence. VM stop/start, partitions, CSI and off-node evidence retention
-remain with #80 and #122.
+evidence, with no scenario artifact set or independent transaction-history
+oracle. The 2026-10-15 record did not establish VM stop/start or recovery,
+network partitions, CSI behavior, an accessible provisioning and cleanup
+reproduction, off-node evidence retention or a target-identity fault guard;
+these gaps remain with #80 and #122.
 
 ## Implementation Gate
 
 Satisfied: the P0 ADRs (#1–#10: HA topology, database model, Broker,
 hostname/DNS, failover/split-brain, join/rebuild, backup POC, restore,
 update/upgrade, Instance Manager) were accepted before the HA controller
-implementation started. This is not the release validation gate. The API
-group ownership decision (#20) is still open.
+implementation started (including Accepted (POC-gated) decisions). This is
+not the release validation gate. The API group ownership decision (#20) is
+still open.
