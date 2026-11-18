@@ -1766,7 +1766,7 @@ func (r *CubridClusterReconciler) reportWriteQuarantineChange(ctx context.Contex
 		}
 		switch rel.Method {
 		case databasev1alpha1.WriteQuarantineReleasedOnOutOfServiceTaint:
-			var fenced []string
+			fenced := make([]string, 0, len(rel.FencedMembers))
 			for _, f := range rel.FencedMembers {
 				fenced = append(fenced, fmt.Sprintf("%s (node %s)", f.Name, f.NodeName))
 			}
