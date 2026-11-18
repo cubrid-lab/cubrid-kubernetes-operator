@@ -125,7 +125,7 @@ Agent checklist before writing or updating an issue:
    for every **new** time in issues, PRs and evidence. Preserve the
    timezone of historical records when a conversion cannot be proven.
 5. Preserve author credit, label metadata, dependencies, safety invariants,
-   release boundaries and existing independent maintainer review.
+   release boundaries and the temporary pre-v0.1 merge/review exception.
 
 ## Unified PR Review Policy
 
@@ -140,16 +140,15 @@ mandatory. Optional AI reviews are **advisory**.
    authoritative for lint, generated manifests, unit/envtest and relevant
    Kind E2E scenarios. Local checks are useful but not a separate merge
    gate; manual cluster/VM evidence remains required where documented.
-3. The reviewer checks scenario contract, safety, tests, security,
-   reconciliation and recovery behavior; AI feedback is only supporting
-   context.
-4. Preserve the existing **two-maintainer independent review**, high-risk
-   safety/HA/backup and release checks, and final maintainer merge
-   decision. No CI result or AI summary grants automatic approval.
-   Until v0.1 is released, one maintainer's review is enough to merge, as
-   [CONTRIBUTING.md — Until v0.1 is released](CONTRIBUTING.md#until-v01-is-released)
-   sets out; the PR then says it merged without a second maintainer's
-   review.
+3. Human PR review is recommended, particularly for safety changes, but
+   before v0.1 it is optional when an authorized maintainer explicitly
+   directs the merge; AI feedback is only supporting context.
+4. Preserve the normal **two-maintainer independent review** after v0.1,
+   the existing safety/HA/backup and release **evidence gates**, and final
+   maintainer merge authority. CI and AI summaries never grant automatic
+   approval. Under the [temporary pre-v0.1 exception](CONTRIBUTING.md#until-v01-is-released),
+   a PR may merge without a submitted reviewer approval, with the maintainer
+   direction recorded on the PR.
 
 Before an agent opens or revises a PR, compare its final code diff with the
 human-readable title, summary, linked issue's acceptance criteria, changed
@@ -159,11 +158,11 @@ the raw runs/artifacts or reproducible aggregation and disclose selection or
 retention limits; an unsupported number must not be represented as verified.
 For required scenario limits, test zero/unset, unmeasured, boundary and
 exceeded values against the same gate semantics as other scenarios. Do not
-introduce an exception merely to keep CI green. If a required reviewer is
-unavailable, leave approval pending rather than self-waiving the independent
-maintainer review or substituting an AI review. Until v0.1 is released the
-second maintainer's review is not required; an AI review still never stands
-in for the one maintainer's review.
+introduce an exception merely to keep CI green. After v0.1, leave approval pending if a required reviewer is unavailable;
+never fabricate a human approval or substitute an AI review. Before v0.1,
+explicit maintainer authorization permits an unreviewed merge **only when**
+all required final-head CI and applicable real SQL/VM/safety evidence gates
+have passed. State the exception on the PR.
 
 ## PR overlap, priority, and readiness
 
@@ -211,7 +210,7 @@ creation because their issue events may not retrigger the workflow.
 3. **Size:** apply exactly one `priority: critical/high/medium/low` and one
    existing `size: XS/S/M/L/XL`; separate overlarge implementations from
    their parent acceptance issue. Preserve `phase:`, safety/release scope,
-   assignees and the two-maintainer review requirement.
+   assignees and the applicable pre-/post-v0.1 review policy.
 4. **Verify actual labels:** fetch the saved GitHub issue after changes and
    check type, priority, size, evidence, duplicates and decision. Only then
    remove `status: needs triage`. Keep it for unresolved investigations,
@@ -239,9 +238,9 @@ independently reviewable does not make it v0.1 work.
   upgrade an investigation hypothesis into an accepted release blocker.
   Keep confirmed safety failures visible, preserve raw evidence and request
   a maintainer decision when scope is disputed.
-- Keep required VM/SQL validation, final-head CI, human review and
-  acknowledged-data safety checks unchanged. If mandatory acceptance is
-  blocked, report No-Go rather than changing the oracle.
+- Keep required VM/SQL validation, final-head CI and acknowledged-data
+  safety checks unchanged. PR review is optional before v0.1 only under
+  explicit maintainer direction; missing acceptance still means No-Go.
 
 ## Working on an Issue
 
