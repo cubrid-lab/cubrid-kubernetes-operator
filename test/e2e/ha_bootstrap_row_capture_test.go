@@ -37,7 +37,7 @@ import (
 // row written on the master: both readings of the slave, the control and the
 // wait between the readings fit in it. The capture runs only after the check
 // has failed, so a passing run never waits for it.
-const rowCaptureLimit = 2 * time.Minute
+const rowCaptureLimit = 3 * time.Minute
 
 // rowCaptureGap is the wait between the two readings of the slave that lacks
 // the row. A copy that moves while the applier stands still, a copy that has
@@ -60,43 +60,57 @@ for p in /proc/[0-9]*; do c=$( { tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null); cas
   echo "${p#/proc/} holds=$h $c"; n=$((n+1));; esac; done
 [ "$n" -eq 0 ] && echo "(none)"; true`
 
-// captureMissingRow writes down why a slave may lack the row written on the
-// master: what read says of that slave twice, gap apart, and once of the
-// control slave, each with its member and UTC time. It records what could
-// not be read, and skips the wait when less than gap is left before the
-// context's deadline, so it neither fails nor outlasts its limit.
-func captureMissingRow(ctx context.Context, lacking, control string, gap time.Duration,
+// captureMissingRow writes down what a slave on which the row could not be
+// read reports: what read says of that slave, then, after gap, again, and
+// last of the control slave, each with its member and UTC time. lastError is
+// why the read failed: the row may be missing, or the read itself may have
+// failed (a lost csql session, a kubectl error). The control comes last, and
+// the wait is taken only if the time left covers it and a second reading as
+// long as the first, so that the second reading is not cut short by the
+// context's deadline.
+func captureMissingRow(ctx context.Context, lacking, control, lastError string, gap time.Duration,
 	now func() time.Time, wait func(context.Context, time.Duration), read func(context.Context, string) string) string {
 	var b strings.Builder
-	reading := func(label, member string) {
+	reading := func(label, member string) time.Duration {
+		started := now()
 		_, _ = fmt.Fprintf(&b, "\n##### %s: member %s, taken at %s\n%s\n",
-			label, member, now().UTC().Format(time.RFC3339Nano), read(ctx, member))
+			label, member, started.UTC().Format(time.RFC3339Nano), read(ctx, member))
+		return now().Sub(started)
 	}
-	_, _ = fmt.Fprintf(&b, "The row written on the master did not reach %s. Control: %s.\n", lacking, control)
-	reading("first reading of the slave without the row", lacking)
-	reading("control slave", control)
-	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > gap {
+	_, _ = fmt.Fprintf(&b, "The row could not be read on %s within 3m; last error: %s\nControl: %s.\n",
+		lacking, lastError, control)
+	took := reading("first reading of the slave", lacking)
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > gap+took {
 		wait(ctx, gap)
+		reading("second reading of the slave", lacking)
 	} else {
-		_, _ = fmt.Fprintf(&b, "\nThe second reading was skipped: less than %s of the capture limit was left.\n", gap)
+		_, _ = fmt.Fprintf(&b, "\nThe %s wait and the second reading of %s were skipped: the first reading took %s and too little of the capture limit was left.\n",
+			gap, lacking, took)
 	}
-	reading("second reading of the slave without the row", lacking)
+	reading("control slave", control)
 	return b.String()
 }
 
 // captureFromCluster is captureMissingRow on the members of a cluster, with
 // memberReplicationScript and applierLockScript run by kubectl exec in the
-// cubrid container. A failed call records its error beside the output.
-func captureFromCluster(spec context.Context, namespace, database, lacking, control string, members []string) string {
+// cubrid container. The lock reading is a copy of appliersScript in
+// test/installed/s12.go (another package); change them together. A failed
+// call records its error beside the output.
+func captureFromCluster(spec context.Context, namespace, database, lacking, control, lastError string, members []string) string {
 	ctx, cancel := context.WithTimeout(spec, rowCaptureLimit)
 	defer cancel()
 	run := func(ctx context.Context, member, script string, args ...string) string {
 		out, err := utils.Run(exec.CommandContext(ctx, "kubectl", append([]string{
 			"--request-timeout=20s", "-n", namespace, kubectlExec, member, "-c", "cubrid", "--",
 			"bash", "-c", script, "capture", database}, args...)...))
+		// utils.Run wraps the exit error with the command and its output,
+		// which are recorded once (as replicationState in s03_test.go does).
+		if wrapped, ok := err.(interface{ Unwrap() error }); ok && wrapped.Unwrap() != nil {
+			err = wrapped.Unwrap()
+		}
 		return fmt.Sprintf("(err %v)\n%s", err, out)
 	}
-	return captureMissingRow(ctx, lacking, control, rowCaptureGap, time.Now,
+	return captureMissingRow(ctx, lacking, control, lastError, rowCaptureGap, time.Now,
 		func(ctx context.Context, d time.Duration) {
 			select {
 			case <-ctx.Done():
@@ -108,16 +122,17 @@ func captureFromCluster(spec context.Context, namespace, database, lacking, cont
 		})
 }
 
-// rowCaptureFailure is a Gomega whose failure first runs capture and then
-// fails the spec with the message unchanged. The capture does not decide the
-// verdict: it runs once, after the check has failed.
-func rowCaptureFailure(capture func()) types.Gomega {
+// rowCaptureFailure is a Gomega whose failure first runs capture, which is
+// given the failure message, and then fails the spec with that message
+// unchanged. The capture does not decide the verdict: the failure is
+// deferred first, so it is reported also if the capture panics.
+func rowCaptureFailure(capture func(message string)) types.Gomega {
 	return NewGomega(func(message string, skip ...int) {
-		capture()
 		offset := 1
 		if len(skip) > 0 {
 			offset += skip[0]
 		}
-		Fail(message, offset)
+		defer Fail(message, offset)
+		capture(message)
 	})
 }

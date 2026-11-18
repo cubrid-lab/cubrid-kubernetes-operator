@@ -436,11 +436,11 @@ spec:
 				if peer == peers[0] {
 					control = peers[1]
 				}
-				rowCaptureFailure(func() {
-					text := captureFromCluster(context.Background(), haNamespace, database, peer, control,
+				rowCaptureFailure(func(message string) {
+					text := captureFromCluster(context.Background(), haNamespace, database, peer, control, message,
 						append([]string{first}, peers...))
 					_, _ = fmt.Fprintf(GinkgoWriter, "%s\n", text)
-					writeScenarioFile("ha-bootstrap/row-not-replicated-"+peer+".txt", []byte(text))
+					writeScenarioFile("ha-bootstrap/row-read-timeout-"+peer+".txt", []byte(text))
 				}).Eventually(func() error {
 					return readS00Row(csqlInPod(context.Background(), haNamespace, peer, database), marker)
 				}, 3*time.Minute, 3*time.Second).Should(Succeed(), peer)

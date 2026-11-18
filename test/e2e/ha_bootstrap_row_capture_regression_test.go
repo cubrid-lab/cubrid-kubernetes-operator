@@ -26,43 +26,54 @@ import (
 	"time"
 )
 
-// The slave without the row is read twice, a gap apart, and the control
-// slave once between them, each with its member and a UTC time.
-func TestCaptureMissingRowReadsTheSlaveTwiceAndTheControlOnce(t *testing.T) {
+// capturedReads runs captureMissingRow with a clock that each reading
+// advances by took, a deadline of limit from now, and returns the members
+// read in order, the number of waits and the text.
+func capturedReads(limit, took time.Duration) ([]string, int, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
 	var reads []string
 	waits := 0
 	clock := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
-	out := captureMissingRow(context.Background(), "hab-2", "hab-1", time.Minute,
-		func() time.Time { clock = clock.Add(time.Second); return clock },
+	out := captureMissingRow(ctx, "hab-2", "hab-1", "csql: the table is unknown", time.Minute,
+		func() time.Time { return clock },
 		func(context.Context, time.Duration) { waits++ },
 		func(_ context.Context, member string) string {
 			reads = append(reads, member)
+			clock = clock.Add(took)
 			return "state of " + member
 		})
-	if got := strings.Join(reads, ","); got != "hab-2,hab-1,hab-2" {
-		t.Fatalf("members read = %s, want hab-2,hab-1,hab-2", got)
+	return reads, waits, out
+}
+
+// The slave is read, after the wait read again, and the control comes last,
+// each with its member, a UTC time and the error of the failed read.
+func TestCaptureMissingRowReadsTheSlaveTwiceThenTheControl(t *testing.T) {
+	reads, waits, out := capturedReads(3*time.Minute, time.Second)
+	if got := strings.Join(reads, ","); got != "hab-2,hab-2,hab-1" {
+		t.Fatalf("members read = %s, want hab-2,hab-2,hab-1", got)
 	}
 	if waits != 1 {
 		t.Fatalf("waited %d times, want 1", waits)
 	}
-	for _, want := range []string{"member hab-2, taken at 2026-11-18T10:00:01Z", "member hab-1, taken at 2026-11-18T10:00:02Z",
-		"member hab-2, taken at 2026-11-18T10:00:03Z", "state of hab-1"} {
+	for _, want := range []string{"The row could not be read on hab-2 within 3m; last error: csql: the table is unknown",
+		"member hab-2, taken at 2026-11-18T10:00:00Z", "member hab-2, taken at 2026-11-18T10:00:01Z",
+		"member hab-1, taken at 2026-11-18T10:00:02Z", "state of hab-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("capture lacks %q:\n%s", want, out)
 		}
 	}
 }
 
-// With less than the gap left, the wait is skipped and said so, and the
-// second reading is still taken, so the capture stays within its limit.
-func TestCaptureMissingRowSkipsTheWaitWhenTheLimitIsNear(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	waited := false
-	out := captureMissingRow(ctx, "hab-1", "hab-2", time.Minute, time.Now,
-		func(context.Context, time.Duration) { waited = true },
-		func(context.Context, string) string { return "x" })
-	if waited || !strings.Contains(out, "second reading was skipped") {
-		t.Fatalf("waited = %v, capture:\n%s", waited, out)
+// A first reading that used much of the time leaves too little for the wait
+// and a second reading as long as the first: the wait and that reading are
+// skipped, said so, and the control is still read.
+func TestCaptureMissingRowSkipsTheWaitWhenTheFirstReadingUsedTheTime(t *testing.T) {
+	reads, waits, out := capturedReads(100*time.Second, 50*time.Second)
+	if got := strings.Join(reads, ","); got != "hab-2,hab-1" {
+		t.Fatalf("members read = %s, want hab-2,hab-1", got)
+	}
+	if waits != 0 || !strings.Contains(out, "1m0s wait and the second reading of hab-2 were skipped") {
+		t.Fatalf("waits = %d, capture:\n%s", waits, out)
 	}
 }
