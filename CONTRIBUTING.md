@@ -324,20 +324,72 @@ issue, reviewer, claim, provenance, durable evidence and review trigger are
 identified, and document the **keep/archive/remove** choice. Actual deletion
 requires a separate, path-scoped, reviewed change with preserved proof.
 
+## v0.1 scope intake freeze (effective 2026-11-18)
+
+The maintainers directed a **feature and speculative design intake freeze** for
+v0.1 from 2026-11-18; see [the decision on #954](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/954#issuecomment-6971118767).
+The 2026-11-29 recovery/safety Go/No-Go checkpoint is not a permission to
+start new v0.1 features. The 2026-12-27 release target remains conditional on
+the existing mandatory evidence. This is an **execution-priority constraint**,
+not a release-contract waiver.
+
+Before assigning, implementing or promoting new work onto the v0.1 critical
+path, the maintainer and implementer must answer in the **existing owning
+issue**:
+
+1. Which **already accepted v0.1 scenario, safety/security invariant or
+   release gate** is currently blocked?
+2. What **observed failure, source evidence or missing required verdict**
+   proves the blocker? Distinguish an untested hypothesis from a reproduced
+   defect.
+3. What is the **smallest sufficient change** and current owner? Can the
+   current issue or existing verification harness cover it without another
+   child issue, new framework or broad refactor?
+4. Which **specific regression, real SQL/VM run or applicable acceptance check**
+   establishes completion, and what remains outside v0.1?
+
+**Proceed** with release-blocking correctness and security fixes, already
+required rejoin/rebuild and backup/restore, required scenarios and repetitions,
+candidate provenance, minimum runbook/release corrections and safe evidence
+retention. A hazardous runbook instruction may be made conservative while its
+replacement awaits independent verification.
+
+**Defer implementation** of new CRD/API/features, architecture redesign,
+optional POCs, new diagnostic/CI/testing frameworks, non-blocking cleanup,
+and post-v0.1 research. Keep a genuinely new safety finding visible and
+triaged; a new issue or POC does **not** automatically become an approved
+v0.1 implementation task. If an existing issue owns the behavior, update that
+issue rather than opening duplicates. A proposed scope exception needs an
+explicit maintainer decision and a link to the blocked acceptance gate.
+
+Do not weaken any existing required scenario, measured time/data oracle,
+acknowledged-write preservation check, managed write-quarantine boundary,
+actual VM failure, 24-hour soak, independent runbook reproduction, or
+final-head CI. Human PR review is optional before v0.1 only under the
+explicit temporary maintainer exception below. A blocked mandatory requirement
+produces a **No-Go** or a separately reviewed explicit support-scope decision,
+never a silently accepted failure. Do not delete historical negative evidence
+to reduce PR size; archival/removal follows the provenance rules above.
+
+This section governs new work selection alongside the normal small-PR,
+issue-assignment and CI/acceptance rules below. It does not transfer ownership,
+waive required failure evidence, or authorize a merge without maintainer direction.
+
 ## Two-maintainer coordination
 
 - Each maintainer has one implementation issue in progress by default.
-  Reviewing a finished PR comes before starting another issue.
+  Reviewing a finished PR is preferred before starting another issue; before
+  v0.1, explicit maintainer merge approval may replace PR review.
 - Size issues as in [Size](#size). Split work exceeding two days at
   independently verifiable boundaries.
 - Before starting, check open PRs and in-progress issues for large changes to
   the same files, and do not start an issue whose dependency is not met.
 - Agree an owner for shared test infrastructure. Feature authors still write
   their own tests; do not hand tests and implementation to different people.
-- The other maintainer reviews the scenario, expected results and failure
-  paths. A passing CI run does not replace maintainer review. Until v0.1 is
-  released, one maintainer's review is enough to merge
-  ([Until v0.1 is released](#until-v01-is-released)).
+- The other maintainer ordinarily reviews the scenario, expected results and
+  failure paths. The temporary pre-v0.1 exception below allows merge without
+  a PR review when a maintainer explicitly directs it. CI and scenario
+  acceptance evidence remain mandatory; approval is not inferred from CI.
 - A dependency names the exact result needed, rather than requiring a whole
   tracking issue to finish. Keep GitHub Assignees current and record the next handoff on the issue.
 - Runs using all three lab VMs happen one at a time. Reserve the run with the
@@ -363,9 +415,13 @@ unchanged for **every** implementation method, except as
 
 ### Until v0.1 is released
 
-Decided by a maintainer on 2026-11-10. Until the v0.1 release is published, a
-PR may be merged with one maintainer's review, without the second
-maintainer's approval. Everything else stays as written here:
+Initially decided 2026-11-10 (one maintainer review); **updated by explicit
+maintainer direction on 2026-11-18**. Until the v0.1 release is published,
+a maintainer may authorize a PR merge **without any submitted human PR
+review**. Review is still recommended for high-risk changes, but is not a
+mandatory merge gate during this temporary period. No AI approval replaces
+maintainer authority, and no automated pass authorizes a merge by itself.
+Everything else stays as written here:
 
 - the required GitHub Actions checks pass on the final head, and a check that
   failed is explained, not waived;
@@ -373,13 +429,15 @@ maintainer's approval. Everything else stays as written here:
   required, and Kind evidence is still not VM evidence;
 - every review comment is answered and every finding is fixed or explicitly
   declined with a reason on the PR;
-- the PR says on itself that it merged without a second maintainer's review;
+- if merged without a submitted human review, the PR records the explicit
+  maintainer direction and that the pre-v0.1 exception was used;
 - changes to the safety contract still need ADR-0005 amended first, and
   maintainer decisions on scope, safety policy and release candidates stay
   with the maintainers.
 
-The two-maintainer independent review applies again from the first change
-after v0.1 is published.
+The regular two-maintainer independent review policy applies again from the
+first change after v0.1 is published. No PR review exception relaxes the
+separate safety/SQL/VM acceptance criteria.
 
 ## Pull requests
 
