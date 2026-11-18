@@ -1,0 +1,10 @@
+26-11-18 04:03:39.622 (9009) cubrid heartbeat copylogdb stop appdb growth-0
+26-11-18 04:03:39.641 (9009) SUCCESS
+26-11-18 04:03:39.909 (9033) cubrid heartbeat applylogdb stop appdb growth-0
+26-11-18 04:03:39.925 (9033) SUCCESS
+--
+26-11-18 04:38:39.118 (12872) cubrid heartbeat copylogdb start appdb growth-0
+26-11-18 04:38:42.255 (12898) cubrid heartbeat status
+--
+26-11-18 04:38:49.526 (12912) cubrid heartbeat applylogdb start appdb growth-0
+26-11-18 04:38:52.539 (12939) cubrid heartbeat status

@@ -1,0 +1,51 @@
+@ cubrid heartbeat status
+
+ HA-Node Info (current growth-2, state slave)
+   Node growth-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node growth-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node growth-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 71, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_growth-1 (pid 344, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/18/26 02:44:32.167
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_growth-0 (pid 342, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/18/26 02:44:32.152
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@growth-1:/var/lib/cubrid/databases/appdb_growth-1 (pid 340, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-1 -m sync appdb@growth-1 ] 
+    - registered-time   11/18/26 02:44:32.136
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@growth-0:/var/lib/cubrid/databases/appdb_growth-0 (pid 338, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0 ] 
+    - registered-time   11/18/26 02:44:32.111
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 80, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/18/26 02:44:30.335
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+

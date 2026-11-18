@@ -6580,6 +6580,38 @@ Kind, VM or Operator result.
 - **#702:** in 5 of 8 trials set up with a backlog at the cut, the higher-priority member became an active master during the cut without waiting for it; in the four whose applier was read (work-3's was not), 4,397 to 4,678 copied pages were not yet applied.
 - **No Operator change follows.** A restart of a CUBRID process is a recovery action that needs an ADR-0005 decision, and this POC does not show that one helps.
 
+## POC-67 — how a new HA member's 2Gi volume grows under sustained writes and a replication stall, on the VM lab with the installed Operator, 11.4.7.1995 (#666) — **observation: with 64 MiB log files and the image's and engine's archive defaults, every own and copied archive was removed at the creation of a later one, about every 4.7 minutes at about 820 MiB of log an hour, and with replication healthy each member's volume stayed between 640 and 758 MiB over 150 minutes of writes (385 MiB own database directory, 130 to 190 MiB per copied peer, CUBRID logs growing about 1 MiB an hour); a slave whose applier was stopped for 34 minutes kept every copied archive and grew at 732 MiB an hour to 1,106 MiB, then caught up in about 4 minutes, briefly holding 7 of its own archives; the master kept no archive for a slave whose copier was stopped, removed the archive it needed 13 minutes in, and that copier failed with `-1024` on resume; `cubrid heartbeat copylogdb|applylogdb stop` run from a login shell stopped nothing, and the matching `start` created a second copier and applier on the container's own filesystem from the master's current position, so that member silently lacked the 34 markers written during the stall**
+
+**Question (#666).** How much of a new member's 2Gi volume do CUBRID's log files take under sustained writes and during a replication stall, with #670's 64 MiB log files and #858's single `data` volume, and are archives ever removed under the current settings?
+
+**Environment (2026-11-18 02:42Z to 05:37Z, under the campaign Lease).** The VM lab with the installed Operator `66ab5ee`, whose log-setting code is the same as `main` at `0fc966b`; Instance Manager image `sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb`, CUBRID 11.4.7.1995; StorageClass `local-path`, which enforces no quota; a three-member cluster, one member per worker, `storage.data.size: 2Gi`. Settings read on every member: `log_volume_size=64.0M`, `log_max_archives=0`, `ha_copy_log_max_archives=1`, `force_remove_log_archives=y`, copiers `-m sync`; `cubrid_ha.conf` holds only `ha_node_list`, `ha_db_list` and `ha_port_id`.
+
+**Method.** `docs/poc/poc67/README.md` is the full record, with the scripts, the raw samples under `out/` and two scripts that recount the results from them. For 150 minutes the master took about 100 row updates a second on a table with a primary key, plus one marker row a minute. Every 5 minutes, on each member: `df`, `du` of every directory of the volume, a listing of every log file, `appdb_lginf`, `cubrid heartbeat status -v` and `cubrid applyinfo`. For 34 minutes of the writes, one slave's copier and applier for the master's log were stopped with `SIGSTOP`, and the other slave's applier only; then `SIGCONT`. (`cubrid heartbeat ... stop` had answered `success` and stopped nothing; see the results.)
+
+**Results.**
+
+| State | Member | Volume, MiB (allocated) | Archives held |
+|---|---|---|---|
+| replication healthy, 03:08 to 04:03 (growth-0 to 05:34) | each of the three | 640 to 758 | at most 2 own, at most 1 per copied peer |
+| applier stopped, copier running (04:07 to 04:38) | growth-2 | 650 → 1,106 (732 MiB/h) | 7 copies of the master's log |
+| catch-up (04:43) | growth-2 | 1,096 | 7 own, removed at the next archive; 719 MiB at 04:48 |
+| copier and applier stopped (04:04 to 04:38) | growth-1 | flat, 674 to 680 | master held at most 2 |
+
+- **Archives are removed.** 202 of the 203 `REMOVE` lines in `appdb_lginf` came within 1.6 s of the creation of an archive in the same directory; the master created 31 archives in 142 minutes.
+- **The healthy volume is a fixed number of log files:** the 128 MiB database volume and four 64 MiB files of its own (`lgat`, `lgar_t` and two of archive, archive or `lgar.removed`), and three per copied peer (`lgat`, one archive, a filling `lgar_t`), about 768 MiB, 37% of the request.
+- **An applier stall grows the slave by the master's log rate**, since unapplied copies are kept. Its catch-up succeeded in about 4 minutes, with all 151 markers.
+- **A copier stall does not grow anything, and the master does not keep what the slave needs.** `appdb_lgar016`, holding the copier's next page, was removed 13 minutes into the stall; on resume the copier failed with `-1024` and shut itself down, as in POC-45, and its copy stayed at page 66561. The Operator reported `LogCopyStalled` from then on.
+- **The heartbeat commands used another directory.** The commands were run through `bash -lc`; the image's `~/.cubrid.sh` sets `CUBRID_DATABASES=$CUBRID/databases`, while the Pods set `/var/lib/cubrid/databases`. `copylogdb start` then registered a copier on `/home/cubrid/CUBRID/databases/appdb_growth-0` (the container's own filesystem), and `applylogdb start` an applier on it that began at the master's then-current LSA. Markers 78 to 111, written from 04:05:40 to 04:38:42, were missing on that member at the end; `SUM(v)` matched, since later updates rewrote every row.
+- No node reported `DiskPressure`.
+
+**Extrapolation, not measured.** At this write rate, a member at the top of its healthy band whose applier is stalled reaches 2 GiB after about (2,048 − 760) / 732 ≈ 1.8 hours, sooner with the catch-up burst; `local-path` would let it go on into the node's disk.
+
+**What this does not show.** Other write rates, volume sizes or archive limits; a longer stall; a restart or failover during the stall; `restoreslave` after a long gap; whether the heartbeat commands without a login shell act on the Operator's processes; why the second applier started at that LSA.
+
+**Consequences.**
+- **#666:** under the current settings, archives are removed and a healthy new 2Gi member stays at about 770 MiB at most; the volume is at risk only while a slave's applier is behind, at the master's log rate. Lowering archive limits would not bound that case (unapplied copies are kept), and the master already removes what a stopped copier needs. The Operator decision (bounded settings or documented sizing) and the long-run check remain.
+- **`docs/observability.md`:** its copier-restart steps use `cubrid heartbeat copylogdb stop|start`; run from a login shell in these Pods, they act on another directory and lose data silently. Not changed here.
+
 ## Applier pause mechanism: unavailable local preflight (#291)
 
 One bounded local Docker attempt sought to establish whether the current

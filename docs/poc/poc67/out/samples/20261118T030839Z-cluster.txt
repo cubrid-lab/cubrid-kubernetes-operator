@@ -1,0 +1,55 @@
+### date
+2026-11-18T03:08:39Z
+### cluster
+MemberPlacement=True MembersOnSeparateNodes
+BootstrapReady=True PeersSeeded
+PrimaryResolved=True SinglePrimaryObserved
+ReplicationHealthy=True AppliersProgressing
+HAReady=True HealthyReplication
+WriteEndpointReady=True BrokerAvailable
+ReadEndpointReady=True BrokerAvailable
+BrokerReady=True BrokersAvailable
+RoutingReady=True PrimaryResolved
+Updating=False UpToDate
+Ready=True ClusterReady
+Progressing=False Reconciled
+### pods
+NAME                                READY   STATUS    RESTARTS   AGE   IP            NODE                  NOMINATED NODE   READINESS GATES
+growth-0                            1/1     Running   0          25m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-1                            1/1     Running   0          25m   <pod-ip>    cubrid-k8s-worker-2   <none>           <none>
+growth-2                            1/1     Running   0          25m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+growth-broker-ro-77bd69699d-p2skx   1/1     Running   0          25m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-broker-ro-77bd69699d-wvm5z   1/1     Running   0          25m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+growth-broker-rw-85f4f646d9-9sccc   1/1     Running   0          25m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-broker-rw-85f4f646d9-nqdfv   1/1     Running   0          25m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+### pvc
+NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-growth-0   Bound    pvc-ce00edd6-7b97-4455-b6c2-91fb4d472d3f   2Gi        RWO            local-path     <unset>                 25m
+data-growth-1   Bound    pvc-f3aec951-9d46-4d14-ae4b-36b918fd4dff   2Gi        RWO            local-path     <unset>                 25m
+data-growth-2   Bound    pvc-69565c57-1d9c-47a1-b5ee-15a2b622a2b2   2Gi        RWO            local-path     <unset>                 25m
+### nodes
+cubrid-k8s-server DiskPressure=False
+cubrid-k8s-worker-1 DiskPressure=False
+cubrid-k8s-worker-2 DiskPressure=False
+cubrid-k8s-worker-3 DiskPressure=False
+### events
+25m         Normal    Created                 pod/growth-0                             Container created
+25m         Normal    Started                 pod/growth-0                             Container started
+25m         Normal    Started                 pod/growth-2                             Container started
+25m         Normal    Created                 pod/growth-2                             Container created
+25m         Normal    Created                 pod/growth-0                             Container created
+25m         Normal    Started                 pod/growth-0                             Container started
+25m         Normal    Started                 pod/growth-2                             Container started
+25m         Normal    Created                 pod/growth-2                             Container created
+25m         Normal    Pulled                  pod/growth-2                             Container image "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb" already present on machine and can be accessed by the pod
+25m         Normal    Pulled                  pod/growth-0                             Container image "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb" already present on machine and can be accessed by the pod
+25m         Normal    Started                 pod/growth-1                             Container started
+25m         Normal    Created                 pod/growth-1                             Container created
+25m         Normal    Pulled                  pod/growth-1                             Container image "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb" already present on machine and can be accessed by the pod
+24m         Warning   Unhealthy               pod/growth-0                             Readiness probe failed: HTTP probe failed with statuscode: 503
+24m         Normal    DatabaseCreated         cubridcluster/growth                     database appdb created on growth-0
+24m         Warning   Unhealthy               pod/growth-1                             Readiness probe failed: HTTP probe failed with statuscode: 503
+24m         Warning   Unhealthy               pod/growth-2                             Readiness probe failed: HTTP probe failed with statuscode: 503
+24m         Normal    PrimaryResolved         cubridcluster/growth                     Primary resolved: growth-0
+23m         Normal    PeersSeeded             cubridcluster/growth                     database appdb copied to the other members
+23m         Normal    ClusterReady            cubridcluster/growth                     all 3 instances ready

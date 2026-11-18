@@ -1,0 +1,276 @@
+### date
+2026-11-18T03:08:39Z
+### df
+Filesystem       1B-blocks       Used   Available Use% Mounted on
+/dev/vdb       52521566208 2805170176 47015264256   6% /var/lib/cubrid
+### du-allocated-kib
+697652	/var/lib/cubrid
+376	/var/lib/cubrid/cubrid-log/
+697260	/var/lib/cubrid/databases/
+8	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+394248	/var/lib/cubrid/databases/appdb/
+155880	/var/lib/cubrid/databases/appdb_growth-0/
+147124	/var/lib/cubrid/databases/appdb_growth-1/
+8	/var/lib/cubrid/cubrid-log/pl/
+72	/var/lib/cubrid/cubrid-log/server/
+### du-apparent-kib
+787761	/var/lib/cubrid
+331	/var/lib/cubrid/cubrid-log/
+787418	/var/lib/cubrid/databases/
+5	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+394219	/var/lib/cubrid/databases/appdb/
+196598	/var/lib/cubrid/databases/appdb_growth-0/
+196598	/var/lib/cubrid/databases/appdb_growth-1/
+5	/var/lib/cubrid/cubrid-log/pl/
+65	/var/lib/cubrid/cubrid-log/server/
+### ls-databases
+/var/lib/cubrid/databases/appdb/:
+total 394244
+131072 -rw------- 1 cubrid cubrid 134217728 2026-11-18 03:08:30.497388224 +0000 appdb
+     4 -rw-r--r-- 1 cubrid cubrid       137 2026-11-18 02:44:24.191842493 +0000 appdb_bkvinf
+  1024 -rw------- 1 cubrid cubrid   1048576 2026-11-18 03:08:30.482388202 +0000 appdb_dwb
+     4 -rw------- 1 cubrid cubrid        65 2026-11-18 02:44:25.067860683 +0000 appdb_keys
+ 65524 -rw------- 1 cubrid cubrid  67092480 2026-11-18 03:02:37.860437885 +0000 appdb_lgar002
+ 65540 -rw------- 1 cubrid cubrid  67108864 2026-11-18 03:07:29.514335681 +0000 appdb_lgar003
+ 65524 -rw------- 1 cubrid cubrid  67092480 2026-11-18 03:08:39.408402306 +0000 appdb_lgar_t
+ 65536 -rw------- 1 cubrid cubrid  67108864 2026-11-18 03:08:39.520402493 +0000 appdb_lgat
+     4 -rw-r--r-- 1 cubrid cubrid        29 2026-11-18 02:44:29.080943989 +0000 appdb_lgat__lock
+     4 -rw------- 1 cubrid cubrid      2139 2026-11-18 03:08:30.502388232 +0000 appdb_lginf
+     4 -rw------- 1 cubrid cubrid       238 2026-11-18 02:44:24.283844403 +0000 appdb_vinf
+     4 drwxr-s--- 2 cubrid cubrid      4096 2026-11-18 02:44:20.946775096 +0000 lob
+
+/var/lib/cubrid/databases/appdb_growth-0/:
+total 155876
+65540 -rw------- 1 cubrid cubrid 67108864 2026-11-18 03:06:57.917340599 +0000 appdb_lgar003
+24788 -rw------- 1 cubrid cubrid 67092480 2026-11-18 03:08:39.509402475 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-18 03:08:39.516402486 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       30 2026-11-18 02:44:32.167008026 +0000 appdb_lgat__lock
+    4 -rw-r--r-- 1 cubrid cubrid     1183 2026-11-18 03:06:58.053340528 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       41 2026-11-18 03:06:58.053340528 +0000 appdb_lgla__lock
+
+/var/lib/cubrid/databases/appdb_growth-1/:
+total 147120
+65540 -rw------- 1 cubrid cubrid 67108864 2026-11-18 03:07:29.516335681 +0000 appdb_lgar003
+16032 -rw------- 1 cubrid cubrid 67092480 2026-11-18 03:08:39.571402578 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-18 03:08:39.585402601 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       30 2026-11-18 02:44:32.214009001 +0000 appdb_lgat__lock
+    4 -rw-r--r-- 1 cubrid cubrid     1273 2026-11-18 03:07:31.145336044 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       41 2026-11-18 03:07:31.145336044 +0000 appdb_lgla__lock
+### ls-cubrid-log
+/var/lib/cubrid/cubrid-log:
+total 300
+  4 -rw-r--r-- 1 cubrid cubrid   3095 2026-11-18 03:06:58.016340546 +0000 appdb@growth-0_copylogdb.err
+  4 -rw-r--r-- 1 cubrid cubrid   2826 2026-11-18 03:07:29.587335696 +0000 appdb@growth-1_copylogdb.err
+  4 -rw-r--r-- 1 cubrid cubrid   1157 2026-11-18 02:44:34.800062646 +0000 appdb@localhost_applylogdb_appdb_growth-0.err
+132 -rw-r--r-- 1 cubrid cubrid 127942 2026-11-18 03:08:39.514402483 +0000 appdb@localhost_applylogdb_appdb_growth-1.err
+  4 -rw-rw-r-- 1 cubrid cubrid    670 2026-11-18 02:48:28.710860523 +0000 appdb@localhost_paramdump.err
+ 60 -rw-r--r-- 1 cubrid cubrid  56362 2026-11-18 03:08:30.530388273 +0000 appdb_applyinfo.err
+  4 -rw-r--r-- 1 cubrid cubrid    316 2026-11-18 02:44:25.799875881 +0000 appdb_restoreslave.access
+  8 -rw-r--r-- 1 cubrid cubrid   5554 2026-11-18 02:44:25.888877729 +0000 appdb_restoreslave.err
+  0 -rw-r--r-- 1 cubrid cubrid      0 2026-11-18 02:44:27.971920971 +0000 cub_client.err
+  0 -rw-r--r-- 1 cubrid cubrid      0 2026-11-18 02:43:28.668685830 +0000 cub_server.access
+  0 -rw-r--r-- 1 cubrid cubrid      0 2026-11-18 02:43:28.668685830 +0000 cub_server.err
+ 68 -rw-r--r-- 1 cubrid cubrid  63769 2026-11-18 03:08:39.485402435 +0000 cubrid_utility.log
+  4 -rw-r--r-- 1 cubrid cubrid   2269 2026-11-18 02:44:32.167008026 +0000 growth-2_master.err
+  4 drwxr-sr-x 2 cubrid cubrid   4096 2026-11-18 02:44:29.509952892 +0000 pl
+  4 drwxr-sr-x 2 cubrid cubrid   4096 2026-11-18 02:44:29.067943719 +0000 server
+
+/var/lib/cubrid/cubrid-log/pl:
+total 4
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-18 02:44:29.101944425 +0000 appdb_pl.access
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-18 02:44:29.100944404 +0000 appdb_pl.err
+4 -rw-r--r-- 1 cubrid cubrid 333 2026-11-18 02:44:29.755957998 +0000 appdb_pl.log
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-18 02:44:29.509952892 +0000 appdb_pl.log.lck
+
+/var/lib/cubrid/cubrid-log/server:
+total 68
+56 -rw-r--r-- 1 cubrid cubrid 51989 2026-11-18 03:08:30.531388275 +0000 appdb.access
+12 -rw-r--r-- 1 cubrid cubrid 10104 2026-11-18 03:08:30.502388232 +0000 appdb.err
+ 0 -rw-r--r-- 1 cubrid cubrid     0 2026-11-18 02:44:29.067943719 +0000 appdb_20261118_0244.event
+ 0 lrwxrwxrwx 1 cubrid cubrid    43 2026-11-18 02:44:29.067943719 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+ 0 lrwxrwxrwx 1 cubrid cubrid    40 2026-11-18 02:44:29.067943719 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+ 0 lrwxrwxrwx 1 cubrid cubrid    56 2026-11-18 02:44:29.067943719 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261118_0244.event
+### lginf
+== /var/lib/cubrid/databases/appdb/
+Time: 11/18/26 02:43:20.169 - COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb/appdb
+Time: 11/18/26 02:43:20.169 - ACTIVE: /var/lib/cubrid/databases/appdb/appdb_lgat 4096 pages
+Time: 11/18/26 02:52:55.876 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb/appdb_lgar000 0 4093
+Time: 11/18/26 02:56:30.445 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar000 is not needed any longer unless a database media crash occurs.
+Time: 11/18/26 02:57:47.318 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb/appdb_lgar001 4094 8187
+Time: 11/18/26 02:57:47.318 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar000, which contains log pages before 8188, is not needed any longer by any HA utilities.
+Time: 11/18/26 02:57:47.818 - REMOVE: 0 /var/lib/cubrid/databases/appdb/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:02:30.774 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar001 is not needed any longer unless a database media crash occurs.
+Time: 11/18/26 03:02:37.940 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb/appdb_lgar002 8188 12281
+Time: 11/18/26 03:02:37.940 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar001, which contains log pages before 12282, is not needed any longer by any HA utilities.
+Time: 11/18/26 03:02:38.455 - REMOVE: 1 /var/lib/cubrid/databases/appdb/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:07:29.523 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb/appdb_lgar003 12282 16375
+Time: 11/18/26 03:07:29.523 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar002, which contains log pages before 16376, is not needed any longer by any HA utilities.
+Time: 11/18/26 03:08:30.503 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar002 to /var/lib/cubrid/databases/appdb/appdb_lgar003 are not needed any longer unless a database media crash occurs.
+== /var/lib/cubrid/databases/appdb_growth-0/
+Time: 11/18/26 02:52:46.388 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar000 0 4093
+Time: 11/18/26 02:57:26.443 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar001 4094 8187
+Time: 11/18/26 02:57:26.656 - REMOVE: 0 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:02:08.750 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar002 8188 12281
+Time: 11/18/26 03:02:08.828 - REMOVE: 1 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:06:58.017 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar003 12282 16375
+Time: 11/18/26 03:06:58.054 - REMOVE: 2 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar002 to 
+        2 /var/lib/cubrid/databases/appdb_growth-0/appdb_lgar002.
+        REASON: Number of active log archives has been exceeded the max desired number.
+== /var/lib/cubrid/databases/appdb_growth-1/
+COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb_growth-1/appdb_lginf
+Time: 11/18/26 02:52:56.103 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar000 0 4093
+Time: 11/18/26 02:57:47.712 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar001 4094 8187
+Time: 11/18/26 02:57:47.932 - REMOVE: 0 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:02:38.248 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar002 8188 12281
+Time: 11/18/26 03:02:38.554 - REMOVE: 1 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/18/26 03:07:29.588 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar003 12282 16375
+Time: 11/18/26 03:07:31.146 - REMOVE: 2 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar002 to 
+        2 /var/lib/cubrid/databases/appdb_growth-1/appdb_lgar002.
+        REASON: Number of active log archives has been exceeded the max desired number.
+### heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current growth-2, state slave)
+   Node growth-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node growth-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node growth-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 71, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_growth-1 (pid 344, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/18/26 02:44:32.167
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_growth-0 (pid 342, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/18/26 02:44:32.152
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@growth-1:/var/lib/cubrid/databases/appdb_growth-1 (pid 340, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-1 -m sync appdb@growth-1 ] 
+    - registered-time   11/18/26 02:44:32.136
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@growth-0:/var/lib/cubrid/databases/appdb_growth-0 (pid 338, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0 ] 
+    - registered-time   11/18/26 02:44:32.111
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 80, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/18/26 02:44:30.335
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+### applyinfo
+== copy of growth-0
+
+ *** Applied Info. *** 
+Insert count                   : 2021
+Update count                   : 125000
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 3142
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 17922 | 3560
+Append LSA                     : 17922 | 3560
+HA server state                : active
+HA promotion time              : 02:44:32.000 AM 11/18/2026 (1794969872)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 17922 | 3560
+Append LSA                     : 17922 | 3560
+HA server state                : active
+HA promotion time              : 02:44:32.000 AM 11/18/2026 (1794969872)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+== copy of growth-1
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 4114
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 17375 | 7928
+Append LSA                     : 17375 | 7928
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 02:44:00.000 AM 11/18/2026 (1794969840)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 17375 | 7928
+Append LSA                     : 17375 | 7928
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 02:44:00.000 AM 11/18/2026 (1794969840)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 1
+Estimated Delay                : - second(s)
+### writer
+### end

@@ -1,0 +1,38 @@
+### date
+2026-11-18T05:24:04Z
+### cluster
+MemberPlacement=True MembersOnSeparateNodes
+BootstrapReady=True PeersSeeded
+PrimaryResolved=True SinglePrimaryObserved
+ReplicationHealthy=False LogCopyStalled
+HAReady=False LogCopyStalled
+WriteEndpointReady=True BrokerAvailable
+ReadEndpointReady=True BrokerAvailable
+BrokerReady=True BrokersAvailable
+RoutingReady=True PrimaryResolved
+Updating=False UpToDate
+Ready=True ClusterReady
+Progressing=False Reconciled
+### pods
+NAME                                READY   STATUS    RESTARTS   AGE    IP            NODE                  NOMINATED NODE   READINESS GATES
+growth-0                            1/1     Running   0          160m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-1                            1/1     Running   0          160m   <pod-ip>    cubrid-k8s-worker-2   <none>           <none>
+growth-2                            1/1     Running   0          160m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+growth-broker-ro-77bd69699d-p2skx   1/1     Running   0          160m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-broker-ro-77bd69699d-wvm5z   1/1     Running   0          160m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+growth-broker-rw-85f4f646d9-9sccc   1/1     Running   0          160m   <pod-ip>   cubrid-k8s-worker-3   <none>           <none>
+growth-broker-rw-85f4f646d9-nqdfv   1/1     Running   0          160m   <pod-ip>    cubrid-k8s-worker-1   <none>           <none>
+### pvc
+NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-growth-0   Bound    pvc-ce00edd6-7b97-4455-b6c2-91fb4d472d3f   2Gi        RWO            local-path     <unset>                 161m
+data-growth-1   Bound    pvc-f3aec951-9d46-4d14-ae4b-36b918fd4dff   2Gi        RWO            local-path     <unset>                 161m
+data-growth-2   Bound    pvc-69565c57-1d9c-47a1-b5ee-15a2b622a2b2   2Gi        RWO            local-path     <unset>                 161m
+### nodes
+cubrid-k8s-server DiskPressure=False
+cubrid-k8s-worker-1 DiskPressure=False
+cubrid-k8s-worker-2 DiskPressure=False
+cubrid-k8s-worker-3 DiskPressure=False
+### events
+LAST SEEN   TYPE      REASON                 OBJECT                 MESSAGE
+45m         Normal    ReplicationRecovered   cubridcluster/growth   Replication recovered: every observed slave applies the master's log
+44m         Warning   LogCopyStalled         cubridcluster/growth   Replication is not healthy: the copy of the master's log has not grown for 1m0s or longer while pages of it waited to be copied, on: growth-1

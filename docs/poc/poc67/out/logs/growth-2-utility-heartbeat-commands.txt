@@ -1,0 +1,5 @@
+26-11-18 04:03:40.195 (8758) cubrid heartbeat applylogdb stop appdb growth-0
+26-11-18 04:03:40.212 (8758) SUCCESS
+--
+26-11-18 04:38:59.811 (12421) cubrid heartbeat applylogdb start appdb growth-0
+26-11-18 04:38:59.841 (12421) FAILURE: Invalid argument.

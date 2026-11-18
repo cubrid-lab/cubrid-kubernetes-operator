@@ -1,0 +1,55 @@
+2026-11-18T02:48:34Z master growth-0; copier+applier stall on growth-1; applier-only stall on growth-2
+2026-11-18T02:48:35Z writer started on growth-0
+2026-11-18T02:48:35Z sample 20261118T024834Z done
+2026-11-18T02:53:36Z sample 20261118T025335Z done
+2026-11-18T02:58:38Z sample 20261118T025836Z done
+2026-11-18T03:03:39Z sample 20261118T030338Z done
+2026-11-18T03:08:39Z sample 20261118T030839Z done
+2026-11-18T03:13:40Z sample 20261118T031340Z done
+2026-11-18T03:18:41Z sample 20261118T031841Z done
+2026-11-18T03:23:42Z sample 20261118T032341Z done
+2026-11-18T03:28:43Z sample 20261118T032842Z done
+2026-11-18T03:33:44Z sample 20261118T033343Z done
+2026-11-18T03:38:45Z sample 20261118T033844Z done
+2026-11-18T03:43:46Z sample 20261118T034345Z done
+2026-11-18T03:48:47Z sample 20261118T034846Z done
+2026-11-18T03:53:48Z sample 20261118T035347Z done
+2026-11-18T03:58:49Z sample 20261118T035848Z done
+2026-11-18T04:03:39Z stall: growth-1 copylogdb stop: @ cubrid heartbeat copylogdb @ copylogdb stop ++ copylogdb stop: success ++ cubrid heartbeat copylogdb: success 
+2026-11-18T04:03:39Z stall: growth-1 applylogdb stop: @ cubrid heartbeat applylogdb @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: success 
+2026-11-18T04:03:40Z stall: growth-2 applylogdb stop: @ cubrid heartbeat applylogdb @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: success 
+2026-11-18T04:03:50Z sample 20261118T040349Z done
+2026-11-18T04:07:01Z freeze stop: growth-1 copylogdb for growth-0: 330 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0  SIGSTOP State:	T (stopped) command terminated with exit code 137 
+2026-11-18T04:07:23Z freeze stop: growth-1 applylogdb for growth-0: 334 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost  SIGSTOP State:	T (stopped) bash: /proc/9711/cmdline: No such file or directory bash: /proc/9731/cmdline: No such file or directory 
+2026-11-18T04:07:23Z freeze stop: growth-2 applylogdb for growth-0: 342 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost  SIGSTOP State:	T (stopped) 
+2026-11-18T04:08:51Z sample 20261118T040850Z done
+2026-11-18T04:13:52Z sample 20261118T041351Z done
+2026-11-18T04:18:53Z sample 20261118T041852Z done
+2026-11-18T04:23:54Z sample 20261118T042353Z done
+2026-11-18T04:28:54Z sample 20261118T042854Z done
+2026-11-18T04:33:55Z sample 20261118T043355Z done
+2026-11-18T04:38:26Z freeze cont: growth-1 copylogdb for growth-0: 330 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0  SIGCONT State:	D (disk sleep) 
+2026-11-18T04:38:26Z freeze cont: growth-1 applylogdb for growth-0: 334 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost  SIGCONT State:	R (running) 
+2026-11-18T04:38:27Z freeze cont: growth-2 applylogdb for growth-0: 342 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost  SIGCONT State:	D (disk sleep) 
+2026-11-18T04:38:49Z resume: growth-1 copylogdb start: @ cubrid heartbeat copylogdb @ copylogdb start ++ copylogdb start: success ++ cubrid heartbeat copylogdb: success 
+2026-11-18T04:38:57Z sample 20261118T043855Z done
+2026-11-18T04:38:59Z resume: growth-1 applylogdb start: @ cubrid heartbeat applylogdb @ applylogdb start ++ applylogdb start: success ++ cubrid heartbeat applylogdb: success 
+2026-11-18T04:39:09Z resume: growth-2 applylogdb start: @ cubrid heartbeat applylogdb @ applylogdb start ++ applylogdb start: success applylogdb: Apply copied log to the server. usage: cub_admin applylogdb [OPTION] database-name  valid options:   -L, --log-path=PATH         directory PATH of copied log volumes       --max-mem-size=SIZE     maximum process SIZE in MB; max 500 @ applylogdb stop ++ applylogdb stop: success ++ cubrid heartbeat applylogdb: fail command terminated with exit code 1 
+2026-11-18T04:43:58Z sample 20261118T044357Z done
+2026-11-18T04:48:58Z sample 20261118T044858Z done
+2026-11-18T04:53:59Z sample 20261118T045358Z done
+2026-11-18T04:59:00Z sample 20261118T045859Z done
+2026-11-18T05:04:01Z sample 20261118T050400Z done
+2026-11-18T05:09:02Z sample 20261118T050901Z done
+2026-11-18T05:14:03Z sample 20261118T051402Z done
+2026-11-18T05:19:01Z writer stop requested
+2026-11-18T05:19:04Z sample 20261118T051903Z done
+2026-11-18T05:19:51Z writer log copied: 2026-11-18T05:19:01Z stopped
+2026-11-18T05:24:05Z sample 20261118T052404Z done
+2026-11-18T05:29:06Z sample 20261118T052905Z done
+2026-11-18T05:34:07Z sample 20261118T053406Z done
+2026-11-18T05:34:52Z data check written
+2026-11-18T05:34:57Z run finished
+2026-11-18T05:35:10Z logs collected
+2026-11-18T05:35:26Z freeze stop: growth-1 applylogdb for growth-0: 334 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost  SIGSTOP State:	T (stopped) command terminated with exit code 137 
+2026-11-18T05:35:28Z freeze stop: growth-2 applylogdb for growth-0: error: Internal error occurred: Internal error occurred: error executing command in container: failed to exec in container: failed to create exec "a706f8299bd4141861caf8e1c799fe9b41b5949eb8649a6fcad9108f62411cc6": task ab57ec90108b99770adede1dbd73229d60de479b87341b30c86ac165ff4d0f35 not found 

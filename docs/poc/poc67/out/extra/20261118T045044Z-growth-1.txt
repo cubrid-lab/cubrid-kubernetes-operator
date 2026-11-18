@@ -1,0 +1,59 @@
+2026-11-18T04:50:44Z
+### processes
+12896 State: S (sleeping) :: cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_growth-0 -m sync appdb@growth-0 
+12936 State: S (sleeping) :: cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost 
+332 State: S (sleeping) :: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-2 -m sync appdb@growth-2 
+334 State: S (sleeping) :: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost 
+336 State: S (sleeping) :: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-2 --max-mem-size=500 appdb@localhost 
+### ls /home/cubrid/CUBRID/databases/appdb_growth-0
+total 194612
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-18 04:46:12.747238804 +0000 appdb_lgar024
+63524 -rw------- 1 cubrid cubrid 67092480 2026-11-18 04:50:43.679709456 +0000 appdb_lgar_t
+65540 -rw------- 1 cubrid cubrid 67108864 2026-11-18 04:50:43.687709705 +0000 appdb_lgat
+    4 -rw-rw-r-- 1 cubrid cubrid       32 2026-11-18 04:38:40.227457954 +0000 appdb_lgat__lock
+    4 -rw-rw-r-- 1 cubrid cubrid      584 2026-11-18 04:46:12.760239318 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       43 2026-11-18 04:46:12.757239200 +0000 appdb_lgla__lock
+### du /home/cubrid/CUBRID/databases/appdb_growth-0
+194616	/home/cubrid/CUBRID/databases/appdb_growth-0
+### df /home/cubrid/CUBRID/databases/appdb_growth-0
+Filesystem       1B-blocks        Used   Available Use% Mounted on
+/dev/vda1      40483942400 12739239936 27727925248  32% /home/cubrid/CUBRID/databases
+### applyinfo /home/cubrid/CUBRID/databases/appdb_growth-0
+
+ *** Applied Info. *** 
+Insert count                   : 12
+Update count                   : 72000
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 1972
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 106317 | 624
+Append LSA                     : 106317 | 624
+HA server state                : active
+HA promotion time              : 02:44:32.000 AM 11/18/2026 (1794969872)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 02:43:18.000 AM 11/18/2026 (1794969798)
+Vol creation time              : 02:43:19.000 AM 11/18/2026 (1794969799)
+EOF LSA                        : 106317 | 624
+Append LSA                     : 106317 | 624
+HA server state                : active
+HA promotion time              : 02:44:32.000 AM 11/18/2026 (1794969872)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)

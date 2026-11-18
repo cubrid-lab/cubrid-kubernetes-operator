@@ -1,0 +1,26 @@
+apiVersion: v1
+data:
+  cubrid_ha.conf: |
+    [common]
+    ha_node_list=cubrid@growth-0:growth-1:growth-2
+    ha_db_list=appdb
+    ha_port_id=59901
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2026-11-18T02:43:05Z"
+  labels:
+    app.kubernetes.io/component: database
+    app.kubernetes.io/instance: growth
+    app.kubernetes.io/managed-by: cubrid-kubernetes-operator
+    app.kubernetes.io/name: cubrid
+  name: growth-ha-config
+  namespace: cubrid-lab-archive-growth-20261118t0250z
+  ownerReferences:
+  - apiVersion: database.cubrid.io/v1alpha1
+    blockOwnerDeletion: true
+    controller: true
+    kind: CubridCluster
+    name: growth
+    uid: 5cfae8f6-7899-4698-b441-6164490d0ece
+  resourceVersion: "4634010"
+  uid: 0e14fae2-58b7-49a7-b071-6cbc8df0642b
