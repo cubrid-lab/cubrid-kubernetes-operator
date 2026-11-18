@@ -1,0 +1,32 @@
+# 2026-11-18T05:56:00Z, local Docker 29.2.1, image ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:7a0e659dca4edfb2387d85bdb7171108c7f2ccc3f0bb3249c8849df0219d46fb
+$ docker run --rm -e CUBRID_DATABASES=/var/lib/cubrid/databases --entrypoint bash <image> -c 'echo "plain: $CUBRID_DATABASES"; bash -lc "echo login: \$CUBRID_DATABASES"; cat ~/.cubrid.sh'
+plain: /var/lib/cubrid/databases
+login: /home/cubrid/CUBRID/databases
+--- ~/.cubrid.sh
+export CUBRID=/home/cubrid/CUBRID
+CUBRID_DATABASES=$CUBRID/databases
+export CUBRID CUBRID_DATABASES
+
+LD_LIBRARY_PATH=$CUBRID/lib:$CUBRID/cci/lib:$LD_LIBRARY_PATH
+PATH=$CUBRID/bin:/usr/sbin:$PATH
+export LD_LIBRARY_PATH PATH
+
+#
+#  tuning setting for glib memory library
+#  
+#  For more information on environment variables, see https://www.gnu.org/software/libc/manual/html_node/Malloc-Tunable-Parameters.html.
+#  (Notice) To using the environment variables below, you should to remove comment them and add them to the export statement.
+#
+#MALLOC_MMAP_MAX_=65536            # default : 65536
+#MALLOC_MMAP_THRESHOLD_=131072     # default : 131072 (128K)
+MALLOC_TRIM_THRESHOLD_=0           # default : 131072 (128K)
+#MALLOC_ARENA_MAX=                 # default : core * 8
+export MALLOC_TRIM_THRESHOLD_
+
+#
+# preloading library for another memory library
+#
+#LD_PRELOAD=/usr/lib64/jemalloc.so.1
+#export LD_PRELOAD
+$ docker image inspect <image> --format "{{json .Config.Volumes}}"
+{"/home/cubrid/CUBRID/databases":{}}

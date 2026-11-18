@@ -1,0 +1,6 @@
+2026-11-18T05:29:02Z
+### processes
+338 State: S (sleeping) :: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0 
+340 State: S (sleeping) :: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-1 -m sync appdb@growth-1 
+342 State: S (sleeping) :: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost 
+344 State: S (sleeping) :: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-1 --max-mem-size=500 appdb@localhost 

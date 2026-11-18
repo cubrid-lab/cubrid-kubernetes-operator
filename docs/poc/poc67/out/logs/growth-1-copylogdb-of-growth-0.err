@@ -1,0 +1,201 @@
+
+Time: 11/18/26 02:44:07.822 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 330) connected to database server 'appdb@growth-0' on the host 'growth-0' (port 1523).
+
+Time: 11/18/26 02:44:07.850 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/18/26 02:44:09.179 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@growth-0) from 'na' to 'to-be-active'. 
+
+Time: 11/18/26 02:44:32.651 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 4
+HA generic: change the state of HA server (appdb@growth-0) from 'to-be-active' to 'active'. 
+
+Time: 11/18/26 02:52:46.373 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 5
+HA generic: log archiving started for archive 000. 
+
+Time: 11/18/26 02:52:46.386 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 6
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar000" is created to archive pages from 0 to 4093.
+
+Time: 11/18/26 02:57:26.373 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 7
+HA generic: log archiving started for archive 001. 
+
+Time: 11/18/26 02:57:26.459 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 8
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar001" is created to archive pages from 4094 to 8187.
+
+Time: 11/18/26 03:02:08.742 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 9
+HA generic: log archiving started for archive 002. 
+
+Time: 11/18/26 03:02:08.758 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 10
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar002" is created to archive pages from 8188 to 12281.
+
+Time: 11/18/26 03:06:57.933 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 11
+HA generic: log archiving started for archive 003. 
+
+Time: 11/18/26 03:06:58.034 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 12
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar003" is created to archive pages from 12282 to 16375.
+
+Time: 11/18/26 03:11:38.800 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 13
+HA generic: log archiving started for archive 004. 
+
+Time: 11/18/26 03:11:38.822 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 14
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar004" is created to archive pages from 16376 to 20469.
+
+Time: 11/18/26 03:16:19.135 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 15
+HA generic: log archiving started for archive 005. 
+
+Time: 11/18/26 03:16:19.150 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 16
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar005" is created to archive pages from 20470 to 24563.
+
+Time: 11/18/26 03:21:07.512 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 17
+HA generic: log archiving started for archive 006. 
+
+Time: 11/18/26 03:21:07.581 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 18
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar006" is created to archive pages from 24564 to 28657.
+
+Time: 11/18/26 03:25:49.097 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 19
+HA generic: log archiving started for archive 007. 
+
+Time: 11/18/26 03:25:49.112 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 20
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar007" is created to archive pages from 28658 to 32751.
+
+Time: 11/18/26 03:30:29.704 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 21
+HA generic: log archiving started for archive 008. 
+
+Time: 11/18/26 03:30:29.717 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 22
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar008" is created to archive pages from 32752 to 36845.
+
+Time: 11/18/26 03:35:17.302 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 23
+HA generic: log archiving started for archive 009. 
+
+Time: 11/18/26 03:35:17.331 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 24
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar009" is created to archive pages from 36846 to 40939.
+
+Time: 11/18/26 03:39:58.178 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 25
+HA generic: log archiving started for archive 010. 
+
+Time: 11/18/26 03:39:58.262 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 26
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar010" is created to archive pages from 40940 to 45033.
+
+Time: 11/18/26 03:44:41.193 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 27
+HA generic: log archiving started for archive 011. 
+
+Time: 11/18/26 03:44:41.207 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 28
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar011" is created to archive pages from 45034 to 49127.
+
+Time: 11/18/26 03:49:29.436 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 29
+HA generic: log archiving started for archive 012. 
+
+Time: 11/18/26 03:49:29.473 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 30
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar012" is created to archive pages from 49128 to 53221.
+
+Time: 11/18/26 03:54:11.244 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 31
+HA generic: log archiving started for archive 013. 
+
+Time: 11/18/26 03:54:11.256 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 32
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar013" is created to archive pages from 53222 to 57315.
+
+Time: 11/18/26 03:58:50.834 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 33
+HA generic: log archiving started for archive 014. 
+
+Time: 11/18/26 03:58:50.926 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 34
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar014" is created to archive pages from 57316 to 61409.
+
+Time: 11/18/26 04:03:39.932 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 35
+HA generic: log archiving started for archive 015. 
+
+Time: 11/18/26 04:03:39.945 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 36
+Archive log "/var/lib/cubrid/databases/appdb_growth-0/appdb_lgar015" is created to archive pages from 61410 to 65503.
+
+Time: 11/18/26 04:38:26.473 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 3, EID = 37
+Server no longer responding.... No such file or directory
+
+Time: 11/18/26 04:38:26.473 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 3, EID = 38
+Your transaction has been aborted by the system due to server failure or mode change.
+
+Time: 11/18/26 04:38:26.478 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = -1, EID = 39
+HA generic: change the state of HA server (appdb@growth-0) from 'active' to 'dead'. 
+
+Time: 11/18/26 04:38:26.478 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = -1, EID = 40
+Server no longer responding.... No such file or directory
+
+Time: 11/18/26 04:38:26.479 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_admin.c, line 1093 ERROR CODE = -224, Tran = -1, EID = 41
+A database has not been restarted.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/18/26 04:38:27.487 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 42
+Program 'copylogdb' (pid 330) connected to database server 'appdb@growth-0' on the host 'growth-0' (port 1523).
+
+Time: 11/18/26 04:38:27.505 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 43
+log writer: log writer started. mode: 3.
+
+Time: 11/18/26 04:38:30.300 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_cl.c, line 9466 ERROR CODE = -1024, Tran = 3, EID = 44
+log writer: failed to get log page(s) starting from page id 66560.
+
+Time: 11/18/26 04:38:30.301 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1684 ERROR CODE = -989, Tran = 3, EID = 45
+Process event: Encountered an unrecoverable error and will shut itself down. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/18/26 04:38:40.165 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 12896) connected to database server 'appdb@growth-0' on the host 'growth-0' (port 1523).
+
+Time: 11/18/26 04:38:40.205 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/18/26 04:38:41.245 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@growth-0) from 'na' to 'active'. 
+
+Time: 11/18/26 04:41:32.357 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 4
+HA generic: log archiving started for archive 023. 
+
+Time: 11/18/26 04:41:32.369 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 5
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar023" is created to archive pages from 94162 to 98255.
+
+Time: 11/18/26 04:46:12.747 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 6
+HA generic: log archiving started for archive 024. 
+
+Time: 11/18/26 04:46:12.760 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 7
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar024" is created to archive pages from 98256 to 102349.
+
+Time: 11/18/26 04:50:53.973 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 8
+HA generic: log archiving started for archive 025. 
+
+Time: 11/18/26 04:50:53.991 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 9
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar025" is created to archive pages from 102350 to 106443.
+
+Time: 11/18/26 04:55:41.417 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 10
+HA generic: log archiving started for archive 026. 
+
+Time: 11/18/26 04:55:41.430 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 11
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar026" is created to archive pages from 106444 to 110537.
+
+Time: 11/18/26 05:00:22.968 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 12
+HA generic: log archiving started for archive 027. 
+
+Time: 11/18/26 05:00:22.982 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 13
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar027" is created to archive pages from 110538 to 114631.
+
+Time: 11/18/26 05:05:03.182 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 14
+HA generic: log archiving started for archive 028. 
+
+Time: 11/18/26 05:05:03.214 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 15
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar028" is created to archive pages from 114632 to 118725.
+
+Time: 11/18/26 05:09:51.488 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 16
+HA generic: log archiving started for archive 029. 
+
+Time: 11/18/26 05:09:51.632 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 17
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar029" is created to archive pages from 118726 to 122819.
+
+Time: 11/18/26 05:14:31.890 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1324  CODE = -1040, Tran = 3, EID = 18
+HA generic: log archiving started for archive 030. 
+
+Time: 11/18/26 05:14:31.903 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1473  CODE = -974, Tran = 3, EID = 19
+Archive log "/home/cubrid/CUBRID/databases/appdb_growth-0/appdb_lgar030" is created to archive pages from 122820 to 126913.
+
+*** The previous error message is the last one. ***
+

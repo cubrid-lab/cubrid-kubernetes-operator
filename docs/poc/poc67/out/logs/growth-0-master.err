@@ -1,0 +1,155 @@
+
+Time: 11/18/26 02:43:28.784 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 5256  CODE = -986, Tran = -1, EID = 1
+CUBRID heartbeat feature started. 
+
+Time: 11/18/26 02:43:29.785 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6620 ERROR CODE = -990, Tran = -1, EID = 2
+Command execution: activate. Failure. (CUBRID heartbeat feature already activated)
+
+Time: 11/18/26 02:43:31.228 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 3
+Process event: Registered as local process entries. Success (pid:55, state:registered_and_standby, args:cub_server appdb )
+
+Time: 11/18/26 02:43:32.924 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 4
+Process event: Registered as local process entries. Success (pid:312, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-1 -m sync appdb@growth-1 )
+
+Time: 11/18/26 02:43:32.944 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 5
+Process event: Registered as local process entries. Success (pid:314, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-2 -m sync appdb@growth-2 )
+
+Time: 11/18/26 02:43:32.960 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 6
+Process event: Registered as local process entries. Success (pid:316, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-1 --max-mem-size=500 appdb@localhost )
+
+Time: 11/18/26 02:43:32.978 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 7
+Process event: Registered as local process entries. Success (pid:318, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-2 --max-mem-size=500 appdb@localhost )
+
+Time: 11/18/26 02:43:41.910 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1179 ERROR CODE = -988, Tran = -1, EID = 8
+Node event: [Failover] [Success] Current node has been successfully promoted to master.
+
+Time: 11/18/26 02:43:41.910 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1196 ERROR CODE = -988, Tran = -1, EID = 9
+Node event: HA Node Info
+================================================================================
+ * group_id : cubrid   host_name : growth-0   state : master 
+--------------------------------------------------------------------------------
+name                 priority   state           score      missed heartbeat    
+--------------------------------------------------------------------------------
+growth-2             3          unknown         32767      0                   
+growth-1             2          unknown         32767      0                   
+growth-0             1          to-be-master    -4095      0                   
+================================================================================
+
+.
+
+Time: 11/18/26 02:43:41.911 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 10
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:41.912 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 11
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:44.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 12
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:44.922 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 13
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:43:46.913 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 14
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:46.913 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 15
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:47.928 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 16
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:47.928 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 17
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:43:50.933 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 18
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:50.933 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 19
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:43:51.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 20
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:51.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 21
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:53.939 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 22
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:53.939 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 23
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:43:56.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 24
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:56.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 25
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:43:56.945 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 26
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:56.945 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 27
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:43:59.952 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 28
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:43:59.952 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 29
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:44:01.927 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 30
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:01.928 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 31
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:02.961 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 851 ERROR CODE = -988, Tran = -1, EID = 32
+Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+
+Time: 11/18/26 02:44:02.961 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 1117  CODE = -988, Tran = -1, EID = 33
+Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+
+Time: 11/18/26 02:44:06.932 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 34
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:06.932 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 35
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:11.935 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 36
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:11.935 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 37
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:16.941 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 38
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:16.941 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 39
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:21.950 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 40
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:21.950 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 41
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:26.958 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 42
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:26.958 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 43
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:31.964 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 44
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:31.964 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 45
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:36.969 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 46
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+Time: 11/18/26 02:44:36.969 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 47
+HA generic: Receive changemode response from the server. (state:1[active], args:[cub_server appdb ], pid:55). 
+
+*** The previous error message is the last one. ***
+

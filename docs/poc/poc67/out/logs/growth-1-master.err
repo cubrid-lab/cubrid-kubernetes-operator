@@ -1,0 +1,33 @@
+
+Time: 11/18/26 02:44:03.658 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 5256  CODE = -986, Tran = -1, EID = 1
+CUBRID heartbeat feature started. 
+
+Time: 11/18/26 02:44:04.657 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6620 ERROR CODE = -990, Tran = -1, EID = 2
+Command execution: activate. Failure. (CUBRID heartbeat feature already activated)
+
+Time: 11/18/26 02:44:06.008 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 3
+Process event: Registered as local process entries. Success (pid:68, state:registered_and_standby, args:cub_server appdb )
+
+Time: 11/18/26 02:44:07.816 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 4
+Process event: Registered as local process entries. Success (pid:330, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-0 -m sync appdb@growth-0 )
+
+Time: 11/18/26 02:44:07.843 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 5
+Process event: Registered as local process entries. Success (pid:332, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_growth-2 -m sync appdb@growth-2 )
+
+Time: 11/18/26 02:44:07.870 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 6
+Process event: Registered as local process entries. Success (pid:334, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/18/26 02:44:07.898 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 7
+Process event: Registered as local process entries. Success (pid:336, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_growth-2 --max-mem-size=500 appdb@localhost )
+
+Time: 11/18/26 04:38:30.301 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6383  CODE = -990, Tran = -1, EID = 8
+Command execution: deregister. Success. (pid:330)
+
+Time: 11/18/26 04:38:40.153 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 9
+Process event: Registered as local process entries. Success (pid:12896, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_growth-0 -m sync appdb@growth-0 )
+
+Time: 11/18/26 04:38:50.576 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 10
+Process event: Registered as local process entries. Success (pid:12936, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_growth-0 --max-mem-size=500 appdb@localhost )
+
+*** The previous error message is the last one. ***
+

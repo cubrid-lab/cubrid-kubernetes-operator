@@ -1,0 +1,42 @@
+
+Time: 11/18/26 02:44:07.875 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 334) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/18/26 02:44:09.384 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 2
+log applier: log applier started. required LSA: 145|8584. last committed LSA: 145|8680. last committed repl LSA: 145|8584.
+
+Time: 11/18/26 02:44:09.386 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@growth-0) from 'idle' to 'to-be-active'. 
+
+Time: 11/18/26 02:44:09.413 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 4
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|10736. 
+
+Time: 11/18/26 02:44:32.731 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 5
+HA generic: change the state of HA server (appdb@growth-0) from 'to-be-active' to 'active'. 
+
+Time: 11/18/26 04:38:26.754 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 6
+HA generic: change the state of HA server (appdb@growth-0) from 'active' to 'dead'. 
+
+Time: 11/18/26 04:38:26.781 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 7
+HA generic: change log apply state from 'working' to 'recovering'. last committed LSA: 66547|1824. 
+
+Time: 11/18/26 04:38:26.825 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 8
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 66561|3080. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/18/26 04:38:50.579 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 12936) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/18/26 04:38:50.706 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 5, EID = 2
+log applier: log applier started. required LSA: 95900|6152. last committed LSA: 95900|6152. last committed repl LSA: 95900|6152.
+
+Time: 11/18/26 04:38:50.707 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 5, EID = 3
+HA generic: change the state of HA server (appdb@growth-0) from 'idle' to 'active'. 
+
+Time: 11/18/26 04:38:50.794 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 5, EID = 4
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 95900|6152. 
+
+*** The previous error message is the last one. ***
+
