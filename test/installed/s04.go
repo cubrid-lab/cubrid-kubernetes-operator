@@ -197,7 +197,10 @@ type s04Record struct {
 	// Operator was read having released the return, and
 	// ReturnAnnotationRemovedAt when the run removed the annotation.
 	// TaintRemovedByCleanup and AnnotationRemovedByCleanup are set when the
-	// end of S04 removed them because the procedure did not finish.
+	// end of S04 finished the procedure in its order, because S04 did not.
+	// FenceLeftInPlace says why the end left the run's taint (and the
+	// annotation) in place, AnnotationLeftInPlace why it left only the
+	// annotation, when it could not finish the procedure in its budget.
 	ReturnRequestedAt          *time.Time `json:"returnRequestedAt,omitempty"`
 	ReturnAnnotationSetByRun   bool       `json:"returnAnnotationSetByRun"`
 	BarrierEnforcedAt          *time.Time `json:"barrierEnforcedAt,omitempty"`
@@ -207,6 +210,8 @@ type s04Record struct {
 	ReturnAnnotationRemovedAt  *time.Time `json:"returnAnnotationRemovedAt,omitempty"`
 	TaintRemovedByCleanup      bool       `json:"taintRemovedByCleanup,omitempty"`
 	AnnotationRemovedByCleanup bool       `json:"annotationRemovedByCleanup,omitempty"`
+	FenceLeftInPlace           string     `json:"fenceLeftInPlace,omitempty"`
+	AnnotationLeftInPlace      string     `json:"annotationLeftInPlace,omitempty"`
 	// TaintGoneBeforeEnforcedAt is set when the taint was seen gone before
 	// the barrier was enforced, a never-event.
 	TaintGoneBeforeEnforcedAt *time.Time `json:"taintGoneBeforeEnforcedAt,omitempty"`
@@ -1558,6 +1563,9 @@ func (h *haRun) returnToService(ctx context.Context, rec *s04Record, result *evi
 			return fmt.Sprintf("the Operator has not released the return of %s to service", member), nil
 		}
 		rec.ReturnReleasedAt = &now
+		if result.Measurements == nil {
+			result.Measurements = map[string]any{}
+		}
 		result.Measurements["returnWithin"] = now.Sub(*rec.ReturnRequestedAt).Round(time.Millisecond).String()
 	}
 	if err := h.returnAnnotation(ctx, member, false); err != nil {
@@ -1584,62 +1592,124 @@ func (h *haRun) taintKept(ctx context.Context, rec *s04Record, result *evidence.
 		"before the Operator's return-to-service barrier was enforced", rec.Node))
 }
 
-// endFence removes, whatever S04 came to and also when the run's context
-// has ended, the out-of-service taint the run added and the
-// return-to-service annotation it set, when the return to service did not
-// remove them: a node left out of service keeps every Pod off it. A taint
-// the run did not add is never removed. This is not the return procedure,
-// and the record says which of them the end removed. A failure to remove
-// either fails a passing S04 and is added to the reason of any other result.
+// endFenceBudget bounds endFence, which has its own budget also when the
+// run's context has ended.
+var endFenceBudget = time.Minute
+
+// endFence finishes, whatever S04 came to and also when the run's context
+// has ended, the return to service that S04 did not: the out-of-service
+// taint the run added is still on the node, or the return-to-service
+// annotation the run set is still on the cluster. A node left out of
+// service keeps every Pod off it, but ADR-0005 (section 8, "Return to
+// service") forbids removing the taint before the Operator's read-write
+// barrier is enforced: the returning database could acknowledge writes the
+// barrier cannot undo. So, within endFenceBudget, it takes the steps of
+// returnToService in their order: with the VM powered on again and the node
+// Ready, it sets the annotation to the member, waits until the Operator
+// reports the barrier enforced, only then removes the taint, waits for the
+// release and removes the annotation. When the barrier is not seen
+// enforced in the budget, the VM is not running, the node is not Ready or
+// the cluster cannot be read, the taint and the annotation stay
+// (fenceLeftInPlace); when only the release is not seen, the annotation
+// stays, as it keeps the barrier (annotationLeftInPlace). Either fails a
+// passing S04 and is added to the reason of any other result, with how an
+// administrator finishes the return. A taint the run did not add is never
+// removed. A taint whose patch returned an error is the run's when the
+// node carries it.
 func (h *haRun) endFence(ctx context.Context, rec *s04Record, result *evidence.Scenario) {
-	added := rec.fencePending
-	if rec.FencedAt != nil {
-		added = nil
-		if rec.FenceTaintAddedByRun && rec.TaintRemovedAt == nil {
-			added = rec.FenceTaintTimeAdded
-		}
-	}
-	setByRun := rec.ReturnAnnotationSetByRun && rec.ReturnAnnotationRemovedAt == nil
-	if added == nil && !setByRun {
+	pending := rec.FencedAt == nil && rec.fencePending != nil
+	taint := rec.FenceTaintAddedByRun && rec.TaintRemovedAt == nil
+	annotation := rec.ReturnAnnotationSetByRun && rec.ReturnAnnotationRemovedAt == nil
+	if !pending && !taint && !annotation {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), endFenceBudget)
 	defer cancel()
-	var reasons []string
-	if added != nil {
-		var last error
+	if pending {
+		carries := false
 		err := pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
-			last = h.removeFenceTaint(ctx, rec.Node, *added)
-			return last == nil, nil
-		})
-		if err == nil {
-			now := time.Now().UTC()
-			if rec.FencedAt != nil {
-				rec.TaintRemovedAt, rec.TaintRemovedByCleanup = &now, true
+			node := &corev1.Node{}
+			if h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node) != nil {
+				return false, nil
 			}
-		} else {
-			reasons = append(reasons, fmt.Sprintf("remove the out-of-service taint the run added to node %s: %v",
-				rec.Node, errors.Join(err, last)))
-		}
-	}
-	if setByRun {
-		var last error
-		err := pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
-			last = h.returnAnnotation(ctx, rec.Master, false)
-			return last == nil, nil
+			carries = fenceTaint(node, rec.fencePending) != nil
+			return true, nil
 		})
-		if err == nil {
-			now := time.Now().UTC()
-			rec.ReturnAnnotationRemovedAt, rec.AnnotationRemovedByCleanup = &now, true
-		} else {
-			reasons = append(reasons, fmt.Sprintf("remove the annotation %s the run set: %v",
-				returnToServiceAnnotation, errors.Join(err, last)))
+		if err != nil {
+			h.fenceLeft(rec, result, fmt.Sprintf("node %s, which may carry the taint the run sent, could not be read",
+				rec.Node))
+			return
 		}
+		if !carries {
+			return
+		}
+		added := *rec.fencePending
+		rec.FenceTaintTimeAdded, rec.FenceTaintAddedByRun = &added, true
 	}
-	if len(reasons) == 0 {
-		return
+	taintWas, annotationWas := rec.TaintRemovedAt, rec.ReturnAnnotationRemovedAt
+	var unmet string
+	var err error
+	if rec.TaintRemovedAt == nil && rec.PoweredOnAt == nil {
+		unmet = fmt.Sprintf("the VM of node %s is not running again", rec.Node)
+	} else {
+		err = pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
+			if rec.TaintRemovedAt == nil {
+				ready, err := h.nodeReady(ctx, rec.Node)
+				if err != nil {
+					unmet = "node " + rec.Node + unread + err.Error()
+					return false, nil
+				}
+				if !ready {
+					unmet = fmt.Sprintf("node %s is not Ready", rec.Node)
+					return false, nil
+				}
+			}
+			var err error
+			unmet, err = h.returnToService(ctx, rec, result, time.Now().UTC())
+			return unmet == "", err
+		})
 	}
-	reason := strings.Join(reasons, "; ")
+	if taintWas == nil && rec.TaintRemovedAt != nil {
+		rec.TaintRemovedByCleanup = true
+	}
+	if annotationWas == nil && rec.ReturnAnnotationRemovedAt != nil {
+		rec.AnnotationRemovedByCleanup = true
+	}
+	why := unmet
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		why = err.Error()
+	}
+	switch {
+	case rec.FenceTaintAddedByRun && rec.TaintRemovedAt == nil:
+		h.fenceLeft(rec, result, why)
+	case rec.ReturnAnnotationSetByRun && rec.ReturnAnnotationRemovedAt == nil:
+		rec.AnnotationLeftInPlace = why
+		h.endFenceReason(result, fmt.Sprintf("the annotation %s=%s on CubridCluster %s/%s is left in place, as it "+
+			"keeps the Operator's return-to-service barrier, because %s within %s; once status.returnedToService "+
+			"names %s, an administrator removes the annotation", returnToServiceAnnotation, rec.Master,
+			h.cfg.Namespace, haClusterName, why, endFenceBudget, rec.Master))
+	}
+}
+
+// fenceLeft records that the end of S04 left the out-of-service taint the
+// run added, and the annotation if it set one, in place because of why, and
+// says how an administrator finishes the return to service (ADR-0005,
+// section 8).
+func (h *haRun) fenceLeft(rec *s04Record, result *evidence.Scenario, why string) {
+	rec.FenceLeftInPlace = why
+	h.endFenceReason(result, fmt.Sprintf("node %s is still tainted %s:NoExecute: the end of S04 left the taint "+
+		"in place because %s within %s, and removing it before the Operator's return-to-service barrier is "+
+		"enforced is forbidden (ADR-0005, section 8). An administrator finishes the return: with the VM powered "+
+		"on and the node Ready, set the annotation %s=%s on CubridCluster %s/%s, wait until "+
+		"status.writeQuarantine names %s as returningMember with an enforcedTime, then remove the taint, wait "+
+		"until status.returnedToService names %s and remove the annotation", rec.Node,
+		corev1.TaintNodeOutOfService, why, endFenceBudget, returnToServiceAnnotation, rec.Master, h.cfg.Namespace,
+		haClusterName, rec.Master, rec.Master))
+}
+
+// endFenceReason fails a passing S04 with reason, and adds it to the reason
+// of any other result.
+func (h *haRun) endFenceReason(result *evidence.Scenario, reason string) {
 	if result.Result == evidence.Pass {
 		result.Result, result.Reason = evidence.Fail, reason
 	} else {

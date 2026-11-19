@@ -66,6 +66,9 @@ func testS04Config(t *testing.T) HAConfig {
 	wasSettle := vmSettle
 	vmSettle = 50 * time.Millisecond
 	t.Cleanup(func() { vmSettle = wasSettle })
+	wasBudget := endFenceBudget
+	endFenceBudget = 2 * time.Second
+	t.Cleanup(func() { endFenceBudget = wasBudget })
 	cfg := testHAConfig(t)
 	cfg.Level = "vm-lab"
 	cfg.Timeout = 30 * time.Second
@@ -142,6 +145,9 @@ type s04Lab struct {
 	neverEnforce bool
 	barrierReads int
 	log          []string
+	// cancelAtFence, when set, is called once the taint is stored: the run
+	// ends right after the fence, before its return to service.
+	cancelAtFence context.CancelFunc
 }
 
 // afterFenceUID is the UID of the Pod the StatefulSet recreates after
@@ -214,7 +220,11 @@ func (l *s04Lab) fence(ctx context.Context, c client.WithWatch, before *corev1.N
 	l.fencedWhile = append(l.fencedWhile, fmt.Sprintf("stopped=%t ready=%t", l.stopped[testMasterNode],
 		nodeConditionReady(before)))
 	l.log = append(l.log, "taint-added")
+	cancel := l.cancelAtFence
 	f.mu.Unlock()
+	if cancel != nil {
+		defer cancel()
+	}
 	pod := &corev1.Pod{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testHAPrimary}, pod); err != nil {
 		f.t.Error(err)
@@ -1510,9 +1520,10 @@ func TestRunS04ReturnsTheMemberToServiceInOrder(t *testing.T) {
 }
 
 // When the Operator never enforces the barrier, the run never removes the
-// taint as a step of the return: S04 fails within vm_return_limit, and only
-// its end removes the taint and the annotation it added, as it makes a node
-// it cordoned schedulable again, so the lab is not left fenced.
+// taint as a step of the return: S04 fails within vm_return_limit. Its end
+// does not remove the taint either, because ADR-0005 forbids removing it
+// before the barrier is enforced: the taint and the annotation stay, the
+// record says why, and the reason tells the administrator how to finish.
 func TestRunS04KeepsTheTaintUntilTheBarrierIsEnforced(t *testing.T) {
 	cfg := testS04Config(t)
 	cfg.VMReturnLimit = 2 * time.Second
@@ -1522,13 +1533,93 @@ func TestRunS04KeepsTheTaintUntilTheBarrierIsEnforced(t *testing.T) {
 		t.Fatal("RunHA() passed")
 	}
 	s04 := s04Scenario(t, cfg.EvidenceDir)
-	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "barrier") {
-		t.Fatalf("S04 = %+v, want a failure: the barrier was never enforced", s04)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "barrier") ||
+		!strings.Contains(s04.Reason, "node "+testMasterNode+" is still tainted") {
+		t.Fatalf("S04 = %+v, want a failure: the barrier was never enforced and the node is still tainted", s04)
+	}
+	assertFenceLeftInPlace(t, f, lab, cfg.EvidenceDir, "barrier")
+}
+
+// assertFenceLeftInPlace checks that the run's taint and the annotation it
+// set are still in place, never removed, and that the record says why.
+func assertFenceLeftInPlace(t *testing.T, f *haFixture, lab *s04Lab, dir, why string) {
+	t.Helper()
+	rec := readS04Record(t, dir)
+	if rec.BarrierEnforcedAt != nil || rec.TaintRemovedAt != nil || rec.TaintRemovedByCleanup ||
+		rec.AnnotationRemovedByCleanup || !strings.Contains(rec.FenceLeftInPlace, why) {
+		t.Fatalf("record = enforced %v, taint removed %v (by the cleanup %t), annotation removed by the cleanup "+
+			"%t, left in place %q; want the fence left in place because of %q", rec.BarrierEnforcedAt,
+			rec.TaintRemovedAt, rec.TaintRemovedByCleanup, rec.AnnotationRemovedByCleanup, rec.FenceLeftInPlace, why)
+	}
+	if !hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the taint was removed before the barrier was enforced")
+	}
+	if rec.ReturnAnnotationSetByRun {
+		if haCluster(t, f).Annotations[returnToServiceAnnotation] != testHAPrimary {
+			t.Fatal("the return-to-service annotation was removed before the return was released")
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.ContainsFunc(lab.log, func(s string) bool { return strings.HasPrefix(s, "taint-removed") }) {
+		t.Fatalf("the taint was removed: %v", lab.log)
+	}
+}
+
+// A blocked S04 whose VM is not running again cannot return the member to
+// service, so its end leaves the taint it added in place: removing it
+// without the barrier is what ADR-0005 forbids. The reason names the node
+// still out of service.
+func TestRunS04LeavesItsTaintWhenTheVMIsNotRunning(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.failStart = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "node "+testMasterNode+" is still tainted") {
+		t.Fatalf("S04 = %+v, want blocked, naming the node still out of service", s04)
+	}
+	assertFenceLeftInPlace(t, f, lab, cfg.EvidenceDir, "not running")
+	if _, set := haCluster(t, f).Annotations[returnToServiceAnnotation]; set {
+		t.Fatal("the end of S04 set the return-to-service annotation while the VM was not running")
+	}
+}
+
+// A run that ends right after the fence, its VM powered on again by the
+// fault's cleanup, has its end follow ADR-0005's order: it sets the
+// annotation, waits until the Operator reports the barrier enforced, only
+// then removes the taint, and removes the annotation once the return is
+// released.
+func TestRunS04EndsItsFenceInTheReturnOrderWhenBlocked(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.enforceAfter = 3
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lab.cancelAtFence = cancel
+	if err := f.runner.RunHA(ctx, cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Blocked {
+		t.Fatalf("S04 = %+v, want blocked: the run ended after the fence", s04)
+	}
+	f.mu.Lock()
+	log := slices.Clone(lab.log)
+	f.mu.Unlock()
+	want := []string{"taint-added", "annotation-set " + testHAPrimary, "enforced", "taint-removed enforced=true",
+		"released", "annotation-removed"}
+	if !slices.Equal(log, want) {
+		t.Fatalf("the end of S04 and the Operator did %v, want %v", log, want)
 	}
 	rec := readS04Record(t, cfg.EvidenceDir)
-	if rec.BarrierEnforcedAt != nil || !rec.TaintRemovedByCleanup || !rec.AnnotationRemovedByCleanup {
-		t.Fatalf("record = enforced %v, taint removed by the cleanup %t, annotation %t; want both removed by "+
-			"the end of S04 only", rec.BarrierEnforcedAt, rec.TaintRemovedByCleanup, rec.AnnotationRemovedByCleanup)
+	if rec.BarrierEnforcedAt == nil || rec.TaintRemovedAt == nil || rec.TaintRemovedAt.Before(*rec.BarrierEnforcedAt) ||
+		!rec.TaintRemovedByCleanup || !rec.AnnotationRemovedByCleanup || rec.FenceLeftInPlace != "" {
+		t.Fatalf("record = enforced %v, taint removed %v (by the cleanup %t), annotation removed by the cleanup "+
+			"%t, left in place %q; want the taint removed by the end after the barrier was enforced",
+			rec.BarrierEnforcedAt, rec.TaintRemovedAt, rec.TaintRemovedByCleanup, rec.AnnotationRemovedByCleanup,
+			rec.FenceLeftInPlace)
 	}
 	if hasFenceTaint(masterNode(t, f)) {
 		t.Fatal("the taint the run added is left on the master's node")
@@ -1538,22 +1629,27 @@ func TestRunS04KeepsTheTaintUntilTheBarrierIsEnforced(t *testing.T) {
 	}
 }
 
-// A blocked S04 removes the taint it added too: here the VM is never
-// powered on again.
-func TestRunS04RemovesItsTaintWhenBlocked(t *testing.T) {
+// The same run with an Operator that never enforces the barrier within the
+// end's budget: the taint and the annotation stay, the record says so, and
+// the reason names the node still out of service.
+func TestRunS04LeavesItsFenceWhenTheBarrierIsNotEnforcedAtItsEnd(t *testing.T) {
 	cfg := testS04Config(t)
 	f, lab := newS04Fixture(t, cfg)
-	lab.failStart = true
-	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+	lab.neverEnforce = true
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lab.cancelAtFence = cancel
+	if err := f.runner.RunHA(ctx, cfg); err == nil {
 		t.Fatal("RunHA() passed")
 	}
-	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Blocked {
-		t.Fatalf("S04 = %+v, want blocked: the VM is still off", s04)
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "node "+testMasterNode+" is still tainted") ||
+		!strings.Contains(s04.Reason, returnToServiceAnnotation) {
+		t.Fatalf("S04 = %+v, want blocked, naming the node still out of service and how to return it", s04)
 	}
-	if rec := readS04Record(t, cfg.EvidenceDir); rec.FencedAt == nil || !rec.TaintRemovedByCleanup ||
-		hasFenceTaint(masterNode(t, f)) {
-		t.Fatalf("record = fenced %v, removed by the cleanup %t; want the run's taint removed at its end",
-			rec.FencedAt, rec.TaintRemovedByCleanup)
+	assertFenceLeftInPlace(t, f, lab, cfg.EvidenceDir, "barrier")
+	if !readS04Record(t, cfg.EvidenceDir).ReturnAnnotationSetByRun {
+		t.Fatal("the end of S04 did not set the return-to-service annotation")
 	}
 }
 

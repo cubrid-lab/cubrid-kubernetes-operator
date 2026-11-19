@@ -612,15 +612,29 @@ of it not `True` after its last `True` until the cluster converged),
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
 the fault flow.
 
-Whatever S04 comes to, also when the run's context ended, its end removes
-the taint the run added and the annotation it set when the return to
-service did not (`taintRemovedByCleanup`, `annotationRemovedByCleanup` in
-the record), so the lab is not left with a node out of service. That
-removal is not the return procedure: on a run that did not reach the
-enforced barrier it lets the member start before the read-write path is
-closed, and the namespace is deleted after it. A taint the run did not add
-is left as it is. A failure to remove either fails a passing S04 and is
-added to the reason of any other result.
+Whatever S04 comes to, also when the run's context ended, its end finishes
+the return to service that step 8 did not, when the taint the run added is
+still on the node or the annotation it set is still on the cluster. ADR-0005
+forbids removing the taint before the Operator's read-write barrier is
+enforced, so the end takes the same steps in the same order, within its own
+budget of one minute: with the VM powered on again and the node `Ready`, it
+sets the annotation to the member, waits until the Operator reports the
+barrier enforced, only then removes the taint, waits until
+`status.returnedToService` names the member and removes the annotation
+(`taintRemovedByCleanup`, `annotationRemovedByCleanup` in the record).
+
+When the VM is not running again, the node is not `Ready`, the cluster
+cannot be read or the barrier is not seen enforced within that budget, the
+end leaves the taint and the annotation in place: the node stays out of
+service. The record says why (`fenceLeftInPlace`), and the scenario's reason
+says that the node is still tainted out of service and how an administrator
+finishes the return: with the VM on and the node `Ready`, set the
+annotation, wait for the barrier's `enforcedTime`, remove the taint, wait
+for `status.returnedToService` and remove the annotation. When only the
+release is not seen, the taint is gone and the annotation stays, because it
+keeps the barrier (`annotationLeftInPlace`). Either fails a passing S04 and
+is added to the reason of any other result. A taint the run did not add is
+left as it is.
 
 When S04 ends before step 9 read the clients' histories (a failed step, a
 VM not powered on again, a cluster that did not converge, the run's
