@@ -381,6 +381,24 @@ func (r *haRun) passingDataCheck(id string, timeout time.Duration) workload.Repo
 	return report
 }
 
+// evidenceOnce returns a function that stores the history and a passed data
+// check of a scenario with evidenceFiles on its first call and returns the
+// same files on every later call. A step defers it right after
+// passingDataCheck returns, so the evidence is also kept when a later
+// assertion of the step fails, such as the applier's fail count (#254); on a
+// step that passes, the files are written where the step calls it.
+func (r *haRun) evidenceOnce(id string, report workload.Report) func() []string {
+	var files []string
+	stored := false
+	return func() []string {
+		if !stored {
+			stored = true
+			files = r.evidenceFiles(id, report)
+		}
+		return files
+	}
+}
+
 // evidenceFiles stores the history and a data check of a scenario and
 // returns the files that were written. A report no data check returned is not
 // stored: its zero values would read as a check that found no rows.
@@ -433,6 +451,8 @@ func s01AndS02Steps(r *haRun) {
 
 		By("applying the data rules to every member and to both Services")
 		report := r.passingDataCheck("S01", 2*time.Minute)
+		storeEvidence := r.evidenceOnce("S01", report)
+		defer storeEvidence()
 		Expect(report.Members).To(HaveLen(len(r.members) + 2))
 
 		history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
@@ -444,7 +464,7 @@ func s01AndS02Steps(r *haRun) {
 				Attempted: history.Counts[workload.Attempted], Acknowledged: history.Counts[workload.Acknowledged],
 				Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 			},
-			Evidence: r.evidenceFiles("S01", report),
+			Evidence: storeEvidence(),
 		}, within(formationLimit, formation))
 	})
 

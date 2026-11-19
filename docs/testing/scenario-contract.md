@@ -857,8 +857,9 @@ under the run directory when the scenario completes. They also write both
 when the data rules never held within the check's time limit, so that a
 violation can be placed in time against the logs. When no check produced a
 report, for example because a member could not be read, only the history is
-written. S02 also writes them when a later step fails; the other scenarios
-do not.
+written. Each of them also writes both when a later assertion of the same
+step fails after the data rules held, such as the applier's fail count or a
+search of the logs, so that failure can be placed in time as well.
 
 ### Measurements
 

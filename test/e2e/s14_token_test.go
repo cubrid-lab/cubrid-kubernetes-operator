@@ -635,6 +635,8 @@ func (r *haRun) s14Token(variant string) {
 
 	By("applying the data rules to every member and to both Services")
 	report := r.passingDataCheck("S14/"+variant, 3*time.Minute)
+	storeEvidence := r.evidenceOnce("S14/"+variant, report)
+	defer storeEvidence()
 
 	By("looking for the tokens where they must not be")
 	places := r.tokenPlaces()
@@ -646,7 +648,7 @@ func (r *haRun) s14Token(variant string) {
 	}
 	note("places searched for both tokens: %d, places that showed one: 0", len(places))
 
-	files := r.evidenceFiles("S14/"+variant, report)
+	files := storeEvidence()
 	if f := writeScenarioFile("S14/"+variant+"/result.txt", []byte(summary.String())); f != "" {
 		files = append(files, f)
 	}

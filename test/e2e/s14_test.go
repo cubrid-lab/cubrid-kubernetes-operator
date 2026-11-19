@@ -349,6 +349,8 @@ func s14Step(r *haRun) {
 			_, _ = fmt.Fprintf(GinkgoWriter, "operation records on %s: %s\n", member, strings.TrimSpace(operations))
 		}
 		report := r.passingDataCheck("S14", 2*time.Minute)
+		storeEvidence := r.evidenceOnce("S14", report)
+		defer storeEvidence()
 
 		By("reading the refusals from the Instance Manager's own log")
 		for _, member := range []string{master, slaves[0]} {
@@ -408,7 +410,7 @@ func s14Step(r *haRun) {
 			dropped) + summary
 		summary += fmt.Sprintf("places that showed the object-storage secret key: 0\n"+
 			"RBAC answers checked: %d, all as config/rbac/role.yaml grants\n", len(checks))
-		files := r.evidenceFiles("S14", report)
+		files := storeEvidence()
 		if f := writeScenarioFile("S14/result.txt", []byte(summary)); f != "" {
 			files = append(files, f)
 		}

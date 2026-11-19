@@ -280,9 +280,10 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(c.Status.WriteQuarantine).To(BeNil())
 		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
 		Expect(c.Status.LastWriteQuarantineRelease.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedAutomatically))
-		Expect(replicas(rwKey)).To(Equal(int32(0)), "the release is written before the Brokers start")
+		Expect(replicas(rwKey)).To(Equal(int32(brokerReplicas)),
+			"the pass that wrote the release starts the read-write Brokers without waiting for the next one (#1003)")
 		Expect(condition(c, conditionReady).Status).To(Equal(metav1.ConditionFalse),
-			"Ready is not True while the read-write Brokers are still held at zero")
+			"the status written before the Brokers were started does not report Ready")
 		Expect(events()).To(ContainSubstring("Normal " + reasonWriteQuarantineReleased))
 
 		By("the pass after the release")
@@ -443,6 +444,62 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil(), "the kept quarantine is written")
 	})
 
+	It("starts the read-write Brokers in the pass that writes the release, never before it is written (#1003)", func() {
+		f := newFixture("wq-release-write")
+		var failRelease error
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		faulty := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource &&
+					failRelease != nil && cluster.Status.WriteQuarantine == nil && cluster.Status.LastWriteQuarantineRelease != nil {
+					return failRelease
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, faulty)
+		runVerified(r, f)
+
+		By("a quarantine of the cut-off first member")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+
+		By("the first member back as a slave, verified, its release check started")
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		for _, step := range []time.Duration{3 * time.Second, quarantineVerifyGap + time.Second} {
+			*f.clock = f.clock.Add(step)
+			reconcileOnce(r, f)
+		}
+		Expect(stored(f).Status.WriteQuarantine.ReleaseCheckSince).NotTo(BeNil())
+
+		for _, failure := range []error{
+			apierrors.NewConflict(databasev1alpha1.GroupVersion.WithResource("cubridclusters").GroupResource(),
+				f.key.Name, errors.New("the object has been modified")),
+			apierrors.NewServiceUnavailable("the API server is not available"),
+		} {
+			By("the releasing pass whose status write fails: " + failure.Error())
+			failRelease = failure
+			*f.clock = f.clock.Add(quarantineReleaseInterval)
+			_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+			Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil(), "the release was not written")
+			Expect(rwReplicas(f)).To(Equal(int32(0)), "an unwritten release does not start the read-write Brokers")
+		}
+
+		By("the releasing pass whose status write succeeds starts them in the same pass")
+		failRelease = nil
+		*f.clock = f.clock.Add(quarantineReleaseInterval)
+		reconcileOnce(r, f)
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
+	})
+
 	It("escalates and revises a quarantine on another active master", func() {
 		f := newFixture("wq-escalate")
 		recorder := record.NewFakeRecorder(100)
@@ -501,8 +558,9 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(rwReplicas(f)).To(Equal(int32(0)), "a read error does not start them")
 	})
 
-	// memberPod creates the Pod of a member as the StatefulSet would, held by
-	// a finalizer so that its deletion leaves it Terminating until released.
+	// memberPod creates the Pod of a member as the StatefulSet would, started
+	// with an IP, held by a finalizer so that its deletion leaves it
+	// Terminating until released.
 	memberPod := func(f quarantineFixture, member string, held bool) *corev1.Pod {
 		GinkgoHelper()
 		c := stored(f)
@@ -520,6 +578,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 				_ = k8sClient.Delete(ctx, got, client.GracePeriodSeconds(0))
 			}
 		})
+		pod.Status.PodIP = memberTestPodIP
 		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: memberTestImage,
 			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}
 		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
@@ -674,8 +733,9 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("WriteQuarantinedMasterChanged")))
 	})
 
-	// fencedNode creates a Node for the first member and its Pod scheduled on
-	// it, before the cluster runs, as a StatefulSet and a scheduler would.
+	// fencedNode creates a Node for the first member and its Pod scheduled and
+	// started on it with an IP, before the cluster runs, as a StatefulSet, a
+	// scheduler and a kubelet would.
 	fencedNode := func(f quarantineFixture) (*corev1.Node, *corev1.Pod) {
 		GinkgoHelper()
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-node-0"}}
@@ -687,6 +747,8 @@ var _ = Describe("Write quarantine (#113)", func() {
 				Containers: []corev1.Container{{Name: appName, Image: memberTestImage}}}}
 		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		pod.Status.PodIP = memberTestPodIP
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 		return node, pod
 	}
 	// setTaint adds the out-of-service taint to node, as an administrator does
@@ -827,7 +889,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(rel.ReturningMember).To(Equal(first))
 		Expect(c.Status.ReturnedToService).To(Equal(first))
 		Expect(c.Status.MemberFences).To(BeEmpty())
-		Expect(rwReplicas(f)).To(Equal(int32(0)), "the release is written before the Brokers start")
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)), "the pass that wrote the release starts the Brokers")
 
 		By("the annotation left in place is ignored: it does not close the path again")
 		step(r, time.Second)
