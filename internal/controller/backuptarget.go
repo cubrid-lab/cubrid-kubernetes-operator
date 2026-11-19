@@ -214,9 +214,9 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 		}
 		withEnd := withSourceLogEnd(r, obs, now)
 		next := nextReplication(history[m], withEnd, positionOf(positions, m), now)
-		if next.StalledSince != nil && now.Sub(next.StalledSince.Time) >= replicationStallWindow {
-			continue
-		}
+		// FAILING-FIRST CHECK ONLY, never to be merged: the exclusion of a
+		// stalled standby is switched off, so the Kind step of #291 must fail.
+		_ = next
 		if next.NotReceivingSince != nil && now.Sub(next.NotReceivingSince.Time) >= replicationStallWindow {
 			continue
 		}
