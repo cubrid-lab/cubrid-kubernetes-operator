@@ -540,3 +540,85 @@ func TestManualReleaseExemptionNotOwned(t *testing.T) {
 		t.Errorf("exempt members %v, ends %v; want none and one end", s.lastRelease.ExemptMembers, d.ExemptionEnded)
 	}
 }
+
+// While a release check is in progress the next pass is due when the second
+// releasable pass can complete it, ReleaseCheckSince plus
+// quarantineReleaseInterval and a margin, when that comes before the usual
+// 3-second pass (#1003). The release still needs two releasable passes at
+// least quarantineReleaseInterval apart, and a pass that is not releasable
+// still resets the check, after which only the usual cadence applies.
+func TestReleasePassRetryRunsTheSecondPassOnTime(t *testing.T) {
+	s := startUnverified(t)
+	// q0 answers again, a fraction of a second off the second, and is
+	// verified quarantineVerifyGap later.
+	now := testNow.Add(3*time.Second + 400*time.Millisecond)
+	s.pass(now, releasable(now))
+	now = now.Add(unverifiedResyncInterval)
+	d := s.pass(now, releasable(now))
+	if d.Quarantine == nil || d.Quarantine.ReleaseCheckSince == nil {
+		t.Fatalf("the first releasable pass did not start the release check: %+v", d.Quarantine)
+	}
+	since := d.Quarantine.ReleaseCheckSince.Time
+	if got := releasePassRetry(d.Quarantine, now); got != since.Add(quarantineReleaseInterval).Sub(now)+releasePassMargin {
+		t.Errorf("retry after the first releasable pass = %s, want %s", got,
+			since.Add(quarantineReleaseInterval).Sub(now)+releasePassMargin)
+	}
+
+	// Each pass runs after the shorter of the usual cadence and the release
+	// pass's retry, as the reconciler requeues it.
+	first := now
+	for range 10 {
+		retry := unverifiedResyncInterval
+		if due := releasePassRetry(d.Quarantine, now); due > 0 && due < retry {
+			retry = due
+		}
+		now = now.Add(retry)
+		if d = s.pass(now, releasable(now)); d.Released != nil {
+			break
+		}
+		if now.Sub(first) >= quarantineReleaseInterval+time.Second+releasePassMargin {
+			t.Fatalf("not released %s after the first releasable pass", now.Sub(first))
+		}
+	}
+	if d.Released == nil {
+		t.Fatal("never released")
+	}
+	if got := now.Sub(since); got < quarantineReleaseInterval {
+		t.Errorf("released %s after the release check started, want at least %s", got, quarantineReleaseInterval)
+	}
+	if got, limit := now.Sub(first), quarantineReleaseInterval+time.Second+releasePassMargin; got > limit {
+		t.Errorf("released %s after the first releasable pass, want at most %s", got, limit)
+	}
+}
+
+// A pass that is not releasable resets the release check: no earlier pass is
+// asked for, and the release still waits for two new releasable passes.
+func TestReleasePassRetryAfterAReset(t *testing.T) {
+	s := startUnverified(t)
+	t1 := testNow.Add(3 * time.Second)
+	s.pass(t1, releasable(t1))
+	t2 := t1.Add(quarantineVerifyGap + time.Second)
+	d := s.pass(t2, releasable(t2))
+	if d.Quarantine == nil || d.Quarantine.ReleaseCheckSince == nil {
+		t.Fatalf("the first releasable pass did not start the release check: %+v", d.Quarantine)
+	}
+	t3 := t2.Add(quarantineReleaseInterval - time.Second)
+	if d = s.pass(t3, releasable(t3)); d.Released != nil {
+		t.Fatalf("released after less than %s", quarantineReleaseInterval)
+	}
+	if got, want := releasePassRetry(d.Quarantine, t3), time.Second+releasePassMargin; got != want {
+		t.Errorf("retry before the second pass = %s, want %s", got, want)
+	}
+	t4 := t3.Add(releasePassRetry(d.Quarantine, t3))
+	broken := releasable(t4)
+	broken[q2] = noAnswerAt(t4)
+	if d = s.pass(t4, broken); d.Released != nil || d.Quarantine == nil || d.Quarantine.ReleaseCheckSince != nil {
+		t.Fatalf("a pass without an answer from %s released or kept the check: %+v", q2, d)
+	}
+	if got := releasePassRetry(d.Quarantine, t4); got != 0 {
+		t.Errorf("retry after a reset = %s, want none", got)
+	}
+	if got := releasePassRetry(nil, t4); got != 0 {
+		t.Errorf("retry without a quarantine = %s, want none", got)
+	}
+}
