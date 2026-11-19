@@ -608,19 +608,54 @@ func (r *haRun) s14Token(variant string) {
 	note("old token refused (401) by %d members, new token accepted (200) by %d members", len(r.members), len(r.members))
 
 	By("checking that, after the overlap, no member refuses the operator's requests")
-	// The probes above logged refusals of their own; count from here.
+	// The probes above logged refusals of their own; count from here, also
+	// while the roles settle below.
 	refusedAfter := refusalsAt(Default)
-	Consistently(func(g Gomega) {
-		s, reason, _, _, err := r.primaryResolved()
+	// The master was replaced last, seconds ago, so CUBRID can still be
+	// settling its roles after the failover, and the Operator then reports
+	// a member it cannot read as unobserved (#438). The roles are read until
+	// they settle and the primary is resolved, by the rules of the starting
+	// state (#704), before the refusals are counted.
+	after, err := settledRoles(context.Background(), r.members, r.readRoles, 15*time.Second, time.Second)
+	if after.noted != "" {
+		note("roles after the overlap: %s", after.noted)
+		result.Reason += "; roles after the overlap: " + after.noted
+	}
+	Expect(err).NotTo(HaveOccurred(), after.noted)
+	var afterIncomplete []string
+	afterSettled := time.Now()
+	Eventually(func(g Gomega) {
+		status, reason, _, primary, err := r.primaryResolved()
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(s + " " + reason).To(Equal("True SinglePrimaryObserved"))
-	}, overlapQuiet/2, 3*time.Second).Should(Succeed())
+		done, err := startingPrimary(status, reason, primary, after.master)
+		if err != nil {
+			StopTrying(strings.TrimSuffix(err.Error()+"; "+after.noted, "; ")).Now()
+		}
+		if !done {
+			afterIncomplete = append(afterIncomplete, fmt.Sprintf("PrimaryResolved %s %s %.1f s after the roles settled",
+				status, reason, time.Since(afterSettled).Seconds()))
+		}
+		g.Expect(done).To(BeTrue(), "PrimaryResolved %s %s", status, reason)
+	}, 30*time.Second, 2*time.Second).Should(Succeed(), after.noted)
+	// The contract requires no refusal here and no PrimaryResolved window; a
+	// reading of an incomplete observation in the window is recorded.
+	inWindow, err := afterOverlapPrimary(func() (string, string, error) {
+		s, reason, _, _, err := r.primaryResolved()
+		return s, reason, err
+	}, overlapQuiet/2, 3*time.Second)
+	afterIncomplete = append(afterIncomplete, inWindow...)
+	for _, reading := range afterIncomplete {
+		note("after the overlap: %s", reading)
+	}
+	Expect(err).NotTo(HaveOccurred(), strings.Join(afterIncomplete, "; "))
 	afterOverlap := 0
 	for member, n := range refusalsAt(Default) {
 		afterOverlap += n - refusedAfter[member]
 	}
 	Expect(afterOverlap).To(BeZero(), "requests the members refused after the overlap ended")
-	note("after the overlap: PrimaryResolved stayed True for %s, requests refused by the members: 0", overlapQuiet/2)
+	note("after the overlap: roles settled with %s as master and the primary resolved; "+
+		"PrimaryResolved read for %s with %d incomplete observations; requests refused by the members: 0",
+		after.master, overlapQuiet/2, len(afterIncomplete))
 
 	By("checking that no member was reported as refusing the operator")
 	for _, reason := range []string{"InstanceManagerTokenRegenerated", "InstanceManagerTokenRefused"} {
@@ -655,21 +690,57 @@ func (r *haRun) s14Token(variant string) {
 	result = evidence.Scenario{
 		ID: "S14", Variant: variant, Result: evidence.Pass,
 		Measurements: map[string]any{
-			"membersReplaced":             replaced,
-			"startingToBeMasterMembers":   len(roles.waited),
-			"startingIncompleteReads":     incomplete,
-			"overlapEndedAfter":           overlap.Round(time.Second).String(),
-			"requestsRefusedWhileSettle":  settling,
-			"requestsRefusedAfterSettle":  later,
-			"oldTokenRefusedBy":           len(r.members),
-			"newTokenAcceptedBy":          len(r.members),
-			"tokenRefusedEvents":          0,
-			"requestsRefusedAfterOverlap": afterOverlap,
-			"placesSearched":              len(places),
-			"tokenFound":                  0,
-			"acknowledgedMissing":         report.AcknowledgedMissing,
+			"membersReplaced":               replaced,
+			"startingToBeMasterMembers":     len(roles.waited),
+			"startingIncompleteReads":       incomplete,
+			"overlapEndedAfter":             overlap.Round(time.Second).String(),
+			"requestsRefusedWhileSettle":    settling,
+			"requestsRefusedAfterSettle":    later,
+			"oldTokenRefusedBy":             len(r.members),
+			"newTokenAcceptedBy":            len(r.members),
+			"tokenRefusedEvents":            0,
+			"requestsRefusedAfterOverlap":   afterOverlap,
+			"afterOverlapToBeMasterMembers": len(after.waited),
+			"afterOverlapIncompleteReads":   len(afterIncomplete),
+			"placesSearched":                len(places),
+			"tokenFound":                    0,
+			"acknowledgedMissing":           report.AcknowledgedMissing,
 		},
 		Evidence: files,
+	}
+}
+
+// afterOverlapPrimary reads PrimaryResolved every interval for window, the
+// time in which the members' refusals of the operator's requests are counted
+// after the overlap ended. The contract requires no refusal there and states
+// no PrimaryResolved window (#438). A False with PrimaryObservationIncomplete
+// is what the Operator reports while it cannot read a member's role, as when
+// `cubrid heartbeat status` is killed after its bound right after a failover
+// (ADR-0005: an unknown role stays unknown), so it is returned, with the time
+// it was read, and read again. Any reading other than True with
+// SinglePrimaryObserved, two primaries above all, and a failed read end the
+// window with an error.
+func afterOverlapPrimary(read func() (status, reason string, err error),
+	window, interval time.Duration) ([]string, error) {
+	start := time.Now()
+	var incomplete []string
+	for {
+		status, reason, err := read()
+		if err != nil {
+			return incomplete, err
+		}
+		at := time.Since(start).Seconds()
+		switch {
+		case status == "True" && reason == "SinglePrimaryObserved":
+		case status == "False" && reason == "PrimaryObservationIncomplete":
+			incomplete = append(incomplete, fmt.Sprintf("PrimaryResolved %s %s %.1f s into the window", status, reason, at))
+		default:
+			return incomplete, fmt.Errorf("PrimaryResolved %s %s %.1f s into the window", status, reason, at)
+		}
+		if time.Since(start) >= window {
+			return incomplete, nil
+		}
+		time.Sleep(interval)
 	}
 }
 
