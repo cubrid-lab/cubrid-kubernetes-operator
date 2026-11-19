@@ -91,10 +91,14 @@ narrowing of the release.
 ### Required
 
 The initial support claim is limited to one pinned CUBRID 11.4.x/amd64
-configuration, one Kubernetes distribution and one CSI/StorageClass in the
-three-VM lab (#80). Distribution/version/driver selection remains unverified
-until that issue records the inventory and run evidence. Three VMs do not
-establish physical-zone resilience.
+configuration on one reference environment, the three-VM lab of #80 as its
+[inventory](docs/testing/lab-inventory.md) records it: three k3s workers
+(`v1.36.5+k3s1`, measured 2026-10-15) with 2 vCPU and 8 GiB each, and the
+node-local `local-path` StorageClass, which is **not CSI**. Evidence from it
+establishes no CSI semantics (attach/detach, a volume following its Pod to
+another node, snapshots), no volume resizing and no zone resilience: the
+workers share one availability zone. Its reproduction by the other
+maintainer remains open in #80.
 
 | Capability | Completion evidence | Tracking issues |
 |---|---|---|
