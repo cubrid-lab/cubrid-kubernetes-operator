@@ -1,0 +1,43 @@
+## ha-0: cub_master process events
+11/19/26 15:54:38.134 Registered as local process entries. Success (pid:120, state:registered_and_standby, args:cub_server appdb )
+11/19/26 15:54:39.634 Registered as local process entries. Success (pid:381, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:54:39.635 Registered as local process entries. Success (pid:383, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:54:39.663 Registered as local process entries. Success (pid:385, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+11/19/26 15:54:39.677 Registered as local process entries. Success (pid:387, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+## ha-1: cub_master process events
+11/19/26 15:55:55.051 Registered as local process entries. Success (pid:124, state:registered_and_standby, args:cub_server appdb )
+11/19/26 15:55:56.799 Registered as local process entries. Success (pid:386, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:55:56.806 Registered as local process entries. Success (pid:388, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:55:56.813 Registered as local process entries. Success (pid:390, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+11/19/26 15:55:56.820 Registered as local process entries. Success (pid:392, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+## ha-1: applier for ha-0's log, state lines
+11/19/26 15:56:23.134 change the state of HA server (appdb@poc68-stall-ha-0) from 'idle' to 'to-be-active'. 
+11/19/26 15:56:25.204 change log apply state from 'unregistered' to 'working'. last committed LSA: 145|11104. 
+11/19/26 15:57:25.691 change the state of HA server (appdb@poc68-stall-ha-0) from 'to-be-active' to 'active'. 
+11/19/26 15:57:58.162 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 15:58:02.710 change log apply state from 'working' to 'done'. last committed LSA: 146|13080. 
+11/19/26 15:58:44.831 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 15:58:47.463 change log apply state from 'done' to 'recovering'. last committed LSA: 146|16088. 
+11/19/26 16:04:22.233 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 16:09:44.652 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 16:10:24.830 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 16:11:03.953 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 16:12:10.060 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 16:15:08.641 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 16:15:54.904 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+## ha-2: cub_master process events
+11/19/26 15:56:57.757 Registered as local process entries. Success (pid:124, state:registered_and_standby, args:cub_server appdb )
+11/19/26 15:56:58.856 Registered as local process entries. Success (pid:384, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:56:58.862 Registered as local process entries. Success (pid:386, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_p
+11/19/26 15:56:58.869 Registered as local process entries. Success (pid:388, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+11/19/26 15:56:58.875 Registered as local process entries. Success (pid:390, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_
+## ha-2: applier for ha-0's log, state lines
+11/19/26 15:57:17.974 change the state of HA server (appdb@poc68-stall-ha-0) from 'idle' to 'to-be-active'. 
+11/19/26 15:57:21.266 change log apply state from 'unregistered' to 'working'. last committed LSA: 145|13112. 
+11/19/26 15:57:31.838 change the state of HA server (appdb@poc68-stall-ha-0) from 'to-be-active' to 'active'. 
+11/19/26 16:03:03.387 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 16:03:17.797 change log apply state from 'working' to 'recovering'. last committed LSA: 147|15496. 
+11/19/26 16:04:51.250 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 16:05:48.604 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
+11/19/26 16:06:44.478 change the state of HA server (appdb@poc68-stall-ha-0) from 'dead' to 'active'. 
+11/19/26 16:14:23.465 change the state of HA server (appdb@poc68-stall-ha-0) from 'active' to 'dead'. 
