@@ -180,9 +180,15 @@ func (f *haFixture) writeStatus(ctx context.Context, c client.WithWatch) {
 // answers all come after now, every seventh operation rolled back, and the
 // rows it leaves; fail names sequences that fail.
 func backgroundWorkload(id string, fail map[int]bool) (string, []workload.Row) {
+	return backgroundWorkloadFrom(id, fail, time.Now().Add(time.Second))
+}
+
+// backgroundWorkloadFrom is backgroundWorkload with its first answer at at
+// and the next ones 100 milliseconds apart.
+func backgroundWorkloadFrom(id string, fail map[int]bool, at time.Time) (string, []workload.Row) {
 	var lines []string
 	var rows []workload.Row
-	at := time.Now().Add(time.Second).UTC()
+	at = at.UTC()
 	for seq := 1; seq <= 40; seq++ {
 		op, note := workload.OpInsert, fmt.Sprintf("%s-%d", id, seq)
 		if seq%7 == 0 {

@@ -110,8 +110,13 @@ type haFixture struct {
 	managerDeleted bool
 	managerDeletes int
 	replacement    func(ctx context.Context, c client.WithWatch)
-	// backgroundHistory returns what a background client recorded.
+	// backgroundHistory returns what a background client recorded. It is
+	// called once per started client, and every read returns that history;
+	// liveHistory, when set, is called on every read instead, for a client
+	// whose history grows while it runs. histories keeps those returned.
 	backgroundHistory func(id string) string
+	liveHistory       func(id string) string
+	histories         map[string]string
 	// clockSkew is added to the clock the nodes report; kills counts the
 	// stops of background clients.
 	clockSkew time.Duration
@@ -196,7 +201,11 @@ type haFixture struct {
 	// nil fails the test on any eviction.
 	evicted func(ctx context.Context, c client.Client, pod client.Object) error
 	// haClusterRead, when set, plays a read of the HA cluster.
-	haClusterRead  func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	haClusterRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// patched, when set, plays the API server and the controllers when the
+	// run patches an object: apply stores the patch, and its error is the
+	// patch's.
+	patched        func(ctx context.Context, c client.WithWatch, obj client.Object, apply func() error) error
 	deploymentRead func(key client.ObjectKey) error
 	// podDeleted plays the API server and the StatefulSet when the run
 	// deletes a Pod of the run namespace.
@@ -318,6 +327,7 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			}
 			return c.List(ctx, list, opts...)
 		},
+		Patch: f.patch,
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption) error {
 			if err := f.beforeGet(ctx, c, key, obj); err != nil {
@@ -854,6 +864,37 @@ func (f *haFixture) heartbeat(pod string) string {
 	return b.String()
 }
 
+// patch stores a patch the run sends, through patched when it is set.
+func (f *haFixture) patch(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch,
+	opts ...client.PatchOption) error {
+	apply := func() error { return c.Patch(ctx, obj, patch, opts...) }
+	if f.patched != nil {
+		return f.patched(ctx, c, obj, apply)
+	}
+	return apply()
+}
+
+// clientHistory returns what background client id recorded so far.
+func (f *haFixture) clientHistory(id string) string {
+	if f.liveHistory != nil {
+		return f.liveHistory(id)
+	}
+	f.mu.Lock()
+	history, ok := f.histories[id]
+	f.mu.Unlock()
+	if ok {
+		return history
+	}
+	history = f.backgroundHistory(id)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.histories == nil {
+		f.histories = map[string]string{}
+	}
+	f.histories[id] = history
+	return history
+}
+
 func (f *haFixture) clientCommand(ctx context.Context, script string) (string, error) {
 	if f.clientHook != nil {
 		if out, err, done := f.clientHook(script); done {
@@ -864,6 +905,11 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 	case strings.HasPrefix(script, "workload init"):
 		return f.initOutput, f.initErr
 	case strings.Contains(script, "nohup workload run"):
+		if _, rest, ok := strings.Cut(script, "CLIENT_ID="); ok {
+			f.mu.Lock()
+			delete(f.histories, strings.Fields(rest)[0])
+			f.mu.Unlock()
+		}
 		return "", nil
 	case strings.HasPrefix(script, "date "):
 		return f.clock(), nil
@@ -877,9 +923,10 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 		return f.marker(script)
 	case strings.HasPrefix(script, `grep -c '"acknowledged"'`):
 		return "12\n", nil
-	case strings.HasPrefix(script, "sleep 1; cat /tmp/"):
-		id := strings.TrimSuffix(strings.TrimPrefix(script, "sleep 1; cat /tmp/"), ".jsonl")
-		return f.backgroundHistory(id), nil
+	case strings.HasPrefix(script, "sleep 1; cat /tmp/") ||
+		strings.HasPrefix(script, "cat /tmp/") && strings.HasSuffix(script, ".jsonl") && !strings.Contains(script, " ;"):
+		id := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(script, "sleep 1; "), "cat /tmp/"), ".jsonl")
+		return f.clientHistory(id), nil
 	case strings.Contains(script, "RO_JDBC_URL") && strings.Contains(script, "workload run"):
 		return roRefusalHistory(f.roRefusal), nil
 	case strings.Contains(script, "CLIENT_ID=s04probe ") && strings.Contains(script, "workload run"):

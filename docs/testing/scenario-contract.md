@@ -2227,9 +2227,10 @@ it needs more.
   `stable_period`.
 - **Implementation:** the Operator reads the taint for the release and runs
   the return-to-service barrier (#113; unit/envtest only, S04 not run). The
-  installed harness (`test/installed/`) does not yet add or remove the taint,
-  or run the return procedure; that follows with the VM-lab validation
-  (#115).
+  installed harness (`test/installed/`) adds the taint once the fault is
+  confirmed, runs the return procedure and measures `failover_limit` from
+  the taint (#1000; unit tests with fakes only). Its VM-lab validation
+  follows (#115).
 - **Source note:** no outside test was read for this scenario; the contract
   comes from ADR-0005 alone.
 

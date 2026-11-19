@@ -480,9 +480,40 @@ What the commands print is kept only through the run's redactor.
    over a second, then starts two clients writing through `<cluster>-rw`.
 4. Right before the fault, the starting conditions must be `True`, the master
    the same as at LAB01's end, the node `Ready`, no Broker Pod on it, and its
-   VM not reported `stopped`. Otherwise S04 is blocked.
+   VM not reported `stopped`. The node must not carry the taint
+   `node.kubernetes.io/out-of-service:NoExecute`, and the cluster must not
+   carry the annotation `database.cubrid.io/return-to-service`: the run adds
+   both itself, and one already there would be someone else's. The
+   cluster's `status.returnedToService` must not already name the member:
+   the Operator would ignore the run's annotation naming it. Otherwise S04
+   is blocked.
 5. The run powers the VM off. The fault is confirmed when the status command
    prints `stopped` and the node is not `Ready`.
+
+   **Fencing step.** The Operator keeps the read-write path closed while
+   the old master cannot answer (ADR-0005, section 8), and a node that only
+   stopped answering is no proof that its database is down. So once the
+   fault is confirmed, the run reads the node not `Ready` again and adds the
+   taint `node.kubernetes.io/out-of-service=nodeshutdown:NoExecute`, with a
+   `timeAdded` (the Operator does not count a taint without one), to the
+   master's node, once. `S04/power-off/record.json` keeps the proof it rests
+   on (`fenceProof`: the status reading `stopped` and its time, and when the
+   node was read not `Ready`), when the run sent the taint (`fencedAt`) and
+   its `timeAdded`; the timeline has a step `out_of_service_taint_added`.
+   A patch that fails is tried again on the next poll and its error kept
+   in `fenceError`. A taint of the same key and effect that someone else
+   added is the fence only when it has a `timeAdded` no earlier than the
+   second the stop command was issued; then it is recorded as the fence
+   (`fenceTaintAddedByRun: false`), and the run never removes it. Its
+   `timeAdded` comes from another clock, so `fencedAt` is when the run first
+   read it, from which `failover_limit` runs, and its `timeAdded` is kept
+   apart as `fenceTaintTimeAdded`. Such a taint without a `timeAdded`, or
+   with one before the stop, is not this outage's fence: S04 is blocked,
+   with the reason in `fenceError`. A run that could not add the taint is
+   blocked: `failover_limit` runs from it.
+   Kubernetes then force-deletes the member's Pod and the StatefulSet
+   recreates it with a new UID; with a node-local volume it stays `Pending`
+   until the taint is removed.
 6. While the VM is off, the run reads, on every poll:
    - the roles of the two other members: one must be master and the other a
      slave. That is CUBRID's promotion; the Operator has no action that
@@ -491,13 +522,19 @@ What the commands print is kept only through the run's redactor.
      was confirmed off is a never-event (ADR-0005 keeps an observation fresh
      for 15 seconds). Readings of the cluster that fail are counted.
    - the powered-off member's Pod: a deletion timestamp, another UID, or no
-     Pod at all is a never-event.
+     Pod at all is a never-event when it is seen before the taint, or when
+     the deletion timestamp or the new Pod's creation is older than the
+     taint (to the second; the earlier of `fencedAt` and the taint's
+     `timeAdded`). After the taint it is Kubernetes' doing:
+     `podReplacedAfterFenceAt` records when it was first seen.
+     `PrimaryResolved` is judged the same before and after the taint: the
+     taint releases the read-write path but does not resolve the primary.
    - the node: `Ready` again before the run powered the VM on blocks S04, as
      the lab, not the run, ended the outage, unless a never-event was already
      seen; then S04 fails.
 
    The VM stays off until a slave was promoted, `PrimaryResolved` was read
-   after its 30 seconds, and at least `-vm-down-for` (default 1 minute; at
+   after its 30 seconds, the node was fenced, and at least `-vm-down-for` (default 1 minute; at
    least twice those 30 seconds) has passed since it was confirmed off, all
    within `-failover-limit` plus `-vm-down-for`. A master that moves again
    while the VM is off fails S04.
@@ -522,39 +559,116 @@ What the commands print is kept only through the run's redactor.
    judged, and the VM is the lab's to recover.
 8. Until the node is `Ready` and the member on the VM answers its heartbeat
    status as master or slave again, the member still cannot be observed, and
-   the reads of step 5 on `PrimaryResolved` and the Pod go on: a node that
+   the reads of step 6 on `PrimaryResolved` and the Pod go on: a node that
    is `Ready` does not mean CUBRID on it runs. The Operator reaches the
    member over the Pod network and the run through `kubectl exec`, so the
    Operator may see it first: the reads also end when the HA cluster's
    `status.instances` shows the member with a known role and a
-   `lastObservedTime` after the VM was powered on. Within
+   `lastObservedTime` after the VM was powered on.
+
+   **Return to service.** Once the node is `Ready`, the run follows
+   ADR-0005's return-to-service procedure, because removing the taint lets
+   the member's database start again, and a write it acknowledged before
+   the read-write path was closed again could not be undone:
+   1. it sets the annotation `database.cubrid.io/return-to-service` on the
+      `CubridCluster` to the member's name (`returnRequestedAt`);
+   2. it waits until `status.writeQuarantine` has the reason
+      `WriteQuarantinedMemberReturning`, names the member as
+      `returningMember` and has an `enforcedTime` (`barrierEnforcedAt`, and
+      the Operator's own time as `operatorEnforcedTime`). Until then the
+      taint stays; seen gone before it, it is a never-event;
+   3. only then it removes the taint it added, matched by its `timeAdded`
+      (`taintRemovedAt`). Each attempt reads the cluster again right before
+      the removal: a barrier no longer reported enforced keeps the taint
+      on. A taint it did not add is waited for, never removed;
+   4. it waits until `status.returnedToService` names the member: the
+      Operator verified it and released the quarantine
+      (`returnReleasedAt`; `returnWithin` from the annotation);
+   5. it removes the annotation (`returnAnnotationRemovedAt`).
+
+   A barrier that becomes `WriteQuarantinedMasterChanged` fails S04:
+   divergent data is a person's decision. Within
    `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the start,
-   the node must be `Ready` and the cluster must converge: the member on the
-   VM is the same Pod, CUBRID reports one master and two slaves,
+   the node must be `Ready`, the return must be done and the cluster must
+   converge: the member on the VM is the same Pod, or the one recreated
+   after the taint (its UID kept as `masterPodUIDAfter`): a replacement was
+   seen after the taint (`podReplacedAfterFenceAt`), and the Pod was created
+   at or after the taint and not after the second the run removed it.
+   Any other new UID fails S04; CUBRID reports
+   one master and two slaves,
    `status.currentPrimary` names that master, and the starting conditions
    are `True`. Which member ends as master is recorded (`finalMaster`), not
    judged; a switchover back to the old master interrupts the clients,
-   which step 8 then measures.
-9. The clients go on for `-stable-period`, then stop. Answers that failed
-   while the master's VM was off are expected. Every client must be
-   acknowledged again without interruption, for at least the stable period,
-   and the last of them must have recovered within `-failover-limit`
-   (`failover_limit`, default 30 seconds) of the moment the stop command was
-   issued, as the contract measures recovery time. The lab's command latency
-   is part of that time; `confirmedOffAfter` records how long the stop took
-   to be confirmed.
+   which step 9 then measures.
+9. The clients are judged as the contract's S04 "Three intervals" define
+   it, on the client's clock. The Operator refuses writes through `-rw`
+   from the fault until the taint, and again from the return-to-service
+   barrier until it releases the return, so answers that failed in those
+   two stretches are expected:
+   - **failover:** each client's first acknowledged write after the moment
+     the run sent the taint must come within `-failover-limit`
+     (`failover_limit`, default 30 seconds) of it. The slowest client is
+     reported as `failoverWithin`.
+   - **return:** answers that fail from the return-to-service request until
+     the client's first acknowledged write after the release are the
+     barrier's. Their outage, from the first such failure to that write, is
+     reported as `returnWriteOutage` (the longest of the clients), without a
+     limit.
+   - **stable period:** after that first write following the release, each
+     client must be acknowledged without interruption for at least
+     `-stable-period`.
+
+   Any other failed or unknown answer, between a client's first write
+   after the taint and the return-to-service request, or after its first
+   write following the release, is an interruption and fails S04. The
+   clients keep running after the convergence until each has been stable
+   for the stable period after the return, one is interrupted, or
+   `failover_limit` plus the stable period has passed since the later of the
+   release and the convergence; then they stop. The time from the stop to
+   the taint is reported as `fencedAfter`, without a limit;
+   `confirmedOffAfter` records how long the stop took to be confirmed.
 10. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
 Measurements, from the stop command's issue unless named otherwise:
-`confirmedOffAfter`, `promotedWithin` (until the promotion was seen),
-`failoverWithin` (until the last client recovered), `vmReturnWithin` and
+`confirmedOffAfter`, `fencedAfter` (until the run sent the taint),
+`promotedWithin` (until the promotion was seen), `failoverWithin` (from the
+taint until the slowest client's first acknowledged write), `returnWithin`
+(from setting the return-to-service annotation until the Operator released
+the return), `returnWriteOutage` (the longest write outage of a client
+behind the return-to-service barrier),
+`vmReturnWithin` and
 `convergedWithin` (from the return of the cleanup's first start command until
 the node was `Ready`, and until the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
 of it not `True` after its last `True` until the cluster converged),
-`finalMaster`, `shortestStableFor` and `operationsNotAcknowledged`.
+`finalMaster`, `shortestStableFor` (from each client's first write
+acknowledged after the release) and `operationsNotAcknowledged`.
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
 the fault flow.
+
+Whatever S04 comes to, also when the run's context ended, its end finishes
+the return to service that step 8 did not, when the taint the run added is
+still on the node or the annotation it set is still on the cluster. ADR-0005
+forbids removing the taint before the Operator's read-write barrier is
+enforced, so the end takes the same steps in the same order, within its own
+budget of one minute: with the VM powered on again and the node `Ready`, it
+sets the annotation to the member, waits until the Operator reports the
+barrier enforced, only then removes the taint, waits until
+`status.returnedToService` names the member and removes the annotation
+(`taintRemovedByCleanup`, `annotationRemovedByCleanup` in the record).
+
+When the VM is not running again, the node is not `Ready`, the cluster
+cannot be read or the barrier is not seen enforced within that budget, the
+end leaves the taint and the annotation in place: the node stays out of
+service. The record says why (`fenceLeftInPlace`), and the scenario's reason
+says that the node is still tainted out of service and how an administrator
+finishes the return: with the VM on and the node `Ready`, set the
+annotation, wait for the barrier's `enforcedTime`, remove the taint, wait
+for `status.returnedToService` and remove the annotation. When only the
+release is not seen, the taint is gone and the annotation stays, because it
+keeps the barrier (`annotationLeftInPlace`). Either fails a passing S04 and
+is added to the reason of any other result. A taint the run did not add is
+left as it is.
 
 When S04 ends before step 9 read the clients' histories (a failed step, a
 VM not powered on again, a cluster that did not converge, the run's
