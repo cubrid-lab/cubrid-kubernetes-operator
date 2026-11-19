@@ -1345,14 +1345,14 @@ const reasonWriteQuarantineOtherCluster = "WriteQuarantineClusterUIDMismatch"
 // writesHeld reports whether the read-write Brokers are kept at zero in this
 // pass: while a quarantine is in force; while this reconciler holds one it
 // decided and has not seen released (quarantineHolds), whatever the status
-// read says; on the pass that releases one, whose release is written to the
-// status before the Brokers are started again.
+// read says; on the pass that releases one, until its release is written to
+// the status (reconcileReport.releaseWritten).
 func (r *CubridClusterReconciler) writesHeld(cluster *databasev1alpha1.CubridCluster) bool {
 	if cluster.Status.WriteQuarantine != nil || r.heldQuarantine(cluster) != nil {
 		return true
 	}
 	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
-	return ok && report.(*reconcileReport).before.WriteQuarantine != nil
+	return ok && report.(*reconcileReport).before.WriteQuarantine != nil && !report.(*reconcileReport).releaseWritten
 }
 
 // scaleUpHeld reports whether this pass keeps the read-write Brokers from
@@ -1852,7 +1852,7 @@ func (h *quarantineHold) rememberEndedExemptions(before, after *databasev1alpha1
 
 // quarantineRetry is how soon the pass is retried for the write quarantine,
 // zero for the usual cadence: a second after a release, so that the next pass
-// starts the read-write Brokers; unverifiedResyncInterval while a quarantine
+// reports the read-write Brokers the releasing pass started; unverifiedResyncInterval while a quarantine
 // is in force or a member is unverified (watchful); releaseRetry after a
 // release annotation that could not be applied, but never later than a
 // watchful pass would be.

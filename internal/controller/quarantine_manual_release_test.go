@@ -165,7 +165,7 @@ var _ = Describe("Manual release of a write quarantine (#113)", func() {
 		stamp, err := rel.ReleaseTime.MarshalJSON()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(stamp)).To(HaveSuffix(`Z"`), "the release time is stored in UTC")
-		Expect(rwReplicas(f)).To(Equal(int32(0)), "the release is written before the read-write Brokers start")
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)), "the pass that wrote the release starts the read-write Brokers")
 		_, present := annotation(f)
 		Expect(present).To(BeFalse(), "the consumed annotation is removed")
 		Expect(drain(f.recorder)).To(ContainElement(SatisfyAll(
