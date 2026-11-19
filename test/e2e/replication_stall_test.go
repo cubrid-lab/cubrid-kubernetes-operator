@@ -34,6 +34,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -793,4 +794,381 @@ func (r *haRun) waitBackupEnded(name string, limit time.Duration) string {
 		time.Sleep(5 * time.Second)
 	}
 	return phase + " (still running after " + limit.String() + ")"
+}
+
+// Shape of stuckStandbysStep. While every slave's applier is paused, the
+// master takes stuckWriteRounds batches of stuckWriteRows rows, one batch
+// every stuckWritePause. The StandbyOnly backup is created once every slave
+// has been reported stalled for at least the Operator's stall window, and
+// must stay unassigned, with the reason NoHealthyStandby, at every one of
+// stuckRefusalReads reads, stuckRefusalEvery apart, before the appliers are
+// resumed. The writes go on past the resume, so the positive control runs
+// while the master is still written to.
+const (
+	stuckWriteRounds  = 40
+	stuckWriteRows    = 10
+	stuckWritePause   = 3 * time.Second
+	stuckStallWindow  = 60 * time.Second
+	stuckRefusalReads = 6
+	stuckRefusalEvery = 5 * time.Second
+)
+
+// pauseAppliersScript sends the signal named in $0, STOP or CONT, to every
+// applylogdb process of the member and prints "sent SIG<signal> to <pid>"
+// for each; with LIST it sends none. Then it prints "<pid> State: <state>"
+// for every applylogdb process. The processes are found by their command
+// line under /proc. The match is anchored on "cub_admin applylogdb ", so
+// neither the shell of this exec, whose command line holds the pattern, nor
+// the Instance Manager's applyinfo, also a cub_admin, is signalled
+// (docs/poc/poc67/freeze.sh, docs/poc/poc68).
+const pauseAppliersScript = `for p in /proc/[0-9]*; do
+  a=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+  case "$a" in 'cub_admin applylogdb '*)
+    if [ "$0" != LIST ]; then kill -"$0" "${p#/proc/}" && echo "sent SIG$0 to ${p#/proc/}"; fi ;;
+  esac
+done
+for p in /proc/[0-9]*; do
+  a=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+  case "$a" in 'cub_admin applylogdb '*) echo "${p#/proc/} $(grep State: "$p/status")" ;; esac
+done`
+
+// sentSignal matches one process the pause script signalled.
+var sentSignal = regexp.MustCompile(`(?m)^sent SIG(?:STOP|CONT) to (\d+)$`)
+
+// stuckStandbysEligible returns why c does not show, at now, the state the
+// negative oracle of stuckStandbysStep needs, or nil when it does: the
+// primary is resolved to master, and every one of slaves is a freshly
+// observed slave that the backup target selection would take but for its
+// stall. Its replication reading is fresh, of master's log, with no failed
+// change, a copy end that was read and a copy that receives the log (no
+// notReceivingSince), and its stall has lasted at least the stall window. A
+// refusal in any other state, such as while the primary is not resolved or
+// an observation is missing, can have another cause than the exclusion of
+// stuck standbys, and proves nothing (#291).
+func stuckStandbysEligible(c *databasev1alpha1.CubridCluster, master string, slaves []string, now time.Time) error {
+	if err := conditionIs(c, "PrimaryResolved", metav1.ConditionTrue); err != nil {
+		return err
+	}
+	if c.Status.CurrentPrimary != master {
+		return fmt.Errorf("currentPrimary is %q, expected %s", c.Status.CurrentPrimary, master)
+	}
+	var problems []error
+	for _, slave := range slaves {
+		i := slices.IndexFunc(c.Status.Instances, func(s databasev1alpha1.InstanceStatus) bool { return s.Name == slave })
+		if i < 0 {
+			problems = append(problems, fmt.Errorf("%s is not in status.instances", slave))
+			continue
+		}
+		in := c.Status.Instances[i]
+		rep := in.Replication
+		switch {
+		case in.Role != databasev1alpha1.RoleSlave:
+			problems = append(problems, fmt.Errorf("%s has the role %q, not slave", slave, in.Role))
+		case in.LastObservedTime == nil || now.Sub(in.LastObservedTime.Time) > stuckStallWindow:
+			problems = append(problems, fmt.Errorf("%s has no observation younger than %s", slave, stuckStallWindow))
+		case rep == nil || rep.ObservedAt == nil || now.Sub(rep.ObservedAt.Time) > stuckStallWindow:
+			problems = append(problems, fmt.Errorf("%s has no replication reading younger than %s", slave, stuckStallWindow))
+		case rep.Source != master:
+			problems = append(problems, fmt.Errorf("%s applies the log of %q, not of %s", slave, rep.Source, master))
+		case rep.FailCount != 0:
+			problems = append(problems, fmt.Errorf("%s has failed %d changes", slave, rep.FailCount))
+		case rep.CopiedEOF == nil:
+			problems = append(problems, fmt.Errorf("%s has no copy end read", slave))
+		case rep.NotReceivingSince != nil:
+			problems = append(problems, fmt.Errorf("%s has not received the log since %s", slave,
+				rep.NotReceivingSince.UTC().Format(time.RFC3339)))
+		case rep.StalledSince == nil:
+			problems = append(problems, fmt.Errorf("%s is not reported stalled (delayedPages %d)", slave, rep.DelayedPages))
+		case now.Sub(rep.StalledSince.Time) < stuckStallWindow:
+			problems = append(problems, fmt.Errorf("%s is stalled since %s, less than %s ago", slave,
+				rep.StalledSince.UTC().Format(time.RFC3339), stuckStallWindow))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+// backupRefusal returns nil when a CubridBackup's status shows the refusal
+// the negative oracle of stuckStandbysStep expects: no target recorded, and
+// its Ready Condition False with exactly the reason NoHealthyStandby. Any
+// other reason, such as PrimaryNotResolved, or no Ready Condition yet, is not
+// that refusal.
+func backupRefusal(b *databasev1alpha1.CubridBackup) error {
+	if b.Status.TargetInstance != "" {
+		return fmt.Errorf("the backup was given to %s (%s)", b.Status.TargetInstance, b.Status.TargetRole)
+	}
+	ready := meta.FindStatusCondition(b.Status.Conditions, "Ready")
+	if ready == nil {
+		return errors.New("the backup has no Ready Condition yet")
+	}
+	if ready.Status != metav1.ConditionFalse || ready.Reason != "NoHealthyStandby" {
+		return fmt.Errorf("Ready is %s/%s (%s), expected False/NoHealthyStandby", ready.Status, ready.Reason, ready.Message)
+	}
+	return nil
+}
+
+// stuckStandbysStep registers the real-engine check of #291 that a backup
+// which must be taken from a standby is refused while every slave is stuck,
+// and given to a slave once they are not. With every slave stuck there is no
+// healthier standby to prefer, so the refusal can only come from the
+// exclusion of stalled standbys, not from their order.
+//
+// The applier of every slave is paused with SIGSTOP while the master is
+// written to. In POC-68 (docs/poc/RESULTS.md) every slave then stayed a
+// standby slave whose applier position could still be read and did not move,
+// its copier went on receiving the master's log, heartbeat did not restart
+// the paused applier, and the master stayed writable; after SIGCONT the
+// appliers caught up and every member held the same rows.
+//
+// The negative oracle: once the status shows every slave otherwise eligible
+// and stalled for at least the stall window (stuckStandbysEligible), a
+// StandbyOnly backup is created. Until the resume, at every read it has no
+// target and the reason NoHealthyStandby (backupRefusal), and the status
+// still shows that state. A refusal with any other reason, or while the
+// status does not show that state, fails the step. The positive control:
+// after SIGCONT, the same backup is given to a slave, and every slave holds
+// the master's rows.
+//
+// It is not a scenario of the contract.
+func stuckStandbysStep(r *haRun) {
+	It("refuses a StandbyOnly backup while every slave's applier is paused, "+
+		"and gives it to a slave after they resume", func() {
+		r.enter(nil)
+		r.mu.Lock()
+		r.markers++
+		table := fmt.Sprintf("stuck_standbys_%d", r.markers)
+		backup := fmt.Sprintf("stuck-standbys-%d", r.markers)
+		r.mu.Unlock()
+		master, slaves, err := r.master(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+
+		readCluster := func() (*databasev1alpha1.CubridCluster, error) {
+			out, err := r.kubectlQuiet(context.Background(), "get", "cubridcluster", r.cluster,
+				"--request-timeout=30s", "-o", "json")
+			if err != nil {
+				return nil, err
+			}
+			c := &databasev1alpha1.CubridCluster{}
+			return c, json.Unmarshal([]byte(out), c)
+		}
+		readBackup := func() (*databasev1alpha1.CubridBackup, error) {
+			out, err := r.kubectlQuiet(context.Background(), "get", "cubridbackup", backup,
+				"--request-timeout=30s", "-o", "json")
+			if err != nil {
+				return nil, err
+			}
+			b := &databasev1alpha1.CubridBackup{}
+			return b, json.Unmarshal([]byte(out), b)
+		}
+		// replication prints each member's role and replication status.
+		replication := func(c *databasev1alpha1.CubridCluster) string {
+			var lines []string
+			for _, in := range c.Status.Instances {
+				line := fmt.Sprintf("  %s: role %s", in.Name, in.Role)
+				if b, err := json.Marshal(in.Replication); err == nil && in.Replication != nil {
+					line += " " + string(b)
+				}
+				lines = append(lines, line)
+			}
+			return strings.Join(lines, "\n")
+		}
+		// The samples are kept also when the step fails.
+		var samples []string
+		sample := func(line string) {
+			samples = append(samples, time.Now().UTC().Format(time.RFC3339)+" "+line)
+		}
+		DeferCleanup(func() {
+			writeScenarioFile("stuck-standbys/samples.txt", []byte(strings.Join(samples, "\n")+"\n"))
+		})
+		appliers := func(pod, signal string) (string, error) {
+			return r.kubectl(context.Background(), "exec", pod, "-c", "cubrid", "--",
+				"bash", "-c", pauseAppliersScript, signal)
+		}
+		count := func(pod string) (string, error) {
+			values, err := r.memberValues(context.Background(), pod, "SELECT TO_CHAR(COUNT(*)) AS v FROM "+table+";")
+			if err == nil && len(values) != 1 {
+				err = fmt.Errorf("count of %s on %s: %v", table, pod, values)
+			}
+			if err != nil {
+				return "", err
+			}
+			return values[0], nil
+		}
+
+		By("creating a table with a primary key on " + master)
+		// A table without a primary key is not replicated (POC-62).
+		err = r.memberCSQL(context.Background(), master).
+			runOnce("CREATE TABLE "+table+" (id INT PRIMARY KEY, pad VARCHAR(100));", statementFinished)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, _ = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database), "DROP TABLE IF EXISTS "+table+";")
+		})
+		for _, slave := range slaves {
+			Eventually(func() (string, error) { return count(slave) }, 2*time.Minute, 3*time.Second).
+				Should(Equal("0"), "the table on %s", slave)
+		}
+		Eventually(func(g Gomega) {
+			c, err := readCluster()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(conditionIs(c, "ReplicationHealthy", metav1.ConditionTrue)).To(Succeed())
+		}, 2*time.Minute, 3*time.Second).Should(Succeed(), "ReplicationHealthy before the pause")
+
+		By("pausing the applier of every slave: " + strings.Join(slaves, ", "))
+		// The appliers are resumed whatever happens below, so that no later
+		// step starts with a paused applier.
+		resumed := false
+		resume := func() {
+			resumed = true
+			for _, slave := range slaves {
+				out, err := appliers(slave, "CONT")
+				sample(fmt.Sprintf("SIGCONT on %s: error %v\n%s", slave, err, out))
+			}
+		}
+		DeferCleanup(func() {
+			if !resumed {
+				resume()
+			}
+		})
+		paused := map[string][]string{}
+		for _, slave := range slaves {
+			out, err := appliers(slave, "STOP")
+			sample(fmt.Sprintf("SIGSTOP on %s: error %v\n%s", slave, err, out))
+			Expect(err).NotTo(HaveOccurred(), "pausing the appliers of %s: %s", slave, out)
+			for _, m := range sentSignal.FindAllStringSubmatch(out, -1) {
+				paused[slave] = append(paused[slave], m[1])
+			}
+			Expect(paused[slave]).NotTo(BeEmpty(), "no applylogdb process was found on %s: %s", slave, out)
+		}
+		pausedAt := time.Now()
+
+		By(fmt.Sprintf("writing %d batches of %d rows on %s, one every %s",
+			stuckWriteRounds, stuckWriteRows, master, stuckWritePause))
+		script := fmt.Sprintf(`export PATH="${CUBRID}/bin:${PATH}"
+{ for i in $(seq 1 %[1]d); do
+    values="$(seq -s, -f "(%%.0f,'stuck')" $(( (i-1)*%[2]d+1 )) $(( i*%[2]d )))"
+    printf 'INSERT INTO %[3]s (id, pad) VALUES %%s;\n' "$values"
+    sleep %[4]d
+  done
+} | csql -u dba %[5]s@localhost`,
+			stuckWriteRounds, stuckWriteRows, table, int(stuckWritePause.Seconds()), r.database)
+		type result struct {
+			out string
+			err error
+		}
+		writes := make(chan result, 1)
+		writeLimit := time.Duration(stuckWriteRounds)*stuckWritePause + 3*time.Minute
+		ctx, cancel := context.WithTimeout(context.Background(), writeLimit)
+		defer cancel()
+		go func() {
+			out, err := r.kubectl(ctx, "exec", master, "-c", "cubrid", "--", "bash", "-c", script)
+			writes <- result{out, err}
+		}()
+
+		By("waiting until every slave is reported stalled for the stall window and is otherwise eligible")
+		Eventually(func(g Gomega) {
+			c, err := readCluster()
+			g.Expect(err).NotTo(HaveOccurred())
+			err = stuckStandbysEligible(c, master, slaves, time.Now())
+			if err != nil {
+				sample("not yet: " + err.Error())
+			}
+			g.Expect(err).NotTo(HaveOccurred(), "status.instances:\n%s", replication(c))
+		}, 4*time.Minute, 5*time.Second).Should(Succeed())
+		stuckAt := time.Now()
+		sample(fmt.Sprintf("every slave stalled and otherwise eligible, %s after the pause",
+			stuckAt.Sub(pausedAt).Round(time.Second)))
+
+		By("creating the StandbyOnly backup " + backup)
+		Expect(r.startStandbyBackup(context.Background(), backup)).To(Succeed())
+		DeferCleanup(func() {
+			if phase := r.waitBackupEnded(backup, 2*time.Minute); phase != "Completed" && phase != "Failed" {
+				AddReportEntry("backup still running", backup+" was in phase "+phase+
+					" when this step ended, and may run into the next step")
+			}
+			_, _ = r.kubectl(context.Background(), "delete", "cubridbackup", backup, "--wait=false", "--ignore-not-found")
+		})
+
+		By("checking that the backup stays without a target, with the reason NoHealthyStandby, while every slave is stuck")
+		// The first reads may come before the Operator has reconciled the
+		// backup; a target or any other reason ends the wait at once.
+		Eventually(func(g Gomega) {
+			b, err := readBackup()
+			g.Expect(err).NotTo(HaveOccurred())
+			err = backupRefusal(b)
+			if err != nil && (b.Status.TargetInstance != "" || meta.FindStatusCondition(b.Status.Conditions, "Ready") != nil) {
+				StopTrying("the StandbyOnly backup was not refused with NoHealthyStandby").Wrap(err).Now()
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+		}, time.Minute, 2*time.Second).Should(Succeed())
+		for i := 1; i <= stuckRefusalReads; i++ {
+			b, err := readBackup()
+			Expect(err).NotTo(HaveOccurred())
+			c, err := readCluster()
+			Expect(err).NotTo(HaveOccurred())
+			refusal := backupRefusal(b)
+			state := stuckStandbysEligible(c, master, slaves, time.Now())
+			sample(fmt.Sprintf("read %d of %d: target %q; refusal: %v; stuck state: %v\n%s",
+				i, stuckRefusalReads, b.Status.TargetInstance, refusal, state, replication(c)))
+			Expect(refusal).NotTo(HaveOccurred(), "the StandbyOnly backup at read %d while every slave is stuck", i)
+			Expect(state).NotTo(HaveOccurred(), "the stuck state at read %d", i)
+			if i < stuckRefusalReads {
+				time.Sleep(stuckRefusalEvery)
+			}
+		}
+		refusedFor := time.Since(stuckAt)
+
+		By("checking that every paused applier is still the same process and still stopped")
+		for _, slave := range slaves {
+			out, err := appliers(slave, "LIST")
+			sample(fmt.Sprintf("appliers on %s before the resume: error %v\n%s", slave, err, out))
+			Expect(err).NotTo(HaveOccurred())
+			for _, pid := range paused[slave] {
+				Expect(out).To(MatchRegexp(`(?m)^`+pid+` State:\s+T`),
+					"applier %s on %s, stopped since the pause", pid, slave)
+			}
+		}
+
+		By("resuming the appliers of every slave")
+		resume()
+		resumedAt := time.Now()
+
+		By("checking that the same backup is given to a slave after the resume")
+		Eventually(func(g Gomega) {
+			b, err := readBackup()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(b.Status.TargetInstance).To(BeElementOf(slaves), "the target of %s", backup)
+			g.Expect(b.Status.TargetRole).To(Equal(string(databasev1alpha1.RoleSlave)))
+		}, 4*time.Minute, 5*time.Second).Should(Succeed())
+		target, recordedAt, err := r.backupRecordedTarget(context.Background(), backup)
+		Expect(err).NotTo(HaveOccurred())
+		sample(fmt.Sprintf("the backup was given to %s, recorded at %s", target, recordedAt.UTC().Format(time.RFC3339)))
+		// targetRecordedAt has whole seconds.
+		Expect(recordedAt).To(BeTemporally(">=", resumedAt.Truncate(time.Second)), "when the backup's target was recorded")
+
+		By("checking that every slave holds the master's rows after the writes")
+		var session result
+		Eventually(writes, writeLimit).Should(Receive(&session))
+		writeScenarioFile("stuck-standbys/writer.txt", []byte(fmt.Sprintf("error: %v\n%s\n", session.err, session.out)))
+		want, err := count(master)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(want).NotTo(Equal("0"), "rows of %s on %s", table, master)
+		for _, slave := range slaves {
+			Eventually(func() (string, error) { return count(slave) }, 5*time.Minute, 3*time.Second).
+				Should(Equal(want), "rows of %s on %s", table, slave)
+		}
+		Eventually(func(g Gomega) {
+			c, err := readCluster()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(conditionIs(c, "ReplicationHealthy", metav1.ConditionTrue)).To(Succeed())
+		}, 3*time.Minute, 5*time.Second).Should(Succeed(), "ReplicationHealthy after the resume")
+		phase := r.waitBackupEnded(backup, 3*time.Minute)
+		writeScenarioFile("stuck-standbys/result.txt", []byte(fmt.Sprintf(
+			"master: %s\nslaves: %s\npaused appliers: %v\n"+
+				"every slave stalled and otherwise eligible: %s after the pause\n"+
+				"StandbyOnly backup %s: no target and NoHealthyStandby at %d reads over %s\n"+
+				"after the resume: given to %s, recorded at %s, phase %s\n"+
+				"rows of %s: %s on every member\n",
+			master, strings.Join(slaves, ", "), paused, stuckAt.Sub(pausedAt).Round(time.Second),
+			backup, stuckRefusalReads, refusedFor.Round(time.Second),
+			target, recordedAt.UTC().Format(time.RFC3339), phase, table, want)))
+	})
 }
