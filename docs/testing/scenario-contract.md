@@ -3124,6 +3124,16 @@ because they move the master.
   the Secret still keeps `previousToken`. After the last one, `previousToken`
   is dropped and the Normal Event `InstanceManagerTokenOverlapEnded` is
   recorded; every member refuses the old token (401) and accepts the new one.
+- **After the overlap:** the master was replaced last, so the members'
+  refusals are counted from the old-token check on, first while the roles
+  settle and the primary is resolved again, by the rules of the starting
+  roles above, and then for 30 seconds; a refusal fails the step. In those
+  30 seconds `PrimaryResolved` is read as well. `False` with
+  `PrimaryObservationIncomplete`, which the Operator reports while it cannot
+  read a member's role (#438), is recorded and read again; any other reading
+  but `True` with `SinglePrimaryObserved` fails the step. The measurements
+  `afterOverlapToBeMasterMembers` and `afterOverlapIncompleteReads` count
+  what was recorded.
 - **Must never happen:** the overlap ending while a member holds the previous
   token; an Event `InstanceManagerTokenRegenerated` or
   `InstanceManagerTokenRefused`; either token in a log, in `status`, in an
