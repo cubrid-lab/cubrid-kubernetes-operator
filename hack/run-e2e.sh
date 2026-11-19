@@ -158,10 +158,35 @@ preload_helper_image() {
 		fi
 	fi
 	echo "Loading Kind test helper image '$image' into '$KIND_CLUSTER'..."
-	if ! run_preload_command "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"; then
+	if ! load_helper_image "$image"; then
 		echo "error: could not load Kind test helper '$image' into '$KIND_CLUSTER'." >&2
 		return 1
 	fi
+}
+# load_helper_image loads image into the Kind cluster. With Docker's
+# containerd image store, "docker save" of a multi-platform image writes its
+# whole index but only the pulled platform's content, and "kind load
+# docker-image" imports that archive with "ctr images import --all-platforms",
+# which fails on the missing platforms (#1004). So Docker saves the daemon's
+# platform only and Kind loads that archive. A Docker without
+# "save --platform", whose image store keeps one platform per image anyway,
+# and Podman load the image as before.
+load_helper_image() {
+	local image="$1" platform archive result
+	if [ "$(basename -- "$CONTAINER_TOOL")" != podman ] &&
+		platform="$("$CONTAINER_TOOL" version --format '{{.Server.Os}}/{{.Server.Arch}}' 2>/dev/null)" &&
+		[ -n "$platform" ]; then
+		archive="$(mktemp "${TMPDIR:-/tmp}/kind-helper.XXXXXX")" || return 1
+		if run_preload_command "$CONTAINER_TOOL" save --platform "$platform" "$image" -o "$archive"; then
+			run_preload_command "$KIND" load image-archive "$archive" --name "$KIND_CLUSTER"
+			result=$?
+			rm -f -- "$archive"
+			return "$result"
+		fi
+		rm -f -- "$archive"
+		echo "'$CONTAINER_TOOL save --platform $platform' failed; loading '$image' as it is."
+	fi
+	run_preload_command "$KIND" load docker-image "$image" --name "$KIND_CLUSTER"
 }
 for helper_image in \
 	docker.io/adobe/s3mock:5.2.3 \
