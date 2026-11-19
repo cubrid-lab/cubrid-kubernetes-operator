@@ -469,6 +469,73 @@ order on every pass:
      first member, a slave beside master `ha-1`, had only one answer
      (#931). That contradicts "a missing Operator observation is not, on its
      own, a reason to quarantine" under *Negative* below.
+   - *Decided on #938, pending maintainer review:* **one probe that gives no
+     role is enough.** A member that outranks M, or is the last resolved
+     primary, and gives no usable answer in a pass starts the quarantine in
+     that pass. This holds when the member was just restarted after a
+     confirmed termination and its previous answer was a slave. No grace
+     period, second probe or deferral applies to it. The #931 deferral above
+     covers only a member that answered as no active master in the pass.
+     - **What happened on Kind** (run 44007242998, 2026-11-17 UTC, scenario
+       S03 graceful). The master Pod of the first member `hab-0` was
+       deleted at 03:36:05.904, and CUBRID promoted `hab-1`. The new Pod of
+       `hab-0` answered `slave` once at 03:36:30.584. Its next
+       `cubrid heartbeat status` hung and was killed after 4 s, at
+       03:36:35.667, and the quarantine started from that probe alone.
+       At 03:36:36.514, `hab-0`'s own heartbeat reported that it had stopped
+       receiving `hab-1`'s heartbeats (`[Failover] [Diagnosis]`). At
+       03:36:37.008, it listed itself as `to-be-master` and cancelled the
+       failover because it had found the new master. It answered `slave` again at
+       03:36:41.452. The quarantine was released automatically at
+       03:36:56.826, and writes through `-rw` resumed at 03:37:05.035:
+       28.4 s of refused writes after CUBRID's own failover of 1.95 s. No
+       acknowledged write was lost.
+     - **Why the missed probe is not ignored.** The probe failed while the
+       member's `cub_master` was not answering. In the same second, that
+       `cub_master` judged the master lost and started its own failover.
+       The missed probe was a symptom of the condition rule 2 guards
+       against, not unrelated noise. CUBRID cancelled the failover in this
+       run. A cut-off member that outranks the master did not always cancel
+       it: both members acknowledged writes in 4 of 26 POC-50 trials. The
+       higher-ranked member was master again after the heal in 19 of 19 Kind
+       trials (#702), so the writes M acknowledges in that window are the
+       ones lost. While the member's `cub_master` does not answer, rule 1
+       cannot see it claim an active master either.
+     - **Narrower options considered and rejected.**
+       - *Wait for a second missed probe, only for a member just restarted
+         whose last readable answer was a slave, not a master or
+         `to-be-master`.* The recorded case meets every one of those
+         conditions: its last readable answer, at 03:36:30.584, was
+         `slave`, and `to-be-master` appeared only after the missed probe.
+         So this option would have deferred in the one recorded case where
+         the member was on its way to master. The `-rw` path would have
+         stayed open for up to one more pass, that is 3 s plus a 5 s probe
+         timeout.
+       - *Extend the confirmed-termination cover past the new Pod's first
+         answer.* This has the same effect as the previous option for the
+         same member.
+       - *Keep the quarantine, but release it sooner.* Nothing measured
+         supports a release interval shorter than 10 s. The time after the
+         release goes to recreating the read-write Brokers, which #1007
+         and #1011 address without changing these rules.
+     - **What it costs.** The S03 graceful variant was compared over 21
+       runs. One of them, the only one that deleted the first member's
+       master Pod, refused writes for this reason. Token-migration run
+       43624901780 also refused writes for this reason (2026-11-14
+       19:01:01 UTC, #438). Of the three such hangs whose engine logs were
+       read (#938 and runs 43624901780 and 44023079925), only #938 showed
+       the failover diagnosis. Why `cubrid heartbeat status` hangs for 4 s
+       after a master Pod replacement is not known (#438). How S03 graceful
+       counts a quarantine started this way against `failover_limit` is a
+       scenario-contract decision on #938, not a change to this rule.
+     - **Revisit when** the cause of that hang is known, or when a POC shows
+       that the active master's own `cubrid heartbeat status` reliably
+       reports a member whose `cub_master` does not answer. Such a POC would
+       give the Operator a second, independent reading. `TestQuarantineMissedProbe*`,
+       `TestQuarantineAfterAMissedProbe` and
+       `TestQuarantineOneMissedProbeBoundary` in
+       `internal/controller/quarantine_missed_probe_test.go` replay this run
+       and pin the rule.
 3. **Otherwise no quarantine starts.** That leaves the state reported, as
    today, through `PrimaryResolved`, `RoutingReady`, and `Ready` after
    60 s. It covers two cases:
@@ -689,7 +756,10 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
     the deletion until it answers without the master role. Whether this
     stays within the 30 s `failover_limit` is not known: the Instance
     Manager's answers during a rejoin have not been sampled pass by pass.
-    #113 measures S03 before any claim.
+    #113 measures S03 before any claim. After a graceful deletion, a new
+    Pod that misses one probe after its first answer starts the quarantine
+    when it outranks the new master. That refused writes for 28.4 s in one
+    Kind run (#938, rule 2 above).
   - **Master VM power-off (S04):** an authorized actor confirms that the
     worker VM is actually stopped, records that proof, then adds
     `node.kubernetes.io/out-of-service:NoExecute`. Kubernetes then
