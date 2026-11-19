@@ -115,6 +115,21 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 		}
 	})
 
+	It("checks each Broker's port soon after start and drops a stalled one in about 16 s", func() {
+		reconcileHA("broker-probe")
+		deps := brokerDeployments("broker-probe")
+		Expect(deps).To(HaveLen(2))
+		for _, dep := range deps {
+			probe := dep.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(probe.TCPSocket).NotTo(BeNil(), dep.Name)
+			Expect(probe.InitialDelaySeconds).To(BeZero(), dep.Name+": a Broker listens within a second or two of start")
+			Expect(probe.PeriodSeconds).To(BeEquivalentTo(2), dep.Name)
+			Expect(probe.FailureThreshold).To(BeEquivalentTo(8), dep.Name)
+			Expect(probe.PeriodSeconds*probe.FailureThreshold).To(BeNumerically(">=", 15),
+				dep.Name+": a stalled Broker must leave the Service no sooner than the earlier 3 x 5 s")
+		}
+	})
+
 	It("runs two Brokers per access mode as the non-root cubrid user, spread over nodes", func() {
 		reconcileHA("broker-ha")
 		deps := brokerDeployments("broker-ha")

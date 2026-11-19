@@ -316,14 +316,18 @@ func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.Cubrid
 				{Name: "CUBRID_DATABASES", Value: brokerDatabasesDir},
 			},
 			Ports: []corev1.ContainerPort{{Name: mode, ContainerPort: port}},
-			// Ready means this Broker listens on its port.
+			// Ready means this Broker listens on its port. The check starts
+			// at once and repeats every 2 s, so a Broker scaled up after a
+			// write quarantine release is Ready about when it listens (a
+			// 5 s delay and period cost seconds of the measured 7 s). Eight
+			// failures still take a stalled Broker out of its Service in
+			// 16 s, as three at 5 s did in 15 s.
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
 					TCPSocket: &corev1.TCPSocketAction{Port: intOrString(port)},
 				},
-				InitialDelaySeconds: 5,
-				PeriodSeconds:       5,
-				FailureThreshold:    3,
+				PeriodSeconds:    2,
+				FailureThreshold: 8,
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "broker-config", MountPath: brokerConfMountPath, ReadOnly: true},
