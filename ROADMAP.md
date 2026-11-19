@@ -126,12 +126,14 @@ candidate evidence arrives.
 (S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
 Operator failures reach Kind; the targeted #931 manager-restart regression
 passed once on the VM lab after #932, but does not qualify S06. Actual VM
-power loss (S04) is not run. Write quarantine was seen in one Kind run of S03/S06; S07–S08 has no pass,
+power loss (S04) is not run. Write quarantine was seen in one Kind run
+of S03/S06; S07–S08 has no pass,
 and its VM-lab partition runs are blocked. Open safety defects: a cut
 higher-ranked member became heartbeat master without 50 acknowledged writes on
 the VM lab (#702), and a graceful master deletion triggered an avoidable
 write-path interruption (#938). The #931 restart regression is now verified
-on the VM lab after #932, but #115's partition safety gates remain open. Rejoin and rebuild are
+on the VM lab after #932, but #115's partition safety gates remain open.
+Rejoin and rebuild are
 `unit-envtest`. Backup and restore variants passed on the VM lab once or a few
 times each; one S12 `exact` run failed (#416). Retention, authentication and
 voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
