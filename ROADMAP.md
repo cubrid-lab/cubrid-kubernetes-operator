@@ -124,12 +124,14 @@ candidate evidence arrives.
 **Where v0.1 stands** against the nine Required capabilities: none is at
 `candidate`. Single-node lifecycle (S00) and three-member HA with RW/RO access
 (S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
-Operator failures reach Kind and one VM-lab Operator restart; VM failure is not
-run. Write quarantine was seen in one Kind run of S03/S06; S07–S08 has no pass,
+Operator failures reach Kind; the targeted #931 manager-restart regression
+passed once on the VM lab after #932, but does not qualify S06. Actual VM
+power loss (S04) is not run. Write quarantine was seen in one Kind run of S03/S06; S07–S08 has no pass,
 and its VM-lab partition runs are blocked. Open safety defects: a cut
 higher-ranked member became heartbeat master without 50 acknowledged writes on
-the VM lab (#702), and healthy write paths were closed after an Operator
-restart (#931) and a graceful master deletion (#938). Rejoin and rebuild are
+the VM lab (#702), and a graceful master deletion triggered an avoidable
+write-path interruption (#938). The #931 restart regression is now verified
+on the VM lab after #932, but #115's partition safety gates remain open. Rejoin and rebuild are
 `unit-envtest`. Backup and restore variants passed on the VM lab once or a few
 times each; one S12 `exact` run failed (#416). Retention, authentication and
 voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
@@ -151,9 +153,9 @@ The reproducible, reviewed release is not run.
 | Log copy stall report | VM-lab | none recorded; live check unowned | `LogCopyStalled` (#623; POC-41, POC-42): reported on the VM lab with `fb6f345` after a cut of TCP 1523, and after partition heals on [2026-11-17][part-20261117] (3 runs) and [2026-11-18][part-20261118]. Nothing acts on it |
 | HA bootstrap seed source | VM-lab (2 runs) | none recorded | Each later member is seeded from the member observed as master and waits while it is unknown (#281; POC-23). Two scripted VM-lab runs on 2026-11-04 killed the master mid-seed: the Operator waited, then seeded from the new master |
 | HA bootstrap catch-up rule | unit-envtest | none recorded; live check unowned (#768) | Docker: a member seeded across a master change joined lacking acknowledged rows in 16 of 16 trials (POC-57). Catch-up rule (#678, #768, #771) and `MemberNotSeeded` (#770): unit-envtest only. The rule does not read the applier, which was behind in 1 of 20 passing readings (POC-59) |
-| Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine on two active masters or an unverified member that outranks the master or was the last primary; one-time token release; out-of-service taint release; return-to-service barrier (#113; ADR-0005 section 8, amended by #870). Unit-envtest only, not on Kind or the VM lab; the S04 harness adds no taint |
+| Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine on two active masters or an unverified member that outranks the master or was the last primary; one-time token release; out-of-service taint release; return-to-service barrier (#113; ADR-0005 section 8, amended by #870). Decision logic is unit-envtest; the separate Kind and VM observations below do not qualify S07/S08; the S04 harness adds no taint |
 | Write quarantine on Kind (S03, S06) | Kind (1 run) | #126, #938 | Before #113, `-rw` writes went on while `PrimaryResolved` and `RoutingReady` were not `True` (S03). [One Kind run][kind-quarantine]: a forced master deletion refused `-rw` 38.6–41.3 s (S03 abrupt) and 87.1 s (S06), judged by `quarantined_failover_limit` (6 min). S03 graceful keeps the 30 s `failover_limit`, not yet re-measured |
-| Write quarantine after an Operator restart | VM-lab (1 observation) | #931, #932 | The VM-lab Operator moved to `66ab5ee` on 2026-11-17 (terraform-zadara-k8s#98; LAB00 passed, #122). Its first pass closed a healthy cluster's `-rw` for 24 s: unobserved over 30 s, master not the first member (#931). Fix #932 is pending the maintainer's review of the ADR-0005 amendment |
+| Healthy RW path after Operator restart | VM-lab (1 post-fix run; not candidate acceptance) | #115, #126 | 2026-11-17 baseline: a healthy cluster lost `-rw` for 24 s after a manager upgrade (#931). Fix #932 merged as `f4305004`. On 2026-11-18, [a pinned VM-lab hold of the updated manager](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/931#issuecomment-6977472448) (`ce1dadf`) left two healthy clusters' RW Brokers at 2/2 and their endpoints at 2 ready during a 68–73 s observation gap. The SQL loop acknowledged 621/621 writes; all 641 checked rows were on every member. #931 is closed for this targeted regression only; this is **not** a partition/quarantine (#115) or release-candidate (#126) pass |
 | Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #716 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
 | Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
 | Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
