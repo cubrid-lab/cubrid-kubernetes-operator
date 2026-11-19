@@ -142,6 +142,10 @@ type CubridClusterReconciler struct {
 	// DefaultBrokerMaxApplServers. Changing it replaces the Brokers, as any
 	// change of their configuration does.
 	BrokerMaxApplServers int
+	// MaxConcurrentReconciles is how many clusters are reconciled at the same
+	// time; zero means one. One cluster is never reconciled by two workers at
+	// once, as the work queue hands out each cluster to one worker only.
+	MaxConcurrentReconciles int
 	// Clock judges observation freshness; nil means time.Now.
 	Clock func() time.Time
 	// BackupTimeout and RestoreTimeout are how long the Instance Manager lets
@@ -288,7 +292,9 @@ type reconcileReport struct {
 type pendingEvent struct{ eventType, reason, message string }
 
 // beginReport starts the report of a reconcile of cluster. One reconcile runs
-// per cluster at a time.
+// per cluster at a time; reconciles of different clusters run in parallel on
+// the controller's workers (MaxConcurrentReconciles), so reports is keyed by
+// cluster.
 func (r *CubridClusterReconciler) beginReport(cluster *databasev1alpha1.CubridCluster) *reconcileReport {
 	report := &reconcileReport{before: cluster.Status.DeepCopy()}
 	r.reports.Store(client.ObjectKeyFromObject(cluster), report)
@@ -1697,6 +1703,23 @@ var clusterEvents = predicate.Or[client.Object](
 	}},
 )
 
+// DefaultClusterMaxConcurrentReconciles is how many clusters the manager
+// reconciles at the same time unless --cluster-max-concurrent-reconciles sets
+// it. With a single worker, a cluster whose member probes wait for their
+// timeout on a powered-off node held back every other cluster's reconcile,
+// including the release of an out-of-service fence (#1003).
+const DefaultClusterMaxConcurrentReconciles = 4
+
+// ValidateClusterMaxConcurrentReconciles reports whether n workers can
+// reconcile clusters: at least one. One restores the earlier behavior of
+// reconciling one cluster after another.
+func ValidateClusterMaxConcurrentReconciles(n int) error {
+	if n < 1 {
+		return fmt.Errorf("%d workers would reconcile no cluster; the minimum is 1", n)
+	}
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -1723,7 +1746,11 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			},
 		}).
 		Named("cubridcluster").
-		WithOptions(controller.Options{RateLimiter: clusterRateLimiter()}).
+		WithOptions(controller.Options{
+			RateLimiter: clusterRateLimiter(),
+			// Zero is one worker, controller-runtime's default.
+			MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+		}).
 		Complete(r)
 }
 

@@ -145,6 +145,17 @@ It is not a fixed one-second poll.
 | A Broker object the cluster does not control | 30 seconds (standalone), 10 seconds (HA) | only a person can free the name, and its removal starts no pass | `refusedBrokerRetryInterval` and `reportBrokerRefusal` in `broker.go` |
 | Standalone cluster, nothing pending; or a cluster name that cannot be used | no timed requeue | the next event starts the next pass; an unusable name is a terminal error and is not retried | the end of `updateStatus`, and `refuseClusterName`, in `cubridcluster_controller.go` |
 
+One cluster is reconciled by one worker at a time: the work queue never hands
+the same cluster to two workers. Different clusters are reconciled at the same
+time, by up to four workers by default. The manager's
+`--cluster-max-concurrent-reconciles` flag sets the number of workers and
+refuses a value below 1; `1` reconciles one cluster after another, as before
+#1003. With one worker, a cluster whose role probes wait for their timeout on
+a powered-off node delays every other cluster's pass. The backup controller
+keeps one worker. Source: `DefaultClusterMaxConcurrentReconciles` and
+`SetupWithManager` in `cubridcluster_controller.go`; the flag in
+[`cmd/main.go`](../../cmd/main.go).
+
 A role answer older than 15 seconds is treated as unknown
 (`roleObservationTTL` in `haresolve.go`), so a slow pass cannot resolve
 a primary from stale answers.
