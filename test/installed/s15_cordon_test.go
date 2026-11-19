@@ -234,7 +234,9 @@ func TestS15RefusesAMemberGoneBeforeItsEviction(t *testing.T) {
 }
 
 // Two members that report themselves active masters in two consecutive
-// sweeps while the master's node is drained are a never-event.
+// sweeps while the master's node is drained are a never-event, as the
+// contract's S03 oracle judges them (faults.CheckOneMaster). The first such
+// sweep is recorded as an observation, not passed over silently.
 func TestS15TwoActiveMastersAreANeverEvent(t *testing.T) {
 	h := newS15Run(t, &s15Lab{})
 	h.Command = func(_ context.Context, args ...string) (string, error) {
@@ -247,11 +249,48 @@ func TestS15TwoActiveMastersAreANeverEvent(t *testing.T) {
 	if _, err := h.observeSurvivors(t.Context(), rec, time.Now()); err != nil {
 		t.Fatalf("first sweep = %v, want it read again", err)
 	}
+	if len(rec.Observed) != 1 || rec.Observed[0].Kind != "two_active_masters_in_one_sweep" {
+		t.Fatalf("observed = %+v, want the first sweep with two active masters recorded", rec.Observed)
+	}
 	if _, err := h.observeSurvivors(t.Context(), rec, time.Now()); err == nil || len(rec.TwoMasters) != 2 {
 		t.Fatalf("second sweep = %v, twoActiveMasters %v; want the never-event", err, rec.TwoMasters)
 	}
 	if never := s15NeverEvents(rec); len(never) == 0 || !strings.Contains(never[0], "active masters") {
 		t.Fatalf("never-events = %v, want two active masters", never)
+	}
+}
+
+// When the run's context ends and the API server does not answer the
+// uncordon, the failure must be in cordon.json before the lab launcher's
+// SIGKILL, 2 seconds after its SIGTERM, so that whoever checks the worker
+// afterwards knows the run left it cordoned.
+func TestS15RecordsAnUncordonThatDidNotFitBeforeTheKill(t *testing.T) {
+	lab := &s15Lab{}
+	h := newS15Run(t, lab, s15Pod("cubrid-lab-ha", testDrainTarget, testDrainNode))
+	rec := s15DrainRecord()
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := (nodeDrain{h: h, rec: rec}).Inject(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lab.patch = func(ctx context.Context, _ client.WithWatch, _ client.Object, _ client.Patch,
+		_ ...client.PatchOption) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	stop := h.uncordonOnEnd(ctx, rec)
+	defer stop()
+	cancel()
+	file := filepath.Join(h.cfg.EvidenceDir, s15File(rec.Variant, "cordon.json"))
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, _ := os.ReadFile(file)
+		if strings.Contains(string(data), `"uncordonError"`) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cordon.json = %s 2s after the run ended, want the failed uncordon recorded", data)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
