@@ -558,8 +558,9 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(rwReplicas(f)).To(Equal(int32(0)), "a read error does not start them")
 	})
 
-	// memberPod creates the Pod of a member as the StatefulSet would, held by
-	// a finalizer so that its deletion leaves it Terminating until released.
+	// memberPod creates the Pod of a member as the StatefulSet would, started
+	// with an IP, held by a finalizer so that its deletion leaves it
+	// Terminating until released.
 	memberPod := func(f quarantineFixture, member string, held bool) *corev1.Pod {
 		GinkgoHelper()
 		c := stored(f)
@@ -577,6 +578,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 				_ = k8sClient.Delete(ctx, got, client.GracePeriodSeconds(0))
 			}
 		})
+		pod.Status.PodIP = memberTestPodIP
 		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: memberTestImage,
 			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}
 		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
@@ -731,8 +733,9 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("WriteQuarantinedMasterChanged")))
 	})
 
-	// fencedNode creates a Node for the first member and its Pod scheduled on
-	// it, before the cluster runs, as a StatefulSet and a scheduler would.
+	// fencedNode creates a Node for the first member and its Pod scheduled and
+	// started on it with an IP, before the cluster runs, as a StatefulSet, a
+	// scheduler and a kubelet would.
 	fencedNode := func(f quarantineFixture) (*corev1.Node, *corev1.Pod) {
 		GinkgoHelper()
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name + "-node-0"}}
@@ -744,6 +747,8 @@ var _ = Describe("Write quarantine (#113)", func() {
 				Containers: []corev1.Container{{Name: appName, Image: memberTestImage}}}}
 		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		pod.Status.PodIP = memberTestPodIP
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 		return node, pod
 	}
 	// setTaint adds the out-of-service taint to node, as an administrator does

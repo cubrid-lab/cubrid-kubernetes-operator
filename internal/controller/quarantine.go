@@ -61,6 +61,12 @@ type memberIdentity struct {
 	TerminatedAt, DeletionRequested time.Time
 	// NodeName is the node the Pod is scheduled on; empty while it is not.
 	NodeName string
+	// NoPodIP is set when the Pod has no status.podIP, as a Pod not
+	// scheduled or not started yet. Such a member is not asked its role
+	// (observeHAStatus). A Pod that gets its IP between the reads before and
+	// after the probes differs between them and verifies nothing in that
+	// pass, which it could not have done anyway without being asked.
+	NoPodIP bool
 }
 
 // terminationSkew is how much earlier than the deletion request the kubelet
@@ -1608,7 +1614,8 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 		}
 		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod), Created: pod.CreationTimestamp.Time,
 			Deleting: pod.DeletionTimestamp != nil, DeletionGrace: deletionGrace(&pod),
-			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod), NodeName: pod.Spec.NodeName}
+			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod), NodeName: pod.Spec.NodeName,
+			NoPodIP: pod.Status.PodIP == ""}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {
 				id.RestartCount = c.RestartCount

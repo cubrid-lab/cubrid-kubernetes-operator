@@ -913,6 +913,7 @@ The `reason` of `member_role_unobserved` is one of:
 |---|---|
 | the request's error, for example `Get "http://<member>.<namespace>.svc:9090/v1/role": dial tcp: ... no such host` | The role query could not be sent or got no answer |
 | the error that the member's token could not be read with | The member was not asked |
+| `the Pod has no IP yet` | The member was not asked: its Pod, read before the role queries, has no IP, as a Pod not yet scheduled after a node fence (#1003). It is recorded at once as a member that gave no answer, without waiting out the query's 5 s timeout |
 | `status <code>`, for example `status 401` | The Instance Manager answered with an error status; 401 refuses the token |
 | `unreadable answer` | The answer was not a role answer |
 | `the Instance Manager reported no role`, followed by `: ` and the reason it gave when it gave one, for example `current node state 'unknown' is not an authoritative role` | The member does not report an authoritative role |

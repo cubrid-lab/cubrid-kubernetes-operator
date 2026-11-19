@@ -1346,7 +1346,7 @@ func (r *CubridClusterReconciler) observeAndQuarantine(ctx context.Context,
 	// The members' Pods are read before and after the probes, so that an
 	// answer is counted only for the Pod it came from.
 	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
-	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers, podsBefore)
 	seen := haObservation{members: members, obs: obs, observedAt: observedAt, lastResolved: lastResolved,
 		podsBefore: podsBefore, podsErr: podsErr}
 	return res, r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr),
