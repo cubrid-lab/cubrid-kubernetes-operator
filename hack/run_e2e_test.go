@@ -105,17 +105,29 @@ func TestRunE2EPreloadsHelperImagesAndKeepsCleanup(t *testing.T) {
 		reuse     bool
 		failImage string
 		failLoad  string
+		// tool is the container tool's file name: Podman loads with
+		// "kind load docker-image", Docker with a single-platform archive.
+		tool string
+		// noPlatformSave makes "save --platform" fail, as on a Docker that
+		// does not know the flag.
+		noPlatformSave bool
 	}{
 		{name: "created cluster"},
 		{name: "helper pull fails closed", failImage: images[0]},
 		{name: "helper load fails closed", failLoad: images[0]},
 		{name: "reused cluster", reuse: true},
+		{name: "podman", tool: "podman"},
+		{name: "docker without save --platform", noPlatformSave: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			trace := filepath.Join(dir, "trace.txt")
 			kind := filepath.Join(dir, "fake-kind")
-			container := filepath.Join(dir, "fake-container")
+			tool := tc.tool
+			if tool == "" {
+				tool = "docker"
+			}
+			container := filepath.Join(dir, tool)
 			write := func(path, body string) {
 				t.Helper()
 				if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
@@ -127,7 +139,11 @@ printf 'kind %s\n' "$*" >> "$TRACE"
 if [ "$1" = get ] && [ "$2" = clusters ]; then
   [ "${MOCK_EXISTING_CLUSTER:-}" = 1 ] && printf '%s\n' "$KIND_CLUSTER"
 fi
-if [ "$1" = load ] && [ "$3" = "${MOCK_FAIL_LOAD:-}" ]; then exit 1; fi
+if [ "$1" = load ] && [ -n "${MOCK_FAIL_LOAD:-}" ]; then exit 1; fi
+if [ "$1" = load ] && [ "$2" = image-archive ] && [ ! -s "$3" ]; then
+  echo "no archive at $3" >&2
+  exit 1
+fi
 exit 0
 `)
 			write(container, `#!/bin/sh
@@ -136,6 +152,14 @@ if [ "$1" = image ] && [ "$2" = inspect ]; then exit 1; fi
 if [ "$1" = pull ] && [ "$2" = "${MOCK_FAIL_PULL:-}" ]; then
   echo '429 Too Many Requests' >&2
   exit 1
+fi
+if [ "$1" = version ]; then printf 'linux/amd64\n'; fi
+if [ "$1" = save ]; then
+  [ "${MOCK_NO_PLATFORM_SAVE:-}" = 1 ] && [ "$2" = --platform ] && exit 125
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then printf 'archive\n' > "$2"; fi
+    shift
+  done
 fi
 exit 0
 `)
@@ -148,6 +172,7 @@ exit 0
 				"TRACE="+trace,
 				"MOCK_FAIL_PULL="+tc.failImage,
 				"MOCK_FAIL_LOAD="+tc.failLoad,
+				"MOCK_NO_PLATFORM_SAVE="+map[bool]string{true: "1", false: ""}[tc.noPlatformSave],
 				"MOCK_EXISTING_CLUSTER="+map[bool]string{true: "1", false: "0"}[tc.reuse],
 				"E2E_REUSE_CLUSTER="+map[bool]string{true: "1", false: ""}[tc.reuse],
 			)
@@ -180,9 +205,24 @@ exit 0
 				}
 				for _, image := range images {
 					pulled := strings.Index(got, "container pull "+image)
-					loaded := strings.Index(got, "kind load docker-image "+image+" --name ci-helper-test")
-					if pulled < 0 || loaded <= pulled || loaded >= firstSuite {
-						t.Errorf("image %s was not pulled and loaded before the suite:\n%s", image, got)
+					// Docker's containerd image store saves a multi-platform
+					// image's whole index but only the pulled platform's
+					// content, which "kind load docker-image" cannot import
+					// (#1004): Docker loads one platform's archive instead.
+					load := "kind load docker-image " + image + " --name ci-helper-test"
+					if tc.tool == "" && !tc.noPlatformSave {
+						saved := strings.Index(got, "container save --platform linux/amd64 "+image+" -o ")
+						if saved <= pulled {
+							t.Errorf("image %s was not saved for the daemon's platform after the pull:\n%s", image, got)
+						}
+						load = "kind load image-archive "
+						if strings.Contains(got, "kind load docker-image "+image) {
+							t.Errorf("image %s was loaded with its whole index:\n%s", image, got)
+						}
+					}
+					loaded := strings.Index(got[max(pulled, 0):], load)
+					if pulled < 0 || loaded < 0 || pulled+loaded >= firstSuite {
+						t.Errorf("image %s was not pulled and loaded (%q) before the suite:\n%s", image, load, got)
 					}
 				}
 			}
