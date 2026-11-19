@@ -117,6 +117,207 @@ type s04Lab struct {
 	// command was cancelled. lateStopIssued is set once that command ran.
 	lateStop       int
 	lateStopIssued bool
+	// Kubernetes and the Operator around the out-of-service taint. Once the
+	// taint is on the master's node, Kubernetes replaces the member's Pod
+	// (UID afterFenceUID), which stays Pending, and the member does not
+	// answer, until the taint is removed; fencedAt is when the taint was
+	// stored, and fences counts the taints added. refuseFence refuses every
+	// patch that adds the taint, fenceDelay those sent sooner than that after
+	// the stop; taintAtStop has someone else add the taint at the stop.
+	pending      bool
+	savedStatus  corev1.PodStatus
+	fencedAt     time.Time
+	stoppedAt    time.Time
+	fences       int
+	fencedWhile  []string
+	refuseFence  bool
+	fenceDelay   time.Duration
+	taintAtStop  bool
+	resolveEarly bool
+	// The Operator's return-to-service barrier: it is enforced on the
+	// enforceAfter-th read of the cluster after the annotation, never with
+	// neverEnforce, and released once the taint is gone and the member's Pod
+	// runs. log lists, in order, what the run and the fake Operator did.
+	enforceAfter int
+	neverEnforce bool
+	barrierReads int
+	log          []string
+}
+
+// afterFenceUID is the UID of the Pod the StatefulSet recreates after
+// Kubernetes force-deleted the member's Pod from the tainted node.
+const afterFenceUID = "after-fence"
+
+// hasFenceTaint reports whether node carries the out-of-service NoExecute
+// taint.
+func hasFenceTaint(node *corev1.Node) bool {
+	return slices.ContainsFunc(node.Spec.Taints, func(t corev1.Taint) bool {
+		return t.Key == corev1.TaintNodeOutOfService && t.Effect == corev1.TaintEffectNoExecute
+	})
+}
+
+// patched plays the API server, Kubernetes and the Operator when the run
+// patches the master's node or the HA cluster.
+func (l *s04Lab) patched(ctx context.Context, c client.WithWatch, obj client.Object, apply func() error) error {
+	switch value := obj.(type) {
+	case *corev1.Node:
+		before := &corev1.Node{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(value), before); err != nil {
+			return err
+		}
+		had, has := hasFenceTaint(before), hasFenceTaint(value)
+		l.f.mu.Lock()
+		refuse := !had && has && (l.refuseFence || time.Since(l.stoppedAt) < l.fenceDelay)
+		l.f.mu.Unlock()
+		if refuse {
+			return errors.New("the API server is unavailable")
+		}
+		if err := apply(); err != nil {
+			return err
+		}
+		switch {
+		case !had && has:
+			l.fence(ctx, c, before)
+		case had && !has:
+			l.unfence(ctx, c)
+		}
+	case *databasev1alpha1.CubridCluster:
+		before := &databasev1alpha1.CubridCluster{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(value), before); err != nil {
+			return err
+		}
+		if err := apply(); err != nil {
+			return err
+		}
+		had, has := before.Annotations[returnToServiceAnnotation], value.Annotations[returnToServiceAnnotation]
+		l.f.mu.Lock()
+		switch {
+		case had == "" && has != "":
+			l.log = append(l.log, "annotation-set "+has)
+		case had != "" && has == "":
+			l.log = append(l.log, "annotation-removed")
+		}
+		l.f.mu.Unlock()
+	default:
+		return apply()
+	}
+	return nil
+}
+
+// fence plays Kubernetes once the taint is on the master's node: the
+// member's Pod is force-deleted and recreated with a new UID, Pending.
+func (l *s04Lab) fence(ctx context.Context, c client.WithWatch, before *corev1.Node) {
+	f := l.f
+	f.mu.Lock()
+	l.fences++
+	l.fencedAt = time.Now()
+	l.fencedWhile = append(l.fencedWhile, fmt.Sprintf("stopped=%t ready=%t", l.stopped[testMasterNode],
+		nodeConditionReady(before)))
+	l.log = append(l.log, "taint-added")
+	f.mu.Unlock()
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testHAPrimary}, pod); err != nil {
+		f.t.Error(err)
+		return
+	}
+	f.mu.Lock()
+	l.savedStatus, l.pending = pod.Status, true
+	f.mu.Unlock()
+	pod.UID = afterFenceUID
+	pod.CreationTimestamp = metav1.Now()
+	pod.Status = corev1.PodStatus{Phase: corev1.PodPending}
+	if err := c.Update(ctx, pod); err != nil {
+		f.t.Error(err)
+	}
+}
+
+// unfence plays Kubernetes and the Operator once the taint is gone: the new
+// Pod runs, and the member answers again.
+func (l *s04Lab) unfence(ctx context.Context, c client.WithWatch) {
+	f := l.f
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		f.t.Error(err)
+		return
+	}
+	q := cluster.Status.WriteQuarantine
+	f.mu.Lock()
+	l.log = append(l.log, fmt.Sprintf("taint-removed enforced=%t", q != nil && q.EnforcedTime != nil))
+	pending, saved := l.pending, l.savedStatus
+	l.pending = false
+	f.mu.Unlock()
+	if !pending {
+		return
+	}
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testHAPrimary}, pod); err != nil {
+		f.t.Error(err)
+		return
+	}
+	pod.Status = saved
+	if err := c.Update(ctx, pod); err != nil {
+		f.t.Error(err)
+	}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: primaryResolvedCondition,
+		Status: metav1.ConditionTrue, Reason: "Test", ObservedGeneration: cluster.Generation})
+	if err := c.Update(ctx, cluster); err != nil {
+		f.t.Error(err)
+	}
+}
+
+// operate plays the Operator's return-to-service barrier before a read of
+// the HA cluster (ADR-0005, section 8, "Return to service").
+func (l *s04Lab) operate(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+	f := l.f
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := c.Get(ctx, key, cluster); err != nil {
+		return nil
+	}
+	node := &corev1.Node{}
+	if err := c.Get(ctx, client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		return err
+	}
+	value, st := cluster.Annotations[returnToServiceAnnotation], &cluster.Status
+	q := st.WriteQuarantine
+	now := metav1.Now()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case value == "" && st.ReturnedToService != "":
+		st.ReturnedToService = ""
+	case value == "" || st.ReturnedToService == value:
+		return nil
+	case q == nil:
+		st.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: "returning",
+			Reason: databasev1alpha1.WriteQuarantinedMemberReturning, StartTime: now, ObservedMaster: testMemberHA0,
+			Revision: 1, ReleaseToken: "token", ReturningMember: value}
+		l.barrierReads = 0
+	case q.EnforcedTime == nil:
+		if l.barrierReads++; l.neverEnforce || l.barrierReads < l.enforceAfter {
+			return nil
+		}
+		q.EnforcedTime = &now
+		l.log = append(l.log, "enforced")
+	case !hasFenceTaint(node) && !l.pending:
+		st.LastWriteQuarantineRelease = &databasev1alpha1.WriteQuarantineRelease{GenerationID: q.GenerationID,
+			Reason: q.Reason, StartTime: q.StartTime, ReleaseTime: now,
+			Method: databasev1alpha1.WriteQuarantineReleasedReturnedToService, ObservedMaster: q.ObservedMaster}
+		st.WriteQuarantine, st.ReturnedToService = nil, value
+		l.log = append(l.log, "released")
+	default:
+		return nil
+	}
+	return c.Update(ctx, cluster)
+}
+
+// nodeConditionReady reports whether node's Ready condition is True.
+func nodeConditionReady(node *corev1.Node) bool {
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func newS04Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) (*haFixture, *s04Lab) {
@@ -139,13 +340,16 @@ func newS04Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) (*haFixtu
 		f.mu.Unlock()
 		return history
 	}
-	lab := &s04Lab{f: f, stopped: map[string]bool{}, promote: true}
+	lab := &s04Lab{f: f, stopped: map[string]bool{}, promote: true, enforceAfter: 2}
 	f.runner.host = lab.run
+	f.patched = lab.patched
+	f.haClusterRead = lab.operate
 	f.memberHook = func(_ context.Context, pod, _ string) (string, error, bool) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if pod == testHAPrimary && (lab.stopped[testMasterNode] || lab.poweredOn && lab.silentAfterOn > 0) {
-			if !lab.stopped[testMasterNode] {
+		if pod == testHAPrimary && (lab.stopped[testMasterNode] || lab.pending ||
+			lab.poweredOn && lab.silentAfterOn > 0) {
+			if !lab.stopped[testMasterNode] && !lab.pending {
 				lab.silentAfterOn--
 			}
 			out := "error: unable to upgrade connection: dial tcp: i/o timeout\n"
@@ -209,7 +413,23 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 		if late {
 			return "", errors.New("signal: killed")
 		}
+		l.f.mu.Lock()
+		l.stoppedAt = time.Now()
+		l.f.mu.Unlock()
 		l.power(ctx, node, false)
+		if l.taintAtStop {
+			n := &corev1.Node{}
+			if err := l.f.store.Get(ctx, client.ObjectKey{Name: node}, n); err != nil {
+				return "", err
+			}
+			before := n.DeepCopy()
+			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: corev1.TaintNodeOutOfService, Value: "someone",
+				Effect: corev1.TaintEffectNoExecute, TimeAdded: &metav1.Time{Time: time.Now().Truncate(time.Second)}})
+			if err := l.f.store.Update(ctx, n); err != nil {
+				return "", err
+			}
+			l.fence(ctx, l.f.store, before)
+		}
 		return "", nil
 	case testVMStart:
 		if l.failStart {
@@ -257,8 +477,14 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 		f.t.Error(err)
 		return
 	}
+	// Once the member's Pod was replaced after the taint, the Operator
+	// resolves the primary only when the member answers again, after the
+	// taint is gone, unless resolveEarly has it report True at once.
 	resolved := metav1.ConditionTrue
-	if !on && !l.keepResolved {
+	f.mu.Lock()
+	pending := l.pending && !l.resolveEarly
+	f.mu.Unlock()
+	if !on && !l.keepResolved || on && pending {
 		resolved = metav1.ConditionFalse
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: primaryResolvedCondition,
@@ -625,7 +851,7 @@ func TestRunS04FailsWhenPrimaryResolvedIsTrueBeforeTheReturningMemberAnswers(t *
 	f, lab := newS04Fixture(t, cfg)
 	// The node is Ready and the Operator reports PrimaryResolved True again
 	// at once, while the member on the VM does not answer yet.
-	lab.silentAfterOn = 3
+	lab.silentAfterOn, lab.resolveEarly = 3, true
 	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 		t.Fatal("RunHA() passed")
 	}
@@ -641,7 +867,7 @@ func TestRunS04PassesWhenTheOperatorSeesTheReturningMemberBeforeTheRun(t *testin
 	f, lab := newS04Fixture(t, cfg)
 	// The Operator's record shows the member answering again while the
 	// run's own reads of it still fail: PrimaryResolved True is then right.
-	lab.silentAfterOn, lab.recordOnReturn = 3, true
+	lab.silentAfterOn, lab.recordOnReturn, lab.resolveEarly = 3, true, true
 	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
 		t.Fatalf("RunHA() = %v", err)
 	}
@@ -1073,5 +1299,315 @@ func TestRunS04IsBlockedWhenTheReadWriteProbeFails(t *testing.T) {
 				t.Fatal("the master's node is left cordoned")
 			}
 		})
+	}
+}
+
+// masterNode reads the master's node from the fake API server.
+func masterNode(t *testing.T, f *haFixture) *corev1.Node {
+	t.Helper()
+	node := &corev1.Node{}
+	if err := f.runner.Client.Get(context.Background(), client.ObjectKey{Name: testMasterNode}, node); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+// haCluster reads the HA cluster from the fake API server.
+func haCluster(t *testing.T, f *haFixture) *databasev1alpha1.CubridCluster {
+	t.Helper()
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := f.store.Get(context.Background(), client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName},
+		cluster); err != nil {
+		t.Fatal(err)
+	}
+	return cluster
+}
+
+// Once the VM status command reports the VM powered off and the node is
+// NotReady, the run adds node.kubernetes.io/out-of-service:NoExecute to the
+// master's node, once and with a timeAdded, and records that proof; the
+// Operator refuses a taint without timeAdded (scenario contract, S04
+// "Fencing step"). A taint added before the VM was confirmed off, or twice,
+// fails this test.
+func TestRunS04FencesThePoweredOffNodeOnceAfterTheFaultIsConfirmed(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	f.mu.Lock()
+	fences, while := lab.fences, slices.Clone(lab.fencedWhile)
+	f.mu.Unlock()
+	if fences != 1 || !slices.Equal(while, []string{"stopped=true ready=false"}) {
+		t.Fatalf("the taint was added %d times, while %v; want once, with the VM stopped and the node not Ready",
+			fences, while)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.FencedAt == nil || rec.FenceTaintTimeAdded == nil || !rec.FenceTaintAddedByRun || rec.FenceProof == nil ||
+		rec.FenceProof.VMStatus != vmStopped || rec.FenceProof.VMStatusReadAt.IsZero() ||
+		rec.FenceProof.VMStatusReadAt.After(*rec.FencedAt) || rec.StopIssuedAt == nil ||
+		rec.FencedAt.Before(*rec.StopIssuedAt) {
+		t.Fatalf("record = fenced at %v, timeAdded %v, by the run %t, proof %+v, stop %v; want the taint recorded "+
+			"after the VM status reading that confirmed the stop", rec.FencedAt, rec.FenceTaintTimeAdded,
+			rec.FenceTaintAddedByRun, rec.FenceProof, rec.StopIssuedAt)
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Pass || s04.Measurements["fencedAfter"] == evidence.Unknown {
+		t.Fatalf("S04 = %+v, want a pass with the time from the stop to the taint measured", s04)
+	}
+	if hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the taint is still on the master's node after S04")
+	}
+}
+
+// After the taint, Kubernetes force-deletes the member's Pod and the
+// StatefulSet recreates it with a new UID: that is the fence working, not
+// the Operator deleting a Pod. The cluster converges on the new Pod, whose
+// UID the record keeps. A replacement before the taint stays a never-event
+// (TestRunS04FailsWhenThePodIsReplacedWhileTheVMIsOff).
+func TestRunS04AcceptsThePodReplacedAfterTheTaint(t *testing.T) {
+	cfg := testS04Config(t)
+	f, _ := newS04Fixture(t, cfg)
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Pass || len(s04.NeverEvents) != 0 {
+		t.Fatalf("S04 = %+v, want a pass: Kubernetes replaced the Pod only after the taint", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.PodDeletedAt != nil || rec.PodReplacedAfterFenceAt == nil || rec.FencedAt == nil ||
+		rec.PodReplacedAfterFenceAt.Before(*rec.FencedAt) || rec.MasterPodUIDAfter != afterFenceUID {
+		t.Fatalf("record = deleted while off %v, replaced after the taint %v, fenced %v, UID after %q; want the "+
+			"replacement after the taint, with its UID %s", rec.PodDeletedAt, rec.PodReplacedAfterFenceAt,
+			rec.FencedAt, rec.MasterPodUIDAfter, afterFenceUID)
+	}
+}
+
+// fenceRelativeClients has the clients' writes refused just before the
+// taint and acknowledged again from after into the run, measured from the
+// moment the lab stored the taint.
+func fenceRelativeClients(f *haFixture, lab *s04Lab, after time.Duration) {
+	f.backgroundHistory = func(id string) string {
+		f.mu.Lock()
+		at := lab.fencedAt
+		f.mu.Unlock()
+		history, rows := backgroundWorkloadFrom(id, map[int]bool{1: true}, at.Add(after-100*time.Millisecond))
+		f.mu.Lock()
+		f.rows = append(f.rows, rows...)
+		f.mu.Unlock()
+		return history
+	}
+}
+
+// failover_limit runs from the taint, not from the stop (scenario contract,
+// S04 "Three intervals"): with the Operator's write quarantine, writes
+// through -rw are refused until the taint. A run whose clients recover
+// quickly after a taint that came late passes; measured from the stop, it
+// would fail.
+func TestRunS04MeasuresTheFailoverFromTheTaint(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 400 * time.Millisecond
+	cfg.VMDownFor = 1500 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.fenceDelay = time.Second
+	fenceRelativeClients(f, lab, 100*time.Millisecond)
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass: the clients recovered within failover_limit of the taint", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.FencedAt.Sub(*rec.StopIssuedAt) < time.Second || rec.FenceError == "" {
+		t.Fatalf("record = stop %v, taint %v, fence error %q; want the taint a second after the stop, after a "+
+			"refused attempt", rec.StopIssuedAt, rec.FencedAt, rec.FenceError)
+	}
+}
+
+// The other side: clients that recover later than failover_limit after the
+// taint fail S04, and the reason says the time runs from the taint.
+func TestRunS04FailsWhenTheClientsRecoverLateAfterTheTaint(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 400 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	fenceRelativeClients(f, lab, 700*time.Millisecond)
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "after the out-of-service taint") ||
+		!strings.Contains(s04.Reason, "over failover_limit") {
+		t.Fatalf("S04 = %+v, want a failure on failover_limit counted from the taint", s04)
+	}
+}
+
+// Without the taint, the Operator keeps the read-write path closed while the
+// old master cannot answer, and failover_limit has nothing to run from: S04
+// is blocked, not failed or passed, and the VM is powered on again.
+func TestRunS04IsBlockedWhenTheTaintCannotBeAdded(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 300 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.refuseFence = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "out-of-service taint") ||
+		s04.CleanupSucceeded == nil || !*s04.CleanupSucceeded {
+		t.Fatalf("S04 = %+v, want blocked: the taint could not be added", s04)
+	}
+	if rec := readS04Record(t, cfg.EvidenceDir); rec.FencedAt != nil || !strings.Contains(rec.FenceError,
+		"unavailable") {
+		t.Fatalf("record = fenced %v, error %q; want no fence and the refusal recorded", rec.FencedAt,
+			rec.FenceError)
+	}
+}
+
+// After the VM is back and its node Ready, the run follows ADR-0005's return
+// to service: it sets the annotation, waits until the Operator reports the
+// barrier enforced, only then removes the taint, waits for the release and
+// removes the annotation. Removing the taint before the barrier is enforced
+// lets the returning database take writes the barrier cannot undo; the fake
+// Operator enforces it only on its third read, so a run that does not wait
+// fails here.
+func TestRunS04ReturnsTheMemberToServiceInOrder(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.enforceAfter = 3
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	f.mu.Lock()
+	log := slices.Clone(lab.log)
+	f.mu.Unlock()
+	want := []string{"taint-added", "annotation-set " + testHAPrimary, "enforced", "taint-removed enforced=true",
+		"released", "annotation-removed"}
+	if !slices.Equal(log, want) {
+		t.Fatalf("the run and the Operator did %v, want %v", log, want)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	steps := []*time.Time{rec.FencedAt, rec.NodeReadyAt, rec.ReturnRequestedAt, rec.BarrierEnforcedAt,
+		rec.TaintRemovedAt, rec.ReturnReleasedAt, rec.ReturnAnnotationRemovedAt, rec.ConvergedAt}
+	for i, at := range steps {
+		if at == nil || i > 0 && at.Before(*steps[i-1]) {
+			t.Fatalf("return step %d at %v, want every step recorded in order: %v", i, at, steps)
+		}
+	}
+	if rec.OperatorEnforcedTime == nil || rec.TaintRemovedByCleanup || rec.AnnotationRemovedByCleanup {
+		t.Fatalf("record = Operator's enforcedTime %v, removed by the cleanup: taint %t, annotation %t",
+			rec.OperatorEnforcedTime, rec.TaintRemovedByCleanup, rec.AnnotationRemovedByCleanup)
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Pass || s04.Measurements["returnWithin"] == evidence.Unknown {
+		t.Fatalf("S04 = %+v, want a pass with the return measured", s04)
+	}
+	if _, set := haCluster(t, f).Annotations[returnToServiceAnnotation]; set {
+		t.Fatal("the return-to-service annotation is left on the cluster")
+	}
+}
+
+// When the Operator never enforces the barrier, the run never removes the
+// taint as a step of the return: S04 fails within vm_return_limit, and only
+// its end removes the taint and the annotation it added, as it makes a node
+// it cordoned schedulable again, so the lab is not left fenced.
+func TestRunS04KeepsTheTaintUntilTheBarrierIsEnforced(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMReturnLimit = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.neverEnforce = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "barrier") {
+		t.Fatalf("S04 = %+v, want a failure: the barrier was never enforced", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.BarrierEnforcedAt != nil || !rec.TaintRemovedByCleanup || !rec.AnnotationRemovedByCleanup {
+		t.Fatalf("record = enforced %v, taint removed by the cleanup %t, annotation %t; want both removed by "+
+			"the end of S04 only", rec.BarrierEnforcedAt, rec.TaintRemovedByCleanup, rec.AnnotationRemovedByCleanup)
+	}
+	if hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the taint the run added is left on the master's node")
+	}
+	if _, set := haCluster(t, f).Annotations[returnToServiceAnnotation]; set {
+		t.Fatal("the return-to-service annotation the run set is left on the cluster")
+	}
+}
+
+// A blocked S04 removes the taint it added too: here the VM is never
+// powered on again.
+func TestRunS04RemovesItsTaintWhenBlocked(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.failStart = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Blocked {
+		t.Fatalf("S04 = %+v, want blocked: the VM is still off", s04)
+	}
+	if rec := readS04Record(t, cfg.EvidenceDir); rec.FencedAt == nil || !rec.TaintRemovedByCleanup ||
+		hasFenceTaint(masterNode(t, f)) {
+		t.Fatalf("record = fenced %v, removed by the cleanup %t; want the run's taint removed at its end",
+			rec.FencedAt, rec.TaintRemovedByCleanup)
+	}
+}
+
+// A taint someone else put on the node after the stop is recorded as the
+// fence, but the run never removes it, at no step and not at its end:
+// whoever added it removes it. Here nobody does, so the member cannot return
+// and S04 fails.
+func TestRunS04LeavesATaintItDidNotAdd(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMReturnLimit = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.taintAtStop = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Fail {
+		t.Fatalf("S04 = %+v, want a failure: the member could not return while the taint stayed", s04)
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.FencedAt == nil || rec.FenceTaintAddedByRun || rec.TaintRemovedAt != nil || rec.TaintRemovedByCleanup {
+		t.Fatalf("record = fenced %v, by the run %t, removed %v, by the cleanup %t; want a fence the run did not "+
+			"add and never removed", rec.FencedAt, rec.FenceTaintAddedByRun, rec.TaintRemovedAt,
+			rec.TaintRemovedByCleanup)
+	}
+	if !hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the run removed a taint it did not add")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.ContainsFunc(lab.log, func(s string) bool { return strings.HasPrefix(s, "taint-removed") }) {
+		t.Fatalf("the run removed a taint it did not add: %v", lab.log)
+	}
+}
+
+// A node that already carries the out-of-service taint before the fault is
+// not the outage S04 makes: S04 is blocked before any VM is touched.
+func TestRunS04RefusesANodeAlreadyOutOfService(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	node := masterNode(t, f)
+	node.Spec.Taints = []corev1.Taint{{Key: corev1.TaintNodeOutOfService, Value: fenceTaintValue,
+		Effect: corev1.TaintEffectNoExecute, TimeAdded: &metav1.Time{Time: time.Now().Truncate(time.Second)}}}
+	if err := f.runner.Client.Update(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, corev1.TaintNodeOutOfService) {
+		t.Fatalf("S04 = %+v, want blocked: the node was out of service before the fault", s04)
+	}
+	assertNoPower(t, lab)
+	if !hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the run removed a taint it did not add")
 	}
 }

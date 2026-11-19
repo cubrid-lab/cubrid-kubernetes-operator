@@ -622,6 +622,28 @@ type clientAnswers struct {
 	// slowestRecovery is the longest time from faultAt until a client
 	// recovered, among the clients that did.
 	slowestRecovery time.Duration
+	// events are each client's events, by client ID.
+	events map[string][]workload.Event
+}
+
+// recover measures, from from, each client's recovery: when its writes were
+// acknowledged again without interruption, and for how long they stayed so.
+// It replaces notRecovered, shortestStable, stableMeasured and
+// slowestRecovery; collectBackgroundClients measures them from its faultAt,
+// and S04 again from the out-of-service taint.
+func (a *clientAnswers) recover(ids []string, from time.Time) {
+	a.notRecovered, a.shortestStable, a.stableMeasured, a.slowestRecovery = nil, 0, false, 0
+	for _, id := range ids {
+		recoveredAt, stable, recovered := workload.Recovery(a.events[id], from)
+		if !recovered {
+			a.notRecovered = append(a.notRecovered, id)
+			continue
+		}
+		if !a.stableMeasured || stable < a.shortestStable {
+			a.shortestStable, a.stableMeasured = stable, true
+		}
+		a.slowestRecovery = max(a.slowestRecovery, recoveredAt.Sub(from))
+	}
 }
 
 // collectBackgroundClients reads what the stopped clients recorded, adds it
@@ -632,7 +654,7 @@ type clientAnswers struct {
 // unanswered.
 func (h *haRun) collectBackgroundClients(ctx context.Context, ids []string, faultAt time.Time) (clientAnswers,
 	error) {
-	var a clientAnswers
+	a := clientAnswers{events: map[string][]workload.Event{}}
 	for _, id := range ids {
 		text, err := h.clientRun(ctx, fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
 		if err != nil {
@@ -659,20 +681,13 @@ func (h *haRun) collectBackgroundClients(ctx context.Context, ids []string, faul
 				a.notAcknowledged++
 			}
 		}
-		recoveredAt, stable, recovered := workload.Recovery(events, faultAt)
-		if !recovered {
-			a.notRecovered = append(a.notRecovered, id)
-		} else {
-			if !a.stableMeasured || stable < a.shortestStable {
-				a.shortestStable, a.stableMeasured = stable, true
-			}
-			a.slowestRecovery = max(a.slowestRecovery, recoveredAt.Sub(faultAt))
-		}
+		a.events[id] = events
 		a.operations.Attempted += history.Counts[workload.Attempted]
 		a.operations.Acknowledged += history.Counts[workload.Acknowledged]
 		a.operations.Failed += history.Counts[workload.Failed]
 		a.operations.Unknown += history.Counts[workload.Unknown]
 	}
+	a.recover(ids, faultAt)
 	all, err := workload.ReadHistory(strings.NewReader(h.history.String()))
 	if err != nil {
 		return a, err

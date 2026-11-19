@@ -196,7 +196,11 @@ type haFixture struct {
 	// nil fails the test on any eviction.
 	evicted func(ctx context.Context, c client.Client, pod client.Object) error
 	// haClusterRead, when set, plays a read of the HA cluster.
-	haClusterRead  func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	haClusterRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// patched, when set, plays the API server and the controllers when the
+	// run patches an object: apply stores the patch, and its error is the
+	// patch's.
+	patched        func(ctx context.Context, c client.WithWatch, obj client.Object, apply func() error) error
 	deploymentRead func(key client.ObjectKey) error
 	// podDeleted plays the API server and the StatefulSet when the run
 	// deletes a Pod of the run namespace.
@@ -317,6 +321,14 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				return f.eventsErr
 			}
 			return c.List(ctx, list, opts...)
+		},
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch,
+			opts ...client.PatchOption) error {
+			apply := func() error { return c.Patch(ctx, obj, patch, opts...) }
+			if f.patched != nil {
+				return f.patched(ctx, c, obj, apply)
+			}
+			return apply()
 		},
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption) error {

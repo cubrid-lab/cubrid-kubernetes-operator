@@ -85,6 +85,14 @@ const (
 	// s04ProbeClient is the client ID of the one write S04 sends through the
 	// read-write Service before the fault and reads back.
 	s04ProbeClient = "s04probe"
+	// returnToServiceAnnotation asks the Operator to close the read-write
+	// path before a fenced member returns (ADR-0005, section 8, "Return to
+	// service").
+	returnToServiceAnnotation = "database.cubrid.io/return-to-service"
+	// fenceTaintValue is the value of the out-of-service taint the run adds,
+	// the one the Kubernetes documentation gives for a node that was shut
+	// down.
+	fenceTaintValue = "nodeshutdown"
 )
 
 // vmSettle is how long the cleanup must read a VM running before it trusts
@@ -160,8 +168,52 @@ type s04Record struct {
 	// powered the VM on: the lab, not the run, ended the outage.
 	VMReturnedEarly bool `json:"vmReturnedEarly,omitempty"`
 	// PodDeletedAt is set when the powered-off member's Pod was seen with a
-	// deletion timestamp, or replaced, while its VM was off.
+	// deletion timestamp, or replaced, while its VM was off and before the
+	// run added the out-of-service taint: the never-event.
 	PodDeletedAt *time.Time `json:"podDeletedWhileOffAt,omitempty"`
+	// FenceProof is what the out-of-service taint rests on: the VM status
+	// command's reading "stopped" that confirmed the fault, with its time,
+	// and the node read NotReady right before the taint. FencedAt is when
+	// the run sent the taint, from which failover_limit runs, and
+	// FenceTaintTimeAdded the taint's timeAdded. FenceTaintAddedByRun is
+	// false for a taint someone else added first; the run never removes
+	// that one. FenceError is why the last attempt to add the taint failed.
+	FenceProof           *s04FenceProof `json:"fenceProof,omitempty"`
+	FencedAt             *time.Time     `json:"fencedAt,omitempty"`
+	FenceTaintTimeAdded  *time.Time     `json:"fenceTaintTimeAdded,omitempty"`
+	FenceTaintAddedByRun bool           `json:"fenceTaintAddedByRun"`
+	FenceError           string         `json:"fenceError,omitempty"`
+	// PodReplacedAfterFenceAt is when the member's Pod was first seen
+	// deleted, gone or replaced after the taint, as Kubernetes does for a
+	// node out of service; MasterPodUIDAfter is the UID of its replacement
+	// once the cluster converged.
+	PodReplacedAfterFenceAt *time.Time `json:"podReplacedAfterFenceAt,omitempty"`
+	MasterPodUIDAfter       string     `json:"masterPodUIDAfter,omitempty"`
+	// The return to service of the fenced member (ADR-0005, section 8):
+	// ReturnRequestedAt is when the run set the return-to-service annotation,
+	// BarrierEnforcedAt when it first read the Operator's barrier enforced
+	// (OperatorEnforcedTime is the Operator's own enforcedTime),
+	// TaintRemovedAt when the taint was removed, ReturnReleasedAt when the
+	// Operator was read having released the return, and
+	// ReturnAnnotationRemovedAt when the run removed the annotation.
+	// TaintRemovedByCleanup and AnnotationRemovedByCleanup are set when the
+	// end of S04 removed them because the procedure did not finish.
+	ReturnRequestedAt          *time.Time `json:"returnRequestedAt,omitempty"`
+	ReturnAnnotationSetByRun   bool       `json:"returnAnnotationSetByRun"`
+	BarrierEnforcedAt          *time.Time `json:"barrierEnforcedAt,omitempty"`
+	OperatorEnforcedTime       *time.Time `json:"operatorEnforcedTime,omitempty"`
+	TaintRemovedAt             *time.Time `json:"taintRemovedAt,omitempty"`
+	ReturnReleasedAt           *time.Time `json:"returnReleasedAt,omitempty"`
+	ReturnAnnotationRemovedAt  *time.Time `json:"returnAnnotationRemovedAt,omitempty"`
+	TaintRemovedByCleanup      bool       `json:"taintRemovedByCleanup,omitempty"`
+	AnnotationRemovedByCleanup bool       `json:"annotationRemovedByCleanup,omitempty"`
+	// TaintGoneBeforeEnforcedAt is set when the taint was seen gone before
+	// the barrier was enforced, a never-event.
+	TaintGoneBeforeEnforcedAt *time.Time `json:"taintGoneBeforeEnforcedAt,omitempty"`
+	// fencePending is the timeAdded of a taint the run sent and whose patch
+	// returned an error: the patch may still have been applied, so a taint
+	// with that timeAdded is the run's.
+	fencePending *time.Time
 	// PoweredOnAt is when the cleanup's first VM start command returned,
 	// whatever its result, or when the cleanup ended if it started nothing;
 	// NodeReadyAt when the node was Ready again; MemberAnsweredAt when the
@@ -182,6 +234,18 @@ type s04Record struct {
 	// ClientHistories, before the namespace is deleted.
 	ClientsRead     bool               `json:"clientsRead"`
 	ClientHistories []s04ClientHistory `json:"clientHistories,omitempty"`
+}
+
+// s04FenceProof is the evidence that the VM was powered off when the run
+// added the out-of-service taint to its node.
+type s04FenceProof struct {
+	// VMStatus is what the VM status command printed, and VMStatusReadAt
+	// when that reading confirmed the fault.
+	VMStatus       string    `json:"vmStatus"`
+	VMStatusReadAt time.Time `json:"vmStatusReadAt"`
+	// NodeNotReadyReadAt is when the node was read not Ready right before
+	// the taint was sent.
+	NodeNotReadyReadAt time.Time `json:"nodeNotReadyReadAt"`
 }
 
 // s04ClientHistory is a background client's history kept when S04 ended
@@ -263,11 +327,13 @@ func (h *haRun) vmCommand(ctx context.Context, script, node string) (string, err
 // vmPowerOff powers off the VM of the node that runs the master, through the
 // lab's own command: the provider's controls are not in this repository.
 // started is set when the cleanup's first start command returned, whether
-// or not it succeeded.
+// or not it succeeded; confirmed when Confirm last read the VM stopped and
+// the node not Ready, the proof the out-of-service taint rests on.
 type vmPowerOff struct {
-	h       *haRun
-	node    string
-	started *time.Time
+	h         *haRun
+	node      string
+	started   *time.Time
+	confirmed *time.Time
 }
 
 func (f vmPowerOff) Name() string { return "power off the VM of node " + f.node }
@@ -287,11 +353,15 @@ func (f vmPowerOff) Confirm(ctx context.Context) (bool, error) {
 	if err != nil || strings.TrimSpace(state) != vmStopped {
 		return false, nil
 	}
+	readAt := time.Now().UTC()
 	ready, err := f.h.nodeReady(ctx, f.node)
-	if err != nil {
+	if err != nil || ready {
 		return false, nil
 	}
-	return !ready, nil
+	if f.confirmed != nil {
+		*f.confirmed = readAt
+	}
+	return true, nil
 }
 
 // Remove powers the VM on again and proves it: it reads the VM's state
@@ -368,15 +438,19 @@ func (h *haRun) s04FlowLimits() faults.Limits {
 
 // runS04 runs S04 power-off on the cluster LAB01 left in its checked state:
 // two clients write through the read-write Service while the VM of the node
-// that runs the master is powered off without a shutdown. CUBRID must promote
-// a slave. While the member on that VM cannot be observed, the Operator must
-// keep PrimaryResolved not True, and its Pod must not be deleted. Once the VM
-// is powered on again, its node must be Ready and the cluster must converge
-// to one master and two slaves with the starting conditions, within
-// VMReturnLimit. Every client's writes must be acknowledged again without
-// interruption within FailoverLimit of the VM stop being issued, and for
-// StablePeriod, and the data rules must hold. A run that ends before its
-// outcome is judged is blocked, not failed.
+// that runs the master is powered off without a shutdown. Once the VM is
+// confirmed off, the run adds the out-of-service taint to that node, the
+// contract's fencing step. CUBRID must promote a slave. While the member on
+// that VM cannot be observed, the Operator must keep PrimaryResolved not
+// True, and its Pod must not be deleted before the taint; after it,
+// Kubernetes replaces it. Once the VM is powered on again and its node is
+// Ready, the run returns the member to service as ADR-0005 describes, and
+// the cluster must converge to one master and two slaves with the starting
+// conditions, within VMReturnLimit. Every client's writes must be
+// acknowledged again without interruption within FailoverLimit of the
+// taint, and for StablePeriod, and the data rules must hold. A run that ends
+// before its outcome is judged, or that could not add the taint, is
+// blocked, not failed.
 func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s04ID+"/"+s04Variant, &result)()
 	result = evidence.Scenario{ID: s04ID, Variant: s04Variant, Result: evidence.Fail, NeverEvents: []string{}}
@@ -385,6 +459,7 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	clientsStarted := false
 	defer func() {
 		h.endCordon(ctx, &rec, &result)
+		h.endFence(ctx, &rec, &result)
 		if clientsStarted {
 			h.endClients(ctx, &rec, &result)
 		}
@@ -419,13 +494,13 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 			return end(evidence.Blocked, "start the clients: %v", err)
 		}
 	}
-	started := new(time.Time)
+	started, confirmed := new(time.Time), new(time.Time)
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault:  vmPowerOff{h: h, node: rec.Node, started: started},
+		Fault:  vmPowerOff{h: h, node: rec.Node, started: started, confirmed: confirmed},
 		Limits: h.s04FlowLimits(),
 		Before: func(ctx context.Context) error { return h.beforeS04(ctx, rec) },
 		Check: func(ctx context.Context) (bool, error) {
-			done, err := h.whileVMOff(ctx, &rec, &result)
+			done, err := h.whileVMOff(ctx, &rec, &result, *confirmed)
 			if ctx.Err() != nil {
 				return false, nil
 			}
@@ -443,6 +518,15 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		}
 		rec.PoweredOnAt = &at
 	}
+	if rec.FencedAt != nil {
+		kind := "out_of_service_taint_added"
+		if !rec.FenceTaintAddedByRun {
+			kind = "out_of_service_taint_found"
+		}
+		outcome.Timeline = append(outcome.Timeline, faults.Step{T: *rec.FencedAt, Kind: kind,
+			Detail: corev1.TaintNodeOutOfService + ":NoExecute on node " + rec.Node})
+		slices.SortStableFunc(outcome.Timeline, func(a, b faults.Step) int { return a.T.Compare(b.T) })
+	}
 	if err := h.writeTimeline(s04TimelineFile, outcome.Timeline); err != nil {
 		return end(evidence.Fail, "write the timeline: %v", err)
 	}
@@ -451,13 +535,16 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	result.Limits = map[string]string{failoverLimitName: h.cfg.FailoverLimit.String(),
 		vmReturnLimitName: h.cfg.VMReturnLimit.String(), "stable_period": h.cfg.StablePeriod.String()}
 	result.Measurements = map[string]any{}
-	for _, name := range []string{"confirmedOffAfter", "promotedWithin", "failoverWithin", "vmReturnWithin",
-		"convergedWithin", "primaryResolvedNotTrueFor", "finalMaster", "shortestStableFor",
-		"operationsNotAcknowledged"} {
+	for _, name := range []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
+		"vmReturnWithin", "returnWithin", "convergedWithin", "primaryResolvedNotTrueFor", "finalMaster",
+		"shortestStableFor", "operationsNotAcknowledged"} {
 		result.Measurements[name] = evidence.Unknown
 	}
 	if rec.StopIssuedAt != nil && rec.PoweredOffAt != nil {
 		result.Measurements["confirmedOffAfter"] = rec.PoweredOffAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
+	}
+	if rec.StopIssuedAt != nil && rec.FencedAt != nil {
+		result.Measurements["fencedAfter"] = rec.FencedAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
 	}
 	if rec.StopIssuedAt != nil && rec.PromotedAt != nil {
 		result.Measurements["promotedWithin"] = rec.PromotedAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
@@ -476,8 +563,14 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 			// little of the toleration to observe it.
 			return end(evidence.Blocked, "%s", outcome.Reason)
 		}
+		if outcome.FaultConfirmed && rec.FencedAt == nil {
+			return end(evidence.Blocked, "%s; %s", notFenced(&rec), outcome.Reason)
+		}
 		result.Result, result.Reason = outcome.Result, outcome.Reason
 		return result
+	}
+	if rec.FencedAt == nil {
+		return end(evidence.Blocked, "%s", notFenced(&rec))
 	}
 	if err := h.afterVMReturn(ctx, &rec, &result); err != nil {
 		if never := strings.Join(result.NeverEvents, "; "); never != "" {
@@ -501,10 +594,17 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 		return end(evidence.Blocked, "the run ended during the stable period: %v", ctx.Err())
 	case <-time.After(h.cfg.StablePeriod + 2*time.Second):
 	}
-	// Recovery is measured, as the contract's RTO is, from the moment the
-	// stop command was issued, on the client's clock. The lab's command
-	// latency is part of it; confirmedOffAfter records it.
-	clientFaultAt := rec.StopIssuedAt.Add(time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second)))
+	// The Operator keeps the read-write path closed while the old master
+	// cannot answer, until the out-of-service taint fences it (ADR-0005,
+	// section 8). So recovery is measured, as the contract's S04 does, from
+	// the moment the run sent the taint, on the client's clock; the time
+	// from the stop to the taint is reported as fencedAfter, without a
+	// limit. Answers that failed are counted from the stop.
+	if rec.FencedAt == nil {
+		return end(evidence.Blocked, "%s", notFenced(rec))
+	}
+	offset := time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second))
+	clientFaultAt, clientFenceAt := rec.StopIssuedAt.Add(offset), rec.FencedAt.Add(offset)
 	if err := h.stopBackgroundClients(ctx, s04Clients); err != nil {
 		return end(evidence.Fail, "stop the clients: %v", err)
 	}
@@ -514,6 +614,7 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 		return end(evidence.Fail, "collect the clients: %v", err)
 	}
 	rec.ClientsRead = true
+	clients.recover(s04Clients, clientFenceAt)
 	result.Operations = &clients.operations
 	rec.NotAcknowledged = &clients.notAcknowledged
 	result.Measurements["operationsNotAcknowledged"] = clients.notAcknowledged
@@ -526,9 +627,9 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	if len(result.NeverEvents) > 0 {
 		return end(evidence.Fail, "%s", strings.Join(result.NeverEvents, "; "))
 	}
-	// Answers that failed while the master's VM was off are expected; every
-	// client must be acknowledged again, without interruption, for the
-	// stable period.
+	// Answers that failed while the master's VM was off and before the taint
+	// are expected; every client must be acknowledged again, without
+	// interruption, for the stable period.
 	if len(clients.notRecovered) > 0 || !clients.stableMeasured || clients.shortestStable < h.cfg.StablePeriod {
 		return end(evidence.Fail, "the clients %v were not acknowledged again, or not for stable_period %s "+
 			"(shortest %s)", clients.notRecovered, h.cfg.StablePeriod, clients.shortestStable.Round(time.Millisecond))
@@ -536,13 +637,15 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	result.Measurements["failoverWithin"] = clients.slowestRecovery.Round(time.Millisecond).String()
 	if clients.slowestRecovery > h.cfg.FailoverLimit {
 		return end(evidence.Fail, "a client's writes were acknowledged again without interruption %s after the "+
-			"VM stop was issued, over failover_limit %s", clients.slowestRecovery.Round(time.Millisecond),
-			h.cfg.FailoverLimit)
+			"out-of-service taint was added to node %s, over failover_limit %s",
+			clients.slowestRecovery.Round(time.Millisecond), rec.Node, h.cfg.FailoverLimit)
 	}
 	result.Result = evidence.Pass
 	result.Reason = fmt.Sprintf("CUBRID promoted %s while the VM was off, the Operator kept PrimaryResolved not "+
-		"True and deleted no Pod, the VM's node returned, the cluster converged on master %s, the clients were "+
-		"acknowledged again and the data rules held", rec.NewMaster, rec.FinalMaster)
+		"True and deleted no Pod before the out-of-service taint, the VM's node returned, the member returned to "+
+		"service behind the Operator's barrier, the cluster converged on master %s, the clients were "+
+		"acknowledged again within failover_limit of the taint and the data rules held", rec.NewMaster,
+		rec.FinalMaster)
 	return *result
 }
 
@@ -910,8 +1013,20 @@ func (h *haRun) beforeS04(ctx context.Context, rec s04Record) error {
 		return fmt.Errorf("the master is %s and status.currentPrimary %q, %s at LAB01's end", roles.Master,
 			cluster.Status.CurrentPrimary, rec.Master)
 	}
+	// The run fences the node and returns the member to service itself: a
+	// taint or a return request already there would be someone else's.
+	if value, ok := cluster.Annotations[returnToServiceAnnotation]; ok {
+		return fmt.Errorf("the cluster already carries the annotation %s=%q", returnToServiceAnnotation, value)
+	}
 	if ready, err := h.nodeReady(ctx, rec.Node); err != nil || !ready {
 		return errors.Join(fmt.Errorf("node %s is not Ready", rec.Node), err)
+	}
+	node := &corev1.Node{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err != nil {
+		return fmt.Errorf("read node %s: %w", rec.Node, err)
+	}
+	if fenceTaint(node, nil) != nil {
+		return fmt.Errorf("node %s already carries the taint %s:NoExecute", rec.Node, corev1.TaintNodeOutOfService)
 	}
 	// A Broker on the node would lose power too, and its clients' failures
 	// would not be the master's.
@@ -941,7 +1056,8 @@ func (h *haRun) beforeS04(ctx context.Context, rec s04Record) error {
 // a slave, PrimaryResolved was read after its grace, and VMDownFor has passed
 // since the VM was confirmed off. A node Ready again before the run powered
 // the VM on ends it: the lab, not the run, ended the outage.
-func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence.Scenario) (bool, error) {
+func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence.Scenario,
+	confirmedAt time.Time) (bool, error) {
 	now := time.Now().UTC()
 	if rec.PoweredOffAt == nil {
 		rec.PoweredOffAt = &now
@@ -951,6 +1067,11 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 		rec.VMReturnedEarly = true
 		return false, fmt.Errorf("node %s was Ready again before the run powered its VM on: the VM came back on "+
 			"its own", rec.Node)
+	}
+	if rec.FencedAt == nil {
+		if err := h.fence(ctx, rec, confirmedAt); err != nil {
+			rec.FenceError = err.Error()
+		}
 	}
 	due := h.powerOnDue(ctx, rec, now)
 	survivors := slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == rec.Master })
@@ -963,7 +1084,7 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 	} else if masters[0] != rec.NewMaster {
 		return false, fmt.Errorf("the master moved from %s to %s while the VM was off", rec.NewMaster, masters[0])
 	}
-	if !rec.PrimaryResolvedCheckedAfterGrace {
+	if !rec.PrimaryResolvedCheckedAfterGrace || rec.FencedAt == nil {
 		return false, h.powerOnNow(rec, due)
 	}
 	if now.Sub(*rec.PoweredOffAt) >= h.cfg.VMDownFor {
@@ -1021,7 +1142,13 @@ func (h *haRun) powerOnNow(rec *s04Record, due bool) error {
 // Operator's PrimaryResolved and that member's Pod, and records in result
 // what breaks the contract: PrimaryResolved True primaryResolvedGrace or
 // more after the VM was confirmed off, and the Pod deleted, gone or
-// replaced. Once the VM was powered on, the Operator reaches the member
+// replaced before the run added the out-of-service taint. After the taint,
+// Kubernetes force-deletes the Pod and the StatefulSet recreates it: that is
+// recorded, not a never-event, when the deletion and the new Pod are not
+// older than the taint. The taint does not resolve the primary (ADR-0005,
+// section 8, "Taint-assisted release is not primary resolution"), so
+// PrimaryResolved is judged the same before and after it. Once the VM was
+// powered on, the Operator reaches the member
 // over the Pod network and the run through kubectl exec, so either can see
 // it first: a member the Operator's own record shows answering since the VM
 // was powered on is observed again, and the watch ends.
@@ -1055,17 +1182,30 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 			rec.PrimaryResolvedNotTrueFrom = &now
 		}
 	}
-	if rec.PodDeletedAt != nil {
+	if rec.PodDeletedAt != nil || rec.PodReplacedAfterFenceAt != nil {
 		return
 	}
 	pod := &corev1.Pod{}
 	err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: rec.MasterPod.Pod}, pod)
-	replaced := err == nil && (pod.DeletionTimestamp != nil || string(pod.UID) != rec.MasterPod.UID)
-	if apierrors.IsNotFound(err) || replaced {
-		rec.PodDeletedAt = &now
-		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the Pod %s was deleted or replaced while its "+
-			"VM was off or before it answered again", rec.MasterPod.Pod))
+	uidChanged := err == nil && string(pod.UID) != rec.MasterPod.UID
+	replaced := err == nil && (pod.DeletionTimestamp != nil || uidChanged)
+	if !apierrors.IsNotFound(err) && !replaced {
+		return
 	}
+	if rec.FencedAt != nil {
+		// The API keeps whole seconds.
+		fence := rec.FencedAt.Truncate(time.Second)
+		fromTaint := err != nil || (pod.DeletionTimestamp == nil || !pod.DeletionTimestamp.Time.Before(fence)) &&
+			(!uidChanged || !pod.CreationTimestamp.Time.Before(fence))
+		if fromTaint {
+			rec.PodReplacedAfterFenceAt = &now
+			return
+		}
+	}
+	rec.PodDeletedAt = &now
+	result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the Pod %s was deleted or replaced while its "+
+		"VM was off or before it answered again, and not after the out-of-service taint on node %s",
+		rec.MasterPod.Pod, rec.Node))
 }
 
 // answeredSince reports whether the Operator's record shows member answering
@@ -1104,8 +1244,9 @@ func (h *haRun) survivorRoles(ctx context.Context, members []string) (masters, s
 }
 
 // afterVMReturn waits, within VMReturnLimit from the VM's start, for its node
-// to be Ready, and then for the cluster to converge: the member Pod on it the
-// same Pod, one master and two slaves, status.currentPrimary naming the
+// to be Ready, then returns the fenced member to service (returnToService),
+// and then waits for the cluster to converge: the member Pod on it the same
+// Pod, or its replacement after the taint, one master and two slaves, status.currentPrimary naming the
 // master, and the starting conditions True. Until the member on the VM
 // answers its heartbeat status again, a node that is Ready does not make it
 // observed, and PrimaryResolved stays watched. What was not seen by then is
@@ -1132,7 +1273,15 @@ func (h *haRun) afterVMReturn(ctx context.Context, rec *s04Record, result *evide
 				h.watchUnobserved(ctx, rec, result, now)
 			}
 		}
-		if rec.NodeReadyAt != nil {
+		returned := rec.FencedAt == nil || rec.ReturnAnnotationRemovedAt != nil
+		if rec.NodeReadyAt != nil && !returned {
+			unmet, err := h.returnToService(ctx, rec, result, now)
+			if err != nil {
+				return err
+			}
+			last, returned = unmet, unmet == ""
+		}
+		if rec.NodeReadyAt != nil && returned {
 			done, unmet, err := h.converged(ctx, rec)
 			if err != nil {
 				return err
@@ -1176,7 +1325,8 @@ func (h *haRun) memberAnswers(ctx context.Context, pod string) bool {
 
 // converged reports whether the cluster is back in a checked state after the
 // VM's return, and what does not hold yet. The member Pod on the VM must be
-// the same Pod; a master other than the promoted one is recorded, not an
+// the same Pod, unless the run fenced its node: Kubernetes then replaced it,
+// and the new UID is recorded; a master other than the promoted one is recorded, not an
 // error: CUBRID HA decides it, and the contract does not.
 func (h *haRun) converged(ctx context.Context, rec *s04Record) (bool, string, error) {
 	cluster := &databasev1alpha1.CubridCluster{}
@@ -1196,7 +1346,11 @@ func (h *haRun) converged(ctx context.Context, rec *s04Record) (bool, string, er
 	rec.MembersAfter = members
 	for _, m := range members {
 		if m.Pod == rec.MasterPod.Pod && m.UID != rec.MasterPod.UID {
-			return false, "", fmt.Errorf("the Pod %s was replaced: UID %s, was %s", m.Pod, m.UID, rec.MasterPod.UID)
+			if rec.FencedAt == nil {
+				return false, "", fmt.Errorf("the Pod %s was replaced: UID %s, was %s", m.Pod, m.UID,
+					rec.MasterPod.UID)
+			}
+			rec.MasterPodUIDAfter = m.UID
 		}
 	}
 	roles, unmet, err := h.roles(ctx)
@@ -1215,4 +1369,280 @@ func (h *haRun) converged(ctx context.Context, rec *s04Record) (bool, string, er
 	}
 	rec.FinalMaster = roles.Master
 	return true, "", nil
+}
+
+// fenceTaint returns node's out-of-service NoExecute taint, the one added at
+// added when added is set, or nil.
+func fenceTaint(node *corev1.Node, added *time.Time) *corev1.Taint {
+	for i, t := range node.Spec.Taints {
+		if t.Key != corev1.TaintNodeOutOfService || t.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if added == nil || t.TimeAdded != nil && t.TimeAdded.Time.Equal(*added) {
+			return &node.Spec.Taints[i]
+		}
+	}
+	return nil
+}
+
+// notFenced says why S04 cannot be judged when the run did not fence the
+// node.
+func notFenced(rec *s04Record) string {
+	why := rec.FenceError
+	if why == "" {
+		why = "it was not attempted"
+	}
+	return fmt.Sprintf("S04 cannot be judged against failover_limit, which runs from the out-of-service taint: "+
+		"the taint was not added to node %s (%s)", rec.Node, why)
+}
+
+// fence adds the taint node.kubernetes.io/out-of-service:NoExecute to the
+// powered-off master's node: the contract's fencing step (ADR-0005, section
+// 8). It tells Kubernetes and the Operator that the member there cannot run,
+// which a node that is only unreachable does not prove. So it rests on the
+// VM status command's reading "stopped" that confirmed the fault, recorded
+// with its time, and on the node read not Ready right before; a node read
+// Ready is not fenced. The taint carries a timeAdded, without which the
+// Operator does not count it. A taint of the same key and effect already
+// there is recorded as the fence and never removed by the run. A patch that
+// failed may still have been stored, so the next attempt counts a taint
+// with the timeAdded it sent as the run's.
+func (h *haRun) fence(ctx context.Context, rec *s04Record, confirmedAt time.Time) error {
+	if confirmedAt.IsZero() {
+		return errors.New("the VM status command's reading that confirmed the VM off is not known")
+	}
+	node := &corev1.Node{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err != nil {
+		return fmt.Errorf("read node %s: %w", rec.Node, err)
+	}
+	readAt := time.Now().UTC()
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+			return fmt.Errorf("node %s is Ready", rec.Node)
+		}
+	}
+	proof := &s04FenceProof{VMStatus: vmStopped, VMStatusReadAt: confirmedAt, NodeNotReadyReadAt: readAt}
+	if rec.fencePending != nil && fenceTaint(node, rec.fencePending) != nil {
+		// The send time of that attempt is not kept; its timeAdded is at
+		// most a second earlier, which only shortens the failover allowed.
+		added := *rec.fencePending
+		rec.FencedAt, rec.FenceTaintTimeAdded, rec.FenceTaintAddedByRun, rec.FenceProof = &added, &added, true, proof
+		return nil
+	}
+	if t := fenceTaint(node, nil); t != nil {
+		at := readAt
+		if t.TimeAdded != nil {
+			at = t.TimeAdded.UTC()
+			rec.FenceTaintTimeAdded = &at
+		}
+		rec.FencedAt, rec.FenceTaintAddedByRun, rec.FenceProof = &at, false, proof
+		return nil
+	}
+	sent := time.Now().UTC()
+	added := sent.Truncate(time.Second)
+	rec.fencePending = &added
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{Key: corev1.TaintNodeOutOfService,
+		Value: fenceTaintValue, Effect: corev1.TaintEffectNoExecute, TimeAdded: &metav1.Time{Time: added}})
+	if err := h.Client.Patch(ctx, node, patch); err != nil {
+		return fmt.Errorf("add the taint %s:NoExecute to node %s: %w", corev1.TaintNodeOutOfService, rec.Node, err)
+	}
+	rec.FencedAt, rec.FenceTaintTimeAdded, rec.FenceTaintAddedByRun, rec.FenceProof = &sent, &added, true, proof
+	return nil
+}
+
+// removeFenceTaint removes from node the out-of-service taint the run added
+// at added, and only that one; a node without it is done.
+func (h *haRun) removeFenceTaint(ctx context.Context, name string, added time.Time) error {
+	node := &corev1.Node{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: name}, node); err != nil {
+		return fmt.Errorf("read node %s: %w", name, err)
+	}
+	if fenceTaint(node, &added) == nil {
+		return nil
+	}
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	node.Spec.Taints = slices.DeleteFunc(node.Spec.Taints, func(t corev1.Taint) bool {
+		return t.Key == corev1.TaintNodeOutOfService && t.Effect == corev1.TaintEffectNoExecute &&
+			t.TimeAdded != nil && t.TimeAdded.Time.Equal(added)
+	})
+	if err := h.Client.Patch(ctx, node, patch); err != nil {
+		return fmt.Errorf("remove the taint %s:NoExecute from node %s: %w", corev1.TaintNodeOutOfService, name, err)
+	}
+	return nil
+}
+
+// returnAnnotation sets the return-to-service annotation of the HA cluster
+// to member, or removes it when it names member.
+func (h *haRun) returnAnnotation(ctx context.Context, member string, set bool) error {
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		return fmt.Errorf("read the HA cluster: %w", err)
+	}
+	value, ok := cluster.Annotations[returnToServiceAnnotation]
+	if set == (ok && value == member) || !set && ok && value != member {
+		return nil
+	}
+	patch := client.MergeFrom(cluster.DeepCopy())
+	if set {
+		if cluster.Annotations == nil {
+			cluster.Annotations = map[string]string{}
+		}
+		cluster.Annotations[returnToServiceAnnotation] = member
+	} else {
+		delete(cluster.Annotations, returnToServiceAnnotation)
+	}
+	return h.Client.Patch(ctx, cluster, patch)
+}
+
+// returnToService takes the fenced member back into service once its VM is
+// on again and its node Ready, following ADR-0005, section 8, "Return to
+// service": removing the taint lets the member's database start again, and a
+// write it acknowledged before the Operator closed the read-write path again
+// could not be undone. So the run sets the annotation
+// database.cubrid.io/return-to-service to the member, waits until the
+// Operator reports its barrier enforced, and only then removes the taint it
+// added; a taint someone else added is waited for, never removed. It then
+// waits until the Operator released the return, and removes the annotation.
+// Each call does the steps it can and returns what it still waits for, ""
+// once all are done; vm_return_limit bounds the whole. A barrier that
+// becomes a quarantine for a changed master, divergent data being a
+// person's decision, is returned as an error. The taint seen gone before
+// the barrier was enforced is a never-event.
+func (h *haRun) returnToService(ctx context.Context, rec *s04Record, result *evidence.Scenario,
+	now time.Time) (string, error) {
+	member := rec.Master
+	if rec.ReturnRequestedAt == nil {
+		if err := h.returnAnnotation(ctx, member, true); err != nil {
+			return fmt.Sprintf("the annotation %s=%s was not set: %v", returnToServiceAnnotation, member, err), nil
+		}
+		rec.ReturnRequestedAt, rec.ReturnAnnotationSetByRun = &now, true
+	}
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		return "the cluster" + unread + err.Error(), nil
+	}
+	q := cluster.Status.WriteQuarantine
+	if q != nil && q.ReturningMember == member && q.Reason == databasev1alpha1.WriteQuarantinedMasterChanged {
+		return "", fmt.Errorf("the Operator's return-to-service barrier for %s became a %s quarantine: another "+
+			"active master was seen", member, q.Reason)
+	}
+	if rec.BarrierEnforcedAt == nil {
+		if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberReturning || q.ReturningMember != member ||
+			q.EnforcedTime == nil {
+			h.taintKept(ctx, rec, result, now)
+			return fmt.Sprintf("the Operator's return-to-service barrier for %s is not enforced", member), nil
+		}
+		enforced := q.EnforcedTime.UTC()
+		rec.BarrierEnforcedAt, rec.OperatorEnforcedTime = &now, &enforced
+	}
+	if rec.TaintRemovedAt == nil {
+		if rec.FenceTaintAddedByRun {
+			if err := h.removeFenceTaint(ctx, rec.Node, *rec.FenceTaintTimeAdded); err != nil {
+				return err.Error(), nil
+			}
+		} else {
+			node := &corev1.Node{}
+			if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err != nil {
+				return "node " + rec.Node + unread + err.Error(), nil
+			}
+			if fenceTaint(node, nil) != nil {
+				return fmt.Sprintf("node %s still carries the out-of-service taint the run did not add; whoever "+
+					"added it removes it", rec.Node), nil
+			}
+		}
+		rec.TaintRemovedAt = &now
+	}
+	if rec.ReturnReleasedAt == nil {
+		if cluster.Status.ReturnedToService != member {
+			return fmt.Sprintf("the Operator has not released the return of %s to service", member), nil
+		}
+		rec.ReturnReleasedAt = &now
+		result.Measurements["returnWithin"] = now.Sub(*rec.ReturnRequestedAt).Round(time.Millisecond).String()
+	}
+	if err := h.returnAnnotation(ctx, member, false); err != nil {
+		return fmt.Sprintf("the annotation %s was not removed: %v", returnToServiceAnnotation, err), nil
+	}
+	rec.ReturnAnnotationRemovedAt = &now
+	return "", nil
+}
+
+// taintKept records the never-event of the out-of-service taint gone from
+// the node before the return-to-service barrier was enforced: the member's
+// database may then start and take writes the barrier cannot undo. A node
+// that cannot be read is read again on the next call.
+func (h *haRun) taintKept(ctx context.Context, rec *s04Record, result *evidence.Scenario, now time.Time) {
+	if rec.TaintGoneBeforeEnforcedAt != nil {
+		return
+	}
+	node := &corev1.Node{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: rec.Node}, node); err != nil || fenceTaint(node, nil) != nil {
+		return
+	}
+	rec.TaintGoneBeforeEnforcedAt = &now
+	result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the out-of-service taint was removed from node %s "+
+		"before the Operator's return-to-service barrier was enforced", rec.Node))
+}
+
+// endFence removes, whatever S04 came to and also when the run's context
+// has ended, the out-of-service taint the run added and the
+// return-to-service annotation it set, when the return to service did not
+// remove them: a node left out of service keeps every Pod off it. A taint
+// the run did not add is never removed. This is not the return procedure,
+// and the record says which of them the end removed. A failure to remove
+// either fails a passing S04 and is added to the reason of any other result.
+func (h *haRun) endFence(ctx context.Context, rec *s04Record, result *evidence.Scenario) {
+	added := rec.fencePending
+	if rec.FencedAt != nil {
+		added = nil
+		if rec.FenceTaintAddedByRun && rec.TaintRemovedAt == nil {
+			added = rec.FenceTaintTimeAdded
+		}
+	}
+	setByRun := rec.ReturnAnnotationSetByRun && rec.ReturnAnnotationRemovedAt == nil
+	if added == nil && !setByRun {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	var reasons []string
+	if added != nil {
+		var last error
+		err := pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
+			last = h.removeFenceTaint(ctx, rec.Node, *added)
+			return last == nil, nil
+		})
+		if err == nil {
+			now := time.Now().UTC()
+			if rec.FencedAt != nil {
+				rec.TaintRemovedAt, rec.TaintRemovedByCleanup = &now, true
+			}
+		} else {
+			reasons = append(reasons, fmt.Sprintf("remove the out-of-service taint the run added to node %s: %v",
+				rec.Node, errors.Join(err, last)))
+		}
+	}
+	if setByRun {
+		var last error
+		err := pollUntil(ctx, h.cfg.Poll, func() (bool, error) {
+			last = h.returnAnnotation(ctx, rec.Master, false)
+			return last == nil, nil
+		})
+		if err == nil {
+			now := time.Now().UTC()
+			rec.ReturnAnnotationRemovedAt, rec.AnnotationRemovedByCleanup = &now, true
+		} else {
+			reasons = append(reasons, fmt.Sprintf("remove the annotation %s the run set: %v",
+				returnToServiceAnnotation, errors.Join(err, last)))
+		}
+	}
+	if len(reasons) == 0 {
+		return
+	}
+	reason := strings.Join(reasons, "; ")
+	if result.Result == evidence.Pass {
+		result.Result, result.Reason = evidence.Fail, reason
+	} else {
+		result.Reason += "; " + reason
+	}
 }
