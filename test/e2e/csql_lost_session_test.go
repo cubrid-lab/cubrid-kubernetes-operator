@@ -94,20 +94,10 @@ type lostSessionRecord struct {
 }
 
 const (
-	// serverLogTailLines and serverLogLineWidth bound the log lines kept with a
-	// record: at most 40 lines of 400 characters each.
-	serverLogTailLines = 40
-	serverLogLineWidth = 400
-	// serverLogTailScript prints the last serverLogTailLines lines of the
-	// newest server error log of database $0, in the member's container.
-	serverLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
-		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
-		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
-	// serverAgeScript prints the member's time and uptime from one moment, then
-	// the identity script, then the clock rate, from which the server's age
-	// follows. The time comes first so that nothing slow runs before it.
-	serverAgeScript = `echo "now $(date +%s.%N 2>/dev/null)"; echo "uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; ` +
-		sqlcheck.HAServerIdentityScript + `; echo "clk_tck $(getconf CLK_TCK 2>/dev/null)"`
+	serverLogTailLines  = sqlcheck.ServerLogTailLines
+	serverLogLineWidth  = sqlcheck.ServerLogLineWidth
+	serverLogTailScript = sqlcheck.ServerLogTailScript
+	serverAgeScript     = sqlcheck.ServerAgeScript
 	// pairCaptureWait bounds the wait for reads still running when the suite
 	// ends. It stays well inside the grace period of the suite (1 minute), so
 	// that the verdict of concludeRun is not lost.
@@ -129,31 +119,9 @@ type pairServerState struct {
 	err               string
 }
 
-// cut returns s cut at width characters.
-func cut(s string, width int) string {
-	if r := []rune(s); len(r) > width {
-		return string(r[:width])
-	}
-	return s
-}
+func cut(s string, width int) string { return sqlcheck.Cut(s, width) }
 
-// boundLines splits out into trimmed non-empty lines, keeps the last limit of
-// them, and cuts each at width characters.
-func boundLines(out string, limit, width int) []string {
-	var lines []string
-	for line := range strings.SplitSeq(out, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
-	}
-	for i, line := range lines {
-		lines[i] = cut(line, width)
-	}
-	return lines
-}
+func boundLines(out string, limit, width int) []string { return sqlcheck.BoundLines(out, limit, width) }
 
 // readServerState reads cub_server's identity and the server log's tail on a
 // member, each bounded in time and size. A failed read is recorded, not
