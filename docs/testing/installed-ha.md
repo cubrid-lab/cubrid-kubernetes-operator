@@ -600,28 +600,49 @@ What the commands print is kept only through the run's redactor.
    are `True`. Which member ends as master is recorded (`finalMaster`), not
    judged; a switchover back to the old master interrupts the clients,
    which step 9 then measures.
-9. The clients go on for `-stable-period`, then stop. Answers that failed
-   while the master's VM was off are expected; writes through `-rw` are
-   refused until the taint. Every client must be acknowledged again without
-   interruption, for at least the stable period, and the last of them must
-   have recovered within `-failover-limit` (`failover_limit`, default 30
-   seconds) of the moment the run sent the taint, on the client's clock, as
-   the contract's S04 measures it. The time from the stop to the taint is
-   reported as `fencedAfter`, without a limit; `confirmedOffAfter` records
-   how long the stop took to be confirmed.
+9. The clients are judged as the contract's S04 "Three intervals" define
+   it, on the client's clock. The Operator refuses writes through `-rw`
+   from the fault until the taint, and again from the return-to-service
+   barrier until it releases the return, so answers that failed in those
+   two stretches are expected:
+   - **failover:** each client's first acknowledged write after the moment
+     the run sent the taint must come within `-failover-limit`
+     (`failover_limit`, default 30 seconds) of it. The slowest client is
+     reported as `failoverWithin`.
+   - **return:** answers that fail from the return-to-service request until
+     the client's first acknowledged write after the release are the
+     barrier's. Their outage, from the first such failure to that write, is
+     reported as `returnWriteOutage` (the longest of the clients), without a
+     limit.
+   - **stable period:** after that first write following the release, each
+     client must be acknowledged without interruption for at least
+     `-stable-period`.
+
+   Any other failed or unknown answer, between a client's first write
+   after the taint and the return-to-service request, or after its first
+   write following the release, is an interruption and fails S04. The
+   clients keep running after the convergence until each has been stable
+   for the stable period after the return, one is interrupted, or
+   `failover_limit` plus the stable period has passed since the later of the
+   release and the convergence; then they stop. The time from the stop to
+   the taint is reported as `fencedAfter`, without a limit;
+   `confirmedOffAfter` records how long the stop took to be confirmed.
 10. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
 Measurements, from the stop command's issue unless named otherwise:
 `confirmedOffAfter`, `fencedAfter` (until the run sent the taint),
 `promotedWithin` (until the promotion was seen), `failoverWithin` (from the
-taint until the last client recovered), `returnWithin` (from setting the
-return-to-service annotation until the Operator released the return),
+taint until the slowest client's first acknowledged write), `returnWithin`
+(from setting the return-to-service annotation until the Operator released
+the return), `returnWriteOutage` (the longest write outage of a client
+behind the return-to-service barrier),
 `vmReturnWithin` and
 `convergedWithin` (from the return of the cleanup's first start command until
 the node was `Ready`, and until the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
 of it not `True` after its last `True` until the cluster converged),
-`finalMaster`, `shortestStableFor` and `operationsNotAcknowledged`.
+`finalMaster`, `shortestStableFor` (from each client's first write
+acknowledged after the release) and `operationsNotAcknowledged`.
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
 the fault flow.
 

@@ -549,21 +549,7 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	result.Limits = map[string]string{failoverLimitName: h.cfg.FailoverLimit.String(),
 		vmReturnLimitName: h.cfg.VMReturnLimit.String(), "stable_period": h.cfg.StablePeriod.String()}
-	result.Measurements = map[string]any{}
-	for _, name := range []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
-		"vmReturnWithin", "returnWithin", "convergedWithin", "primaryResolvedNotTrueFor", "finalMaster",
-		"shortestStableFor", "operationsNotAcknowledged"} {
-		result.Measurements[name] = evidence.Unknown
-	}
-	if rec.StopIssuedAt != nil && rec.PoweredOffAt != nil {
-		result.Measurements["confirmedOffAfter"] = rec.PoweredOffAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
-	}
-	if rec.StopIssuedAt != nil && rec.FencedAt != nil {
-		result.Measurements["fencedAfter"] = rec.FencedAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
-	}
-	if rec.StopIssuedAt != nil && rec.PromotedAt != nil {
-		result.Measurements["promotedWithin"] = rec.PromotedAt.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
-	}
+	result.Measurements = s04FaultMeasurements(&rec)
 	if !outcome.CleanupSucceeded {
 		// A VM left off is the lab's to recover; nothing after it can be
 		// judged.
@@ -604,27 +590,56 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 	return h.finishS04(ctx, &rec, &result, end)
 }
 
-// finishS04 lets the clients go on for the stable period after the cluster
-// converged, stops and reads them, applies the data rules and judges S04.
+// s04FaultMeasurements returns S04's measurements, each unknown until
+// measured, with those of the fault flow measured from the stop command's
+// issue: until it was confirmed, until the taint and until the promotion.
+func s04FaultMeasurements(rec *s04Record) map[string]any {
+	m := map[string]any{}
+	for _, name := range []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
+		"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "primaryResolvedNotTrueFor",
+		"finalMaster", "shortestStableFor", "operationsNotAcknowledged"} {
+		m[name] = evidence.Unknown
+	}
+	if rec.StopIssuedAt == nil {
+		return m
+	}
+	for name, at := range map[string]*time.Time{"confirmedOffAfter": rec.PoweredOffAt, "fencedAfter": rec.FencedAt,
+		"promotedWithin": rec.PromotedAt} {
+		if at != nil {
+			m[name] = at.Sub(*rec.StopIssuedAt).Round(time.Millisecond).String()
+		}
+	}
+	return m
+}
+
+// finishS04 lets the clients go on until each was acknowledged without
+// interruption for the stable period after the return to service, or until
+// failover_limit plus the stable period after the later of the release and
+// the convergence; then it stops and reads them, applies the data rules and
+// judges S04 as the scenario contract's "Three intervals" define it.
 func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.Scenario,
 	end func(evidence.Result, string, ...any) evidence.Scenario) evidence.Scenario {
-	// The clients go on for the stable period after convergence, then stop.
-	select {
-	case <-ctx.Done():
-		return end(evidence.Blocked, "the run ended during the stable period: %v", ctx.Err())
-	case <-time.After(h.cfg.StablePeriod + 2*time.Second):
-	}
 	// The Operator keeps the read-write path closed while the old master
-	// cannot answer, until the out-of-service taint fences it (ADR-0005,
-	// section 8). So recovery is measured, as the contract's S04 does, from
-	// the moment the run sent the taint, on the client's clock; the time
-	// from the stop to the taint is reported as fencedAfter, without a
-	// limit. Answers that failed are counted from the stop.
+	// cannot answer, until the out-of-service taint fences it, and again
+	// from the return-to-service barrier until it releases the return
+	// (ADR-0005, section 8). So failover_limit runs from the moment the run
+	// sent the taint to each client's first acknowledged write after it, on
+	// the client's clock; the time from the stop to the taint is reported as
+	// fencedAfter, and the barrier's write outage as returnWriteOutage, both
+	// without a limit. Answers that failed are counted from the stop.
 	if rec.FencedAt == nil {
 		return end(evidence.Blocked, "%s", notFenced(rec))
 	}
+	if rec.ReturnRequestedAt == nil || rec.ReturnReleasedAt == nil {
+		return end(evidence.Blocked, "the return to service of %s is not recorded", rec.Master)
+	}
 	offset := time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second))
-	clientFaultAt, clientFenceAt := rec.StopIssuedAt.Add(offset), rec.FencedAt.Add(offset)
+	w := s04Windows{fence: rec.FencedAt.Add(offset), returnAt: rec.ReturnRequestedAt.Add(offset),
+		release: rec.ReturnReleasedAt.Add(offset)}
+	clientFaultAt := rec.StopIssuedAt.Add(offset)
+	if err := h.awaitS04Stable(ctx, rec, w); err != nil {
+		return end(evidence.Blocked, "the run ended while the clients went on after the return: %v", err)
+	}
 	if err := h.stopBackgroundClients(ctx, s04Clients); err != nil {
 		return end(evidence.Fail, "stop the clients: %v", err)
 	}
@@ -634,12 +649,33 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 		return end(evidence.Fail, "collect the clients: %v", err)
 	}
 	rec.ClientsRead = true
-	clients.recover(s04Clients, clientFenceAt)
 	result.Operations = &clients.operations
 	rec.NotAcknowledged = &clients.notAcknowledged
 	result.Measurements["operationsNotAcknowledged"] = clients.notAcknowledged
-	if clients.stableMeasured {
-		result.Measurements["shortestStableFor"] = clients.shortestStable.Round(time.Millisecond).String()
+	var slowest, outage, shortest time.Duration
+	var notAcked, interrupted, notBack []string
+	for i, id := range s04Clients {
+		j := judgeS04Client(clients.events[id], w)
+		switch {
+		case !j.acknowledged:
+			notAcked = append(notAcked, id)
+			continue
+		case !j.interruptedAt.IsZero():
+			interrupted = append(interrupted, fmt.Sprintf("%s at %s", id, j.interruptedAt.Format(time.RFC3339Nano)))
+		case !j.back:
+			notBack = append(notBack, id)
+		}
+		slowest, outage = max(slowest, j.failover), max(outage, j.returnOutage)
+		if i == 0 || j.stable < shortest {
+			shortest = j.stable
+		}
+	}
+	if len(notAcked) == 0 {
+		result.Measurements["failoverWithin"] = slowest.Round(time.Millisecond).String()
+		result.Measurements["returnWriteOutage"] = outage.Round(time.Millisecond).String()
+		if len(notBack) == 0 {
+			result.Measurements["shortestStableFor"] = shortest.Round(time.Millisecond).String()
+		}
 	}
 	if err := h.checkData(ctx, time.Now(), s04DataCheckFile); err != nil {
 		return end(evidence.Fail, "%v", err)
@@ -647,26 +683,143 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	if len(result.NeverEvents) > 0 {
 		return end(evidence.Fail, "%s", strings.Join(result.NeverEvents, "; "))
 	}
-	// Answers that failed while the master's VM was off and before the taint
-	// are expected; every client must be acknowledged again, without
-	// interruption, for the stable period.
-	if len(clients.notRecovered) > 0 || !clients.stableMeasured || clients.shortestStable < h.cfg.StablePeriod {
-		return end(evidence.Fail, "the clients %v were not acknowledged again, or not for stable_period %s "+
-			"(shortest %s)", clients.notRecovered, h.cfg.StablePeriod, clients.shortestStable.Round(time.Millisecond))
-	}
-	result.Measurements["failoverWithin"] = clients.slowestRecovery.Round(time.Millisecond).String()
-	if clients.slowestRecovery > h.cfg.FailoverLimit {
-		return end(evidence.Fail, "a client's writes were acknowledged again without interruption %s after the "+
-			"out-of-service taint was added to node %s, over failover_limit %s",
-			clients.slowestRecovery.Round(time.Millisecond), rec.Node, h.cfg.FailoverLimit)
+	switch {
+	case len(notAcked) > 0:
+		return end(evidence.Fail, "the clients %v had no write acknowledged through the read-write Service after "+
+			"the out-of-service taint was added to node %s", notAcked, rec.Node)
+	case slowest > h.cfg.FailoverLimit:
+		return end(evidence.Fail, "a client's first write was acknowledged %s after the out-of-service taint was "+
+			"added to node %s, over failover_limit %s", slowest.Round(time.Millisecond), rec.Node, h.cfg.FailoverLimit)
+	case len(interrupted) > 0:
+		return end(evidence.Fail, "the clients' writes were interrupted after they were acknowledged again, "+
+			"outside the return-to-service barrier: %s", strings.Join(interrupted, ", "))
+	case len(notBack) > 0:
+		return end(evidence.Fail, "the clients %v had no write acknowledged after the Operator released the "+
+			"return of %s to service", notBack, rec.Master)
+	case shortest < h.cfg.StablePeriod:
+		return end(evidence.Fail, "a client was acknowledged without interruption for %s after the return to "+
+			"service, under stable_period %s", shortest.Round(time.Millisecond), h.cfg.StablePeriod)
 	}
 	result.Result = evidence.Pass
 	result.Reason = fmt.Sprintf("CUBRID promoted %s while the VM was off, the Operator kept PrimaryResolved not "+
 		"True and deleted no Pod before the out-of-service taint, the VM's node returned, the member returned to "+
-		"service behind the Operator's barrier, the cluster converged on master %s, the clients were "+
-		"acknowledged again within failover_limit of the taint and the data rules held", rec.NewMaster,
-		rec.FinalMaster)
+		"service behind the Operator's barrier, the cluster converged on master %s, the clients' first writes "+
+		"were acknowledged within failover_limit of the taint, they were acknowledged without interruption for "+
+		"stable_period after the return and the data rules held", rec.NewMaster, rec.FinalMaster)
 	return *result
+}
+
+// s04Windows are, on the client's clock, the moments S04 judges the
+// clients' answers by: the out-of-service taint, the return-to-service
+// request and the Operator's release of the return.
+type s04Windows struct {
+	fence, returnAt, release time.Time
+}
+
+// s04ClientJudgement is what one client's answers after the taint show.
+type s04ClientJudgement struct {
+	// acknowledged is set once a write was acknowledged after the taint;
+	// failover is the time from the taint to the first one.
+	acknowledged bool
+	failover     time.Duration
+	// back is set once a write was acknowledged after the release;
+	// returnOutage is the time from the first failed answer after the
+	// return-to-service request to that write, and stable how long the
+	// client was then acknowledged without interruption.
+	back         bool
+	returnOutage time.Duration
+	stable       time.Duration
+	// interruptedAt is the first failed or unknown answer outside the
+	// expected windows: after the first acknowledged write following the
+	// taint and before the return-to-service request, or after the first
+	// acknowledged write following the release.
+	interruptedAt time.Time
+}
+
+// judgeS04Client reads one client's answers after the taint (scenario
+// contract, S04 "Three intervals"). Failed answers are expected until the
+// first acknowledged write after the taint, and again from the
+// return-to-service request until the first acknowledged write after the
+// release: the Operator's barrier closes the read-write path then. Any
+// other failed or unknown answer is an interruption. An acknowledged
+// rollback committed nothing and is neither.
+func judgeS04Client(events []workload.Event, w s04Windows) s04ClientJudgement {
+	var j s04ClientJudgement
+	var outageFrom, backAt, lastAck time.Time
+	for _, e := range events {
+		if !e.T.After(w.fence) {
+			continue
+		}
+		failed := e.Event == workload.Failed || e.Event == workload.Unknown
+		wrote := e.Event == workload.Acknowledged && e.Op == workload.OpInsert
+		inReturn := !e.T.Before(w.returnAt) && !j.back
+		switch {
+		case wrote && !j.acknowledged:
+			j.acknowledged, j.failover = true, e.T.Sub(w.fence)
+		case failed && inReturn:
+			if outageFrom.IsZero() {
+				outageFrom = e.T
+			}
+		case failed && j.acknowledged && j.interruptedAt.IsZero():
+			j.interruptedAt = e.T
+		}
+		if !wrote {
+			continue
+		}
+		if !j.back && e.T.After(w.release) {
+			j.back, backAt = true, e.T
+			if !outageFrom.IsZero() {
+				j.returnOutage = e.T.Sub(outageFrom)
+			}
+		}
+		if j.back && j.interruptedAt.IsZero() {
+			lastAck = e.T
+		}
+	}
+	if j.back {
+		j.stable = lastAck.Sub(backAt)
+	}
+	return j
+}
+
+// awaitS04Stable keeps the clients running until each was acknowledged
+// without interruption for the stable period after the return, one was
+// interrupted, or failover_limit plus the stable period has passed since
+// the later of the release and the convergence. A history that cannot be
+// read ends the wait; the clients' histories are read again once stopped.
+func (h *haRun) awaitS04Stable(ctx context.Context, rec *s04Record, w s04Windows) error {
+	from := *rec.ReturnReleasedAt
+	if rec.ConvergedAt != nil && rec.ConvergedAt.After(from) {
+		from = *rec.ConvergedAt
+	}
+	deadline := from.Add(h.cfg.FailoverLimit + h.cfg.StablePeriod)
+	for time.Now().Before(deadline) {
+		settled := true
+		for _, id := range s04Clients {
+			text, err := h.clientRun(ctx, fmt.Sprintf("cat /tmp/%s.jsonl", id))
+			if err != nil {
+				return nil
+			}
+			events, err := workload.ReadEvents(strings.NewReader(text[:strings.LastIndex(text, "\n")+1]))
+			if err != nil {
+				return nil
+			}
+			j := judgeS04Client(events, w)
+			if !j.interruptedAt.IsZero() {
+				return nil
+			}
+			settled = settled && j.back && j.stable >= h.cfg.StablePeriod
+		}
+		if settled {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+	return nil
 }
 
 // endClients stops the clients that S04 started when it did not, and keeps

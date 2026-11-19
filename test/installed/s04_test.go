@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,7 +157,12 @@ type s04Lab struct {
 	// good. keepReturned has the Operator report status.returnedToService
 	// naming the master's member without the annotation.
 	replaceAfterUntaint, taintAtStopUntimed, dropBarrierAtUntaint, keepReturned bool
-	taintAtStopAge                                                              time.Duration
+	// returnSetAt is when the annotation was set, releasedAt when the
+	// Operator released the return; releaseDelay holds the release that
+	// long after the annotation.
+	returnSetAt, releasedAt time.Time
+	releaseDelay            time.Duration
+	taintAtStopAge          time.Duration
 }
 
 // afterFenceUID is the UID of the Pod the StatefulSet recreates after
@@ -228,6 +234,7 @@ func (l *s04Lab) patched(ctx context.Context, c client.WithWatch, obj client.Obj
 		switch {
 		case had == "" && has != "":
 			l.log = append(l.log, "annotation-set "+has)
+			l.returnSetAt = time.Now()
 		case had != "" && has == "":
 			l.log = append(l.log, "annotation-removed")
 		}
@@ -302,7 +309,7 @@ func (l *s04Lab) unfence(ctx context.Context, c client.WithWatch) {
 		f.t.Error(err)
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: primaryResolvedCondition,
-		Status: metav1.ConditionTrue, Reason: "Test", ObservedGeneration: cluster.Generation})
+		Status: metav1.ConditionTrue, Reason: testConditionReason, ObservedGeneration: cluster.Generation})
 	if err := c.Update(ctx, cluster); err != nil {
 		f.t.Error(err)
 	}
@@ -338,7 +345,7 @@ func (l *s04Lab) operate(ctx context.Context, c client.WithWatch, key client.Obj
 	case q == nil:
 		st.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: "returning",
 			Reason: databasev1alpha1.WriteQuarantinedMemberReturning, StartTime: now, ObservedMaster: testMemberHA0,
-			Revision: 1, ReleaseToken: "token", ReturningMember: value}
+			Revision: 1, ReleaseToken: "return-token", ReturningMember: value}
 		l.barrierReads = 0
 	case q.EnforcedTime == nil:
 		if l.barrierReads++; l.neverEnforce || l.barrierReads < l.enforceAfter {
@@ -346,14 +353,15 @@ func (l *s04Lab) operate(ctx context.Context, c client.WithWatch, key client.Obj
 		}
 		q.EnforcedTime = &now
 		l.log = append(l.log, "enforced")
-	case !hasFenceTaint(node) && !l.pending:
+	case hasFenceTaint(node) || l.pending || time.Since(l.returnSetAt) < l.releaseDelay:
+		return nil
+	default:
 		st.LastWriteQuarantineRelease = &databasev1alpha1.WriteQuarantineRelease{GenerationID: q.GenerationID,
 			Reason: q.Reason, StartTime: q.StartTime, ReleaseTime: now,
 			Method: databasev1alpha1.WriteQuarantineReleasedReturnedToService, ObservedMaster: q.ObservedMaster}
 		st.WriteQuarantine, st.ReturnedToService = nil, value
 		l.log = append(l.log, "released")
-	default:
-		return nil
+		l.releasedAt = time.Now()
 	}
 	return c.Update(ctx, cluster)
 }
@@ -540,7 +548,7 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 		resolved = metav1.ConditionFalse
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: primaryResolvedCondition,
-		Status: resolved, Reason: "Test", ObservedGeneration: cluster.Generation})
+		Status: resolved, Reason: testConditionReason, ObservedGeneration: cluster.Generation})
 	if on {
 		cluster.Status.CurrentPrimary = testMemberHA0
 	}
@@ -1854,4 +1862,131 @@ func TestRunS04RefusesAReturnAlreadyReleasedForTheMember(t *testing.T) {
 		t.Fatalf("S04 = %+v, want blocked: the Operator already released a return of %s", s04, testHAPrimary)
 	}
 	assertNoPower(t, lab)
+}
+
+// liveS04Clients has the clients write every 100 milliseconds from a second
+// before the taint until each read of their history, as clients that keep
+// running do; failed says, from the taint, the return-to-service request and
+// the release, which writes fail.
+func liveS04Clients(f *haFixture, lab *s04Lab, failed func(at, fence, ret, rel time.Time) bool) {
+	next, seq, lines := map[string]time.Time{}, map[string]int{}, map[string][]string{}
+	var mu sync.Mutex
+	f.liveHistory = func(id string) string {
+		f.mu.Lock()
+		fence, ret, rel := lab.fencedAt, lab.returnSetAt, lab.releasedAt
+		f.mu.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
+		at, ok := next[id]
+		if !ok {
+			at = fence.Add(-time.Second)
+		}
+		for ; at.Before(time.Now()); at = at.Add(100 * time.Millisecond) {
+			seq[id]++
+			n := seq[id]
+			opID, note, amount := fmt.Sprintf("%s-%06d", id, n), fmt.Sprintf("%s-%d", id, n), n*37%1000+1
+			answer := workload.Event{T: at.UTC(), Client: id, Seq: n, Op: workload.OpInsert, OpID: opID,
+				Endpoint: "rw", Event: workload.Acknowledged}
+			if failed(at, fence, ret, rel) {
+				answer.Event, answer.Error = workload.Failed, testIMRefused
+			}
+			for _, e := range []workload.Event{{T: at.UTC(), Client: id, Seq: n, Op: workload.OpInsert, OpID: opID,
+				Endpoint: "rw", Event: workload.Attempted, Amount: amount, Note: note}, answer} {
+				data, _ := json.Marshal(e)
+				lines[id] = append(lines[id], string(data))
+			}
+			if answer.Event == workload.Acknowledged {
+				f.mu.Lock()
+				f.rows = append(f.rows, workload.Row{OpID: opID, Client: id, Seq: n, Amount: amount, Note: note})
+				f.mu.Unlock()
+			}
+		}
+		next[id] = at
+		return strings.Join(lines[id], "\n") + "\n"
+	}
+}
+
+// returnBarrierOutage fails the writes from the return-to-service request
+// until back after the release: the Operator's barrier closes the
+// read-write path, and the Brokers take a while to come back.
+func returnBarrierOutage(at, ret, rel time.Time, back time.Duration) bool {
+	return !ret.IsZero() && !at.Before(ret.Add(100*time.Millisecond)) && (rel.IsZero() || at.Before(rel.Add(back)))
+}
+
+// The VM lab's run: writes fail from the stop until shortly after the taint,
+// are acknowledged again, fail again while the return-to-service barrier
+// closes the read-write path, and come back seconds after the release, so
+// after the convergence. failover_limit is judged from the taint to the
+// first acknowledged write, the barrier's outage is reported without a
+// limit, and stable_period counts from the writes acknowledged again after
+// the release: the clients go on until it has passed.
+func TestRunS04JudgesTheFailoverAndTheStablePeriodAroundTheReturn(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.StablePeriod = 2 * time.Second
+	cfg.VMDownFor = 1500 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.releaseDelay = time.Second
+	liveS04Clients(f, lab, func(at, fence, ret, rel time.Time) bool {
+		return at.Before(fence.Add(300*time.Millisecond)) || returnBarrierOutage(at, ret, rel, 3*time.Second)
+	})
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass", s04)
+	}
+	failover, err := time.ParseDuration(fmt.Sprint(s04.Measurements["failoverWithin"]))
+	if err != nil || failover > time.Second {
+		t.Fatalf("failoverWithin = %v, want the time to the first write after the taint", s04.Measurements)
+	}
+	outage, err := time.ParseDuration(fmt.Sprint(s04.Measurements["returnWriteOutage"]))
+	if err != nil || outage < 3*time.Second {
+		t.Fatalf("returnWriteOutage = %v, want the barrier's outage reported", s04.Measurements)
+	}
+	stable, err := time.ParseDuration(fmt.Sprint(s04.Measurements["shortestStableFor"]))
+	if err != nil || stable < cfg.StablePeriod {
+		t.Fatalf("shortestStableFor = %v, want stable_period after the return", s04.Measurements)
+	}
+}
+
+// A first write after the taint later than failover_limit fails S04, even
+// when the clients are stable afterwards.
+func TestRunS04FailsWhenTheFirstWriteAfterTheTaintIsLate(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 500 * time.Millisecond
+	cfg.VMDownFor = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	liveS04Clients(f, lab, func(at, fence, ret, rel time.Time) bool {
+		return at.Before(fence.Add(time.Second)) || returnBarrierOutage(at, ret, rel, 200*time.Millisecond)
+	})
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "over failover_limit") {
+		t.Fatalf("S04 = %+v, want a failure on failover_limit", s04)
+	}
+}
+
+// Writes that fail again after the clients were acknowledged following the
+// release are an interruption the barrier does not explain: S04 fails.
+func TestRunS04FailsOnAnInterruptionAfterTheReturn(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.StablePeriod = 2 * time.Second
+	cfg.VMDownFor = 1500 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.releaseDelay = time.Second
+	liveS04Clients(f, lab, func(at, fence, ret, rel time.Time) bool {
+		again := !rel.IsZero() && !at.Before(rel.Add(time.Second)) && at.Before(rel.Add(1200*time.Millisecond))
+		return at.Before(fence.Add(300*time.Millisecond)) || returnBarrierOutage(at, ret, rel, 200*time.Millisecond) ||
+			again
+	})
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "interrupted") {
+		t.Fatalf("S04 = %+v, want a failure on the interruption after the return", s04)
+	}
 }
