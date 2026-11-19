@@ -157,11 +157,15 @@ not match, so trial-1 has no id lists (its empty files were removed) and its con
 - The negative oracle can be built on this state: pause every slave's appliers with `SIGSTOP`
   (matching `cub_admin applylogdb ` only, as `appliers.sh` does), write to the master, and wait
   until the cluster status shows every slave as an authoritative slave of the resolved master with
-  a fresh reading, failure count 0, a copy end, no `notReceivingSince` and a `stalledSince` at
-  least 60 s old. Only then create the `StandbyOnly` backup and require, at every read until the
-  resume, no target and exactly the reason `NoHealthyStandby`. A refusal while that state is not
-  shown (for example `PrimaryNotResolved`, or a missing observation) must fail the step, not pass
-  it.
+  a fresh reading, failure count 0, no `notReceivingSince` and a `stalledSince` at least 60 s
+  old. Only then create the `StandbyOnly` backup and require, at every read until the resume, no
+  target and exactly the reason `NoHealthyStandby`. A refusal while that state is not shown (for
+  example `PrimaryNotResolved`, or a missing observation) must fail the step, not pass it.
+- The selection also needs the copy's end from the Operator's last observation, and the cluster
+  status keeps a copy's end only while pages wait to be copied (a first Kind run of the step
+  waited for it in the status and timed out with both slaves stalled). So a run of the same step
+  with the exclusion of stalled standbys switched off, in which the backup goes to a slave, is what
+  shows that nothing else excluded them.
 - The positive control: after `SIGCONT` the same backup must be given to a slave, and every slave
   must hold the master's rows.
 - The copy's end did not grow for about 23 s once in trial-1; the Operator's not-receiving rule
