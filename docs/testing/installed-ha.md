@@ -483,8 +483,10 @@ What the commands print is kept only through the run's redactor.
    VM not reported `stopped`. The node must not carry the taint
    `node.kubernetes.io/out-of-service:NoExecute`, and the cluster must not
    carry the annotation `database.cubrid.io/return-to-service`: the run adds
-   both itself, and one already there would be someone else's. Otherwise
-   S04 is blocked.
+   both itself, and one already there would be someone else's. The
+   cluster's `status.returnedToService` must not already name the member:
+   the Operator would ignore the run's annotation naming it. Otherwise S04
+   is blocked.
 5. The run powers the VM off. The fault is confirmed when the status command
    prints `stopped` and the node is not `Ready`.
 
@@ -500,9 +502,15 @@ What the commands print is kept only through the run's redactor.
    its `timeAdded`; the timeline has a step `out_of_service_taint_added`.
    A patch that fails is tried again on the next poll and its error kept
    in `fenceError`. A taint of the same key and effect that someone else
-   added after the stop is recorded as the fence
-   (`fenceTaintAddedByRun: false`), and the run never removes it. A run
-   that could not add the taint is blocked: `failover_limit` runs from it.
+   added is the fence only when it has a `timeAdded` no earlier than the
+   second the stop command was issued; then it is recorded as the fence
+   (`fenceTaintAddedByRun: false`), and the run never removes it. Its
+   `timeAdded` comes from another clock, so `fencedAt` is when the run first
+   read it, from which `failover_limit` runs, and its `timeAdded` is kept
+   apart as `fenceTaintTimeAdded`. Such a taint without a `timeAdded`, or
+   with one before the stop, is not this outage's fence: S04 is blocked,
+   with the reason in `fenceError`. A run that could not add the taint is
+   blocked: `failover_limit` runs from it.
    Kubernetes then force-deletes the member's Pod and the StatefulSet
    recreates it with a new UID; with a node-local volume it stays `Pending`
    until the taint is removed.
@@ -516,7 +524,8 @@ What the commands print is kept only through the run's redactor.
    - the powered-off member's Pod: a deletion timestamp, another UID, or no
      Pod at all is a never-event when it is seen before the taint, or when
      the deletion timestamp or the new Pod's creation is older than the
-     taint (to the second). After the taint it is Kubernetes' doing:
+     taint (to the second; the earlier of `fencedAt` and the taint's
+     `timeAdded`). After the taint it is Kubernetes' doing:
      `podReplacedAfterFenceAt` records when it was first seen.
      `PrimaryResolved` is judged the same before and after the taint: the
      taint releases the read-write path but does not resolve the primary.
@@ -569,8 +578,9 @@ What the commands print is kept only through the run's redactor.
       the Operator's own time as `operatorEnforcedTime`). Until then the
       taint stays; seen gone before it, it is a never-event;
    3. only then it removes the taint it added, matched by its `timeAdded`
-      (`taintRemovedAt`). A taint it did not add is waited for, never
-      removed;
+      (`taintRemovedAt`). Each attempt reads the cluster again right before
+      the removal: a barrier no longer reported enforced keeps the taint
+      on. A taint it did not add is waited for, never removed;
    4. it waits until `status.returnedToService` names the member: the
       Operator verified it and released the quarantine
       (`returnReleasedAt`; `returnWithin` from the annotation);
@@ -581,7 +591,10 @@ What the commands print is kept only through the run's redactor.
    `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the start,
    the node must be `Ready`, the return must be done and the cluster must
    converge: the member on the VM is the same Pod, or the one recreated
-   after the taint (its UID kept as `masterPodUIDAfter`), CUBRID reports
+   after the taint (its UID kept as `masterPodUIDAfter`): a replacement was
+   seen after the taint (`podReplacedAfterFenceAt`), and the Pod was created
+   at or after the taint and not after the second the run removed it.
+   Any other new UID fails S04; CUBRID reports
    one master and two slaves,
    `status.currentPrimary` names that master, and the starting conditions
    are `True`. Which member ends as master is recorded (`finalMaster`), not

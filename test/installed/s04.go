@@ -219,6 +219,9 @@ type s04Record struct {
 	// returned an error: the patch may still have been applied, so a taint
 	// with that timeAdded is the run's.
 	fencePending *time.Time
+	// foreignFence is set when someone else's out-of-service taint on the
+	// node cannot be this outage's fence (errForeignFence).
+	foreignFence bool
 	// PoweredOnAt is when the cleanup's first VM start command returned,
 	// whatever its result, or when the cleanup ended if it started nothing;
 	// NodeReadyAt when the node was Ready again; MemberAnsweredAt when the
@@ -339,11 +342,14 @@ type vmPowerOff struct {
 	node      string
 	started   *time.Time
 	confirmed *time.Time
+	// issued is when Inject issued the stop command.
+	issued *time.Time
 }
 
 func (f vmPowerOff) Name() string { return "power off the VM of node " + f.node }
 
 func (f vmPowerOff) Inject(ctx context.Context) error {
+	*f.issued = time.Now().UTC()
 	if _, err := f.h.vmCommand(ctx, f.h.cfg.VMStopCommand, f.node); err != nil {
 		return fmt.Errorf("the VM stop command failed: %w", err)
 	}
@@ -499,12 +505,16 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 			return end(evidence.Blocked, "start the clients: %v", err)
 		}
 	}
-	started, confirmed := new(time.Time), new(time.Time)
+	started, confirmed, issued := new(time.Time), new(time.Time), new(time.Time)
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault:  vmPowerOff{h: h, node: rec.Node, started: started, confirmed: confirmed},
+		Fault:  vmPowerOff{h: h, node: rec.Node, started: started, confirmed: confirmed, issued: issued},
 		Limits: h.s04FlowLimits(),
 		Before: func(ctx context.Context) error { return h.beforeS04(ctx, rec) },
 		Check: func(ctx context.Context) (bool, error) {
+			if rec.StopIssuedAt == nil {
+				at := *issued
+				rec.StopIssuedAt = &at
+			}
 			done, err := h.whileVMOff(ctx, &rec, &result, *confirmed)
 			if ctx.Err() != nil {
 				return false, nil
@@ -558,6 +568,11 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		// A VM left off is the lab's to recover; nothing after it can be
 		// judged.
 		return end(evidence.Blocked, "the VM was not powered on again: %s", lastStep(outcome.Timeline))
+	}
+	if rec.foreignFence {
+		// Kubernetes acts on that taint too: what followed it is not the
+		// product's to answer for.
+		return end(evidence.Blocked, "S04 cannot be judged: %s", rec.FenceError)
 	}
 	if outcome.Result != evidence.Pass {
 		if len(result.NeverEvents) > 0 {
@@ -1023,6 +1038,10 @@ func (h *haRun) beforeS04(ctx context.Context, rec s04Record) error {
 	if value, ok := cluster.Annotations[returnToServiceAnnotation]; ok {
 		return fmt.Errorf("the cluster already carries the annotation %s=%q", returnToServiceAnnotation, value)
 	}
+	if cluster.Status.ReturnedToService == rec.Master {
+		return fmt.Errorf("the Operator's status.returnedToService already names %s: it would ignore the run's "+
+			"annotation %s=%s", rec.Master, returnToServiceAnnotation, rec.Master)
+	}
 	if ready, err := h.nodeReady(ctx, rec.Node); err != nil || !ready {
 		return errors.Join(fmt.Errorf("node %s is not Ready", rec.Node), err)
 	}
@@ -1076,6 +1095,10 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 	if rec.FencedAt == nil {
 		if err := h.fence(ctx, rec, confirmedAt); err != nil {
 			rec.FenceError = err.Error()
+			if errors.Is(err, errForeignFence) {
+				rec.foreignFence = true
+				return false, err
+			}
 		}
 	}
 	due := h.powerOnDue(ctx, rec, now)
@@ -1198,8 +1221,7 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 		return
 	}
 	if rec.FencedAt != nil {
-		// The API keeps whole seconds.
-		fence := rec.FencedAt.Truncate(time.Second)
+		fence := fenceFloor(rec)
 		fromTaint := err != nil || (pod.DeletionTimestamp == nil || !pod.DeletionTimestamp.Time.Before(fence)) &&
 			(!uidChanged || !pod.CreationTimestamp.Time.Before(fence))
 		if fromTaint {
@@ -1351,7 +1373,11 @@ func (h *haRun) converged(ctx context.Context, rec *s04Record) (bool, string, er
 	rec.MembersAfter = members
 	for _, m := range members {
 		if m.Pod == rec.MasterPod.Pod && m.UID != rec.MasterPod.UID {
-			if rec.FencedAt == nil {
+			replaced, err := h.replacedByFence(ctx, rec, m.Pod, m.UID)
+			if err != nil {
+				return false, "the Pod " + m.Pod + unread + err.Error(), nil
+			}
+			if !replaced {
 				return false, "", fmt.Errorf("the Pod %s was replaced: UID %s, was %s", m.Pod, m.UID,
 					rec.MasterPod.UID)
 			}
@@ -1376,6 +1402,28 @@ func (h *haRun) converged(ctx context.Context, rec *s04Record) (bool, string, er
 	return true, "", nil
 }
 
+// replacedByFence reports whether the member Pod pod, now with UID uid, is
+// the replacement the fence explains: one was seen after the taint, and this
+// Pod was created at or after the taint and, once the taint was removed, not
+// after that, to the second the API keeps.
+func (h *haRun) replacedByFence(ctx context.Context, rec *s04Record, name, uid string) (bool, error) {
+	if rec.FencedAt == nil || rec.PodReplacedAfterFenceAt == nil {
+		return false, nil
+	}
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, pod); err != nil {
+		return false, err
+	}
+	if string(pod.UID) != uid {
+		return false, fmt.Errorf("its UID changed from %s to %s while it was read", uid, pod.UID)
+	}
+	created := pod.CreationTimestamp.Time
+	if created.Before(fenceFloor(rec)) {
+		return false, nil
+	}
+	return rec.TaintRemovedAt == nil || created.Before(rec.TaintRemovedAt.Truncate(time.Second).Add(time.Second)), nil
+}
+
 // fenceTaint returns node's out-of-service NoExecute taint, the one added at
 // added when added is set, or nil.
 func fenceTaint(node *corev1.Node, added *time.Time) *corev1.Taint {
@@ -1388,6 +1436,21 @@ func fenceTaint(node *corev1.Node, added *time.Time) *corev1.Taint {
 		}
 	}
 	return nil
+}
+
+// errForeignFence marks an out-of-service taint someone else added that
+// cannot be this outage's fence; S04 is blocked on it.
+var errForeignFence = errors.New("the out-of-service taint on the node is not this outage's fence")
+
+// fenceFloor is the earliest moment the fence can explain a replaced Pod,
+// to the second the API keeps: the run's send time, or the timeAdded of a
+// taint when that is earlier.
+func fenceFloor(rec *s04Record) time.Time {
+	floor := *rec.FencedAt
+	if rec.FenceTaintTimeAdded != nil && rec.FenceTaintTimeAdded.Before(floor) {
+		floor = *rec.FenceTaintTimeAdded
+	}
+	return floor.Truncate(time.Second)
 }
 
 // notFenced says why S04 cannot be judged when the run did not fence the
@@ -1435,12 +1498,23 @@ func (h *haRun) fence(ctx context.Context, rec *s04Record, confirmedAt time.Time
 		return nil
 	}
 	if t := fenceTaint(node, nil); t != nil {
-		at := readAt
-		if t.TimeAdded != nil {
-			at = t.TimeAdded.UTC()
-			rec.FenceTaintTimeAdded = &at
+		if t.TimeAdded == nil {
+			return fmt.Errorf("%w: node %s carries a taint %s:NoExecute someone else added without a timeAdded, "+
+				"which the Operator does not count", errForeignFence, rec.Node, corev1.TaintNodeOutOfService)
 		}
-		rec.FencedAt, rec.FenceTaintAddedByRun, rec.FenceProof = &at, false, proof
+		if rec.StopIssuedAt == nil {
+			return errors.New("the time the VM stop command was issued is not known")
+		}
+		added := t.TimeAdded.UTC()
+		if added.Before(rec.StopIssuedAt.Truncate(time.Second)) {
+			return fmt.Errorf("%w: node %s carries a taint %s:NoExecute someone else added with the timeAdded %s, "+
+				"before the VM stop command was issued at %s: it is not this outage's fence", errForeignFence,
+				rec.Node, corev1.TaintNodeOutOfService, added.Format(time.RFC3339), rec.StopIssuedAt.Format(time.RFC3339))
+		}
+		// timeAdded comes from another clock: failover_limit runs from the
+		// run's own first reading of the taint.
+		at := readAt
+		rec.FencedAt, rec.FenceTaintTimeAdded, rec.FenceTaintAddedByRun, rec.FenceProof = &at, &added, false, proof
 		return nil
 	}
 	sent := time.Now().UTC()
@@ -1532,17 +1606,24 @@ func (h *haRun) returnToService(ctx context.Context, rec *s04Record, result *evi
 		return "", fmt.Errorf("the Operator's return-to-service barrier for %s became a %s quarantine: another "+
 			"active master was seen", member, q.Reason)
 	}
+	enforced := q != nil && q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning &&
+		q.ReturningMember == member && q.EnforcedTime != nil
 	if rec.BarrierEnforcedAt == nil {
-		if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberReturning || q.ReturningMember != member ||
-			q.EnforcedTime == nil {
+		if !enforced {
 			h.taintKept(ctx, rec, result, now)
 			return fmt.Sprintf("the Operator's return-to-service barrier for %s is not enforced", member), nil
 		}
-		enforced := q.EnforcedTime.UTC()
-		rec.BarrierEnforcedAt, rec.OperatorEnforcedTime = &now, &enforced
+		at := q.EnforcedTime.UTC()
+		rec.BarrierEnforcedAt, rec.OperatorEnforcedTime = &now, &at
 	}
 	if rec.TaintRemovedAt == nil {
 		if rec.FenceTaintAddedByRun {
+			// Read again on this call, right before the removal: a barrier
+			// enforced earlier and no longer reported keeps the taint on.
+			if !enforced {
+				return fmt.Sprintf("the Operator's return-to-service barrier for %s is no longer reported "+
+					"enforced", member), nil
+			}
 			if err := h.removeFenceTaint(ctx, rec.Node, *rec.FenceTaintTimeAdded); err != nil {
 				return err.Error(), nil
 			}

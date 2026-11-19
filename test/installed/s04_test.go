@@ -148,6 +148,15 @@ type s04Lab struct {
 	// cancelAtFence, when set, is called once the taint is stored: the run
 	// ends right after the fence, before its return to service.
 	cancelAtFence context.CancelFunc
+	// replaceAfterUntaint has the StatefulSet recreate the member's Pod once
+	// more after the taint is gone. taintAtStopAge dates the taint someone
+	// else adds at the stop that long before it; taintAtStopUntimed leaves
+	// its timeAdded out. dropBarrierAtUntaint refuses the first patch that
+	// removes the taint and has the Operator drop the enforced barrier for
+	// good. keepReturned has the Operator report status.returnedToService
+	// naming the master's member without the annotation.
+	replaceAfterUntaint, taintAtStopUntimed, dropBarrierAtUntaint, keepReturned bool
+	taintAtStopAge                                                              time.Duration
 }
 
 // afterFenceUID is the UID of the Pod the StatefulSet recreates after
@@ -174,7 +183,26 @@ func (l *s04Lab) patched(ctx context.Context, c client.WithWatch, obj client.Obj
 		had, has := hasFenceTaint(before), hasFenceTaint(value)
 		l.f.mu.Lock()
 		refuse := !had && has && (l.refuseFence || time.Since(l.stoppedAt) < l.fenceDelay)
+		drop := had && !has && l.dropBarrierAtUntaint
+		if drop {
+			l.dropBarrierAtUntaint, l.neverEnforce = false, true
+			l.log = append(l.log, "untaint-refused barrier-dropped")
+		}
 		l.f.mu.Unlock()
+		if drop {
+			cluster := &databasev1alpha1.CubridCluster{}
+			key := client.ObjectKey{Namespace: l.f.cfg.Namespace, Name: haClusterName}
+			if err := c.Get(ctx, key, cluster); err != nil {
+				return err
+			}
+			if q := cluster.Status.WriteQuarantine; q != nil {
+				q.EnforcedTime = nil
+			}
+			if err := c.Update(ctx, cluster); err != nil {
+				return err
+			}
+			return errors.New("the API server is unavailable")
+		}
 		if refuse {
 			return errors.New("the API server is unavailable")
 		}
@@ -253,7 +281,7 @@ func (l *s04Lab) unfence(ctx context.Context, c client.WithWatch) {
 	q := cluster.Status.WriteQuarantine
 	f.mu.Lock()
 	l.log = append(l.log, fmt.Sprintf("taint-removed enforced=%t", q != nil && q.EnforcedTime != nil))
-	pending, saved := l.pending, l.savedStatus
+	pending, saved, again := l.pending, l.savedStatus, l.replaceAfterUntaint
 	l.pending = false
 	f.mu.Unlock()
 	if !pending {
@@ -265,6 +293,11 @@ func (l *s04Lab) unfence(ctx context.Context, c client.WithWatch) {
 		return
 	}
 	pod.Status = saved
+	if again {
+		// Created after the untaint: the API's whole seconds put it in a
+		// later second than the untaint.
+		pod.UID, pod.CreationTimestamp = "after-untaint", metav1.NewTime(time.Now().Add(2*time.Second))
+	}
 	if err := c.Update(ctx, pod); err != nil {
 		f.t.Error(err)
 	}
@@ -293,6 +326,11 @@ func (l *s04Lab) operate(ctx context.Context, c client.WithWatch, key client.Obj
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch {
+	case value == "" && l.keepReturned:
+		if st.ReturnedToService == testHAPrimary {
+			return nil
+		}
+		st.ReturnedToService = testHAPrimary
 	case value == "" && st.ReturnedToService != "":
 		st.ReturnedToService = ""
 	case value == "" || st.ReturnedToService == value:
@@ -433,8 +471,12 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 				return "", err
 			}
 			before := n.DeepCopy()
+			added := &metav1.Time{Time: time.Now().Add(-l.taintAtStopAge).Truncate(time.Second)}
+			if l.taintAtStopUntimed {
+				added = nil
+			}
 			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: corev1.TaintNodeOutOfService, Value: "someone",
-				Effect: corev1.TaintEffectNoExecute, TimeAdded: &metav1.Time{Time: time.Now().Truncate(time.Second)}})
+				Effect: corev1.TaintEffectNoExecute, TimeAdded: added})
 			if err := l.f.store.Update(ctx, n); err != nil {
 				return "", err
 			}
@@ -1706,4 +1748,110 @@ func TestRunS04RefusesANodeAlreadyOutOfService(t *testing.T) {
 	if !hasFenceTaint(masterNode(t, f)) {
 		t.Fatal("the run removed a taint it did not add")
 	}
+}
+
+// Kubernetes replaces the member's Pod after the taint, and only while the
+// taint is on the node; a Pod created again after the run removed the taint
+// is a replacement the fence does not explain, and S04 fails on it.
+func TestRunS04FailsWhenThePodIsReplacedAfterTheUntaint(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMReturnLimit = 4 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.replaceAfterUntaint = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "was replaced") {
+		t.Fatalf("S04 = %+v, want a failure: the Pod was replaced after the taint was removed", s04)
+	}
+}
+
+// A taint someone else put on the node is the fence only when it carries a
+// timeAdded no earlier than the stop: one without a timeAdded is not counted
+// by the Operator, and one dated before the stop is not this outage's. S04
+// is blocked on either.
+func TestRunS04IsBlockedOnAForeignTaintThatIsNotThisOutagesFence(t *testing.T) {
+	for name, set := range map[string]func(*s04Lab){
+		"without timeAdded":   func(l *s04Lab) { l.taintAtStopUntimed = true },
+		"added before a stop": func(l *s04Lab) { l.taintAtStopAge = time.Hour },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS04Config(t)
+			f, lab := newS04Fixture(t, cfg)
+			lab.taintAtStop = true
+			set(lab)
+			if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+				t.Fatal("RunHA() passed")
+			}
+			s04 := s04Scenario(t, cfg.EvidenceDir)
+			if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "timeAdded") {
+				t.Fatalf("S04 = %+v, want blocked on the taint's timeAdded", s04)
+			}
+			if rec := readS04Record(t, cfg.EvidenceDir); rec.FencedAt != nil {
+				t.Fatalf("record = fenced at %v, want no fence", rec.FencedAt)
+			}
+		})
+	}
+}
+
+// A taint someone else added after the stop is the fence, and failover_limit
+// runs from when the run first saw it, on its own clock; the taint's
+// timeAdded, from another clock, is recorded apart.
+func TestRunS04MeasuresAForeignTaintFromWhenItWasSeen(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMReturnLimit = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.taintAtStop = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.FencedAt == nil || rec.FenceTaintTimeAdded == nil || rec.FenceProof == nil ||
+		!rec.FencedAt.Equal(rec.FenceProof.NodeNotReadyReadAt) || rec.FencedAt.Equal(*rec.FenceTaintTimeAdded) {
+		t.Fatalf("record = fenced %v, timeAdded %v, proof %+v; want the fence at the run's own reading and the "+
+			"timeAdded apart", rec.FencedAt, rec.FenceTaintTimeAdded, rec.FenceProof)
+	}
+}
+
+// The run re-reads the barrier right before each attempt to remove the
+// taint: an Operator that enforced it and then no longer reports it
+// enforced keeps the taint on, at the return and at S04's end.
+func TestRunS04KeepsTheTaintWhenTheBarrierIsDroppedBeforeTheUntaint(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMReturnLimit = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.dropBarrierAtUntaint = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if !hasFenceTaint(masterNode(t, f)) {
+		t.Fatal("the taint was removed after the barrier was dropped")
+	}
+	rec := readS04Record(t, cfg.EvidenceDir)
+	if rec.BarrierEnforcedAt == nil || rec.TaintRemovedAt != nil || !strings.Contains(rec.FenceLeftInPlace, "barrier") {
+		t.Fatalf("record = enforced %v, taint removed %v, left in place %q; want the taint kept once the barrier "+
+			"was dropped", rec.BarrierEnforcedAt, rec.TaintRemovedAt, rec.FenceLeftInPlace)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.ContainsFunc(lab.log, func(s string) bool { return strings.HasPrefix(s, "taint-removed") }) {
+		t.Fatalf("the taint was removed: %v", lab.log)
+	}
+}
+
+// An Operator that already records the member's return as released would
+// ignore the run's annotation naming it, so S04 is blocked before the fault.
+func TestRunS04RefusesAReturnAlreadyReleasedForTheMember(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.keepReturned = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "returnedToService") {
+		t.Fatalf("S04 = %+v, want blocked: the Operator already released a return of %s", s04, testHAPrimary)
+	}
+	assertNoPower(t, lab)
 }
