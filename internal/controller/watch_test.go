@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +82,61 @@ func (p *countingProber) gapsSince(since time.Time) []time.Duration {
 		gaps = append(gaps, p.starts[i].Sub(p.starts[i-1]))
 	}
 	return gaps
+}
+
+// blockingProber answers like memberProber, with <cluster>-0 as the master,
+// but the first probe of each cluster's <cluster>-1 waits for block first, as
+// a probe of a powered-off node waits for its timeout (#1003). It records how
+// many of those waits overlapped and when the first began and the last ended.
+type blockingProber struct {
+	block time.Duration
+
+	mu         sync.Mutex
+	blocked    map[string]bool
+	running    int
+	maxRunning int
+	first      time.Time
+	last       time.Time
+}
+
+func (p *blockingProber) ProbeRole(ctx context.Context, podName, namespace string) RoleObservation {
+	cluster := podName[:strings.LastIndex(podName, "-")]
+	if strings.HasSuffix(podName, "-1") && p.startBlock(podName) {
+		select {
+		case <-time.After(p.block):
+		case <-ctx.Done():
+		}
+		p.mu.Lock()
+		p.running--
+		p.last = time.Now()
+		p.mu.Unlock()
+	}
+	return (&memberProber{master: cluster + "-0"}).ProbeRole(ctx, podName, namespace)
+}
+
+// startBlock reports whether podName has not waited yet, and counts its wait.
+func (p *blockingProber) startBlock(podName string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.blocked[podName] {
+		return false
+	}
+	if p.blocked == nil {
+		p.blocked = map[string]bool{}
+		p.first = time.Now()
+	}
+	p.blocked[podName] = true
+	p.running++
+	p.maxRunning = max(p.maxRunning, p.running)
+	return true
+}
+
+// waits returns how many waits ended, the most that overlapped, and the
+// time from the start of the first to the end of the last.
+func (p *blockingProber) waits() (ended, overlap int, span time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.blocked) - p.running, p.maxRunning, p.last.Sub(p.first)
 }
 
 // versionProber reports <cluster>-0 as the master, every member with the same
@@ -309,6 +365,53 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		Expect(second.Reason).To(Equal("ImageChangeNotAccepted"))
 		Expect(second.LastTransitionTime).To(Equal(first.LastTransitionTime),
 			"a value the condition held only in the middle of a reconcile is not a transition")
+	})
+
+	// Three HA clusters each wait on one slow member probe. With several
+	// workers the waits overlap, so one slow cluster does not hold back the
+	// others (#1003); with one worker they run one after another, which
+	// shows that the test tells the two apart.
+	slowProbes := func(namespace string, workers int) (overlap int, span time.Duration) {
+		const block = 2 * time.Second
+		prober := &blockingProber{block: block}
+		startManager(namespace, &CubridClusterReconciler{
+			Recorder: record.NewFakeRecorder(100), Prober: prober, MaxConcurrentReconciles: workers,
+		})
+		names := []string{"slow-a", "slow-b", "slow-c"}
+		for _, name := range names {
+			Expect(k8sClient.Create(ctx, inNamespace(haCluster(name), namespace))).To(Succeed())
+		}
+		Eventually(func() int {
+			ended, _, _ := prober.waits()
+			return ended
+		}).WithTimeout(time.Duration(len(names))*block + 20*time.Second).Should(Equal(len(names)))
+
+		By("every cluster reporting the slow member's answer")
+		for _, name := range names {
+			key := types.NamespacedName{Name: name, Namespace: namespace}
+			Eventually(func() databasev1alpha1.CubridRole {
+				for _, in := range getCluster(key).Status.Instances {
+					if in.Name == name+"-1" {
+						return in.Role
+					}
+				}
+				return ""
+			}).WithTimeout(20 * time.Second).Should(Equal(databasev1alpha1.RoleSlave))
+		}
+		_, overlap, span = prober.waits()
+		return overlap, span
+	}
+
+	It("reconciles different clusters at the same time with several workers", func() {
+		overlap, span := slowProbes("watch-parallel", 4)
+		Expect(overlap).To(Equal(3), "the three slow probes run at the same time")
+		Expect(span).To(BeNumerically("<", 4*time.Second), "about one wait, not three in a row")
+	})
+
+	It("reconciles one cluster after another with one worker", func() {
+		overlap, span := slowProbes("watch-serial", 1)
+		Expect(overlap).To(Equal(1), "one worker runs one reconcile at a time")
+		Expect(span).To(BeNumerically(">=", 6*time.Second), "three waits in a row")
 	})
 
 	It("passes spec, annotation and deletion changes of the cluster and drops status-only ones", func() {

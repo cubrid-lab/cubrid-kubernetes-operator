@@ -78,6 +78,7 @@ func main() {
 	var operatorNamespace, watchNamespace string
 	var backupTimeout, restoreTimeout time.Duration
 	var brokerMaxApplServers int
+	var clusterMaxConcurrentReconciles int
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -89,6 +90,10 @@ func main() {
 	flag.IntVar(&brokerMaxApplServers, "broker-max-appl-servers", controller.DefaultBrokerMaxApplServers,
 		"MAX_NUM_APPL_SERVER of every Broker: how many CAS it runs at most. Raise it when clients pool "+
 			"more connections; all Brokers at the maximum must fit the DB server's max_clients.")
+	flag.IntVar(&clusterMaxConcurrentReconciles, "cluster-max-concurrent-reconciles",
+		controller.DefaultClusterMaxConcurrentReconciles,
+		"How many CubridClusters are reconciled at the same time; one cluster is never reconciled twice at once. "+
+			"1 reconciles one cluster after another. The backup controller keeps one worker.")
 	flag.DurationVar(&backupTimeout, "instance-manager-backup-timeout", 0,
 		"How long the Instance Manager lets one backup run (backupdb and the upload) before it ends it, as a duration "+
 			"such as 6h. 0 keeps the manager's default of 2h. A Pod takes a changed value when it is replaced.")
@@ -142,6 +147,11 @@ func main() {
 
 	if err := controller.ValidateBrokerMaxApplServers(brokerMaxApplServers); err != nil {
 		setupLog.Error(err, "Invalid --broker-max-appl-servers")
+		os.Exit(1)
+	}
+
+	if err := controller.ValidateClusterMaxConcurrentReconciles(clusterMaxConcurrentReconciles); err != nil {
+		setupLog.Error(err, "Invalid --cluster-max-concurrent-reconciles")
 		os.Exit(1)
 	}
 
@@ -276,6 +286,8 @@ func main() {
 		Positions:    positions,
 		// Checked above: at least MIN_NUM_APPL_SERVER.
 		BrokerMaxApplServers: brokerMaxApplServers,
+		// Checked above: at least 1.
+		MaxConcurrentReconciles: clusterMaxConcurrentReconciles,
 		// Checked above: neither is negative.
 		BackupTimeout:  backupTimeout,
 		RestoreTimeout: restoreTimeout,
