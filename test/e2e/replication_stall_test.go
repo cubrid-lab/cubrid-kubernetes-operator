@@ -840,11 +840,18 @@ var sentSignal = regexp.MustCompile(`(?m)^sent SIG(?:STOP|CONT) to (\d+)$`)
 // primary is resolved to master, and every one of slaves is a freshly
 // observed slave that the backup target selection would take but for its
 // stall. Its replication reading is fresh, of master's log, with no failed
-// change, a copy end that was read and a copy that receives the log (no
-// notReceivingSince), and its stall has lasted at least the stall window. A
-// refusal in any other state, such as while the primary is not resolved or
-// an observation is missing, can have another cause than the exclusion of
-// stuck standbys, and proves nothing (#291).
+// change and a copy that receives the log (no notReceivingSince), and its
+// stall has lasted at least the stall window. A refusal in any other state,
+// such as while the primary is not resolved or an observation is missing,
+// can have another cause than the exclusion of stuck standbys, and proves
+// nothing (#291).
+//
+// Whether the copy's end was read in the Operator's last observation, which
+// the selection also needs, is not in the status: the status keeps a copy's
+// end only while pages wait to be copied, and a caught-up copy has none. The
+// run with the exclusion of stalled standbys switched off, in which a
+// backup created in this state went to a slave, is what shows that nothing
+// else excluded them (#1026).
 func stuckStandbysEligible(c *databasev1alpha1.CubridCluster, master string, slaves []string, now time.Time) error {
 	if err := conditionIs(c, "PrimaryResolved", metav1.ConditionTrue); err != nil {
 		return err
@@ -872,8 +879,6 @@ func stuckStandbysEligible(c *databasev1alpha1.CubridCluster, master string, sla
 			problems = append(problems, fmt.Errorf("%s applies the log of %q, not of %s", slave, rep.Source, master))
 		case rep.FailCount != 0:
 			problems = append(problems, fmt.Errorf("%s has failed %d changes", slave, rep.FailCount))
-		case rep.CopiedEOF == nil:
-			problems = append(problems, fmt.Errorf("%s has no copy end read", slave))
 		case rep.NotReceivingSince != nil:
 			problems = append(problems, fmt.Errorf("%s has not received the log since %s", slave,
 				rep.NotReceivingSince.UTC().Format(time.RFC3339)))
