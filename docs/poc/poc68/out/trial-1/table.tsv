@@ -1,0 +1,1288 @@
+2026-11-19T15:57:57.064Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:57:57.145Z	ha-0	changemode	active
+2026-11-19T15:57:57.217Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:57:57.289Z	ha-0	rows	count=10 max=20
+2026-11-19T15:57:57.363Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:57:57.442Z	ha-1	changemode	standby
+2026-11-19T15:57:57.510Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T15:57:57.586Z	ha-1	rows	count=0 max=NULL
+2026-11-19T15:57:57.654Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:57:57.734Z	ha-2	changemode	standby
+2026-11-19T15:57:57.802Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T15:57:57.873Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:57:57.938Z	ha-1	applyinfo	insert=0 fail=0 eof=146|15472 final=- hastate=dead delayed=0
+2026-11-19T15:57:58.010Z	ha-2	applyinfo	insert=0 fail=0 eof=146|15472 final=- hastate=dead delayed=0
+2026-11-19T15:58:08.081Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:58:08.160Z	ha-0	changemode	active
+2026-11-19T15:58:08.248Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T15:58:08.322Z	ha-0	rows	count=40 max=50
+2026-11-19T15:58:08.391Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:58:08.480Z	ha-1	changemode	standby
+2026-11-19T15:58:08.550Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T15:58:08.623Z	ha-1	rows	count=0 max=NULL
+2026-11-19T15:58:08.710Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:58:08.789Z	ha-2	changemode	standby
+2026-11-19T15:58:08.856Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T15:58:08.928Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:58:09.029Z	ha-1	applyinfo	insert=0 fail=0 eof=147|11976 final=- hastate=active delayed=1
+2026-11-19T15:58:09.097Z	ha-2	applyinfo	insert=0 fail=0 eof=147|11976 final=- hastate=active delayed=1
+2026-11-19T15:58:19.167Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:58:19.290Z	ha-0	changemode	active
+2026-11-19T15:58:19.381Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T15:58:19.456Z	ha-0	rows	count=70 max=80
+2026-11-19T15:58:19.539Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:58:19.625Z	ha-1	changemode	standby
+2026-11-19T15:58:19.709Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T15:58:19.779Z	ha-1	rows	count=0 max=NULL
+2026-11-19T15:58:19.864Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:58:19.951Z	ha-2	changemode	standby
+2026-11-19T15:58:20.024Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T15:58:20.099Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:58:20.165Z	ha-1	applyinfo	insert=0 fail=0 eof=148|6304 final=- hastate=active delayed=2
+2026-11-19T15:58:20.232Z	ha-2	applyinfo	insert=0 fail=0 eof=148|6304 final=- hastate=active delayed=2
+2026-11-19T15:58:30.304Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:58:30.392Z	ha-0	changemode	active
+2026-11-19T15:58:30.461Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T15:58:30.535Z	ha-0	rows	count=100 max=110
+2026-11-19T15:58:30.618Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:58:30.913Z	ha-1	changemode	standby
+2026-11-19T15:58:31.025Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T15:58:31.120Z	ha-1	rows	count=0 max=NULL
+2026-11-19T15:58:31.189Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:58:31.269Z	ha-2	changemode	standby
+2026-11-19T15:58:31.352Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T15:58:31.423Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:58:31.488Z	ha-1	applyinfo	insert=0 fail=0 eof=149|616 final=- hastate=dead delayed=3
+2026-11-19T15:58:31.555Z	ha-2	applyinfo	insert=0 fail=0 eof=149|616 final=- hastate=dead delayed=3
+2026-11-19T15:58:41.635Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:58:41.738Z	ha-0	changemode	active
+2026-11-19T15:58:41.966Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T15:58:42.052Z	ha-0	rows	count=140 max=150
+2026-11-19T15:58:42.116Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:58:42.199Z	ha-1	changemode	standby
+2026-11-19T15:58:42.270Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T15:58:42.341Z	ha-1	rows	count=0 max=NULL
+2026-11-19T15:58:42.423Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:58:42.503Z	ha-2	changemode	standby
+2026-11-19T15:58:42.571Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T15:58:42.643Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:58:42.708Z	ha-1	applyinfo	insert=0 fail=0 eof=149|13728 final=- hastate=active delayed=2
+2026-11-19T15:58:42.793Z	ha-2	applyinfo	insert=0 fail=0 eof=149|13728 final=- hastate=active delayed=3
+2026-11-19T15:58:53.126Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:58:53.213Z	ha-0	changemode	active
+2026-11-19T15:58:53.304Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T15:58:53.377Z	ha-0	rows	count=180 max=190
+2026-11-19T15:58:53.444Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:58:53.525Z	ha-1	changemode	standby
+2026-11-19T15:58:53.600Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T15:58:53.672Z	ha-1	rows	count=10 max=20
+2026-11-19T15:58:53.736Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:58:53.819Z	ha-2	changemode	standby
+2026-11-19T15:58:53.893Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T15:58:53.971Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:58:54.042Z	ha-1	applyinfo	insert=10 fail=0 eof=151|1272 final=- hastate=active delayed=4
+2026-11-19T15:58:54.113Z	ha-2	applyinfo	insert=0 fail=0 eof=151|1272 final=- hastate=active delayed=5
+2026-11-19T15:59:04.189Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:59:04.298Z	ha-0	changemode	active
+2026-11-19T15:59:04.385Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:59:04.459Z	ha-0	rows	count=210 max=220
+2026-11-19T15:59:04.550Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:59:04.637Z	ha-1	changemode	standby
+2026-11-19T15:59:04.705Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T15:59:04.777Z	ha-1	rows	count=20 max=30
+2026-11-19T15:59:04.847Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:59:04.926Z	ha-2	changemode	standby
+2026-11-19T15:59:04.998Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T15:59:05.082Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:59:05.160Z	ha-1	applyinfo	insert=20 fail=0 eof=151|13120 final=- hastate=active delayed=4
+2026-11-19T15:59:05.233Z	ha-2	applyinfo	insert=0 fail=0 eof=151|13120 final=- hastate=active delayed=4
+2026-11-19T15:59:15.301Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:59:15.391Z	ha-0	changemode	active
+2026-11-19T15:59:15.465Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:59:15.549Z	ha-0	rows	count=230 max=240
+2026-11-19T15:59:15.636Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:59:15.719Z	ha-1	changemode	standby
+2026-11-19T15:59:15.812Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T15:59:15.892Z	ha-1	rows	count=20 max=30
+2026-11-19T15:59:15.959Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:59:16.048Z	ha-2	changemode	standby
+2026-11-19T15:59:16.121Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T15:59:16.195Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:59:16.423Z	ha-1	applyinfo	insert=20 fail=0 eof=152|3888 final=- hastate=active delayed=5
+2026-11-19T15:59:16.492Z	ha-2	applyinfo	insert=0 fail=0 eof=152|3888 final=- hastate=active delayed=5
+2026-11-19T15:59:26.569Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:59:26.658Z	ha-0	changemode	active
+2026-11-19T15:59:26.749Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:59:26.823Z	ha-0	rows	count=260 max=270
+2026-11-19T15:59:26.919Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:59:27.000Z	ha-1	changemode	standby
+2026-11-19T15:59:27.067Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T15:59:27.139Z	ha-1	rows	count=20 max=30
+2026-11-19T15:59:27.492Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:59:27.585Z	ha-2	changemode	standby
+2026-11-19T15:59:27.662Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T15:59:27.736Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:59:27.803Z	ha-1	applyinfo	insert=20 fail=0 eof=152|14568 final=- hastate=active delayed=5
+2026-11-19T15:59:27.876Z	ha-2	applyinfo	insert=0 fail=0 eof=153|1784 final=- hastate=active delayed=6
+2026-11-19T15:59:37.949Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:59:38.036Z	ha-0	changemode	active
+2026-11-19T15:59:38.332Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:59:38.445Z	ha-0	rows	count=300 max=310
+2026-11-19T15:59:38.540Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:59:38.659Z	ha-1	changemode	standby
+2026-11-19T15:59:38.750Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T15:59:38.828Z	ha-1	rows	count=20 max=30
+2026-11-19T15:59:38.896Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:59:38.977Z	ha-2	changemode	standby
+2026-11-19T15:59:39.118Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T15:59:39.210Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:59:39.275Z	ha-1	applyinfo	insert=20 fail=0 eof=153|16024 final=- hastate=active delayed=6
+2026-11-19T15:59:39.344Z	ha-2	applyinfo	insert=0 fail=0 eof=153|16024 final=- hastate=active delayed=6
+2026-11-19T15:59:49.413Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T15:59:49.506Z	ha-0	changemode	active
+2026-11-19T15:59:49.600Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T15:59:49.682Z	ha-0	rows	count=340 max=350
+2026-11-19T15:59:49.766Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T15:59:49.846Z	ha-1	changemode	standby
+2026-11-19T15:59:49.937Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T15:59:50.020Z	ha-1	rows	count=20 max=30
+2026-11-19T15:59:50.114Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T15:59:50.202Z	ha-2	changemode	standby
+2026-11-19T15:59:50.271Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T15:59:50.347Z	ha-2	rows	count=0 max=NULL
+2026-11-19T15:59:50.414Z	ha-1	applyinfo	insert=20 fail=0 eof=154|10344 final=- hastate=active delayed=7
+2026-11-19T15:59:50.509Z	ha-2	applyinfo	insert=0 fail=0 eof=154|10344 final=- hastate=active delayed=7
+2026-11-19T16:00:00.581Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:00:00.786Z	ha-0	changemode	active
+2026-11-19T16:00:00.873Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:00:00.944Z	ha-0	rows	count=360 max=370
+2026-11-19T16:00:01.039Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:00:01.122Z	ha-1	changemode	standby
+2026-11-19T16:00:01.192Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:00:01.264Z	ha-1	rows	count=20 max=30
+2026-11-19T16:00:01.350Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:00:01.432Z	ha-2	changemode	standby
+2026-11-19T16:00:01.503Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:00:01.577Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:00:01.648Z	ha-1	applyinfo	insert=20 fail=0 eof=155|1176 final=- hastate=active delayed=8
+2026-11-19T16:00:01.717Z	ha-2	applyinfo	insert=0 fail=0 eof=155|1176 final=- hastate=active delayed=8
+2026-11-19T16:00:11.786Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:00:11.867Z	ha-0	changemode	active
+2026-11-19T16:00:11.952Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:00:12.029Z	ha-0	rows	count=400 max=410
+2026-11-19T16:00:12.127Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:00:12.211Z	ha-1	changemode	standby
+2026-11-19T16:00:12.305Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:00:12.380Z	ha-1	rows	count=20 max=30
+2026-11-19T16:00:12.467Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:00:12.548Z	ha-2	changemode	standby
+2026-11-19T16:00:12.619Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:00:12.701Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:00:12.766Z	ha-1	applyinfo	insert=20 fail=0 eof=155|16112 final=- hastate=active delayed=8
+2026-11-19T16:00:12.834Z	ha-2	applyinfo	insert=0 fail=0 eof=155|16112 final=- hastate=active delayed=8
+2026-11-19T16:00:22.902Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:00:23.022Z	ha-0	changemode	active
+2026-11-19T16:00:23.152Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:00:23.300Z	ha-0	rows	count=420 max=430
+2026-11-19T16:00:23.411Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:00:23.513Z	ha-1	changemode	standby
+2026-11-19T16:00:23.639Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:00:23.785Z	ha-1	rows	count=20 max=30
+2026-11-19T16:00:23.919Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:00:24.046Z	ha-2	changemode	standby
+2026-11-19T16:00:24.122Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:00:24.215Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:00:24.337Z	ha-1	applyinfo	insert=20 fail=0 eof=156|3320 final=- hastate=dead delayed=9
+2026-11-19T16:00:24.446Z	ha-2	applyinfo	insert=0 fail=0 eof=156|3320 final=- hastate=dead delayed=9
+2026-11-19T16:00:34.572Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:00:34.781Z	ha-0	changemode	active
+2026-11-19T16:00:34.919Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:00:35.090Z	ha-0	rows	count=460 max=470
+2026-11-19T16:00:35.192Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:00:35.281Z	ha-1	changemode	standby
+2026-11-19T16:00:35.356Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:00:35.434Z	ha-1	rows	count=20 max=30
+2026-11-19T16:00:35.509Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:00:35.604Z	ha-2	changemode	standby
+2026-11-19T16:00:35.696Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:00:35.777Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:00:35.977Z	ha-1	applyinfo	insert=20 fail=0 eof=158|12608 final=- hastate=active delayed=11
+2026-11-19T16:00:36.053Z	ha-2	applyinfo	insert=0 fail=0 eof=158|12608 final=- hastate=active delayed=11
+2026-11-19T16:00:46.121Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:00:46.229Z	ha-0	changemode	active
+2026-11-19T16:00:47.362Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:00:47.471Z	ha-0	rows	count=490 max=500
+2026-11-19T16:00:47.564Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:00:47.651Z	ha-1	changemode	standby
+2026-11-19T16:00:48.160Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:00:48.237Z	ha-1	rows	count=20 max=30
+2026-11-19T16:00:49.425Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:00:49.542Z	ha-2	changemode	standby
+2026-11-19T16:00:49.632Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:00:49.726Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:00:49.825Z	ha-1	applyinfo	insert=20 fail=0 eof=159|6920 final=- hastate=active delayed=12
+2026-11-19T16:00:49.911Z	ha-2	applyinfo	insert=0 fail=0 eof=159|6920 final=- hastate=active delayed=12
+2026-11-19T16:00:59.996Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:00.168Z	ha-0	changemode	active
+2026-11-19T16:01:00.417Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:00.495Z	ha-0	rows	count=500 max=510
+2026-11-19T16:01:00.568Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:00.661Z	ha-1	changemode	standby
+2026-11-19T16:01:00.763Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:01:01.162Z	ha-1	rows	count=20 max=30
+2026-11-19T16:01:01.247Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:01.358Z	ha-2	changemode	standby
+2026-11-19T16:01:01.488Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:01:01.611Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:01:01.746Z	ha-1	applyinfo	insert=20 fail=0 eof=159|6920 final=- hastate=dead delayed=12
+2026-11-19T16:01:01.859Z	ha-2	applyinfo	insert=0 fail=0 eof=159|6920 final=- hastate=dead delayed=12
+2026-11-19T16:01:11.970Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:12.065Z	ha-0	changemode	active
+2026-11-19T16:01:12.131Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:12.203Z	ha-0	rows	count=520 max=530
+2026-11-19T16:01:12.267Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:12.347Z	ha-1	changemode	standby
+2026-11-19T16:01:12.632Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:01:12.719Z	ha-1	rows	count=20 max=30
+2026-11-19T16:01:12.800Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:12.891Z	ha-2	changemode	standby
+2026-11-19T16:01:13.005Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:01:13.139Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:01:13.211Z	ha-1	applyinfo	insert=20 fail=0 eof=159|6920 final=- hastate=dead delayed=12
+2026-11-19T16:01:13.597Z	ha-2	applyinfo	insert=0 fail=0 eof=159|6920 final=- hastate=dead delayed=12
+2026-11-19T16:01:23.692Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:23.833Z	ha-0	changemode	active
+2026-11-19T16:01:24.017Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:24.221Z	ha-0	rows	count=550 max=560
+2026-11-19T16:01:24.345Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:24.439Z	ha-1	changemode	standby
+2026-11-19T16:01:24.540Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:01:24.618Z	ha-1	rows	count=20 max=30
+2026-11-19T16:01:24.683Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:24.772Z	ha-2	changemode	standby
+2026-11-19T16:01:24.845Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:01:24.943Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:01:25.024Z	ha-1	applyinfo	insert=20 fail=0 eof=160|8568 final=- hastate=active delayed=13
+2026-11-19T16:01:25.103Z	ha-2	applyinfo	insert=0 fail=0 eof=160|8568 final=- hastate=active delayed=13
+2026-11-19T16:01:35.181Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:35.276Z	ha-0	changemode	active
+2026-11-19T16:01:35.373Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:35.458Z	ha-0	rows	count=580 max=590
+2026-11-19T16:01:35.526Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:35.616Z	ha-1	changemode	standby
+2026-11-19T16:01:35.699Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:01:35.778Z	ha-1	rows	count=20 max=30
+2026-11-19T16:01:35.851Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:35.954Z	ha-2	changemode	standby
+2026-11-19T16:01:36.110Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:01:36.194Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:01:36.263Z	ha-1	applyinfo	insert=20 fail=0 eof=160|15784 final=- hastate=dead delayed=13
+2026-11-19T16:01:36.359Z	ha-2	applyinfo	insert=0 fail=0 eof=160|15784 final=- hastate=dead delayed=13
+2026-11-19T16:01:46.456Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:46.543Z	ha-0	changemode	active
+2026-11-19T16:01:46.638Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:46.726Z	ha-0	rows	count=600 max=610
+2026-11-19T16:01:46.819Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:46.900Z	ha-1	changemode	standby
+2026-11-19T16:01:46.968Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:T applylogdb:392:T
+2026-11-19T16:01:47.049Z	ha-1	rows	count=20 max=30
+2026-11-19T16:01:47.117Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:47.197Z	ha-2	changemode	standby
+2026-11-19T16:01:47.285Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:T applylogdb:390:T
+2026-11-19T16:01:47.358Z	ha-2	rows	count=0 max=NULL
+2026-11-19T16:01:47.426Z	ha-1	applyinfo	insert=20 fail=0 eof=160|15784 final=- hastate=dead delayed=13
+2026-11-19T16:01:47.494Z	ha-2	applyinfo	insert=0 fail=0 eof=160|15784 final=- hastate=dead delayed=13
+2026-11-19T16:01:57.564Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:01:57.652Z	ha-0	changemode	active
+2026-11-19T16:01:57.728Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:01:57.821Z	ha-0	rows	count=620 max=630
+2026-11-19T16:01:57.908Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:01:58.011Z	ha-1	changemode	standby
+2026-11-19T16:01:58.082Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:01:58.157Z	ha-1	rows	count=30 max=40
+2026-11-19T16:01:58.227Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:01:58.306Z	ha-2	changemode	standby
+2026-11-19T16:01:58.374Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:01:58.445Z	ha-2	rows	count=10 max=20
+2026-11-19T16:01:58.511Z	ha-1	applyinfo	insert=30 fail=0 eof=162|4560 final=- hastate=active delayed=15
+2026-11-19T16:01:58.581Z	ha-2	applyinfo	insert=10 fail=0 eof=162|4560 final=- hastate=active delayed=15
+2026-11-19T16:02:08.650Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:02:08.728Z	ha-0	changemode	active
+2026-11-19T16:02:08.812Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:02:08.885Z	ha-0	rows	count=640 max=650
+2026-11-19T16:02:08.966Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:02:09.653Z	ha-1	changemode	standby
+2026-11-19T16:02:09.740Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:02:09.811Z	ha-1	rows	count=40 max=50
+2026-11-19T16:02:09.890Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:02:09.973Z	ha-2	changemode	standby
+2026-11-19T16:02:10.064Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:02:10.134Z	ha-2	rows	count=20 max=30
+2026-11-19T16:02:10.214Z	ha-1	applyinfo	insert=40 fail=0 eof=162|4560 final=- hastate=active delayed=15
+2026-11-19T16:02:10.281Z	ha-2	applyinfo	insert=20 fail=0 eof=162|4560 final=- hastate=active delayed=15
+2026-11-19T16:02:20.350Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:02:20.429Z	ha-0	changemode	active
+2026-11-19T16:02:20.502Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:02:20.575Z	ha-0	rows	count=650 max=660
+2026-11-19T16:02:20.662Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:02:20.769Z	ha-1	changemode	standby
+2026-11-19T16:02:20.847Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:02:20.920Z	ha-1	rows	count=40 max=50
+2026-11-19T16:02:20.983Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:02:21.064Z	ha-2	changemode	standby
+2026-11-19T16:02:21.152Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:02:21.224Z	ha-2	rows	count=30 max=40
+2026-11-19T16:02:21.290Z	ha-1	applyinfo	insert=40 fail=0 eof=162|14216 final=- hastate=dead delayed=14
+2026-11-19T16:02:21.363Z	ha-2	applyinfo	insert=30 fail=0 eof=162|14216 final=- hastate=dead delayed=15
+2026-11-19T16:02:31.489Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:02:31.756Z	ha-0	changemode	active
+2026-11-19T16:02:32.025Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:02:32.227Z	ha-0	rows	count=660 max=670
+2026-11-19T16:02:32.414Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:02:32.564Z	ha-1	changemode	standby
+2026-11-19T16:02:32.677Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:02:32.791Z	ha-1	rows	count=50 max=60
+2026-11-19T16:02:32.992Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:02:33.100Z	ha-2	changemode	standby
+2026-11-19T16:02:33.283Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:02:33.481Z	ha-2	rows	count=40 max=50
+2026-11-19T16:02:33.593Z	ha-1	applyinfo	insert=50 fail=0 eof=162|14216 final=- hastate=dead delayed=14
+2026-11-19T16:02:33.685Z	ha-2	applyinfo	insert=40 fail=0 eof=162|14216 final=- hastate=dead delayed=15
+2026-11-19T16:02:43.800Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:02:44.445Z	ha-0	changemode	active
+2026-11-19T16:02:44.615Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:02:44.781Z	ha-0	rows	count=670 max=680
+2026-11-19T16:02:44.884Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:02:45.025Z	ha-1	changemode	standby
+2026-11-19T16:02:45.150Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:02:45.236Z	ha-1	rows	count=50 max=60
+2026-11-19T16:02:45.389Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:02:45.507Z	ha-2	changemode	standby
+2026-11-19T16:02:45.585Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:02:45.658Z	ha-2	rows	count=40 max=50
+2026-11-19T16:02:45.725Z	ha-1	applyinfo	insert=50 fail=0 eof=163|5040 final=- hastate=active delayed=15
+2026-11-19T16:02:45.797Z	ha-2	applyinfo	insert=40 fail=0 eof=163|5040 final=- hastate=active delayed=16
+2026-11-19T16:02:55.875Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:02:55.956Z	ha-0	changemode	active
+2026-11-19T16:02:56.048Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:02:56.120Z	ha-0	rows	count=670 max=680
+2026-11-19T16:02:56.206Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:02:56.284Z	ha-1	changemode	standby
+2026-11-19T16:02:56.349Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:02:56.421Z	ha-1	rows	count=60 max=70
+2026-11-19T16:02:56.491Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:02:56.575Z	ha-2	changemode	standby
+2026-11-19T16:02:57.300Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:02:57.370Z	ha-2	rows	count=40 max=50
+2026-11-19T16:02:57.435Z	ha-1	applyinfo	insert=60 fail=0 eof=163|5040 final=- hastate=active delayed=15
+2026-11-19T16:02:57.504Z	ha-2	applyinfo	insert=40 fail=0 eof=163|5040 final=- hastate=active delayed=15
+2026-11-19T16:03:07.584Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:03:07.667Z	ha-0	changemode	active
+2026-11-19T16:03:07.753Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:03:07.824Z	ha-0	rows	count=670 max=680
+2026-11-19T16:03:07.912Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:03:07.994Z	ha-1	changemode	standby
+2026-11-19T16:03:08.062Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:03:08.136Z	ha-1	rows	count=60 max=70
+2026-11-19T16:03:08.239Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:03:08.325Z	ha-2	changemode	standby
+2026-11-19T16:03:08.391Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:03:08.460Z	ha-2	rows	count=40 max=50
+2026-11-19T16:03:08.525Z	ha-1	applyinfo	insert=60 fail=0 eof=163|5040 final=- hastate=active delayed=15
+2026-11-19T16:03:08.595Z	ha-2	applyinfo	insert=40 fail=0 eof=163|5040 final=- hastate=active delayed=15
+2026-11-19T16:03:18.668Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:03:18.957Z	ha-0	changemode	active
+2026-11-19T16:03:19.044Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:03:19.135Z	ha-0	rows	count=670 max=680
+2026-11-19T16:03:19.218Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:03:19.297Z	ha-1	changemode	standby
+2026-11-19T16:03:19.384Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:03:19.455Z	ha-1	rows	count=70 max=80
+2026-11-19T16:03:19.521Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:03:19.600Z	ha-2	changemode	standby
+2026-11-19T16:03:19.670Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:03:19.741Z	ha-2	rows	count=50 max=60
+2026-11-19T16:03:19.805Z	ha-1	applyinfo	insert=70 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:19.872Z	ha-2	applyinfo	insert=50 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:29.941Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:03:30.033Z	ha-0	changemode	active
+2026-11-19T16:03:30.124Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:03:30.200Z	ha-0	rows	count=670 max=680
+2026-11-19T16:03:30.265Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:03:30.355Z	ha-1	changemode	standby
+2026-11-19T16:03:30.428Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:03:30.509Z	ha-1	rows	count=70 max=80
+2026-11-19T16:03:30.573Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:03:30.652Z	ha-2	changemode	standby
+2026-11-19T16:03:30.719Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:03:30.789Z	ha-2	rows	count=50 max=60
+2026-11-19T16:03:30.852Z	ha-1	applyinfo	insert=70 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:30.918Z	ha-2	applyinfo	insert=50 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:40.989Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:03:41.069Z	ha-0	changemode	active
+2026-11-19T16:03:41.168Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:03:41.238Z	ha-0	rows	count=670 max=680
+2026-11-19T16:03:41.318Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:03:41.398Z	ha-1	changemode	standby
+2026-11-19T16:03:41.488Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:03:41.560Z	ha-1	rows	count=70 max=80
+2026-11-19T16:03:41.627Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:03:41.710Z	ha-2	changemode	standby
+2026-11-19T16:03:41.954Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:03:42.028Z	ha-2	rows	count=50 max=60
+2026-11-19T16:03:42.118Z	ha-1	applyinfo	insert=70 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:42.187Z	ha-2	applyinfo	insert=50 fail=0 eof=163|13424 final=- hastate=dead delayed=15
+2026-11-19T16:03:52.255Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:03:52.813Z	ha-0	changemode	active
+2026-11-19T16:03:52.909Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:03:52.981Z	ha-0	rows	count=670 max=680
+2026-11-19T16:03:53.075Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:03:53.163Z	ha-1	changemode	standby
+2026-11-19T16:03:53.232Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:03:53.304Z	ha-1	rows	count=80 max=90
+2026-11-19T16:03:53.380Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:03:53.477Z	ha-2	changemode	standby
+2026-11-19T16:03:53.553Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:03:53.636Z	ha-2	rows	count=60 max=70
+2026-11-19T16:03:53.716Z	ha-1	applyinfo	insert=80 fail=0 eof=164|480 final=- hastate=active delayed=16
+2026-11-19T16:03:53.794Z	ha-2	applyinfo	insert=60 fail=0 eof=164|480 final=- hastate=active delayed=16
+2026-11-19T16:04:03.885Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:04:04.801Z	ha-0	changemode	active
+2026-11-19T16:04:04.892Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:04:04.966Z	ha-0	rows	count=670 max=680
+2026-11-19T16:04:05.064Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:04:05.144Z	ha-1	changemode	standby
+2026-11-19T16:04:05.229Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:04:05.299Z	ha-1	rows	count=80 max=90
+2026-11-19T16:04:05.364Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:04:05.451Z	ha-2	changemode	standby
+2026-11-19T16:04:05.524Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:04:05.594Z	ha-2	rows	count=70 max=80
+2026-11-19T16:04:05.658Z	ha-1	applyinfo	insert=80 fail=0 eof=164|480 final=- hastate=active delayed=16
+2026-11-19T16:04:05.730Z	ha-2	applyinfo	insert=70 fail=0 eof=164|480 final=- hastate=active delayed=16
+2026-11-19T16:04:15.805Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:04:15.884Z	ha-0	changemode	active
+2026-11-19T16:04:15.969Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:04:16.049Z	ha-0	rows	count=670 max=680
+2026-11-19T16:04:16.134Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:04:16.213Z	ha-1	changemode	standby
+2026-11-19T16:04:16.279Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:04:16.348Z	ha-1	rows	count=80 max=90
+2026-11-19T16:04:16.415Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:04:16.506Z	ha-2	changemode	standby
+2026-11-19T16:04:16.577Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:04:16.650Z	ha-2	rows	count=70 max=80
+2026-11-19T16:04:16.734Z	ha-1	applyinfo	insert=80 fail=0 eof=164|3248 final=- hastate=dead delayed=15
+2026-11-19T16:04:16.800Z	ha-2	applyinfo	insert=70 fail=0 eof=164|3248 final=- hastate=dead delayed=16
+2026-11-19T16:04:26.869Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:04:26.950Z	ha-0	changemode	active
+2026-11-19T16:04:27.040Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:04:27.113Z	ha-0	rows	count=670 max=680
+2026-11-19T16:04:27.194Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:04:27.277Z	ha-1	changemode	standby
+2026-11-19T16:04:27.373Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:04:27.443Z	ha-1	rows	count=90 max=100
+2026-11-19T16:04:27.531Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:04:27.611Z	ha-2	changemode	standby
+2026-11-19T16:04:27.688Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:04:27.761Z	ha-2	rows	count=80 max=90
+2026-11-19T16:04:27.827Z	ha-1	applyinfo	insert=90 fail=0 eof=164|3248 final=- hastate=dead delayed=15
+2026-11-19T16:04:27.894Z	ha-2	applyinfo	insert=80 fail=0 eof=164|3248 final=- hastate=dead delayed=16
+2026-11-19T16:04:37.963Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:04:38.082Z	ha-0	changemode	active
+2026-11-19T16:04:38.180Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:04:38.250Z	ha-0	rows	count=670 max=680
+2026-11-19T16:04:38.334Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:04:38.421Z	ha-1	changemode	standby
+2026-11-19T16:04:38.535Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:04:38.605Z	ha-1	rows	count=90 max=100
+2026-11-19T16:04:38.672Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:04:38.752Z	ha-2	changemode	standby
+2026-11-19T16:04:38.825Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:04:38.921Z	ha-2	rows	count=80 max=90
+2026-11-19T16:04:39.001Z	ha-1	applyinfo	insert=90 fail=0 eof=164|3248 final=- hastate=dead delayed=15
+2026-11-19T16:04:39.074Z	ha-2	applyinfo	insert=80 fail=0 eof=164|3248 final=- hastate=dead delayed=16
+2026-11-19T16:04:49.149Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:04:49.229Z	ha-0	changemode	active
+2026-11-19T16:04:49.312Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:04:49.382Z	ha-0	rows	count=670 max=680
+2026-11-19T16:04:49.470Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:04:49.552Z	ha-1	changemode	standby
+2026-11-19T16:04:49.637Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:04:49.707Z	ha-1	rows	count=100 max=110
+2026-11-19T16:04:49.774Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:04:50.183Z	ha-2	changemode	standby
+2026-11-19T16:04:50.250Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:04:50.320Z	ha-2	rows	count=80 max=90
+2026-11-19T16:04:50.388Z	ha-1	applyinfo	insert=100 fail=0 eof=164|3248 final=- hastate=dead delayed=15
+2026-11-19T16:04:50.499Z	ha-2	applyinfo	insert=80 fail=0 eof=164|3248 final=- hastate=dead delayed=15
+2026-11-19T16:05:00.581Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:05:00.658Z	ha-0	changemode	active
+2026-11-19T16:05:00.740Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:05:00.815Z	ha-0	rows	count=670 max=680
+2026-11-19T16:05:00.878Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:05:00.957Z	ha-1	changemode	standby
+2026-11-19T16:05:01.025Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:05:01.127Z	ha-1	rows	count=100 max=110
+2026-11-19T16:05:01.215Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:05:01.293Z	ha-2	changemode	standby
+2026-11-19T16:05:01.399Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:05:01.496Z	ha-2	rows	count=90 max=100
+2026-11-19T16:05:01.572Z	ha-1	applyinfo	insert=100 fail=0 eof=164|6576 final=- hastate=active delayed=15
+2026-11-19T16:05:01.676Z	ha-2	applyinfo	insert=90 fail=0 eof=164|6576 final=- hastate=active delayed=15
+2026-11-19T16:05:11.779Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:05:11.960Z	ha-0	changemode	active
+2026-11-19T16:05:12.119Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:05:12.343Z	ha-0	rows	count=670 max=680
+2026-11-19T16:05:12.429Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:05:12.513Z	ha-1	changemode	standby
+2026-11-19T16:05:12.585Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:05:12.672Z	ha-1	rows	count=100 max=110
+2026-11-19T16:05:12.751Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:05:12.850Z	ha-2	changemode	standby
+2026-11-19T16:05:12.927Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:05:13.000Z	ha-2	rows	count=100 max=110
+2026-11-19T16:05:13.065Z	ha-1	applyinfo	insert=100 fail=0 eof=164|6576 final=- hastate=active delayed=15
+2026-11-19T16:05:13.135Z	ha-2	applyinfo	insert=100 fail=0 eof=164|6576 final=- hastate=active delayed=15
+2026-11-19T16:05:23.212Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:05:23.428Z	ha-0	changemode	active
+2026-11-19T16:05:23.522Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:05:23.636Z	ha-0	rows	count=670 max=680
+2026-11-19T16:05:23.793Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:05:23.916Z	ha-1	changemode	standby
+2026-11-19T16:05:24.306Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:05:24.389Z	ha-1	rows	count=110 max=120
+2026-11-19T16:05:24.464Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:05:24.553Z	ha-2	changemode	standby
+2026-11-19T16:05:25.014Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:05:25.110Z	ha-2	rows	count=100 max=110
+2026-11-19T16:05:25.177Z	ha-1	applyinfo	insert=110 fail=0 eof=164|9200 final=- hastate=active delayed=15
+2026-11-19T16:05:25.263Z	ha-2	applyinfo	insert=100 fail=0 eof=164|9200 final=- hastate=active delayed=15
+2026-11-19T16:05:35.364Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:05:35.747Z	ha-0	changemode	active
+2026-11-19T16:05:36.567Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:05:36.735Z	ha-0	rows	count=670 max=680
+2026-11-19T16:05:36.921Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:05:37.125Z	ha-1	changemode	standby
+2026-11-19T16:05:37.448Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:05:37.703Z	ha-1	rows	count=120 max=130
+2026-11-19T16:05:37.868Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:05:38.103Z	ha-2	changemode	standby
+2026-11-19T16:05:38.228Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:05:38.895Z	ha-2	rows	count=120 max=130
+2026-11-19T16:05:39.143Z	ha-1	applyinfo	insert=120 fail=0 eof=164|9200 final=- hastate=dead delayed=14
+2026-11-19T16:05:39.348Z	ha-2	applyinfo	insert=120 fail=0 eof=164|9200 final=- hastate=dead delayed=15
+2026-11-19T16:05:49.556Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:05:49.779Z	ha-0	changemode	active
+2026-11-19T16:05:49.959Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:05:50.154Z	ha-0	rows	count=670 max=680
+2026-11-19T16:05:50.325Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:05:50.488Z	ha-1	changemode	standby
+2026-11-19T16:05:50.989Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:05:51.227Z	ha-1	rows	count=140 max=150
+2026-11-19T16:05:51.421Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:05:51.578Z	ha-2	changemode	standby
+2026-11-19T16:05:51.738Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:05:51.867Z	ha-2	rows	count=130 max=140
+2026-11-19T16:05:52.063Z	ha-1	applyinfo	insert=140 fail=0 eof=164|14640 final=- hastate=active delayed=14
+2026-11-19T16:05:53.157Z	ha-2	applyinfo	insert=130 fail=0 eof=164|13888 final=- hastate=active delayed=14
+2026-11-19T16:06:03.483Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:06:03.561Z	ha-0	changemode	active
+2026-11-19T16:06:03.648Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:06:03.751Z	ha-0	rows	count=670 max=680
+2026-11-19T16:06:04.517Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:06:04.606Z	ha-1	changemode	standby
+2026-11-19T16:06:04.698Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:06:04.844Z	ha-1	rows	count=140 max=150
+2026-11-19T16:06:04.957Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:06:05.120Z	ha-2	changemode	standby
+2026-11-19T16:06:05.203Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:06:05.288Z	ha-2	rows	count=140 max=150
+2026-11-19T16:06:05.362Z	ha-1	applyinfo	insert=150 fail=0 eof=164|14640 final=- hastate=active delayed=14
+2026-11-19T16:06:05.438Z	ha-2	applyinfo	insert=140 fail=0 eof=164|15952 final=- hastate=dead delayed=14
+2026-11-19T16:06:15.509Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:06:15.608Z	ha-0	changemode	active
+2026-11-19T16:06:15.708Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:06:15.790Z	ha-0	rows	count=670 max=680
+2026-11-19T16:06:16.283Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:06:16.361Z	ha-1	changemode	standby
+2026-11-19T16:06:16.797Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:06:16.877Z	ha-1	rows	count=150 max=160
+2026-11-19T16:06:16.958Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:06:17.041Z	ha-2	changemode	standby
+2026-11-19T16:06:17.128Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:06:17.201Z	ha-2	rows	count=150 max=160
+2026-11-19T16:06:17.295Z	ha-1	applyinfo	insert=150 fail=0 eof=165|896 final=- hastate=dead delayed=15
+2026-11-19T16:06:17.362Z	ha-2	applyinfo	insert=150 fail=0 eof=164|15952 final=- hastate=dead delayed=14
+2026-11-19T16:06:27.430Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:06:27.568Z	ha-0	changemode	active
+2026-11-19T16:06:27.684Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:06:27.755Z	ha-0	rows	count=670 max=680
+2026-11-19T16:06:27.844Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:06:27.952Z	ha-1	changemode	standby
+2026-11-19T16:06:28.048Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:06:28.129Z	ha-1	rows	count=160 max=170
+2026-11-19T16:06:28.198Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:06:28.277Z	ha-2	changemode	standby
+2026-11-19T16:06:28.348Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:06:28.432Z	ha-2	rows	count=160 max=170
+2026-11-19T16:06:28.499Z	ha-1	applyinfo	insert=160 fail=0 eof=165|896 final=- hastate=dead delayed=15
+2026-11-19T16:06:28.579Z	ha-2	applyinfo	insert=160 fail=0 eof=164|15952 final=- hastate=dead delayed=14
+2026-11-19T16:06:38.656Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:06:38.733Z	ha-0	changemode	active
+2026-11-19T16:06:38.820Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:06:38.889Z	ha-0	rows	count=670 max=680
+2026-11-19T16:06:38.956Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:06:39.038Z	ha-1	changemode	standby
+2026-11-19T16:06:39.105Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:06:39.176Z	ha-1	rows	count=160 max=170
+2026-11-19T16:06:39.240Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:06:39.363Z	ha-2	changemode	standby
+2026-11-19T16:06:39.468Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:06:39.545Z	ha-2	rows	count=160 max=170
+2026-11-19T16:06:39.614Z	ha-1	applyinfo	insert=160 fail=0 eof=165|896 final=- hastate=dead delayed=14
+2026-11-19T16:06:39.732Z	ha-2	applyinfo	insert=160 fail=0 eof=164|15952 final=- hastate=dead delayed=13
+2026-11-19T16:06:49.801Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:06:50.026Z	ha-0	changemode	active
+2026-11-19T16:06:51.969Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:06:52.041Z	ha-0	rows	count=670 max=680
+2026-11-19T16:06:52.121Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:06:52.209Z	ha-1	changemode	standby
+2026-11-19T16:06:52.276Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:06:52.353Z	ha-1	rows	count=170 max=180
+2026-11-19T16:06:52.454Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:06:52.540Z	ha-2	changemode	standby
+2026-11-19T16:06:52.606Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:06:52.713Z	ha-2	rows	count=170 max=180
+2026-11-19T16:06:52.872Z	ha-1	applyinfo	insert=170 fail=0 eof=165|896 final=- hastate=dead delayed=14
+2026-11-19T16:06:52.981Z	ha-2	applyinfo	insert=170 fail=0 eof=165|5632 final=- hastate=active delayed=14
+2026-11-19T16:07:03.057Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:07:03.960Z	ha-0	changemode	active
+2026-11-19T16:07:04.044Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:07:04.115Z	ha-0	rows	count=670 max=680
+2026-11-19T16:07:04.198Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:07:04.291Z	ha-1	changemode	standby
+2026-11-19T16:07:04.357Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:07:04.428Z	ha-1	rows	count=170 max=180
+2026-11-19T16:07:04.501Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:07:04.598Z	ha-2	changemode	standby
+2026-11-19T16:07:04.685Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:07:04.756Z	ha-2	rows	count=180 max=190
+2026-11-19T16:07:04.877Z	ha-1	applyinfo	insert=170 fail=0 eof=165|6384 final=- hastate=active delayed=14
+2026-11-19T16:07:04.983Z	ha-2	applyinfo	insert=180 fail=0 eof=165|5632 final=- hastate=active delayed=14
+2026-11-19T16:07:15.053Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:07:19.350Z	ha-0	changemode	active
+2026-11-19T16:07:21.524Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:07:21.633Z	ha-0	rows	count=670 max=680
+2026-11-19T16:07:21.701Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:07:21.793Z	ha-1	changemode	standby
+2026-11-19T16:07:21.878Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:07:21.960Z	ha-1	rows	count=190 max=200
+2026-11-19T16:07:22.031Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:07:22.125Z	ha-2	changemode	standby
+2026-11-19T16:07:22.196Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:07:22.269Z	ha-2	rows	count=190 max=200
+2026-11-19T16:07:22.349Z	ha-1	applyinfo	insert=190 fail=0 eof=165|6384 final=- hastate=active delayed=14
+2026-11-19T16:07:22.415Z	ha-2	applyinfo	insert=190 fail=0 eof=165|7168 final=- hastate=active delayed=14
+2026-11-19T16:07:32.496Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:07:32.645Z	ha-0	changemode	active
+2026-11-19T16:07:32.770Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:07:32.902Z	ha-0	rows	count=670 max=680
+2026-11-19T16:07:33.006Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:07:33.115Z	ha-1	changemode	standby
+2026-11-19T16:07:34.025Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:07:34.215Z	ha-1	rows	count=200 max=210
+2026-11-19T16:07:34.356Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:07:34.500Z	ha-2	changemode	standby
+2026-11-19T16:07:34.728Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:07:34.955Z	ha-2	rows	count=200 max=210
+2026-11-19T16:07:35.114Z	ha-1	applyinfo	insert=200 fail=0 eof=165|8432 final=- hastate=dead delayed=14
+2026-11-19T16:07:36.252Z	ha-2	applyinfo	insert=200 fail=0 eof=165|7168 final=- hastate=dead delayed=14
+2026-11-19T16:07:46.367Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:07:46.848Z	ha-0	changemode	active
+2026-11-19T16:07:48.130Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:07:48.205Z	ha-0	rows	count=670 max=680
+2026-11-19T16:07:48.318Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:07:48.401Z	ha-1	changemode	standby
+2026-11-19T16:07:48.473Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:07:48.545Z	ha-1	rows	count=200 max=210
+2026-11-19T16:07:48.612Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:07:48.991Z	ha-2	changemode	standby
+2026-11-19T16:07:49.059Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:07:49.234Z	ha-2	rows	count=200 max=210
+2026-11-19T16:07:49.871Z	ha-1	applyinfo	insert=210 fail=0 eof=165|8432 final=- hastate=dead delayed=13
+2026-11-19T16:07:49.962Z	ha-2	applyinfo	insert=200 fail=0 eof=165|11152 final=- hastate=active delayed=13
+2026-11-19T16:08:00.035Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:08:15.868Z	ha-0	changemode	active
+2026-11-19T16:08:15.981Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:08:16.478Z	ha-0	rows	count=670 max=680
+2026-11-19T16:08:17.496Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:08:17.595Z	ha-1	changemode	standby
+2026-11-19T16:08:17.685Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:08:17.769Z	ha-1	rows	count=230 max=240
+2026-11-19T16:08:17.869Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:08:17.978Z	ha-2	changemode	standby
+2026-11-19T16:08:18.098Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:08:18.217Z	ha-2	rows	count=220 max=230
+2026-11-19T16:08:18.333Z	ha-1	applyinfo	insert=230 fail=0 eof=165|14576 final=- hastate=dead delayed=13
+2026-11-19T16:08:18.404Z	ha-2	applyinfo	insert=220 fail=0 eof=165|13920 final=- hastate=dead delayed=13
+2026-11-19T16:08:28.499Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:08:28.580Z	ha-0	changemode	active
+2026-11-19T16:08:28.646Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:08:28.745Z	ha-0	rows	count=670 max=680
+2026-11-19T16:08:29.280Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:08:29.363Z	ha-1	changemode	standby
+2026-11-19T16:08:29.472Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:08:29.544Z	ha-1	rows	count=240 max=250
+2026-11-19T16:08:29.626Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:08:29.706Z	ha-2	changemode	standby
+2026-11-19T16:08:29.778Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:08:29.850Z	ha-2	rows	count=230 max=240
+2026-11-19T16:08:29.938Z	ha-1	applyinfo	insert=250 fail=0 eof=165|14576 final=- hastate=dead delayed=13
+2026-11-19T16:08:30.117Z	ha-2	applyinfo	insert=230 fail=0 eof=165|13920 final=- hastate=dead delayed=13
+2026-11-19T16:08:40.192Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:08:40.281Z	ha-0	changemode	active
+2026-11-19T16:08:40.368Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:08:40.452Z	ha-0	rows	count=670 max=680
+2026-11-19T16:08:40.550Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:08:40.631Z	ha-1	changemode	standby
+2026-11-19T16:08:40.699Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:08:41.608Z	ha-1	rows	count=250 max=260
+2026-11-19T16:08:41.694Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:08:41.772Z	ha-2	changemode	standby
+2026-11-19T16:08:41.860Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:08:41.931Z	ha-2	rows	count=240 max=250
+2026-11-19T16:08:41.999Z	ha-1	applyinfo	insert=250 fail=0 eof=166|2848 final=- hastate=active delayed=14
+2026-11-19T16:08:42.091Z	ha-2	applyinfo	insert=240 fail=0 eof=166|2096 final=- hastate=active delayed=14
+2026-11-19T16:08:52.161Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:08:52.241Z	ha-0	changemode	active
+2026-11-19T16:08:52.892Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:08:52.969Z	ha-0	rows	count=670 max=680
+2026-11-19T16:08:53.058Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:08:53.138Z	ha-1	changemode	standby
+2026-11-19T16:08:53.212Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:08:53.319Z	ha-1	rows	count=250 max=260
+2026-11-19T16:08:53.393Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:08:53.486Z	ha-2	changemode	standby
+2026-11-19T16:08:53.567Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:08:54.197Z	ha-2	rows	count=250 max=260
+2026-11-19T16:08:54.269Z	ha-1	applyinfo	insert=250 fail=0 eof=166|4864 final=- hastate=dead delayed=13
+2026-11-19T16:08:54.347Z	ha-2	applyinfo	insert=250 fail=0 eof=166|4768 final=- hastate=dead delayed=14
+2026-11-19T16:09:04.428Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:09:04.978Z	ha-0	changemode	active
+2026-11-19T16:09:05.247Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:09:05.321Z	ha-0	rows	count=670 max=680
+2026-11-19T16:09:05.386Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:09:05.467Z	ha-1	changemode	standby
+2026-11-19T16:09:05.536Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:09:05.606Z	ha-1	rows	count=260 max=270
+2026-11-19T16:09:05.670Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:09:05.751Z	ha-2	changemode	standby
+2026-11-19T16:09:05.817Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:09:05.886Z	ha-2	rows	count=250 max=260
+2026-11-19T16:09:05.949Z	ha-1	applyinfo	insert=260 fail=0 eof=166|4864 final=- hastate=dead delayed=13
+2026-11-19T16:09:06.019Z	ha-2	applyinfo	insert=250 fail=0 eof=166|4768 final=- hastate=dead delayed=13
+2026-11-19T16:09:16.092Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:09:16.183Z	ha-0	changemode	active
+2026-11-19T16:09:16.295Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:09:16.393Z	ha-0	rows	count=670 max=680
+2026-11-19T16:09:16.489Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:09:16.590Z	ha-1	changemode	standby
+2026-11-19T16:09:16.730Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:09:16.959Z	ha-1	rows	count=280 max=290
+2026-11-19T16:09:17.101Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:09:17.290Z	ha-2	changemode	standby
+2026-11-19T16:09:18.021Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:09:18.208Z	ha-2	rows	count=260 max=270
+2026-11-19T16:09:18.602Z	ha-1	applyinfo	insert=280 fail=0 eof=166|9504 final=- hastate=active delayed=13
+2026-11-19T16:09:18.752Z	ha-2	applyinfo	insert=270 fail=0 eof=166|7536 final=- hastate=active delayed=13
+2026-11-19T16:09:29.354Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:09:29.439Z	ha-0	changemode	active
+2026-11-19T16:09:29.532Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:09:29.607Z	ha-0	rows	count=670 max=680
+2026-11-19T16:09:29.700Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:09:29.795Z	ha-1	changemode	standby
+2026-11-19T16:09:29.879Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:09:29.978Z	ha-1	rows	count=290 max=300
+2026-11-19T16:09:30.171Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:09:30.286Z	ha-2	changemode	standby
+2026-11-19T16:09:30.372Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:09:30.471Z	ha-2	rows	count=280 max=290
+2026-11-19T16:09:30.557Z	ha-1	applyinfo	insert=290 fail=0 eof=166|12696 final=- hastate=active delayed=13
+2026-11-19T16:09:30.641Z	ha-2	applyinfo	insert=280 fail=0 eof=166|10160 final=- hastate=dead delayed=13
+2026-11-19T16:09:40.728Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:09:40.820Z	ha-0	changemode	active
+2026-11-19T16:09:40.920Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:09:41.119Z	ha-0	rows	count=670 max=680
+2026-11-19T16:09:41.311Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:09:41.408Z	ha-1	changemode	standby
+2026-11-19T16:09:41.477Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:09:41.556Z	ha-1	rows	count=300 max=310
+2026-11-19T16:09:41.624Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:09:41.720Z	ha-2	changemode	standby
+2026-11-19T16:09:41.799Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:09:41.878Z	ha-2	rows	count=290 max=300
+2026-11-19T16:09:41.943Z	ha-1	applyinfo	insert=300 fail=0 eof=166|12696 final=- hastate=dead delayed=13
+2026-11-19T16:09:42.016Z	ha-2	applyinfo	insert=290 fail=0 eof=166|10160 final=- hastate=dead delayed=13
+2026-11-19T16:09:52.085Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:09:52.167Z	ha-0	changemode	active
+2026-11-19T16:09:52.265Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:09:52.344Z	ha-0	rows	count=670 max=680
+2026-11-19T16:09:52.435Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:09:52.522Z	ha-1	changemode	standby
+2026-11-19T16:09:52.613Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:09:52.789Z	ha-1	rows	count=310 max=320
+2026-11-19T16:09:52.887Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:09:52.973Z	ha-2	changemode	standby
+2026-11-19T16:09:53.052Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:09:53.128Z	ha-2	rows	count=300 max=310
+2026-11-19T16:09:53.197Z	ha-1	applyinfo	insert=310 fail=0 eof=166|12696 final=- hastate=dead delayed=12
+2026-11-19T16:09:53.272Z	ha-2	applyinfo	insert=300 fail=0 eof=166|16016 final=- hastate=active delayed=12
+2026-11-19T16:10:03.340Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:10:04.366Z	ha-0	changemode	active
+2026-11-19T16:10:04.442Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:10:04.512Z	ha-0	rows	count=670 max=680
+2026-11-19T16:10:04.576Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:10:04.655Z	ha-1	changemode	standby
+2026-11-19T16:10:04.725Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:10:04.796Z	ha-1	rows	count=330 max=340
+2026-11-19T16:10:04.861Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:10:04.946Z	ha-2	changemode	standby
+2026-11-19T16:10:05.018Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:10:05.807Z	ha-2	rows	count=320 max=330
+2026-11-19T16:10:05.903Z	ha-1	applyinfo	insert=330 fail=0 eof=167|1664 final=- hastate=active delayed=13
+2026-11-19T16:10:05.977Z	ha-2	applyinfo	insert=320 fail=0 eof=167|2976 final=- hastate=dead delayed=13
+2026-11-19T16:10:16.061Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:10:16.140Z	ha-0	changemode	active
+2026-11-19T16:10:16.228Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:10:16.303Z	ha-0	rows	count=670 max=680
+2026-11-19T16:10:16.386Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:10:16.470Z	ha-1	changemode	standby
+2026-11-19T16:10:16.537Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:10:16.610Z	ha-1	rows	count=340 max=350
+2026-11-19T16:10:16.673Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:10:16.753Z	ha-2	changemode	standby
+2026-11-19T16:10:17.132Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:10:17.206Z	ha-2	rows	count=330 max=340
+2026-11-19T16:10:17.271Z	ha-1	applyinfo	insert=340 fail=0 eof=167|4288 final=- hastate=dead delayed=13
+2026-11-19T16:10:17.346Z	ha-2	applyinfo	insert=330 fail=0 eof=167|2976 final=- hastate=dead delayed=13
+2026-11-19T16:10:27.414Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:10:27.506Z	ha-0	changemode	active
+2026-11-19T16:10:27.592Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:10:27.662Z	ha-0	rows	count=670 max=680
+2026-11-19T16:10:27.746Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:10:27.827Z	ha-1	changemode	standby
+2026-11-19T16:10:27.896Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:10:27.968Z	ha-1	rows	count=350 max=360
+2026-11-19T16:10:28.033Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:10:28.112Z	ha-2	changemode	standby
+2026-11-19T16:10:28.177Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:10:28.249Z	ha-2	rows	count=340 max=350
+2026-11-19T16:10:28.312Z	ha-1	applyinfo	insert=350 fail=0 eof=167|4288 final=- hastate=dead delayed=12
+2026-11-19T16:10:28.382Z	ha-2	applyinfo	insert=340 fail=0 eof=167|2976 final=- hastate=dead delayed=12
+2026-11-19T16:10:38.452Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:10:38.536Z	ha-0	changemode	active
+2026-11-19T16:10:38.628Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:10:38.698Z	ha-0	rows	count=670 max=680
+2026-11-19T16:10:39.235Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:10:39.314Z	ha-1	changemode	standby
+2026-11-19T16:10:39.405Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:10:39.476Z	ha-1	rows	count=370 max=380
+2026-11-19T16:10:39.540Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:10:39.619Z	ha-2	changemode	standby
+2026-11-19T16:10:39.685Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:10:39.754Z	ha-2	rows	count=360 max=370
+2026-11-19T16:10:39.838Z	ha-1	applyinfo	insert=370 fail=0 eof=167|10528 final=- hastate=active delayed=12
+2026-11-19T16:10:39.906Z	ha-2	applyinfo	insert=360 fail=0 eof=167|11184 final=- hastate=dead delayed=12
+2026-11-19T16:10:50.064Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:10:50.145Z	ha-0	changemode	active
+2026-11-19T16:10:50.228Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:10:50.299Z	ha-0	rows	count=670 max=680
+2026-11-19T16:10:50.395Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:10:50.588Z	ha-1	changemode	standby
+2026-11-19T16:10:50.665Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:10:50.741Z	ha-1	rows	count=380 max=390
+2026-11-19T16:10:50.805Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:10:50.884Z	ha-2	changemode	standby
+2026-11-19T16:10:50.950Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:10:51.022Z	ha-2	rows	count=370 max=380
+2026-11-19T16:10:51.086Z	ha-1	applyinfo	insert=380 fail=0 eof=167|11280 final=- hastate=dead delayed=12
+2026-11-19T16:10:51.153Z	ha-2	applyinfo	insert=370 fail=0 eof=167|12544 final=- hastate=active delayed=12
+2026-11-19T16:11:01.227Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:01.310Z	ha-0	changemode	active
+2026-11-19T16:11:01.396Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:01.467Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:01.961Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:02.043Z	ha-1	changemode	standby
+2026-11-19T16:11:02.128Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:02.199Z	ha-1	rows	count=400 max=410
+2026-11-19T16:11:02.264Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:02.342Z	ha-2	changemode	standby
+2026-11-19T16:11:02.408Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:02.478Z	ha-2	rows	count=380 max=390
+2026-11-19T16:11:02.562Z	ha-1	applyinfo	insert=400 fail=0 eof=167|15216 final=- hastate=active delayed=10
+2026-11-19T16:11:02.943Z	ha-2	applyinfo	insert=380 fail=0 eof=167|15872 final=- hastate=dead delayed=12
+2026-11-19T16:11:13.022Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:13.102Z	ha-0	changemode	active
+2026-11-19T16:11:13.193Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:13.273Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:13.362Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:13.450Z	ha-1	changemode	standby
+2026-11-19T16:11:13.517Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:13.587Z	ha-1	rows	count=410 max=420
+2026-11-19T16:11:13.652Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:13.733Z	ha-2	changemode	standby
+2026-11-19T16:11:13.808Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:13.881Z	ha-2	rows	count=390 max=400
+2026-11-19T16:11:13.952Z	ha-1	applyinfo	insert=410 fail=0 eof=168|160 final=- hastate=dead delayed=11
+2026-11-19T16:11:14.021Z	ha-2	applyinfo	insert=390 fail=0 eof=167|15872 final=- hastate=dead delayed=11
+2026-11-19T16:11:24.092Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:24.179Z	ha-0	changemode	active
+2026-11-19T16:11:24.246Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:24.321Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:24.389Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:24.468Z	ha-1	changemode	standby
+2026-11-19T16:11:24.535Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:24.606Z	ha-1	rows	count=420 max=430
+2026-11-19T16:11:24.691Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:24.769Z	ha-2	changemode	standby
+2026-11-19T16:11:24.834Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:24.905Z	ha-2	rows	count=400 max=410
+2026-11-19T16:11:24.969Z	ha-1	applyinfo	insert=420 fail=0 eof=168|3488 final=- hastate=active delayed=10
+2026-11-19T16:11:25.041Z	ha-2	applyinfo	insert=400 fail=0 eof=168|1424 final=- hastate=active delayed=11
+2026-11-19T16:11:35.110Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:35.219Z	ha-0	changemode	active
+2026-11-19T16:11:35.287Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:35.362Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:35.455Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:35.536Z	ha-1	changemode	standby
+2026-11-19T16:11:35.603Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:35.673Z	ha-1	rows	count=420 max=430
+2026-11-19T16:11:35.736Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:35.814Z	ha-2	changemode	standby
+2026-11-19T16:11:35.880Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:35.952Z	ha-2	rows	count=410 max=420
+2026-11-19T16:11:36.021Z	ha-1	applyinfo	insert=420 fail=0 eof=168|5456 final=- hastate=dead delayed=10
+2026-11-19T16:11:36.088Z	ha-2	applyinfo	insert=410 fail=0 eof=168|4144 final=- hastate=dead delayed=10
+2026-11-19T16:11:46.156Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:46.242Z	ha-0	changemode	active
+2026-11-19T16:11:46.328Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:46.398Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:46.483Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:46.564Z	ha-1	changemode	standby
+2026-11-19T16:11:46.649Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:46.722Z	ha-1	rows	count=440 max=450
+2026-11-19T16:11:47.253Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:47.339Z	ha-2	changemode	standby
+2026-11-19T16:11:47.405Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:47.478Z	ha-2	rows	count=420 max=430
+2026-11-19T16:11:47.547Z	ha-1	applyinfo	insert=440 fail=0 eof=168|5456 final=- hastate=dead delayed=10
+2026-11-19T16:11:47.618Z	ha-2	applyinfo	insert=420 fail=0 eof=168|6816 final=- hastate=active delayed=10
+2026-11-19T16:11:57.708Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:11:58.073Z	ha-0	changemode	active
+2026-11-19T16:11:58.160Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:11:58.231Z	ha-0	rows	count=670 max=680
+2026-11-19T16:11:58.310Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:11:58.389Z	ha-1	changemode	standby
+2026-11-19T16:11:58.473Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:11:58.545Z	ha-1	rows	count=450 max=460
+2026-11-19T16:11:58.610Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:11:58.866Z	ha-2	changemode	standby
+2026-11-19T16:11:58.934Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:11:59.007Z	ha-2	rows	count=440 max=450
+2026-11-19T16:11:59.072Z	ha-1	applyinfo	insert=450 fail=0 eof=168|8320 final=- hastate=active delayed=10
+2026-11-19T16:11:59.143Z	ha-2	applyinfo	insert=440 fail=0 eof=168|8416 final=- hastate=dead delayed=10
+2026-11-19T16:12:09.211Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:12:09.289Z	ha-0	changemode	active
+2026-11-19T16:12:09.355Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:12:09.429Z	ha-0	rows	count=670 max=680
+2026-11-19T16:12:09.496Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:12:09.586Z	ha-1	changemode	standby
+2026-11-19T16:12:09.660Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:12:09.730Z	ha-1	rows	count=460 max=470
+2026-11-19T16:12:09.814Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:12:09.893Z	ha-2	changemode	standby
+2026-11-19T16:12:09.960Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:12:10.059Z	ha-2	rows	count=450 max=460
+2026-11-19T16:12:10.122Z	ha-1	applyinfo	insert=470 fail=0 eof=168|10336 final=- hastate=dead delayed=9
+2026-11-19T16:12:10.191Z	ha-2	applyinfo	insert=450 fail=0 eof=168|8416 final=- hastate=dead delayed=10
+2026-11-19T16:12:20.278Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:12:20.358Z	ha-0	changemode	active
+2026-11-19T16:12:20.445Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:12:20.520Z	ha-0	rows	count=670 max=680
+2026-11-19T16:12:20.584Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:12:20.663Z	ha-1	changemode	standby
+2026-11-19T16:12:20.729Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:12:20.799Z	ha-1	rows	count=470 max=480
+2026-11-19T16:12:20.864Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:12:20.944Z	ha-2	changemode	standby
+2026-11-19T16:12:21.012Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:12:21.082Z	ha-2	rows	count=460 max=470
+2026-11-19T16:12:21.146Z	ha-1	applyinfo	insert=470 fail=0 eof=168|15072 final=- hastate=active delayed=9
+2026-11-19T16:12:21.213Z	ha-2	applyinfo	insert=460 fail=0 eof=168|13008 final=- hastate=active delayed=9
+2026-11-19T16:12:31.281Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:12:31.361Z	ha-0	changemode	active
+2026-11-19T16:12:31.429Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:12:31.502Z	ha-0	rows	count=670 max=680
+2026-11-19T16:12:31.570Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:12:31.659Z	ha-1	changemode	standby
+2026-11-19T16:12:31.731Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:12:32.078Z	ha-1	rows	count=490 max=500
+2026-11-19T16:12:32.140Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:12:32.219Z	ha-2	changemode	standby
+2026-11-19T16:12:32.285Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:12:32.355Z	ha-2	rows	count=470 max=480
+2026-11-19T16:12:32.420Z	ha-1	applyinfo	insert=490 fail=0 eof=169|1264 final=- hastate=active delayed=10
+2026-11-19T16:12:32.488Z	ha-2	applyinfo	insert=470 fail=0 eof=168|16296 final=- hastate=dead delayed=9
+2026-11-19T16:12:42.579Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:12:42.672Z	ha-0	changemode	active
+2026-11-19T16:12:42.760Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:12:42.832Z	ha-0	rows	count=670 max=680
+2026-11-19T16:12:42.920Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:12:43.006Z	ha-1	changemode	standby
+2026-11-19T16:12:43.096Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:12:43.166Z	ha-1	rows	count=500 max=510
+2026-11-19T16:12:43.237Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:12:43.315Z	ha-2	changemode	standby
+2026-11-19T16:12:43.382Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:12:43.806Z	ha-2	rows	count=490 max=500
+2026-11-19T16:12:43.871Z	ha-1	applyinfo	insert=500 fail=0 eof=169|1264 final=- hastate=dead delayed=10
+2026-11-19T16:12:43.946Z	ha-2	applyinfo	insert=490 fail=0 eof=168|16296 final=- hastate=dead delayed=9
+2026-11-19T16:12:54.017Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:12:54.100Z	ha-0	changemode	active
+2026-11-19T16:12:54.166Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:12:54.236Z	ha-0	rows	count=670 max=680
+2026-11-19T16:12:54.323Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:12:54.408Z	ha-1	changemode	standby
+2026-11-19T16:12:54.476Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:12:54.548Z	ha-1	rows	count=500 max=510
+2026-11-19T16:12:54.634Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:12:54.718Z	ha-2	changemode	standby
+2026-11-19T16:12:54.813Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:12:54.884Z	ha-2	rows	count=500 max=510
+2026-11-19T16:12:54.950Z	ha-1	applyinfo	insert=500 fail=0 eof=169|1264 final=- hastate=dead delayed=9
+2026-11-19T16:12:55.019Z	ha-2	applyinfo	insert=500 fail=0 eof=169|5424 final=- hastate=active delayed=9
+2026-11-19T16:13:05.088Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:13:05.170Z	ha-0	changemode	active
+2026-11-19T16:13:05.236Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:13:05.306Z	ha-0	rows	count=670 max=680
+2026-11-19T16:13:05.371Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:13:05.458Z	ha-1	changemode	standby
+2026-11-19T16:13:05.544Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:13:05.915Z	ha-1	rows	count=510 max=520
+2026-11-19T16:13:06.012Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:13:06.110Z	ha-2	changemode	standby
+2026-11-19T16:13:06.181Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:13:06.254Z	ha-2	rows	count=520 max=530
+2026-11-19T16:13:06.318Z	ha-1	applyinfo	insert=520 fail=0 eof=169|8096 final=- hastate=active delayed=9
+2026-11-19T16:13:06.804Z	ha-2	applyinfo	insert=520 fail=0 eof=169|8096 final=- hastate=dead delayed=9
+2026-11-19T16:13:16.874Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:13:16.962Z	ha-0	changemode	active
+2026-11-19T16:13:17.186Z	ha-0	processes	copylogdb:381:D copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:13:17.257Z	ha-0	rows	count=670 max=680
+2026-11-19T16:13:17.324Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:13:17.405Z	ha-1	changemode	standby
+2026-11-19T16:13:17.492Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:13:17.562Z	ha-1	rows	count=530 max=540
+2026-11-19T16:13:17.646Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:13:17.725Z	ha-2	changemode	standby
+2026-11-19T16:13:17.790Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:13:17.861Z	ha-2	rows	count=530 max=540
+2026-11-19T16:13:17.925Z	ha-1	applyinfo	insert=530 fail=0 eof=169|9040 final=- hastate=dead delayed=9
+2026-11-19T16:13:18.014Z	ha-2	applyinfo	insert=530 fail=0 eof=169|8096 final=- hastate=dead delayed=9
+2026-11-19T16:13:28.086Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:13:28.217Z	ha-0	changemode	active
+2026-11-19T16:13:28.304Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:13:28.390Z	ha-0	rows	count=670 max=680
+2026-11-19T16:13:28.475Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:13:28.557Z	ha-1	changemode	standby
+2026-11-19T16:13:28.644Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:13:28.726Z	ha-1	rows	count=540 max=550
+2026-11-19T16:13:28.796Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:13:28.878Z	ha-2	changemode	standby
+2026-11-19T16:13:28.946Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:13:29.020Z	ha-2	rows	count=540 max=550
+2026-11-19T16:13:29.084Z	ha-1	applyinfo	insert=540 fail=0 eof=169|11760 final=- hastate=active delayed=9
+2026-11-19T16:13:29.150Z	ha-2	applyinfo	insert=540 fail=0 eof=169|9744 final=- hastate=active delayed=9
+2026-11-19T16:13:39.219Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:13:39.296Z	ha-0	changemode	active
+2026-11-19T16:13:39.380Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:13:39.451Z	ha-0	rows	count=670 max=680
+2026-11-19T16:13:39.540Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:13:39.622Z	ha-1	changemode	standby
+2026-11-19T16:13:39.688Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:13:39.760Z	ha-1	rows	count=550 max=560
+2026-11-19T16:13:39.824Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:13:39.903Z	ha-2	changemode	standby
+2026-11-19T16:13:39.970Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:13:40.043Z	ha-2	rows	count=550 max=560
+2026-11-19T16:13:40.107Z	ha-1	applyinfo	insert=550 fail=0 eof=169|13776 final=- hastate=dead delayed=9
+2026-11-19T16:13:40.174Z	ha-2	applyinfo	insert=550 fail=0 eof=169|12416 final=- hastate=dead delayed=9
+2026-11-19T16:13:50.264Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:13:50.346Z	ha-0	changemode	active
+2026-11-19T16:13:50.437Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:13:50.508Z	ha-0	rows	count=670 max=680
+2026-11-19T16:13:50.595Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:13:50.674Z	ha-1	changemode	standby
+2026-11-19T16:13:50.741Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:13:50.811Z	ha-1	rows	count=560 max=570
+2026-11-19T16:13:50.874Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:13:50.954Z	ha-2	changemode	standby
+2026-11-19T16:13:51.044Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:13:51.332Z	ha-2	rows	count=550 max=560
+2026-11-19T16:13:51.400Z	ha-1	applyinfo	insert=560 fail=0 eof=169|13776 final=- hastate=dead delayed=8
+2026-11-19T16:13:51.467Z	ha-2	applyinfo	insert=550 fail=0 eof=169|13872 final=- hastate=active delayed=8
+2026-11-19T16:14:01.540Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:01.648Z	ha-0	changemode	active
+2026-11-19T16:14:01.923Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:02.019Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:02.108Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:02.187Z	ha-1	changemode	standby
+2026-11-19T16:14:02.258Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:02.330Z	ha-1	rows	count=570 max=580
+2026-11-19T16:14:02.394Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:02.473Z	ha-2	changemode	standby
+2026-11-19T16:14:02.543Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:02.614Z	ha-2	rows	count=570 max=580
+2026-11-19T16:14:03.139Z	ha-1	applyinfo	insert=580 fail=0 eof=170|1488 final=- hastate=active delayed=9
+2026-11-19T16:14:03.210Z	ha-2	applyinfo	insert=570 fail=0 eof=170|176 final=- hastate=dead delayed=9
+2026-11-19T16:14:13.289Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:13.381Z	ha-0	changemode	active
+2026-11-19T16:14:13.471Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:13.543Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:13.608Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:13.688Z	ha-1	changemode	standby
+2026-11-19T16:14:13.756Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:13.830Z	ha-1	rows	count=580 max=590
+2026-11-19T16:14:13.910Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:13.994Z	ha-2	changemode	standby
+2026-11-19T16:14:14.062Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:14.133Z	ha-2	rows	count=580 max=590
+2026-11-19T16:14:14.409Z	ha-1	applyinfo	insert=580 fail=0 eof=170|4112 final=- hastate=dead delayed=9
+2026-11-19T16:14:14.480Z	ha-2	applyinfo	insert=580 fail=0 eof=170|4816 final=- hastate=active delayed=9
+2026-11-19T16:14:24.551Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:24.631Z	ha-0	changemode	active
+2026-11-19T16:14:24.717Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:24.789Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:24.879Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:24.962Z	ha-1	changemode	standby
+2026-11-19T16:14:25.033Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:25.104Z	ha-1	rows	count=590 max=600
+2026-11-19T16:14:25.333Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:25.413Z	ha-2	changemode	standby
+2026-11-19T16:14:25.482Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:25.557Z	ha-2	rows	count=600 max=610
+2026-11-19T16:14:25.622Z	ha-1	applyinfo	insert=590 fail=0 eof=170|7584 final=- hastate=active delayed=8
+2026-11-19T16:14:25.690Z	ha-2	applyinfo	insert=600 fail=0 eof=170|6880 final=- hastate=dead delayed=8
+2026-11-19T16:14:35.759Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:35.838Z	ha-0	changemode	active
+2026-11-19T16:14:35.920Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:35.995Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:36.079Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:36.158Z	ha-1	changemode	standby
+2026-11-19T16:14:36.225Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:36.293Z	ha-1	rows	count=600 max=610
+2026-11-19T16:14:36.357Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:36.436Z	ha-2	changemode	standby
+2026-11-19T16:14:36.524Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:36.895Z	ha-2	rows	count=610 max=620
+2026-11-19T16:14:36.958Z	ha-1	applyinfo	insert=600 fail=0 eof=170|9088 final=- hastate=dead delayed=8
+2026-11-19T16:14:37.027Z	ha-2	applyinfo	insert=610 fail=0 eof=170|9744 final=- hastate=active delayed=8
+2026-11-19T16:14:47.096Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:47.184Z	ha-0	changemode	active
+2026-11-19T16:14:47.273Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:47.348Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:47.417Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:47.507Z	ha-1	changemode	standby
+2026-11-19T16:14:47.581Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:47.660Z	ha-1	rows	count=610 max=620
+2026-11-19T16:14:47.747Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:47.829Z	ha-2	changemode	standby
+2026-11-19T16:14:47.899Z	ha-2	processes	copylogdb:384:D copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:48.235Z	ha-2	rows	count=620 max=630
+2026-11-19T16:14:48.304Z	ha-1	applyinfo	insert=610 fail=0 eof=170|9088 final=- hastate=dead delayed=8
+2026-11-19T16:14:48.378Z	ha-2	applyinfo	insert=620 fail=0 eof=170|13024 final=- hastate=active delayed=8
+2026-11-19T16:14:58.476Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:14:58.745Z	ha-0	changemode	active
+2026-11-19T16:14:58.818Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:14:58.896Z	ha-0	rows	count=670 max=680
+2026-11-19T16:14:58.964Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:14:59.052Z	ha-1	changemode	standby
+2026-11-19T16:14:59.130Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:14:59.208Z	ha-1	rows	count=620 max=630
+2026-11-19T16:14:59.277Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:14:59.754Z	ha-2	changemode	standby
+2026-11-19T16:14:59.831Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:14:59.902Z	ha-2	rows	count=630 max=640
+2026-11-19T16:14:59.965Z	ha-1	applyinfo	insert=630 fail=0 eof=170|15792 final=- hastate=active delayed=8
+2026-11-19T16:15:00.035Z	ha-2	applyinfo	insert=630 fail=0 eof=170|13680 final=- hastate=dead delayed=8
+2026-11-19T16:15:10.105Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:15:10.182Z	ha-0	changemode	active
+2026-11-19T16:15:10.272Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:15:10.341Z	ha-0	rows	count=670 max=680
+2026-11-19T16:15:10.422Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:15:10.502Z	ha-1	changemode	standby
+2026-11-19T16:15:10.569Z	ha-1	processes	copylogdb:386:S copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:15:10.637Z	ha-1	rows	count=640 max=650
+2026-11-19T16:15:10.701Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:15:10.779Z	ha-2	changemode	standby
+2026-11-19T16:15:10.845Z	ha-2	processes	copylogdb:384:S copylogdb:386:S applylogdb:388:S applylogdb:390:S
+2026-11-19T16:15:10.914Z	ha-2	rows	count=640 max=650
+2026-11-19T16:15:10.977Z	ha-1	applyinfo	insert=640 fail=0 eof=170|15792 final=- hastate=dead delayed=7
+2026-11-19T16:15:11.049Z	ha-2	applyinfo	insert=640 fail=0 eof=170|13680 final=- hastate=dead delayed=7
+2026-11-19T16:15:21.120Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:15:21.219Z	ha-0	changemode	active
+2026-11-19T16:15:21.285Z	ha-0	processes	copylogdb:381:S copylogdb:383:S applylogdb:385:S applylogdb:387:S
+2026-11-19T16:15:21.357Z	ha-0	rows	count=670 max=680
+2026-11-19T16:15:21.451Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:15:21.536Z	ha-1	changemode	standby
+2026-11-19T16:15:21.602Z	ha-1	processes	copylogdb:386:S copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:15:21.673Z	ha-1	rows	count=650 max=660
+2026-11-19T16:15:21.737Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:15:21.816Z	ha-2	changemode	standby
+2026-11-19T16:15:21.882Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:15:21.950Z	ha-2	rows	count=660 max=670
+2026-11-19T16:15:22.016Z	ha-1	applyinfo	insert=650 fail=0 eof=170|15792 final=- hastate=dead delayed=7
+2026-11-19T16:15:22.083Z	ha-2	applyinfo	insert=660 fail=0 eof=171|5576 final=- hastate=active delayed=8
+2026-11-19T16:15:32.162Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:15:32.239Z	ha-0	changemode	active
+2026-11-19T16:15:32.305Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:15:32.376Z	ha-0	rows	count=670 max=680
+2026-11-19T16:15:32.459Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:15:32.539Z	ha-1	changemode	standby
+2026-11-19T16:15:32.608Z	ha-1	processes	copylogdb:386:D copylogdb:388:S applylogdb:390:S applylogdb:392:S
+2026-11-19T16:15:32.682Z	ha-1	rows	count=660 max=670
+2026-11-19T16:15:32.764Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:15:32.844Z	ha-2	changemode	standby
+2026-11-19T16:15:32.915Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:15:33.193Z	ha-2	rows	count=670 max=680
+2026-11-19T16:15:33.283Z	ha-1	applyinfo	insert=670 fail=0 eof=171|6232 final=- hastate=active delayed=8
+2026-11-19T16:15:33.350Z	ha-2	applyinfo	insert=670 fail=0 eof=171|7544 final=- hastate=active delayed=8
+2026-11-19T16:15:43.420Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:15:43.505Z	ha-0	changemode	active
+2026-11-19T16:15:43.588Z	ha-0	processes	copylogdb:381:D copylogdb:383:D applylogdb:385:D applylogdb:387:S
+2026-11-19T16:15:43.659Z	ha-0	rows	count=670 max=680
+2026-11-19T16:15:43.746Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:15:43.826Z	ha-1	changemode	standby
+2026-11-19T16:15:43.913Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:15:43.989Z	ha-1	rows	count=670 max=680
+2026-11-19T16:15:44.056Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:15:44.136Z	ha-2	changemode	standby
+2026-11-19T16:15:44.239Z	ha-2	processes	copylogdb:384:D copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:15:44.357Z	ha-2	rows	count=670 max=680
+2026-11-19T16:15:44.438Z	ha-1	applyinfo	insert=670 fail=0 eof=171|10168 final=- hastate=active delayed=8
+2026-11-19T16:15:44.506Z	ha-2	applyinfo	insert=670 fail=0 eof=171|10168 final=- hastate=active delayed=8
+2026-11-19T16:15:54.580Z	ha-0	heartbeat	master server=registered_and_active A:387:registered A:385:registered C:383:registered C:381:registered
+2026-11-19T16:15:54.678Z	ha-0	changemode	active
+2026-11-19T16:15:54.764Z	ha-0	processes	copylogdb:381:S copylogdb:383:D applylogdb:385:S applylogdb:387:S
+2026-11-19T16:15:54.834Z	ha-0	rows	count=670 max=680
+2026-11-19T16:15:55.149Z	ha-1	heartbeat	slave server=registered_and_standby A:392:registered A:390:registered C:388:registered C:386:registered
+2026-11-19T16:15:55.235Z	ha-1	changemode	standby
+2026-11-19T16:15:55.344Z	ha-1	processes	copylogdb:386:D copylogdb:388:D applylogdb:390:S applylogdb:392:S
+2026-11-19T16:15:55.429Z	ha-1	rows	count=670 max=680
+2026-11-19T16:15:55.524Z	ha-2	heartbeat	slave server=registered_and_standby A:390:registered A:388:registered C:386:registered C:384:registered
+2026-11-19T16:15:55.882Z	ha-2	changemode	standby
+2026-11-19T16:15:55.968Z	ha-2	processes	copylogdb:384:S copylogdb:386:D applylogdb:388:S applylogdb:390:S
+2026-11-19T16:15:56.047Z	ha-2	rows	count=670 max=680
+2026-11-19T16:15:56.115Z	ha-1	applyinfo	insert=670 fail=0 eof=171|12136 final=- hastate=active delayed=7
+2026-11-19T16:15:56.186Z	ha-2	applyinfo	insert=670 fail=0 eof=171|12136 final=- hastate=active delayed=8
