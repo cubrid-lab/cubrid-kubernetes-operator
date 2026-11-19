@@ -45,8 +45,9 @@ func stuckCluster(now time.Time) *databasev1alpha1.CubridCluster {
 		c.Status.Instances = append(c.Status.Instances, databasev1alpha1.InstanceStatus{
 			Name: name, Role: databasev1alpha1.RoleSlave, LastObservedTime: &observed,
 			Replication: &databasev1alpha1.InstanceReplication{
-				Source: "ha-0", DelayedPages: 3, CopiedEOF: &databasev1alpha1.LogAddress{Page: 120, Offset: 40},
-				StalledSince: &stalled, ObservedAt: &observed,
+				// No copiedEOF: the status keeps none while nothing waits to
+				// be copied, as in the Kind run of #1026.
+				Source: "ha-0", DelayedPages: 3, StalledSince: &stalled, ObservedAt: &observed,
 			},
 		})
 	}
@@ -93,9 +94,6 @@ func TestStuckStandbysEligible(t *testing.T) {
 		{"a failed change", func(c *databasev1alpha1.CubridCluster) {
 			c.Status.Instances[2].Replication.FailCount = 1
 		}, "ha-2 has failed 1 changes"},
-		{"no copy end", func(c *databasev1alpha1.CubridCluster) {
-			c.Status.Instances[1].Replication.CopiedEOF = nil
-		}, "ha-1 has no copy end read"},
 		{"a copy that receives nothing", func(c *databasev1alpha1.CubridCluster) {
 			since := metav1.NewTime(now.Add(-time.Minute))
 			c.Status.Instances[2].Replication.NotReceivingSince = &since
