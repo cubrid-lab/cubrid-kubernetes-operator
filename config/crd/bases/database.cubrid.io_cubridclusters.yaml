@@ -1148,6 +1148,12 @@ spec:
                     description: endTime is when the rebuild ended.
                     format: date-time
                     type: string
+                  formerPrimary:
+                    description: |-
+                      formerPrimary says that the member was status.lastResolvedPrimary and
+                      the request named the source, accepting the source's data as the
+                      member's data (ADR-0006).
+                    type: boolean
                   member:
                     description: member is the member whose storage is rebuilt.
                     type: string
@@ -1559,6 +1565,12 @@ spec:
                     description: endTime is when the rebuild ended.
                     format: date-time
                     type: string
+                  formerPrimary:
+                    description: |-
+                      formerPrimary says that the member was status.lastResolvedPrimary and
+                      the request named the source, accepting the source's data as the
+                      member's data (ADR-0006).
+                    type: boolean
                   member:
                     description: member is the member whose storage is rebuilt.
                     type: string
@@ -1634,6 +1646,13 @@ spec:
                         claimUID is the UID of the member's data PersistentVolumeClaim: the
                         replacement claim the rebuild would restore into.
                       type: string
+                    formerPrimary:
+                      description: |-
+                        formerPrimary says that the member is status.lastResolvedPrimary: it
+                        may have acknowledged writes the source lacks. Its request must name
+                        the source as a third field, stating that the source's data becomes the
+                        member's data (ADR-0006).
+                      type: boolean
                     member:
                       description: member is the member whose storage would be rebuilt.
                       type: string
@@ -1651,7 +1670,8 @@ spec:
                     token:
                       description: |-
                         token is the one-time token that requests this rebuild: the annotation
-                        database.cubrid.io/rebuild-member set to "<member>:<token>".
+                        database.cubrid.io/rebuild-member set to "<member>:<token>", or to
+                        "<member>:<token>:<source>" when formerPrimary is true.
                       type: string
                     volumeName:
                       description: volumeName is the PersistentVolume that claim is

@@ -1373,10 +1373,6 @@ A member is listed only when all of these hold in the latest observation:
   `False` meanwhile: the source is found among the other members. A member
   whose Pod UID changed between the reads before and after the role probes
   counts as one that did not answer;
-- the member is not the last resolved primary (`status.lastResolvedPrimary`).
-  It may hold writes no other member has, and its claim cannot be shown to
-  be a replacement while it gives no role, so a former primary whose storage
-  was lost cannot be rebuilt through this request (#117);
 - the member has a Pod and a data claim that is bound to a volume, is not
   being deleted and was created no later than the Pod, a claim of the member
   is recorded in `status.memberDataClaims`, the current claim has another
@@ -1387,6 +1383,27 @@ A member is listed only when all of these hold in the latest observation:
 The token is kept while the member's Pod, claim and volume, the source and
 the source's Pod stay the same, also across an Operator restart, and
 replaced by a new one as soon as any of them changes.
+
+**A former primary that lost its storage.** The member that
+`status.lastResolvedPrimary` names may have acknowledged writes the source
+lacks. That field moves only when every member answers, so it keeps naming a
+primary that lost its storage. Such a member is offered under the same
+conditions as any other, with `formerPrimary: true` in its offer
+(ADR-0006, "Rebuilding a former primary whose storage was replaced"). In
+practice:
+
+- while it is unverified beside the new master, a write quarantine is in force
+  (rule 2 of [the write quarantine](#the-write-quarantine)), and nothing is
+  offered until that quarantine is released, for example by the
+  [manual release](#manual-release), in which the administrator accepts that
+  writes only the lost member acknowledged may be lost;
+- its request must name the source as a third field,
+  `<member>:<token>:<source>`, which states that the source's data becomes
+  the member's data. Without that field the request is refused; with another
+  member's name it is ignored. A third field on any other member's request is
+  ignored;
+- `lastResolvedPrimary` does not move until the rebuilt member answers as a
+  slave and every member answers.
 
 **An offer is not proof that the storage is empty.** The Operator can only
 compare the claim and volume with what it saw holding the database. A
@@ -1406,13 +1423,17 @@ claim and a new Pod. Then read the token and set it with the member's name:
 ```sh
 kubectl get cubridcluster <name> -o jsonpath='{range .status.memberRebuildOffers[*]}{.member} {.claimUID} {.source} {.token}{"\n"}{end}'
 kubectl annotate cubridcluster <name> database.cubrid.io/rebuild-member="<member>:<token>" --overwrite
+# for an offer with formerPrimary: true, naming its source:
+kubectl annotate cubridcluster <name> database.cubrid.io/rebuild-member="<member>:<token>:<source>" --overwrite
 ```
 
 The Operator acts on it in the next observation of the roles. It reads the
 cluster from the API server, past its cache, and compares the annotation with
 the **stored** offers:
 
-- A value that is not `<member>:<token>`, a token that is not the stored
+- A value that is not `<member>:<token>` (or `<member>:<token>:<source>`
+  for a former primary), a source that is not the offer's, a source on an
+  offer without `formerPrimary`, a token that is not the stored
   offer's current token for the named member (including another member's
   token), or a token whose offer no longer binds this observation's member
   Pod, claim and volume, source and source Pod, is ignored, with one Warning Event
@@ -1425,7 +1446,8 @@ the **stored** offers:
   the observation decided from, nothing is accepted and the pass is retried
   after a second.
 - On acceptance it records `status.memberRebuild`: the member, its Pod and
-  claim UIDs and volume, the source and its Pod UID, the consumed `token`, a new
+  claim UIDs and volume, the source and its Pod UID, the consumed `token`,
+  `formerPrimary` when the request named the source, a new
   `operationID`, the `acceptedTime` and the `state` `Accepted`, and a Normal
   Event `MemberRebuildAccepted`. The operation ID is in the stored status
   before anything is restored on the member, and an Operator restart keeps
@@ -1456,7 +1478,8 @@ An accepted rebuild is withdrawn when a write quarantine starts, when the
 member answers as a master, when its Pod, claim or volume, the source or the
 source's Pod changes, or when the member could no longer be offered a
 rebuild for any of the reasons above (for example its claim is seen holding
-the database, or it becomes the last resolved primary). It then moves to
+the database), or when it becomes the last resolved primary while its request
+did not name the source. It then moves to
 `status.lastMemberRebuild` with the state `Withdrawn` and a message, with a
 Warning Event `MemberRebuildWithdrawn`, and a new token is published once the
 member can be rebuilt again. An observation that sees no healthy primary

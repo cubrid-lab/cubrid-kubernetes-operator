@@ -45,7 +45,17 @@ const (
 	rbPV0, rbPV1                            = "pv-0", "pv-1"
 	rbWantNotExpendable                     = "not shown expendable"
 	rbWantVolume                            = "volume"
+	rbWantNameSource                        = "name the source"
 )
+
+// formerPrimaryLost is rebuildScenario with r-2 as the last resolved primary:
+// it was the primary when it lost its storage, and CUBRID's failover made
+// r-0 the active master. r-2 gives no role, so no primary is resolved and
+// status.lastResolvedPrimary keeps naming r-2. The write quarantine that
+// rule 2 started for it was released by the administrator.
+func formerPrimaryLost(in *rebuildInput) {
+	in.CurrentPrimary, in.LastResolvedPrimary = "", rbM2
+}
 
 // rebuildNonces numbers the tokens of rebuildScenario, so that no two
 // scenarios give the same token.
@@ -164,8 +174,10 @@ func TestRecordDataClaims(t *testing.T) {
 }
 
 // A rebuild is refused while a write quarantine is in force, for the current
-// primary, for the last resolved primary, and for a member whose data has not
-// been shown expendable; only r-2 of the scenario is eligible. The claims are
+// primary, and for a member whose data has not been shown expendable; only
+// r-2 of the scenario is eligible. The last resolved primary that lost its
+// storage is eligible beside exactly one other active master, and refused
+// without one or while a write quarantine is in force (ADR-0006). The claims are
 // recorded from the same observation first, as the reconciler does.
 func TestRebuildRefusal(t *testing.T) {
 	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
@@ -183,15 +195,45 @@ func TestRebuildRefusal(t *testing.T) {
 		}, want: rbWantNotExpendable},
 		{name: "retained claim while another member does not answer", member: rbM1, want: rbWantNoHealthyPrimary},
 		{name: "no member", member: "r-7", want: "not a promotable member"},
-		{name: "last resolved primary unverified", member: rbM2, mutate: func(in *rebuildInput) {
-			in.CurrentPrimary, in.LastResolvedPrimary = rbM1, rbM2
-		}, want: rbWantLastResolved},
+		// The request for it must still name the source (decideRebuildRequest).
+		{name: "last resolved primary that lost its storage beside one other active master", member: rbM2,
+			mutate: formerPrimaryLost},
 		// A former primary answering as a slave has its claim recorded, so
-		// it is refused either way.
+		// it is refused.
 		{name: "last resolved primary answering as a slave", member: rbM2, mutate: func(in *rebuildInput) {
 			in.CurrentPrimary, in.LastResolvedPrimary = rbM0, rbM2
 			in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
-		}, want: rbWantLastResolved},
+		}, want: rbWantNotExpendable},
+		{name: "last resolved primary without another active master", member: rbM2, mutate: func(in *rebuildInput) {
+			formerPrimaryLost(in)
+			in.Observations[rbM0] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+		}, want: rbWantNoHealthyPrimary},
+		{name: "last resolved primary beside two active masters", member: rbM2, mutate: func(in *rebuildInput) {
+			formerPrimaryLost(in)
+			in.Observations[rbM1] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: now}
+		}, want: rbWantNoHealthyPrimary},
+		{name: "last resolved primary while another member does not answer", member: rbM2,
+			mutate: func(in *rebuildInput) {
+				formerPrimaryLost(in)
+				in.Observations[rbM1] = RoleObservation{}
+			}, want: rbWantNoHealthyPrimary},
+		{name: "last resolved primary while the source's Pod changed during the observation", member: rbM2,
+			mutate: func(in *rebuildInput) {
+				formerPrimaryLost(in)
+				in.Unstable = map[string]bool{rbM0: true}
+			}, want: rbWantNoHealthyPrimary},
+		{name: "last resolved primary while the quarantine for it is in force", member: rbM2,
+			mutate: func(in *rebuildInput) {
+				formerPrimaryLost(in)
+				in.Quarantine = &databasev1alpha1.WriteQuarantine{
+					Reason:         databasev1alpha1.WriteQuarantinedMemberUnverified,
+					ObservedMaster: rbM0, Members: []databasev1alpha1.WriteQuarantineMember{{Name: rbM2}}}
+			}, want: rbWantQuarantine},
+		{name: "last resolved primary on a new claim bound to its retained volume", member: rbM2,
+			mutate: func(in *rebuildInput) {
+				formerPrimaryLost(in)
+				in.Claims[rbM2] = claimIdentity{UID: rbClaim2New, Created: now.Add(-2 * time.Minute), VolumeName: rbPV2Old}
+			}, want: rbWantVolume},
 		{name: "quarantine for two masters", member: rbM2, mutate: func(in *rebuildInput) {
 			in.Quarantine = &databasev1alpha1.WriteQuarantine{Reason: databasev1alpha1.WriteQuarantinedMultipleMasters,
 				Members: []databasev1alpha1.WriteQuarantineMember{{Name: rbM0}, {Name: rbM1}}}
@@ -331,6 +373,24 @@ func TestRebuildOffers(t *testing.T) {
 		})
 	}
 
+	// The last resolved primary's offer says so, and it binds another
+	// token than the same member's offer as an ordinary member.
+	in = rebuildScenario(now)
+	in.Offers = offers
+	formerPrimaryLost(&in)
+	former, err := rebuildOffers(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFormer := want
+	wantFormer.FormerPrimary = true
+	if len(former) == 1 {
+		wantFormer.Token = former[0].Token
+	}
+	if len(former) != 1 || former[0] != wantFormer || former[0].Token == want.Token {
+		t.Fatalf("expected the former primary's offer %+v with a new token, got %+v", wantFormer, former)
+	}
+
 	in = rebuildScenario(now)
 	in.Offers, in.Unknown = offers, true
 	kept, err := rebuildOffers(in)
@@ -363,6 +423,18 @@ func TestDecideRebuildRequest(t *testing.T) {
 		t.Fatalf("scenario offers: %+v, %v", offers, err)
 	}
 	token := offers[0].Token
+	formerIn := rebuildScenario(now)
+	formerPrimaryLost(&formerIn)
+	formerOffers, err := rebuildOffers(formerIn)
+	if err != nil || len(formerOffers) != 1 || !formerOffers[0].FormerPrimary {
+		t.Fatalf("former primary offers: %+v, %v", formerOffers, err)
+	}
+	formerToken := formerOffers[0].Token
+	// asFormer is the pass after the former primary's offer was published.
+	asFormer := func(in *rebuildInput) {
+		formerPrimaryLost(in)
+		in.Offers = formerOffers
+	}
 	// bothReplaced is the scenario in which r-1 and r-2 answer as slaves on
 	// claims that were not recorded holding the database before this pass,
 	// so that both are offered.
@@ -376,6 +448,8 @@ func TestDecideRebuildRequest(t *testing.T) {
 		mutate  func(*rebuildInput)
 		verdict rebuildVerdict
 		msg     string
+		// former says that the accepted rebuild is the former primary's.
+		former bool
 	}{
 		{name: "no annotation", stored: func() *databasev1alpha1.CubridCluster { return storedRebuild("", offers) },
 			verdict: rebuildNone},
@@ -403,10 +477,44 @@ func TestDecideRebuildRequest(t *testing.T) {
 				both, _ := rebuildOffers(in)
 				return storedRebuild("r-1:"+both[1].Token, both)
 			}, verdict: rebuildInert, msg: "not the current rebuild token of r-1"},
-		{name: "last resolved primary unverified", mutate: func(in *rebuildInput) {
-			in.CurrentPrimary, in.LastResolvedPrimary = rbM1, rbM2
-		}, stored: func() *databasev1alpha1.CubridCluster { return storedRebuild("r-2:"+token, offers) },
-			verdict: rebuildRefused, msg: rbWantLastResolved},
+		{name: "former primary without the source named", mutate: asFormer,
+			stored: func() *databasev1alpha1.CubridCluster {
+				return storedRebuild("r-2:"+formerToken, formerOffers)
+			}, verdict: rebuildRefused, msg: rbWantNameSource},
+		{name: "former primary with another member named as the source", mutate: asFormer,
+			stored: func() *databasev1alpha1.CubridCluster {
+				return storedRebuild("r-2:"+formerToken+":r-1", formerOffers)
+			}, verdict: rebuildInert, msg: "not the source r-0"},
+		{name: "former primary with an empty source", mutate: asFormer,
+			stored: func() *databasev1alpha1.CubridCluster {
+				return storedRebuild("r-2:"+formerToken+":", formerOffers)
+			}, verdict: rebuildInert, msg: "not the source r-0"},
+		{name: "former primary with the source named while the quarantine for it is in force",
+			mutate: func(in *rebuildInput) {
+				asFormer(in)
+				in.Quarantine = &databasev1alpha1.WriteQuarantine{
+					Reason:         databasev1alpha1.WriteQuarantinedMemberUnverified,
+					ObservedMaster: rbM0, Members: []databasev1alpha1.WriteQuarantineMember{{Name: rbM2}}}
+			}, stored: func() *databasev1alpha1.CubridCluster {
+				return storedRebuild("r-2:"+formerToken+":r-0", formerOffers)
+			}, verdict: rebuildRefused, msg: rbWantQuarantine},
+		{name: "former primary with the source named and no active master left", mutate: func(in *rebuildInput) {
+			asFormer(in)
+			in.Observations[rbM0] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+		}, stored: func() *databasev1alpha1.CubridCluster {
+			return storedRebuild("r-2:"+formerToken+":r-0", formerOffers)
+		}, verdict: rebuildRefused, msg: rbWantNoHealthyPrimary},
+		{name: "former primary's token from before the member became the last resolved primary",
+			mutate:  formerPrimaryLost,
+			stored:  func() *databasev1alpha1.CubridCluster { return storedRebuild("r-2:"+token+":r-0", offers) },
+			verdict: rebuildInert, msg: rbWantStale},
+		{name: "former primary with the source named", mutate: asFormer,
+			stored: func() *databasev1alpha1.CubridCluster {
+				return storedRebuild("r-2:"+formerToken+":r-0", formerOffers)
+			}, verdict: rebuildAccepted, former: true},
+		{name: "a source named for an ordinary member", stored: func() *databasev1alpha1.CubridCluster {
+			return storedRebuild("r-2:"+token+":r-0", offers)
+		}, verdict: rebuildInert, msg: "only for the last resolved primary"},
 		{name: "stale token after the member's Pod changed", mutate: func(in *rebuildInput) {
 			in.Identities[rbM2] = memberIdentity{PodUID: rbPod2b, Created: now}
 		}, stored: func() *databasev1alpha1.CubridCluster { return storedRebuild("r-2:"+token, offers) },
@@ -479,6 +587,9 @@ func TestDecideRebuildRequest(t *testing.T) {
 			want := databasev1alpha1.MemberRebuild{Member: rbM2, PodUID: rbPod2, ClaimUID: rbClaim2New,
 				VolumeName: rbPV2New, Source: rbM0, SourcePodUID: rbPod0, Token: token, OperationID: rebuild.OperationID,
 				AcceptedTime: metav1.NewTime(now), State: databasev1alpha1.MemberRebuildAccepted}
+			if tc.former {
+				want.Token, want.FormerPrimary = formerToken, true
+			}
 			if rebuild.OperationID == "" || rebuild.OperationID == token {
 				t.Fatalf("the operation ID is a new value of its own, got %q", rebuild.OperationID)
 			}
@@ -547,6 +658,15 @@ func TestRebuildWithdrawal(t *testing.T) {
 		{name: "member becomes the last resolved primary", mutate: func(in *rebuildInput) {
 			in.LastResolvedPrimary = rbM2
 		}, want: rbWantLastResolved},
+		{name: "former primary's rebuild while it stays the last resolved primary", mutate: func(in *rebuildInput) {
+			formerPrimaryLost(in)
+			in.Active.FormerPrimary = true
+		}},
+		{name: "former primary's rebuild when a write quarantine starts", mutate: func(in *rebuildInput) {
+			formerPrimaryLost(in)
+			in.Active.FormerPrimary = true
+			in.Quarantine = &databasev1alpha1.WriteQuarantine{Reason: databasev1alpha1.WriteQuarantinedMultipleMasters}
+		}, want: rbWantQuarantine},
 		{name: "claim recorded holding the database", mutate: func(in *rebuildInput) {
 			in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
 			in.DataClaims = recordDataClaims(*in)
