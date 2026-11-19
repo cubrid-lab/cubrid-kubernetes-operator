@@ -20,6 +20,9 @@ limitations under the License.
 package e2e
 
 import (
+	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +150,107 @@ func TestBackupRefusal(t *testing.T) {
 		err := backupRefusal(tc.b)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, expected an error with %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// TestResumeAppliers checks that the cleanup of stuckStandbysStep counts a
+// slave as resumed only when, after SIGCONT, a complete listing shows every
+// paused applier running or exited and none stopped. A failed exec, a
+// listing cut short, or an applier still stopped, as after a kill that
+// failed in a shell that still ended well, keeps the slave pending: the
+// cleanup tries again, and reports failure when an applier stays stopped.
+// Before, the resume counted as done before any SIGCONT, and its errors were
+// ignored (#291, #1026).
+func TestResumeAppliers(t *testing.T) {
+	const (
+		running = "sent SIGCONT to 101\n101 State:\tS (sleeping)\nappliers listed\n"
+		stopped = "101 State:\tT (stopped)\nappliers listed\n"
+		cut     = "sent SIGCONT to 202\n202 State:\tS (sleeping)\n"
+		exited  = "appliers listed\n"
+	)
+	type reply struct {
+		out string
+		err error
+	}
+	pending := map[string][]string{"ha-1": {"101"}, "ha-2": {"202"}}
+	cases := []struct {
+		name    string
+		replies map[string][]reply
+		execs   map[string]int
+		left    map[string][]string
+	}{
+		{"both resumed at once", map[string][]reply{
+			"ha-1": {{running, nil}}, "ha-2": {{exited, nil}},
+		}, map[string]int{"ha-1": 1, "ha-2": 1}, nil},
+		{"a failed exec is tried again", map[string][]reply{
+			"ha-1": {{"", errors.New("error dialing backend")}, {running, nil}}, "ha-2": {{exited, nil}},
+		}, map[string]int{"ha-1": 2, "ha-2": 1}, nil},
+		{"a listing cut short is tried again", map[string][]reply{
+			"ha-1": {{running, nil}}, "ha-2": {{cut, nil}, {exited, nil}},
+		}, map[string]int{"ha-1": 1, "ha-2": 2}, nil},
+		{"an applier that stays stopped after a shell that ended well fails", map[string][]reply{
+			"ha-1": {{stopped, nil}}, "ha-2": {{exited, nil}},
+		}, map[string]int{"ha-1": 3, "ha-2": 1}, map[string][]string{"ha-1": {"101"}}},
+		{"an exec that always fails fails, whatever it printed", map[string][]reply{
+			"ha-1": {{running, nil}}, "ha-2": {{exited, errors.New("exit status 1")}},
+		}, map[string]int{"ha-1": 1, "ha-2": 3}, map[string][]string{"ha-2": {"202"}}},
+		{"another applier still stopped fails", map[string][]reply{
+			"ha-1": {{running + "303 State:\tT (stopped)\nappliers listed\n", nil}}, "ha-2": {{exited, nil}},
+		}, map[string]int{"ha-1": 3, "ha-2": 1}, map[string][]string{"ha-1": {"303"}}},
+	}
+	for _, tc := range cases {
+		// Each exec on a member gets its next reply, and the last one again
+		// once they are used up.
+		execs := map[string]int{}
+		run := func(pod, signal string) (string, error) {
+			if signal != "CONT" {
+				t.Errorf("%s: signal %s sent to %s, expected CONT", tc.name, signal, pod)
+			}
+			rs := tc.replies[pod]
+			r := rs[min(execs[pod], len(rs)-1)]
+			execs[pod]++
+			return r.out, r.err
+		}
+		logged := 0
+		left, err := resumeAppliers(run, pending, 3, 0, func(string) { logged++ })
+		if !maps.Equal(execs, tc.execs) {
+			t.Errorf("%s: execs %v, expected %v", tc.name, execs, tc.execs)
+		}
+		if logged != execs["ha-1"]+execs["ha-2"] {
+			t.Errorf("%s: %d execs logged of %v", tc.name, logged, execs)
+		}
+		if !maps.EqualFunc(left, tc.left, slices.Equal) {
+			t.Errorf("%s: still pending %v, expected %v", tc.name, left, tc.left)
+		}
+		if (err != nil) != (tc.left != nil) {
+			t.Errorf("%s: got the error %v, expected one only when an applier is still pending", tc.name, err)
+		}
+	}
+	if !maps.EqualFunc(pending, map[string][]string{"ha-1": {"101"}, "ha-2": {"202"}}, slices.Equal) {
+		t.Errorf("the caller's pending map was changed: %v", pending)
+	}
+}
+
+// TestStuckWriterVerdict checks that the writes of stuckStandbysStep pass
+// only when the csql session ended well and printed no ERROR, so that a write
+// stream that failed part of the way fails the step (#291, #1026).
+func TestStuckWriterVerdict(t *testing.T) {
+	if err := stuckWriterVerdict("1 row affected.\n", nil); err != nil {
+		t.Fatalf("a session without an error was rejected: %v", err)
+	}
+	cases := map[string]struct {
+		out string
+		err error
+	}{
+		"a session that failed":             {"1 row affected.\n", errors.New("exit status 1")},
+		"an ERROR in the output":            {"1 row affected.\nERROR: In line 7, Server no longer responding\n", nil},
+		"a lost session with exit status 0": {"ERROR CODE = -199\nERROR CODE = -111\n", nil},
+		"a feeder that failed, no output":   {"", errors.New("exit status 141")},
+	}
+	for name, tc := range cases {
+		if stuckWriterVerdict(tc.out, tc.err) == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

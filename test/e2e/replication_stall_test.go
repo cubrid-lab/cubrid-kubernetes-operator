@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
@@ -816,11 +817,13 @@ const (
 // pauseAppliersScript sends the signal named in $0, STOP or CONT, to every
 // applylogdb process of the member and prints "sent SIG<signal> to <pid>"
 // for each; with LIST it sends none. Then it prints "<pid> State: <state>"
-// for every applylogdb process. The processes are found by their command
-// line under /proc. The match is anchored on "cub_admin applylogdb ", so
-// neither the shell of this exec, whose command line holds the pattern, nor
-// the Instance Manager's applyinfo, also a cub_admin, is signalled
-// (docs/poc/poc67/freeze.sh, docs/poc/poc68).
+// for every applylogdb process, and last the line "appliers listed", so that
+// a listing cut short is told apart from one without a stopped applier. The
+// processes are found by their command line under /proc. The match is
+// anchored on "cub_admin applylogdb ", so neither the shell of this exec,
+// whose command line holds the pattern, nor the Instance Manager's
+// applyinfo, also a cub_admin, is signalled (docs/poc/poc67/freeze.sh,
+// docs/poc/poc68).
 const pauseAppliersScript = `for p in /proc/[0-9]*; do
   a=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
   case "$a" in 'cub_admin applylogdb '*)
@@ -830,7 +833,89 @@ done
 for p in /proc/[0-9]*; do
   a=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
   case "$a" in 'cub_admin applylogdb '*) echo "${p#/proc/} $(grep State: "$p/status")" ;; esac
-done`
+done
+echo 'appliers listed'`
+
+// appliersListed matches the last line of a complete output of the pause
+// script, and listedApplier one applylogdb process and its state in it.
+var (
+	appliersListed = regexp.MustCompile(`(?m)^appliers listed$`)
+	listedApplier  = regexp.MustCompile(`(?m)^(\d+) State:\s+(\S)`)
+)
+
+// stillStopped returns the applylogdb processes that an output of the pause
+// script does not show running: every listed process in the state T or t
+// (stopped), or, when the listing is not complete, every one of paused, since
+// nothing then shows that they run. A process of paused that is not listed
+// has exited; were its PID taken again, it would not be by an applier.
+func stillStopped(paused []string, out string) []string {
+	if !appliersListed.MatchString(out) {
+		return slices.Clone(paused)
+	}
+	var stopped []string
+	for _, m := range listedApplier.FindAllStringSubmatch(out, -1) {
+		if m[2] == "T" || m[2] == "t" {
+			stopped = append(stopped, m[1])
+		}
+	}
+	return stopped
+}
+
+// resumeAppliers sends SIGCONT, through run, to every applylogdb process of
+// each member in pending, which maps the members whose appliers were paused
+// to the PIDs that were. It then checks, from the listing in the same
+// output, that each of those processes runs or has exited and that no
+// applier of the member is stopped. A member whose exec failed or whose
+// listing was cut short stays pending, whatever its output says, since a
+// shell can end well after a kill that failed. It tries up to attempts
+// times, wait apart, and returns the members still pending, with the PIDs
+// still stopped or not shown running, and an error naming them. Every exec
+// and its output go to log.
+func resumeAppliers(run func(pod, signal string) (string, error), pending map[string][]string,
+	attempts int, wait time.Duration, log func(string)) (map[string][]string, error) {
+	left := maps.Clone(pending)
+	for attempt := 1; attempt <= attempts && len(left) > 0; attempt++ {
+		if attempt > 1 {
+			time.Sleep(wait)
+		}
+		for _, pod := range slices.Sorted(maps.Keys(left)) {
+			out, err := run(pod, "CONT")
+			log(fmt.Sprintf("SIGCONT on %s, attempt %d of %d: error %v\n%s", pod, attempt, attempts, err, out))
+			if err != nil {
+				continue
+			}
+			if stopped := stillStopped(left[pod], out); len(stopped) > 0 {
+				left[pod] = stopped
+				continue
+			}
+			delete(left, pod)
+		}
+	}
+	if len(left) == 0 {
+		return nil, nil
+	}
+	var problems []string
+	for _, pod := range slices.Sorted(maps.Keys(left)) {
+		problems = append(problems, fmt.Sprintf("%s %v", pod, left[pod]))
+	}
+	return left, fmt.Errorf("after %d SIGCONT attempts, appliers not shown running or exited: %s",
+		attempts, strings.Join(problems, "; "))
+}
+
+// stuckWriterVerdict returns nil when the csql session of stuckStandbysStep
+// ended without an error and printed no ERROR: every one of its statements
+// then committed. The step also expects exactly the rows it wrote on the
+// master, so a session cut short fails it as well. A failed or lost
+// statement is never written again: whether it committed is not known.
+func stuckWriterVerdict(out string, err error) error {
+	if err != nil {
+		return fmt.Errorf("the csql session failed: %w: %s", err, out)
+	}
+	if strings.Contains(out, "ERROR") {
+		return fmt.Errorf("the csql session printed an ERROR: %s", out)
+	}
+	return nil
+}
 
 // sentSignal matches one process the pause script signalled.
 var sentSignal = regexp.MustCompile(`(?m)^sent SIG(?:STOP|CONT) to (\d+)$`)
@@ -1019,35 +1104,49 @@ func stuckStandbysStep(r *haRun) {
 
 		By("pausing the applier of every slave: " + strings.Join(slaves, ", "))
 		// The appliers are resumed whatever happens below, so that no later
-		// step starts with a paused applier.
-		resumed := false
-		resume := func() {
-			resumed = true
-			for _, slave := range slaves {
-				out, err := appliers(slave, "CONT")
-				sample(fmt.Sprintf("SIGCONT on %s: error %v\n%s", slave, err, out))
-			}
+		// step starts with a paused applier. pending holds every slave on
+		// which SIGSTOP was tried, with the PIDs it stopped, until a listing
+		// shows each of them running or exited and no applier of the slave
+		// stopped. The cleanup tries again while any slave is pending, and
+		// fails the step when one still is.
+		pending := map[string][]string{}
+		resume := func() error {
+			left, err := resumeAppliers(appliers, pending, 3, 5*time.Second, sample)
+			pending = left
+			return err
 		}
 		DeferCleanup(func() {
-			if !resumed {
-				resume()
+			if len(pending) == 0 {
+				return
+			}
+			if err := resume(); err != nil {
+				AddReportEntry("applier still paused", err.Error())
+				Fail("the paused appliers were not shown resumed, and may stop replication in later steps: " +
+					err.Error())
 			}
 		})
 		paused := map[string][]string{}
 		for _, slave := range slaves {
+			// The slave is pending before the exec, since an exec that
+			// fails may still have stopped an applier.
+			pending[slave] = nil
 			out, err := appliers(slave, "STOP")
 			sample(fmt.Sprintf("SIGSTOP on %s: error %v\n%s", slave, err, out))
-			Expect(err).NotTo(HaveOccurred(), "pausing the appliers of %s: %s", slave, out)
 			for _, m := range sentSignal.FindAllStringSubmatch(out, -1) {
 				paused[slave] = append(paused[slave], m[1])
 			}
+			pending[slave] = slices.Clone(paused[slave])
+			Expect(err).NotTo(HaveOccurred(), "pausing the appliers of %s: %s", slave, out)
 			Expect(paused[slave]).NotTo(BeEmpty(), "no applylogdb process was found on %s: %s", slave, out)
 		}
 		pausedAt := time.Now()
 
 		By(fmt.Sprintf("writing %d batches of %d rows on %s, one every %s",
 			stuckWriteRounds, stuckWriteRows, master, stuckWritePause))
-		script := fmt.Sprintf(`export PATH="${CUBRID}/bin:${PATH}"
+		// Each batch commits on its own. pipefail makes the session fail
+		// when the loop that feeds csql fails as well as when csql does.
+		script := fmt.Sprintf(`set -o pipefail
+export PATH="${CUBRID}/bin:${PATH}"
 { for i in $(seq 1 %[1]d); do
     values="$(seq -s, -f "(%%.0f,'stuck')" $(( (i-1)*%[2]d+1 )) $(( i*%[2]d )))"
     printf 'INSERT INTO %[3]s (id, pad) VALUES %%s;\n' "$values"
@@ -1133,7 +1232,7 @@ func stuckStandbysStep(r *haRun) {
 		}
 
 		By("resuming the appliers of every slave")
-		resume()
+		Expect(resume()).To(Succeed(), "resuming the paused appliers")
 		resumedAt := time.Now()
 
 		By("checking that the same backup is given to a slave after the resume")
@@ -1149,13 +1248,18 @@ func stuckStandbysStep(r *haRun) {
 		// targetRecordedAt has whole seconds.
 		Expect(recordedAt).To(BeTemporally(">=", resumedAt.Truncate(time.Second)), "when the backup's target was recorded")
 
-		By("checking that every slave holds the master's rows after the writes")
+		By("checking that every write committed on the master and every slave holds the master's rows")
+		// A write that failed or was lost is not written again, since
+		// whether it committed is not known: the step fails instead.
 		var session result
 		Eventually(writes, writeLimit).Should(Receive(&session))
 		writeScenarioFile("stuck-standbys/writer.txt", []byte(fmt.Sprintf("error: %v\n%s\n", session.err, session.out)))
-		want, err := count(master)
+		Expect(stuckWriterVerdict(session.out, session.err)).To(Succeed(), "the writes on %s", master)
+		want := fmt.Sprint(stuckWriteRounds * stuckWriteRows)
+		got, err := count(master)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(want).NotTo(Equal("0"), "rows of %s on %s", table, master)
+		Expect(got).To(Equal(want), "rows of %s on %s after %d batches of %d rows", table, master,
+			stuckWriteRounds, stuckWriteRows)
 		for _, slave := range slaves {
 			Eventually(func() (string, error) { return count(slave) }, 5*time.Minute, 3*time.Second).
 				Should(Equal(want), "rows of %s on %s", table, slave)
