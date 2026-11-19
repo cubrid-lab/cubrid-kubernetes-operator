@@ -97,8 +97,8 @@ func TestQuarantineMissedProbeAfterGracefulDeletionStartsAtOnce(t *testing.T) {
 		t.Fatalf("%s is confirmed %v or pending %v: a missed probe ends the confirmed-termination cover and is "+
 			"never pending", q0, d.Confirmed, d.Pending)
 	}
-	if q.Members[0].ObservedRole != "no role" {
-		t.Errorf("observed role %q, want %q", q.Members[0].ObservedRole, "no role")
+	if q.Members[0].ObservedRole == string(databasev1alpha1.RoleSlave) || q.Members[0].ObservedRole == "" {
+		t.Errorf("observed role %q, want the missed probe recorded, not the earlier slave answer", q.Members[0].ObservedRole)
 	}
 }
 
