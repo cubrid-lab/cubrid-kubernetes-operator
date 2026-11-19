@@ -29,7 +29,8 @@ const (
 	ServerLogLineWidth = 400
 	// ServerLogTailScript prints the last ServerLogTailLines lines of the
 	// newest server error log of database $0, in the member's container.
-	ServerLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
+	ServerLogTailScript = `f=$(cd "$CUBRID/log/server" 2>/dev/null && ` +
+		`ls -1t -- "$0".err "$0"_*.err 2>/dev/null | head -n 1); ` +
 		`[ -n "$f" ] || { echo "(no server error log)"; exit 0; }; ` +
 		`timeout 5 tail -n 40 -- "$CUBRID/log/server/$f"`
 	// ServerAgeScript prints the member's time and uptime from one moment,
