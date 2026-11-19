@@ -35,14 +35,48 @@ v0.1 support claim, required scenarios, validation evidence, release date
 target, or review gates. [CONTRIBUTING.md](./CONTRIBUTING.md#v01-scope-intake-freeze-effective-2026-11-18)
 defines the mandatory four-question work-intake test.
 
-**Work in order:** (1) verified HA/write safety and availability regressions,
-including controlled network partitions and data histories (#702, #716,
-#115, #931); (2) accepted retained-data rejoin and explicit PVC-loss rebuild
-with SQL data checks (#116–#118); (3) required actual VM failure, backup/restore,
-storage bounds and candidate qualification (#110, #88–#89, #666, #126);
-(4) independent runbook verification and final release evidence (#125, #127,
-#94). Respect prerequisites, assignees and serialized lab authorization; these
-are work streams, not permission to run all at once.
+**Work in order, subject to gates below:** (1) required CI restoration
+and independently executable HA/write safety and availability fixes; (2)
+retained-data rejoin and explicit PVC-loss rebuild with actual SQL comparisons;
+(3) other mandatory VM, storage, backup/restore and release prerequisites;
+(4) a single pinned candidate's repeated scenarios and soak, then independent
+runbook reproduction and release review. **Order means prerequisites and exit
+evidence, not merely issue priority or a requirement to serialize independent
+off-lab work.** The [current work-order decisions on #308](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/308#issuecomment-7002540810)
+govern issue owners and handoffs. A green unit test, PR merge or Kind run cannot
+substitute for the real SQL/VM outcome a gate requires.
+
+#### Current execution gates — 2026-11-19
+
+**This is an execution/verification sequence, not an issue-priority list.**
+A failed gate holds its own merge, scenario verdict or release claim; it does
+not stop independent analysis or an owner's safe, scoped work.
+
+| Gate | Current blocker | Exit condition |
+|---|---|---|
+| **0 — Final-head CI** | #1004: Kind E2E cannot import its s3mock helper; #1002 merged without a passing E2E. | Restore a real applicable E2E pass and other required checks before the next code merge. A docs-only skip is not an E2E pass. |
+| **1a — VM failure (S04)** | #1000 harness fix merged (#1002). #1003/#110: 40.483 s from Node fence to first `-rw` write, above the 30 s limit. | Measure observations, release passes and Broker startup; fix without weakening ADR-0005, then pass an authorized pinned VM S04 rerun. |
+| **1b — HA data safety** | #702/#115: a partition/heal trial's promoted member missed 73 acknowledged writes. | Qualify S07–S08 against independent new/existing-session SQL and each member's dataset; keep failed evidence. |
+| **1c — Other safety regressions** | #938: S03 graceful exceeded 30 s; #949: possible observation gap on child-write failure. | Bounded reproduction, safe fix and relevant regressions under existing owners. |
+| **2 — Rejoin/rebuild** | #116–#118: S09–S10 implementation, permissioned PVC-loss rebuild and SQL comparisons incomplete. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
+| **3 — Other required gates** | #88/#89 backup/restore, #666 capacity, #20 API ownership and #94/#124 release controls. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
+| **4 — Release qualification** | #126 candidate repetitions/24-hour soak and #127 independent reproduction outstanding. | Freeze one exact candidate after required gates, run the full qualification, then decide Go/No-Go. |
+
+**Parallel work:** CI repair (0), read-only S04 latency analysis (1a),
+#702/#115 evidence analysis (1b), and independent recovery/backup preparation
+may overlap. Final-head implementation merges still require applicable CI.
+A successful Kind run or merged PR cannot close an unpassed VM/SQL gate.
+Do not raise the S04 limit or relax Write Quarantine just to obtain a pass.
+The #931 restart regression is closed narrowly; it does not qualify S07/S08.
+
+**Lab boundary:** every disruptive run needs #80/#122 fault authorization,
+live Lease, pinned images, placement/storage preflight, off-node evidence and
+cleanup. Node-level fencing affects other CubridClusters; record their
+safe return. [Terraform's lab](https://github.com/cubrid-lab/terraform-zadara-k8s)
+pins an Operator image but uses `local-path`, **not CSI**; reboot evidence
+does not prove CSI recovery. [Terraform PR #117](https://github.com/cubrid-lab/terraform-zadara-k8s/pull/117)
+remains independently blocked by the existing State VM protocol and its
+unapproved server-first cutover, not by Operator source analysis.
 
 Post-v0.1 research (#955–#958), speculative new architecture/API work and
 optional harness/CI enhancements do not enter the v0.1 execution queue merely
@@ -125,9 +159,11 @@ candidate evidence arrives.
 `candidate`. Single-node lifecycle (S00) and three-member HA with RW/RO access
 (S01–S02) reach Kind, with VM-lab runs without a fault. Pod, Broker and
 Operator failures reach Kind; the targeted #931 manager-restart regression
-passed once on the VM lab after #932, but does not qualify S06. Actual VM power loss (S04) has a failed installed-lane run, not a
-qualified scenario pass (#110, #1000). Write quarantine was seen in one Kind run
-of S03/S06; S07–S08 has no pass,
+passed once on the VM lab after #932, but does not qualify S06.
+Actual VM power loss (S04) is **failed, not qualified**: #1000's fencing
+harness merged in #1002, but first `-rw` write took 40.483 s from the
+taint versus 30 s allowed (#110, #1003). Write quarantine was seen in
+one Kind run of S03/S06; S07–S08 has no pass,
 and its VM-lab partition runs are blocked. Open safety defects: a cut
 higher-ranked member became heartbeat master without 50 acknowledged writes on
 the VM lab (#702), and a graceful master deletion triggered an avoidable
@@ -148,7 +184,7 @@ The reproducible, reviewed release is not run.
 | Three-member HA and RW/RO access (S01–S02) | Kind; VM-lab (no fault) | #126 | Seeded via object storage (a mock on Kind). S01–S02: a 121-operation history checked on every member and Service; `-ro` write refused (`-581`, POC-22, #366). Installed-Operator HA run, no fault ([LAB01][installed-ha]): 2 VM-lab passes on 2026-10-24 (#546; object store, terraform-zadara-k8s #51); not an S01 result |
 | Pod and Broker failure (S03, S05) | Kind | #85, #126, #938 | S03 (3 variants; no two masters seen, #368; POC-19) and S05 (3 variants) run in CI on Kind. A graceful master deletion took 59.3 s against the 30 s `failover_limit` (#938). One [manual VM-lab master deletion][lab-20261021] on 2026-10-21: not a scenario pass |
 | Operator failure (S06) | Kind; VM-lab (1 run) | #85, #126 | Both variants run on Kind: SQL continues, CUBRID fails over without the Operator, and the returning Operator names the new master and restarts no member. S06 `restart` passed once on the VM lab on 2026-10-24: status 23.3 s after the fault, no failed client operation (#546). One run; applier fail count not checked there |
-| VM failure (S04) | VM-lab (failed; not qualified) | #85, #110, #1000, #126 | [Power-off run](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/110#issuecomment-6995884469): no acknowledged row lost; write recovery 5m9s from VM stop. Required fence and taint-based timing absent (#1000). |
+| VM failure (S04) | VM-lab (failed; not qualified) | #85, #110, #1003, #126 | #1000 harness fixed by #1002. [11/19 fenced VM run](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/110#issuecomment-7000840854): 40.483 s taint-to-first-write (limit 30 s); 3,618 acknowledged, none missing, return barrier held. S04 not qualified. |
 | Ambiguous primary detection | unit-envtest | #115 | Two fresh active-master claims keep `Ready` and `cubrid_cluster_ready` off (#339; engine occurrence unverified, #373). A reconcile that ends before the roles are read reports them `Unknown` instead of keeping an earlier primary (#340) |
 | Second writable master (engine behavior) | Kind (POC-51); Docker POCs | #115, #702 | Docker: a higher-priority member became a second writable master (POC-50, #392). Kind with the Operator, cuts: acknowledged rows diverged once; `-rw` refused while `Ready` stayed `True` twice (POC-51). Nothing the Operator renders stops such a promotion; acknowledged writes missing on the final master (POC-52) |
 | Replication health | unit-envtest; Kind (non-contract step) | none recorded; live check unowned | `ReplicationHealthy`/`HAReady` on a stalled slave or held transaction (#229, #249, #352; POC-48): pass in the [reviewed Kind run][kind-base]; nothing on the VM lab. Applier restart (#360): unit tests on POC-30, no cluster run. Nothing acts on the Condition |
@@ -158,7 +194,7 @@ The reproducible, reviewed release is not run.
 | Write quarantine: implementation | unit-envtest | #86, #115 | Quarantine, token release, external fence and return barrier (#113; ADR-0005 section 8). Decision-level tests are unit/envtest; separate Kind/VM observations below do not qualify S07/S08. |
 | Write quarantine on Kind (S03, S06) | Kind (1 run) | #126, #938 | Before #113, `-rw` writes went on while `PrimaryResolved` and `RoutingReady` were not `True` (S03). [One Kind run][kind-quarantine]: a forced master deletion refused `-rw` 38.6–41.3 s (S03 abrupt) and 87.1 s (S06), judged by `quarantined_failover_limit` (6 min). S03 graceful keeps the 30 s `failover_limit`, not yet re-measured |
 | Healthy RW path after Operator restart | VM-lab (1 post-fix run) | #115, #126 | [VM evidence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/931#issuecomment-6977472448): #932 fix on `ce1dadf`; 68–73 s observation gap, two RW paths open, 621/621 acknowledged writes, all 641 checked rows on each member. #931 closed; not partition or candidate acceptance. |
-| Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #716 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
+| Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
 | Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
 | Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
 | Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
