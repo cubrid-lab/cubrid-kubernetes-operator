@@ -25,6 +25,18 @@ HA failure cases (#702/#703). Those Docker observations do not by themselves
 prove two writable masters were exposed through the Operator-managed RW Broker
 in Kubernetes; that path needs separate evidence (#115).
 
+The managed-path records so far show the hazard in a sequential form. In
+Kind runs with the Operator and Brokers (POC-51, and the 2026-11-08 record on
+#702) and in five VM-lab runs that cut off a member ranked above the master
+(2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18), writes
+through `-rw` were acknowledged by one master at a time. The VM-lab runs saw
+no overlapping writable servers in 959 role sweeps. Even so, the old master's
+last acknowledged writes never reached the member CUBRID made master after
+the heal. Docker trials with clients inside each member and no Broker
+(POC-50, also POC-52 and POC-58) remain the only records of two servers
+acknowledging writes at once. These are observations of one engine series
+in small numbers of runs, not a general statement of CUBRID behavior.
+
 ## Constraints
 
 Grounded in CUBRID 11.4 + prior ADRs:
@@ -243,8 +255,8 @@ case is reduced availability, not operator-induced split-brain.
 tag on Kind), from small trial counts, and none of it is a CUBRID guarantee.
 The records are in `docs/poc/RESULTS.md`.
 
-- **Two active servers appear when a member is cut off from its peers,
-  whatever its rank.**
+- **In Docker, two active servers appeared when a member was cut off from
+  its peers, whatever its rank.**
   - When the cut-off member ranked above the active master, it promoted
     itself, and both acknowledged writes in 4 of 26 trials, for up to
     40.6 s (POC-50).
@@ -254,13 +266,35 @@ The records are in `docs/poc/RESULTS.md`.
   - With the highest-ranked member as master and a lower one cut off, no
     second server accepted a write in 85 trials, including a 600 s hold
     (POC-50).
+- **On the VM lab, with the Operator and Brokers, no two active servers
+  were seen.** A member ranked above the master was cut off in five runs
+  (2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18).
+  - It became heartbeat master during the cut, but its server stayed
+    `registered_and_to_be_active`. No sweep of 959 saw more than one
+    active server.
+  - In the two runs with server logs, its server was never active from the
+    master move to the end of observation. The other three runs did not
+    observe its server from the master move to the first sweep (63 to
+    81 s, apart from one check just before the cut) or from the last sweep
+    in the cut to the heal (48 to 51 s).
 - **Writes acknowledged on one side during a cut were lost when it
   healed.** Where both sides took writes, one side's acknowledged writes
   were missing from the final master:
   - In Kind runs with the Operator and Brokers (data on #702, 2026-11-08),
     the higher-ranked member was cut off. It was master again after the
     heal in 19 of 19 trials, and the writes the lower member had
-    acknowledged through `-rw` during the cut were not on it.
+    acknowledged through `-rw` during the cut were not on it. Within each
+    trial the two members' acknowledgement spans did not overlap.
+  - In the five VM-lab runs above, only the old master took writes. Every
+    write it acknowledged from about 2 s after the cut was issued until the
+    quarantine closed the path, 6 to 17 s after the cut was issued, reached
+    it and the other slave but never the cut-off member: 13 to 73 writes
+    per run. CUBRID left the cut-off member as heartbeat master after the
+    heal in all five runs, and in one it became the active master while
+    lacking all 73. No row was found only on the cut-off member. That
+    writes went to one master at a time is inferred from the rows, the role
+    sweeps and the times; no Broker or CAS record ties a write to a
+    server.
   - In POC-52, 922 acknowledged writes in 23 of 78 trials were not on the
     final master.
   - In POC-58's control trials, the higher-ranked member was cut off and
@@ -276,12 +310,19 @@ The records are in `docs/poc/RESULTS.md`.
   recreated at once and the former master rejoined as a slave in all 8 runs.
   The required limit for that recovery is 30 s
   (`docs/testing/scenario-contract.md`, `failover_limit`).
-- **Neither ping parameter is a substitute** (POC-52).
-  - `ha_ping_hosts` held the promotion only with every packet cut and no
-    `cubrid heartbeat status` call on the member, and the Instance
-    Manager's readiness check makes that call every 5 s.
-  - `ha_tcp_ping_hosts` held it in every full cut, but caused failovers
-    with no member failed when its target was down.
+- **Neither ping parameter is a substitute** (POC-52, in Docker with a
+  stand-in target and no Pod; a plain status call every 5 s stood in for the
+  Instance Manager's calls).
+  - `ha_ping_hosts` held the promotion only with every packet cut, the
+    target included, and no `cubrid heartbeat status` call on the member
+    that returned before the heartbeat pass that counted it isolated. The
+    Instance Manager's readiness check makes that call every 5 s, and its
+    `/v1/role` answer makes it too.
+  - `ha_tcp_ping_hosts` held it in every full cut, but with its target down
+    and a status call every 5 s it caused failovers with no member failed.
+  - On the VM lab, `ha_ping_hosts` set by hand did not make a cut-off master
+    that no member replaced demote (POC-40). POC-52 reads that result as
+    depending on the status calls as well.
   - The Operator renders neither.
 
 **Definitions.** Each is read from the current pass's observations.
