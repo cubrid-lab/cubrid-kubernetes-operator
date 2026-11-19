@@ -2462,8 +2462,10 @@ it needs more.
 - **Data check:** after the partition ends, each member's rows are compared.
   A difference between members is the expected input for S09 and S10, and
   must be *reported* by the cluster's status, not hidden.
-- **Limits:** `quarantine_limit`, `partition_duration`.
-  Their unset values remain blocked baselines, not passing measurements.
+- **Limits:** `quarantine_limit`, `partition_duration`. On the VM lab they
+  are 30 seconds and 2 minutes ([time limits](#time-limits)); elsewhere they
+  are unset, and an unset value remains a blocked baseline, not a passing
+  measurement.
   Established-session timing is reported independently; this contract invents
   no numeric bound for it. Missing or unordered measurements remain unknown,
   never zero. Direct database connections and the interval when the Operator
@@ -2485,13 +2487,14 @@ it needs more.
   and established-session SQL and the release separately, removes the fault
   however the run ends and checks every member's rows. It covers neither the
   `asymmetric` variant nor the persistence, release-token and return checks
-  above. The limits above stay unset, so a run is a baseline until they are
-  set. Its first lab runs, on 2026-11-17 UTC, are recorded with the lane
-  ([first lab runs](installed-ha.md#first-lab-runs)): the control started no
-  quarantine, and a 2-minute symmetric cut of the master produced no second
-  active master, so the quarantine triggers still need another fault shape.
-  `higher-rank-isolated` was added for that, from POC-50 and POC-51, and has
-  not run on the lab yet.
+  above. A judged run passes the VM-lab values of the limits above; without
+  them it is a baseline. Its first lab runs, on 2026-11-17 UTC, are recorded
+  with the lane ([first lab runs](installed-ha.md#first-lab-runs)): the
+  control started no quarantine, and a 2-minute symmetric cut of the master
+  produced no second active master, so the quarantine triggers needed another
+  fault shape. `higher-rank-isolated` was added for that, from POC-50 and
+  POC-51; its lab runs are the baseline of `quarantine_limit`
+  ([baselines](#baselines)).
 
 ### S08: replication lag followed by repeated failures
 
@@ -3234,8 +3237,8 @@ measured; **unset** limits have neither a value nor a baseline.
 | `vm_return_limit` | VM powered on until its member has rejoined | unset | unset |
 | `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
 | `operator_resync_limit` | Operator started until status matches fresh observations | Kind on a GitHub-hosted runner: 2 minutes. VM lab: unset | Kind: measured |
-| `quarantine_limit` | Quarantine-triggering observation until new managed read-write connections stop succeeding | unset | unset |
-| `partition_duration` | How long the partition is held | unset | unset |
+| `quarantine_limit` | Quarantine-triggering observation until new managed read-write connections stop succeeding | VM lab: 30 seconds. Kind: unset | VM lab: measured |
+| `partition_duration` | How long the partition is held, at least | VM lab: 2 minutes. Kind: unset | VM lab: choice, checked against the measured holds |
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
@@ -3271,6 +3274,8 @@ no limit is unset. S00 records both limits and the resulting
 
 | `drain_limit` | VM lab (three workers, `local-path`, every member bound to its node: the `no-spare-node` layout), installed Operator `66ab5ee`, scenario S15 both variants | 6.3 s to 12.7 s in six runs on 2026-11-17 (three per variant): `drain-slave-node` 10.8 s, 6.3 s, 12.5 s; `drain-master-node` 12.3 s, 12.7 s, 12.5 s; every run `blocked` with `time_limit_unset` and every other check held (#614) | `drainWithin`: from the cordon of the target node until the run's member and Broker Pods on it are gone or the eviction is refused | 1 minute, about four times the slowest run |
 | `failover_limit` | The same VM lab; scenario S15 both variants | 0.14 s to 0.35 s (`drain-slave-node`) and 1.9 s to 12.5 s (`drain-master-node`) in the same six runs | `failoverWithin`: from the first eviction request to the clients' first acknowledged operation after which none failed. Writes on new connections through `-rw` resumed 7.7 s to 14.3 s after the cordon (`sqlContinuedWithin`, recorded, not limited) | 1 minute for S15 only, about four times the slowest run; the other VM-lab scenarios keep it unset until their own baselines |
+| `quarantine_limit` | The same VM lab (installed Operator `66ab5ee`, manager image `sha256:0ca329e9…`); scenario S07 `higher-rank-isolated`, the only variant that produced a trigger | 6.6 s to 17.0 s in six runs on 2026-11-17 and 2026-11-18 (median 12.3 s): 6.6, 11.9, 12.1, 12.5, 12.5 and 17.0 s, recounted from each run's `S07/higher-rank-isolated/record.json`; every run `blocked`, five because the cluster did not settle after the heal and one with `time_limit_unset`. A seventh run ended before the cut and has no value (#115) | `quarantineWithin`: from `triggerWindowStart`, in every one of these runs the cut's issue, to the start of the first write through a new connection to `-rw` that did not take effect and after which none did (`newConnectionsStoppedAt`), an upper bound. The quarantine's `startTime` was 5.7 s to 15.8 s after the cut's issue, on the Operator's clock | 30 seconds, about 1.8 times the slowest run. Not the usual four times: this is the window in which ADR-0005 section 8 expects acknowledged writes to be lost (13 to 73 per run in these runs, as traced on #702), and 30 s stays above the Operator's own intervals that the ADR adds up for it (up to 10 s to the next pass, a 5 s probe timeout and a second probe). Six runs of one variant, on one lab and one Operator build, are a small sample |
+| `partition_duration` | The same VM lab and build; scenario S07, all three variants | Held 140.1 s to 144.7 s in eleven runs with the default `-partition-hold 2m`, and 1,222.2 s in one run with `-partition-hold 20m`, on 2026-11-17 and 2026-11-18 (#115) | `partitionHeldFor`: from the cut's confirmation until the end of the hold, which also waits for the cut to be confirmed again, so it exceeds `-partition-hold` by 20 s to 25 s | 2 minutes, a choice: the least time a run must hold the cut, not a time the system takes. In every triggered run the quarantine closed the path within 17 s of the cut's issue, and the 20-minute cut of the master produced no trigger, like the 2-minute cuts. A run with the default hold meets it with about 20 s to spare |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 
