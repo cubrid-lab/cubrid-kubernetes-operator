@@ -280,9 +280,10 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(c.Status.WriteQuarantine).To(BeNil())
 		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
 		Expect(c.Status.LastWriteQuarantineRelease.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedAutomatically))
-		Expect(replicas(rwKey)).To(Equal(int32(0)), "the release is written before the Brokers start")
+		Expect(replicas(rwKey)).To(Equal(int32(brokerReplicas)),
+			"the pass that wrote the release starts the read-write Brokers without waiting for the next one (#1003)")
 		Expect(condition(c, conditionReady).Status).To(Equal(metav1.ConditionFalse),
-			"Ready is not True while the read-write Brokers are still held at zero")
+			"the status written before the Brokers were started does not report Ready")
 		Expect(events()).To(ContainSubstring("Normal " + reasonWriteQuarantineReleased))
 
 		By("the pass after the release")
@@ -441,6 +442,62 @@ var _ = Describe("Write quarantine (#113)", func() {
 		reconcileOnce(r, f)
 		Expect(rwReplicas(f)).To(Equal(int32(0)))
 		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil(), "the kept quarantine is written")
+	})
+
+	It("starts the read-write Brokers in the pass that writes the release, never before it is written (#1003)", func() {
+		f := newFixture("wq-release-write")
+		var failRelease error
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		faulty := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+				opts ...client.SubResourceUpdateOption) error {
+				if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && subResource == statusSubresource &&
+					failRelease != nil && cluster.Status.WriteQuarantine == nil && cluster.Status.LastWriteQuarantineRelease != nil {
+					return failRelease
+				}
+				return c.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		})
+		r := reconcilerFor(f, faulty)
+		runVerified(r, f)
+
+		By("a quarantine of the cut-off first member")
+		f.answers.set(roleReports(f.key.Name, [3]string{"", wqMaster, wqSlave}))
+		*f.clock = f.clock.Add(3 * time.Second)
+		reconcileOnce(r, f)
+		Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(0)))
+
+		By("the first member back as a slave, verified, its release check started")
+		f.answers.set(roleReports(f.key.Name, [3]string{wqSlave, wqMaster, wqSlave}))
+		for _, step := range []time.Duration{3 * time.Second, quarantineVerifyGap + time.Second} {
+			*f.clock = f.clock.Add(step)
+			reconcileOnce(r, f)
+		}
+		Expect(stored(f).Status.WriteQuarantine.ReleaseCheckSince).NotTo(BeNil())
+
+		for _, failure := range []error{
+			apierrors.NewConflict(databasev1alpha1.GroupVersion.WithResource("cubridclusters").GroupResource(),
+				f.key.Name, errors.New("the object has been modified")),
+			apierrors.NewServiceUnavailable("the API server is not available"),
+		} {
+			By("the releasing pass whose status write fails: " + failure.Error())
+			failRelease = failure
+			*f.clock = f.clock.Add(quarantineReleaseInterval)
+			_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: f.key})
+			Expect(stored(f).Status.WriteQuarantine).NotTo(BeNil(), "the release was not written")
+			Expect(rwReplicas(f)).To(Equal(int32(0)), "an unwritten release does not start the read-write Brokers")
+		}
+
+		By("the releasing pass whose status write succeeds starts them in the same pass")
+		failRelease = nil
+		*f.clock = f.clock.Add(quarantineReleaseInterval)
+		reconcileOnce(r, f)
+		c := stored(f)
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.LastWriteQuarantineRelease).NotTo(BeNil())
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)))
 	})
 
 	It("escalates and revises a quarantine on another active master", func() {
@@ -827,7 +884,7 @@ var _ = Describe("Write quarantine (#113)", func() {
 		Expect(rel.ReturningMember).To(Equal(first))
 		Expect(c.Status.ReturnedToService).To(Equal(first))
 		Expect(c.Status.MemberFences).To(BeEmpty())
-		Expect(rwReplicas(f)).To(Equal(int32(0)), "the release is written before the Brokers start")
+		Expect(rwReplicas(f)).To(Equal(int32(brokerReplicas)), "the pass that wrote the release starts the Brokers")
 
 		By("the annotation left in place is ignored: it does not close the path again")
 		step(r, time.Second)
