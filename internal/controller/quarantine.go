@@ -523,6 +523,12 @@ const (
 	// unverified member, also when the status that would record its
 	// answers cannot be written.
 	quarantinePendingLimit = unverifiedResyncInterval + quarantineVerifyGap + 2*roleProbeTimeout
+	// releasePassMargin is added to the time the second releasable pass of a
+	// release check is due, so that the pass run then is past
+	// ReleaseCheckSince plus quarantineReleaseInterval despite clock rounding
+	// and a timer that fires a little early. A pass that comes too soon
+	// releases nothing; it only waits for the next one.
+	releasePassMargin = 100 * time.Millisecond
 )
 
 // newQuarantineNonce returns 128 random bits, hex-encoded.
@@ -1721,6 +1727,9 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 		// steps.err holds only a failed Pod or Node read here.
 		d.Quarantine != nil || steps.err != nil || len(d.Pending) > 0 ||
 			(len(d.Unverified) > 0 && cluster.Status.LastResolvedPrimary != ""))
+	if due := releasePassRetry(d.Quarantine, now); due > 0 && due < steps.retry {
+		steps.retry = due
+	}
 	if err := r.enforceWriteQuarantine(ctx, cluster); err != nil {
 		steps.err = errors.Join(steps.err, err)
 	}
@@ -1859,6 +1868,25 @@ func quarantineRetry(released bool, releaseRetry time.Duration, watchful bool) t
 		return unverifiedResyncInterval
 	}
 	return 0
+}
+
+// releasePassRetry is how soon the pass is retried so that the second
+// releasable pass of q's release check runs when it can complete the release,
+// ReleaseCheckSince plus quarantineReleaseInterval and releasePassMargin
+// after now, rather than up to a whole unverifiedResyncInterval later (#1003);
+// zero when no release check is in progress. It only moves the next pass
+// earlier: that pass is decided as any other, so the release still needs two
+// releasable passes at least quarantineReleaseInterval apart, and a pass that
+// is not releasable resets the check.
+func releasePassRetry(q *databasev1alpha1.WriteQuarantine, now time.Time) time.Duration {
+	if q == nil || q.ReleaseCheckSince == nil {
+		return 0
+	}
+	due := q.ReleaseCheckSince.Add(quarantineReleaseInterval).Sub(now)
+	if due < 0 {
+		return 0
+	}
+	return due + releasePassMargin
 }
 
 // releaseWritten lets the read-write path open after the status that
