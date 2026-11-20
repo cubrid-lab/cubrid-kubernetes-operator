@@ -93,8 +93,10 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 	return nil
 }
 
-// databaseNetworkPolicy admits to the DB Pods: the operator to the Instance
-// Manager; the cluster's DB Pods to the server and heartbeat ports, for HA
+// databaseNetworkPolicy admits to the DB Pods: the operator and the cluster's
+// own DB Pods to the Instance Manager (a rebuilt member asks its source member
+// whether it is the active master; Brokers and other clusters' Pods are not
+// admitted); the cluster's DB Pods to the server and heartbeat ports, for HA
 // replication; and the cluster's Brokers to the server port. The kubelet's
 // probes come from the node, which NetworkPolicy implementations commonly
 // admit; it is not part of the policy. A recreated member waits until its
@@ -102,25 +104,29 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.NetworkPolicySpec {
 	peers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)}}
 	brokers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: brokerLabelsFor(cluster)}}
-	rules := []networkingv1.NetworkPolicyIngressRule{
-		{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
+	rules := make([]networkingv1.NetworkPolicyIngressRule, 0, 3)
+	rules = append(rules,
+		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolTCP, cubridServerPort),
 		}},
-		{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
+		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolUDP, haHeartbeatPort),
 		}},
-	}
-	// Without the operator's namespace no Pod is admitted to the Instance
-	// Manager, rather than every namespace.
+	)
+	// Without the operator's namespace the operator is not admitted to the
+	// Instance Manager, rather than every namespace; the cluster's own DB Pods
+	// are admitted either way.
+	imPeers := []networkingv1.NetworkPolicyPeer{peers}
 	if r.OperatorNS != "" {
-		rules = append(rules, networkingv1.NetworkPolicyIngressRule{
-			From: []networkingv1.NetworkPolicyPeer{{
-				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{namespaceNameLabel: r.OperatorNS}},
-				PodSelector:       &metav1.LabelSelector{MatchLabels: operatorPodLabels},
-			}},
-			Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolTCP, instanceManagerPort)},
+		imPeers = append(imPeers, networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{namespaceNameLabel: r.OperatorNS}},
+			PodSelector:       &metav1.LabelSelector{MatchLabels: operatorPodLabels},
 		})
 	}
+	rules = append(rules, networkingv1.NetworkPolicyIngressRule{
+		From:  imPeers,
+		Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolTCP, instanceManagerPort)},
+	})
 	return networkingv1.NetworkPolicySpec{
 		PodSelector: metav1.LabelSelector{MatchLabels: labelsFor(cluster)},
 		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},

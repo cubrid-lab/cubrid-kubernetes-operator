@@ -171,12 +171,12 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 		peer := npSource{namespace: ns, pod: db}
 		Expect(npAdmits(nps, db, peer, 1523, tcp)).To(BeTrue(), "HA peers replicate through cub_master")
 		Expect(npAdmits(nps, db, peer, 59901, udp)).To(BeTrue(), "HA peers exchange heartbeats")
-		Expect(npAdmits(nps, db, peer, 9090, tcp)).To(BeFalse(), "a peer does not call the Instance Manager")
+		Expect(npAdmits(nps, db, peer, 9090, tcp)).To(BeTrue(), "a rebuilt member asks its source member's Instance Manager for the role")
 
 		for _, broker := range brokerPods("np-db") {
 			b := npSource{namespace: ns, pod: broker}
 			Expect(npAdmits(nps, db, b, 1523, tcp)).To(BeTrue(), "the cluster's Brokers open the database")
-			Expect(npAdmits(nps, db, b, 9090, tcp)).To(BeFalse())
+			Expect(npAdmits(nps, db, b, 9090, tcp)).To(BeFalse(), "a Broker never calls the Instance Manager")
 		}
 
 		strangers := map[string]npSource{
@@ -258,10 +258,11 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 		Expect(npAdmits(nps, db, operator, 9090, tcp)).To(BeFalse(), "fails closed, not open to every namespace")
 		for _, src := range []npSource{
 			{namespace: ns, pod: operator.pod}, {namespace: appsNS, pod: operator.pod},
-			{namespace: ns, pod: someClient}, {namespace: ns, pod: db},
+			{namespace: ns, pod: someClient},
 		} {
 			Expect(npAdmits(nps, db, src, 9090, tcp)).To(BeFalse(), "%+v", src)
 		}
+		Expect(npAdmits(nps, db, npSource{namespace: ns, pod: db}, 9090, tcp)).To(BeTrue(), "the cluster's own members still reach it")
 		Expect(npAdmits(nps, db, npSource{namespace: ns, pod: db}, 1523, tcp)).To(BeTrue(), "peers still replicate")
 	})
 
