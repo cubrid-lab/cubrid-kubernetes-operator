@@ -59,8 +59,9 @@ type haRun struct {
 	// history is everything the workload client recorded so far.
 	history string
 	// failovers are the windows in which a step lost the master, from the
-	// fault to the recovery it observed; the data check accepts the stale
-	// read of the read-write Service only inside one of them.
+	// fault to the moment it first saw a new master active; the data check
+	// accepts the stale read of the read-write Service only inside one of
+	// them.
 	failovers []workload.FailoverWindow
 	// running holds the clients started and not stopped yet.
 	running map[string]bool
@@ -177,7 +178,7 @@ func (r *haRun) historyText() string {
 }
 
 // addFailover records that a step lost the master from the moment it issued
-// the fault until the moment it observed the recovery. A window without
+// the fault until the moment it first saw a new master active. A window without
 // either end is not recorded: the data check then accepts no stale read in
 // it.
 func (r *haRun) addFailover(from, to time.Time) {

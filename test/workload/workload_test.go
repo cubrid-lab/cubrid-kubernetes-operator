@@ -499,7 +499,8 @@ const (
 // with differentValues, finds it with other values), the next write c1-4
 // gets nextWrite (failed with the updates-disabled error of a standby, or
 // acknowledged), and c1-5 is acknowledged after the new master is active.
-func staleReadHistory(t *testing.T, nextWrite Event, differentValues bool) History {
+// others are events of other clients, added after those of c1.
+func staleReadHistory(t *testing.T, nextWrite Event, differentValues bool, others ...Event) History {
 	t.Helper()
 	mismatch := ReadMismatch + " c1-2 not found"
 	if differentValues {
@@ -518,9 +519,11 @@ func staleReadHistory(t *testing.T, nextWrite Event, differentValues bool) Histo
 		{T: at(5000), Seq: 5, Op: OpInsert, OpID: laterWrite, Event: Attempted, Amount: 50, Note: "n5"},
 		{T: at(5010), Seq: 5, Op: OpInsert, OpID: laterWrite, Event: Acknowledged},
 	}
+	for i := range events {
+		events[i].Client = "c1"
+	}
 	var b strings.Builder
-	for _, e := range events {
-		e.Client = "c1"
+	for _, e := range append(events, others...) {
 		data, err := json.Marshal(e)
 		if err != nil {
 			t.Fatal(err)
@@ -539,8 +542,9 @@ func staleReadHistory(t *testing.T, nextWrite Event, differentValues bool) Histo
 // is active, because the read-write Broker connects to a standby
 // (docs/architecture/failure-recovery.md, POC-60, #786). The check accepts
 // such a read only when it ran inside a failover window the scenario
-// recorded, the client's next write failed with the updates-disabled error
-// that shows the connection was on a standby, and the row it missed is on
+// recorded, before the new master was seen active, the same client's next
+// write failed in that window with the updates-disabled error of a standby,
+// and the row it missed is on
 // every member and endpoint with the values sent. The read stays in the
 // report. Any other read mismatch still fails the check (#1048).
 func TestCheckDuringFailovers_StaleRead(t *testing.T) {
@@ -553,7 +557,15 @@ func TestCheckDuringFailovers_StaleRead(t *testing.T) {
 	members := func(rows, onB []Row) map[string][]Row {
 		return map[string][]Row{memberA: rows, memberB: onB, "rw": rows, "ro": rows}
 	}
-	window := []FailoverWindow{{From: staleReadBase, To: staleReadBase.Add(25 * time.Second)}}
+	// The new master is first seen active 4.8 s after the fault.
+	window := []FailoverWindow{{From: staleReadBase, To: staleReadBase.Add(4800 * time.Millisecond)}}
+	ms := func(n int) time.Time { return staleReadBase.Add(time.Duration(n) * time.Millisecond) }
+	// otherRefused is a write of client c2 that a standby refuses right after
+	// the read of c1.
+	otherRefused := []Event{
+		{T: ms(300), Client: "c2", Seq: 1, Op: OpInsert, OpID: "c2-1", Event: Attempted, Amount: 1, Note: "m1"},
+		{T: ms(320), Client: "c2", Seq: 1, Op: OpInsert, OpID: "c2-1", Event: refused.Event, Error: refused.Error},
+	}
 
 	report := CheckDuringFailovers(staleReadHistory(t, refused, false), members(all, all), window)
 	if !report.OK {
@@ -576,14 +588,20 @@ func TestCheckDuringFailovers_StaleRead(t *testing.T) {
 		failovers []FailoverWindow
 	}{
 		{"no failover window was recorded", staleReadHistory(t, refused, false), all, all, nil},
-		{"the window ended before the read", staleReadHistory(t, refused, false), all, all,
-			[]FailoverWindow{{From: staleReadBase, To: staleReadBase.Add(200 * time.Millisecond)}}},
+		{"the new master was seen active before the read", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(200)}}},
+		{"the new master was seen active while the read ran", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(215)}}},
+		{"the new master was seen active before the refused write", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(300)}}},
 		{"the window started after the read", staleReadHistory(t, refused, false), all, all,
-			[]FailoverWindow{{From: staleReadBase.Add(220 * time.Millisecond), To: staleReadBase.Add(25 * time.Second)}}},
+			[]FailoverWindow{{From: ms(220), To: ms(4800)}}},
 		{"the window has no end", staleReadHistory(t, refused, false), all, all,
 			[]FailoverWindow{{From: staleReadBase}}},
 		{"the next write was acknowledged", staleReadHistory(t, Event{Event: Acknowledged}, false),
 			withFourth, withFourth, window},
+		{"only another client's write was refused",
+			staleReadHistory(t, Event{Event: Acknowledged}, false, otherRefused...), withFourth, withFourth, window},
 		{"the next write failed for another reason",
 			staleReadHistory(t, Event{Event: Failed, Error: "code -111: aborted"}, false), all, all, window},
 		{"the read found other values", staleReadHistory(t, refused, true), all, all, window},

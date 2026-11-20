@@ -861,11 +861,15 @@ of these hold:
   that found the row with other values is never explained;
 - the read was attempted and answered inside a failover window that the
   scenario recorded: from the moment it issued the deletion of the master's
-  Pod to the moment its recovery check held, with a new master that had
-  acknowledged the client's last write;
-- the client's next write was answered inside the same window and failed with
-  `-581` (updates disabled), which shows that its connection was on a
-  standby;
+  Pod to the moment it first saw a new master active (S03: its recovery check
+  accepting a member as the only active master; S06: the first heartbeat
+  read showing a former slave as the active master). A scenario that has no
+  such observation records no window;
+- the same client's next write was answered inside the same window and
+  failed with `-581` (updates disabled). That proves the write's connection
+  was on a standby. That the read ran on the same connection is inferred
+  from the read-write Broker keeping the client on one CAS (POC-60), not
+  proven;
 - the row is an acknowledged insert, and every member and both Services hold
   it with the values sent.
 

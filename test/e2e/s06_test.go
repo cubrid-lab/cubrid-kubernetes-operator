@@ -414,7 +414,7 @@ func (r *haRun) s06Absent() {
 	By("removing the Operator, then deleting the master Pod while it is absent")
 	var staleStatus string
 	var membersBeforeReturn map[string]string
-	var masterDeletedAt, lastObservedDuringAbsence time.Time
+	var masterDeletedAt, newMasterSeenAt, lastObservedDuringAbsence time.Time
 	var ageBeforeAbsence time.Duration
 	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
@@ -465,6 +465,7 @@ func (r *haRun) s06Absent() {
 				if newMaster = r.activeMasterAmong(ctx, slaves); newMaster == "" {
 					return false, nil
 				}
+				newMasterSeenAt = time.Now()
 			}
 			// One master and two slaves again: the StatefulSet recreates the
 			// deleted Pod and its member rejoins by itself.
@@ -512,9 +513,12 @@ func (r *haRun) s06Absent() {
 		},
 	})
 	faultEnded = outcome.CleanupSucceeded
-	// The master's Pod was deleted at masterDeletedAt, and at OutcomeAt a
-	// new master had acknowledged the client's last write.
-	r.addFailover(masterDeletedAt, outcome.OutcomeAt)
+	// The master's Pod was deleted at masterDeletedAt, and a slave was first
+	// seen as the active master at newMasterSeenAt. A check still running
+	// may yet write that time, so no window is recorded then.
+	if len(outcome.StillRunning) == 0 {
+		r.addFailover(masterDeletedAt, newMasterSeenAt)
+	}
 	timeline := writeTimeline("S06/"+s06Absent+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded

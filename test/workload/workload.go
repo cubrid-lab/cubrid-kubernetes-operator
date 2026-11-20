@@ -139,8 +139,7 @@ type Report struct {
 }
 
 // FailoverWindow is the time from the moment a scenario issued a fault that
-// loses the master until the moment it saw the cluster recovered, with a new
-// master that acknowledged the client's writes.
+// loses the master until the moment it first saw a new master active.
 type FailoverWindow struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
@@ -326,8 +325,10 @@ func Check(h History, members map[string][]Row) Report {
 //   - the read did not find the row: a standby that lags can miss a row, not
 //     hold it with other values;
 //   - the read was attempted and answered inside one window;
-//   - the client's next write was answered inside the same window and failed
-//     with ReadOnlyRefusal, which shows its connection was on a standby;
+//   - the same client's next write was answered inside the same window and
+//     failed with ReadOnlyRefusal. That proves the write's connection was on
+//     a standby; that the read ran on the same connection is inferred from
+//     the Broker keeping the client on one CAS (POC-60), not proven;
 //   - the row is an acknowledged insert, and every member and endpoint checked
 //     holds it with the values sent.
 //
