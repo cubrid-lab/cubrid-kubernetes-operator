@@ -59,7 +59,7 @@ not stop independent analysis or an owner's safe, scoped work.
 | **1b — HA data safety** | #702/#115: a partition/heal trial's promoted member missed 73 acknowledged writes. | Qualify S07–S08 against independent new/existing-session SQL and each member's dataset; keep failed evidence. |
 | **1c — Other safety regressions** | #938: S03 graceful exceeded 30 s; #949: possible observation gap on child-write failure. | Bounded reproduction, safe fix and relevant regressions under existing owners. |
 | **2 — Rejoin/rebuild** | #116–#118: S09–S10 implementation, permissioned PVC-loss rebuild and SQL comparisons incomplete. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
-| **3 — Other required gates** | #88/#89 backup/restore, #666 capacity, #20 API ownership and #94/#124 release controls. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
+| **3 — Other required gates** | #88/#89 backup/restore, #666 capacity and #94/#124 release controls; the API group decision (#20) moved to v0.2 on 2026-11-20 UTC. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
 | **4 — Release qualification** | #126 candidate repetitions/24-hour soak and #127 independent reproduction outstanding. | Freeze one exact candidate after required gates, run the full qualification, then decide Go/No-Go. |
 
 **Parallel work:** CI repair (0), read-only S04 latency analysis (1a),
@@ -296,4 +296,4 @@ hostname/DNS, failover/split-brain, join/rebuild, backup POC, restore,
 update/upgrade, Instance Manager) were accepted before the HA controller
 implementation started (including Accepted (POC-gated) decisions). This is
 not the release validation gate. The API group ownership decision (#20) is
-still open.
+still open and planned for v0.2.

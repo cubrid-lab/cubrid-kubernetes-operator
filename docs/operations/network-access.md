@@ -9,7 +9,7 @@ For each `CubridCluster` the operator keeps two ingress NetworkPolicies:
 
 | Policy | Selects | Admits |
 |---|---|---|
-| `<cluster>-database` | the DB Pods | the operator's Pods to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP |
+| `<cluster>-database` | the DB Pods | the operator's Pods and the cluster's own DB Pods (not its Brokers) to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP |
 | `<cluster>-broker` | the Broker Pods | clients to the Broker ports 33000/TCP (read-write) and 33001/TCP (read-only): the Pods of the cluster's namespace, or the peers listed in `spec.networkPolicy.clients` instead |
 
 ```yaml
@@ -58,8 +58,9 @@ spec:
   operator's service account (`--operator-namespace` overrides it), and the
   labels `control-plane: controller-manager` and
   `app.kubernetes.io/name: cubrid-kubernetes-operator` of
-  `config/manager/manager.yaml`. Without a known namespace no Pod is
-  admitted to the Instance Manager port.
+  `config/manager/manager.yaml`. Without a known namespace the operator is
+  not admitted to the Instance Manager port; the cluster's own DB Pods
+  still are.
 - **The namespace is the trust boundary.** Any Pod that can be created in
   the cluster's namespace with the DB or Broker labels, or in the operator's
   namespace with the operator's labels, gets the access of that role; so
