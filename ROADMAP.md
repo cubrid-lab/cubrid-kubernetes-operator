@@ -279,9 +279,9 @@ retention of these artifacts is not guaranteed.
 ### Shared lab historical baseline
 
 The [lab inventory](docs/testing/lab-inventory.md) records the lab as measured
-on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it does
-not qualify that configuration for v0.1. One manual Pod deletion on
-2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
+on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it is the
+experimental v0.1 reference environment, with CSI behavior untested. One
+manual Pod deletion on 2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
 26 s, with `ha-0` a slave: a single run, not a scenario pass or VM-failure
 evidence, with no scenario artifact set or independent transaction-history
 oracle. The 2026-10-15 record did not establish VM stop/start or recovery,
