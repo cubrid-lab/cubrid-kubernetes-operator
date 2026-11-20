@@ -986,10 +986,15 @@ pick and check the node, and to cordon and uncordon it with the annotation),
 PersistentVolumeClaims, `create` on `pods/eviction` and `list` on
 PodDisruptionBudgets and EndpointSlices.
 
-The lane has not run on the lab yet. A pass would be the first real-node
-observation of the policy that ADR-0012 and the
-[voluntary-disruption page](../architecture/voluntary-disruption.md) expect;
-envtest covers only the API server's eviction rules for a written budget
+The lane ran on the VM lab six times on 2026-11-17, before its limits were
+set, and every run ended `blocked` with `time_limit_unset` (#614). On
+2026-11-20, after #1020, both variants ran once against the 1-minute
+`drain_limit` and `failover_limit` and passed, and each run removed its own
+cordon (results on #90). These are the first real-node observations of the
+policy that ADR-0012 and the
+[voluntary-disruption page](../architecture/voluntary-disruption.md) expect.
+The cordon removal on `SIGTERM` or a lost Lease has not been exercised on the
+lab. envtest covers only the API server's eviction rules for a written budget
 status.
 
 ## S07 network partition
@@ -1752,8 +1757,8 @@ on the lab runner, in `partition-slave-isolated-76ae5e2-20261117T062313` and
   of the master no second member became an active master: `ha-0` stayed the
   active master, and no acknowledged row was missing afterwards. Rules 1 and
   2 of the quarantine were therefore not exercised on this lab. The
-  `higher-rank-isolated` variant was added for that, with the reasons above;
-  it has not run on the lab yet.
+  `higher-rank-isolated` variant was added for that, with the reasons above.
+  It has run on the lab since 2026-11-17; its results are on #115 and #702.
 
 Beyond these runs, the unit tests use fake clients and a model of the
 members' network namespaces; they are no evidence of CUBRID's or the
