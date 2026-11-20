@@ -1635,8 +1635,11 @@ What it judges, in this order:
 | `quarantine_limit` | `-quarantine-limit` (default `0`, unset) | `quarantineWithin`: from `triggerWindowStart` until the first write through a new connection that was not acknowledged and after which none was acknowledged before the release (`newConnectionsStoppedAt`); an upper bound. Not applied when no trigger was seen |
 | `partition_duration` | `-partition-duration` (default `0`, unset) | `partitionHeldFor`: from the cut's confirmation until the end of the hold; at least the limit |
 
-The contract records no value for either. A limit of `0` is unset and makes
-the run a baseline: `blocked` with `time_limit_unset`, never `pass`. A limit
+The contract records the VM-lab values for this lane, set from the lab runs
+in its [baselines](scenario-contract.md#baselines): `quarantine_limit` is 30
+seconds and `partition_duration` 2 minutes, so a judged run passes
+`-quarantine-limit 30s -partition-duration 2m`. A limit of `0` is unset and
+makes the run a baseline: `blocked` with `time_limit_unset`, never `pass`. A limit
 that is set but whose time was not measured blocks S07 with
 `measurement_missing`. `-partition-hold` is the run's own choice and must be
 at least `-partition-duration`.

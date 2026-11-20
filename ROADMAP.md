@@ -91,10 +91,14 @@ narrowing of the release.
 ### Required
 
 The initial support claim is limited to one pinned CUBRID 11.4.x/amd64
-configuration, one Kubernetes distribution and one CSI/StorageClass in the
-three-VM lab (#80). Distribution/version/driver selection remains unverified
-until that issue records the inventory and run evidence. Three VMs do not
-establish physical-zone resilience.
+configuration on one reference environment, the three-VM lab of #80 as its
+[inventory](docs/testing/lab-inventory.md) records it: three k3s workers
+(`v1.36.5+k3s1`, measured 2026-10-15) with 2 vCPU and 8 GiB each, and the
+node-local `local-path` StorageClass, which is **not CSI**. Evidence from it
+establishes no CSI semantics (attach/detach, a volume following its Pod to
+another node, snapshots), no volume resizing and no zone resilience: the
+workers share one availability zone. Its reproduction by the other
+maintainer remains open in #80.
 
 | Capability | Completion evidence | Tracking issues |
 |---|---|---|
@@ -199,7 +203,7 @@ The reproducible, reviewed release is not run.
 | Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
 | Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
 | Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
-| Backup safeguards in code | unit-envtest | #291, #369 | Standby choice (#291), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
+| Backup safeguards in code | unit-envtest; Kind (standby) | #291, #369 | Standby choice (#291; Kind: all slaves stuck, #1026), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
 | Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #126, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
 | Restore (S12): restarts and stops | VM-lab (1–2 runs each) | #89, #126 | `operator-restart`: 2 passes. Instance Manager kills at `restoring`, `preparing`, `seeding` (#598) and, with `16dbbf8` (#670), `starting` (#682; equal records do not rule out a short second `restoredb`) and `seed-backup` passed. `graceful-stop`: 1 pass, earlier harness (#277; seeding placement #676 not run) |
 | Lab run resources | VM-lab (1 failed run) | none recorded | All three members placed on one memory-filled worker failed: the kernel killed `cub_server` and LAB01 never became Ready, since database Pods requested no memory (#596). The harness now refuses such a node (#672). Members now declare requests (#701); no lab run has used them yet |
@@ -275,9 +279,9 @@ retention of these artifacts is not guaranteed.
 ### Shared lab historical baseline
 
 The [lab inventory](docs/testing/lab-inventory.md) records the lab as measured
-on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it does
-not qualify that configuration for v0.1. One manual Pod deletion on
-2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
+on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it is the
+experimental v0.1 reference environment, with CSI behavior untested. One
+manual Pod deletion on 2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
 26 s, with `ha-0` a slave: a single run, not a scenario pass or VM-failure
 evidence, with no scenario artifact set or independent transaction-history
 oracle. The 2026-10-15 record did not establish VM stop/start or recovery,
