@@ -34,7 +34,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -448,10 +447,12 @@ spec:
 
 			By("checking that a slave refuses a write")
 			// Only the slave's own refusal shows that it took no write: a
-			// csql or kubectl failure says nothing about the statement.
-			_, err := runSQL(csqlInPod(context.Background(), haNamespace, peers[0], database),
-				"INSERT INTO "+s00Table+" VALUES (99, 'on-a-slave');")
-			Expect(sqlcheck.RefusedAsReadOnly(err)).To(BeTrue(), "the slave did not refuse the write as read-only: %v", err)
+			// csql or kubectl failure says nothing about the statement. csql
+			// can print -199 and -111 as it exits after the refusal; that
+			// counts only with the slave's cub_server unchanged (#238).
+			refused, err := memberCSQL(context.Background(), haNamespace, peers[0], database, true).
+				refusedAsReadOnly("INSERT INTO " + s00Table + " VALUES (99, 'on-a-slave');")
+			Expect(refused).To(BeTrue(), "the slave did not refuse the write as read-only: %v", err)
 		})
 
 		It("serves SQL through the read-write and the read-only Service", Label(haSetup), func() {

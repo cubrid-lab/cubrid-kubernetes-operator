@@ -1,0 +1,134 @@
+2026-11-19T15:57:57.988Z batch 1 rc=0
+10 rows affected. (0.847995 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:00.036Z batch 2 rc=0
+10 rows affected. (0.823995 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:05.212Z batch 3 rc=0
+10 rows affected. (4.079976 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:08.730Z batch 4 rc=0
+10 rows affected. (2.395986 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:12.042Z batch 5 rc=0
+10 rows affected. (2.243986 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:15.658Z batch 6 rc=0
+10 rows affected. (2.527985 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:19.535Z batch 7 rc=0
+10 rows affected. (2.791984 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:23.072Z batch 8 rc=0
+10 rows affected. (2.471985 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:27.790Z batch 9 rc=0
+10 rows affected. (3.627978 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:31.924Z batch 10 rc=0
+10 rows affected. (3.011982 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:34.307Z batch 11 rc=0
+10 rows affected. (1.255992 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:37.303Z batch 12 rc=0
+10 rows affected. (1.879989 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:39.148Z batch 13 rc=0
+10 rows affected. (0.699995 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:41.949Z batch 14 rc=0
+10 rows affected. (1.639989 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:45.751Z batch 15 rc=0
+10 rows affected. (2.615983 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:48.889Z batch 16 rc=0
+10 rows affected. (2.023988 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:51.855Z batch 17 rc=0
+10 rows affected. (1.851988 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:54.900Z batch 18 rc=0
+10 rows affected. (1.919988 sec) Committed. (0.000000 sec) 
+2026-11-19T15:58:58.385Z batch 19 rc=0
+10 rows affected. (2.367985 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:01.269Z batch 20 rc=0
+10 rows affected. (1.747989 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:06.151Z batch 21 rc=0
+10 rows affected. (3.791976 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:10.794Z batch 22 rc=0
+10 rows affected. (3.343979 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:16.415Z batch 23 rc=0
+10 rows affected. (4.479971 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:20.163Z batch 24 rc=0
+10 rows affected. (2.663982 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:23.257Z batch 25 rc=0
+10 rows affected. (1.967987 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:26.505Z batch 26 rc=0
+10 rows affected. (2.003987 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:29.340Z batch 27 rc=0
+10 rows affected. (1.719988 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:32.104Z batch 28 rc=0
+10 rows affected. (1.619989 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:34.977Z batch 29 rc=0
+10 rows affected. (1.787988 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:37.511Z batch 30 rc=0
+10 rows affected. (1.443990 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:40.869Z batch 31 rc=0
+10 rows affected. (2.283985 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:43.572Z batch 32 rc=0
+10 rows affected. (1.627989 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:47.611Z batch 33 rc=0
+10 rows affected. (2.919981 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:52.794Z batch 34 rc=0
+10 rows affected. (4.071973 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:56.621Z batch 35 rc=0
+10 rows affected. (2.735981 sec) Committed. (0.000000 sec) 
+2026-11-19T15:59:59.970Z batch 36 rc=0
+10 rows affected. (2.255984 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:03.815Z batch 37 rc=0
+10 rows affected. (2.763981 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:06.875Z batch 38 rc=0
+10 rows affected. (1.967986 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:10.764Z batch 39 rc=0
+10 rows affected. (2.787981 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:14.977Z batch 40 rc=0
+10 rows affected. (3.119979 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:20.554Z batch 41 rc=0
+10 rows affected. (4.399970 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:24.422Z batch 42 rc=0
+10 rows affected. (2.779980 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:26.280Z batch 43 rc=0
+10 rows affected. (0.747994 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:28.515Z batch 44 rc=0
+10 rows affected. (1.127993 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:30.873Z batch 45 rc=0
+10 rows affected. (1.119992 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:35.749Z batch 46 rc=0
+10 rows affected. (3.743974 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:39.408Z batch 47 rc=0
+10 rows affected. (2.539982 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:43.271Z batch 48 rc=0
+10 rows affected. (2.795981 sec) Committed. (0.000000 sec) 
+2026-11-19T16:00:55.600Z batch 49 rc=0
+10 rows affected. (10.791923 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:03.797Z batch 50 rc=0
+10 rows affected. (7.079949 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:08.816Z batch 51 rc=0
+10 rows affected. (3.851972 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:12.322Z batch 52 rc=0
+10 rows affected. (2.435983 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:15.640Z batch 53 rc=0
+10 rows affected. (2.039985 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:19.473Z batch 54 rc=0
+10 rows affected. (2.403982 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:24.208Z batch 55 rc=0
+10 rows affected. (3.655973 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:30.230Z batch 56 rc=0
+10 rows affected. (4.911963 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:33.912Z batch 57 rc=0
+10 rows affected. (2.555981 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:38.119Z batch 58 rc=0
+10 rows affected. (2.771980 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:42.261Z batch 59 rc=0
+10 rows affected. (3.047977 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:46.294Z batch 60 rc=0
+10 rows affected. (2.935978 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:52.108Z batch 61 rc=0
+10 rows affected. (4.731964 sec) Committed. (0.000000 sec) 
+2026-11-19T16:01:57.687Z batch 62 rc=0
+10 rows affected. (4.483966 sec) Committed. (0.000000 sec) 
+2026-11-19T16:02:02.594Z batch 63 rc=0
+10 rows affected. (3.839971 sec) Committed. (0.000000 sec) 
+2026-11-19T16:02:12.302Z batch 64 rc=0
+10 rows affected. (7.847940 sec) Committed. (0.000000 sec) 
+2026-11-19T16:02:26.189Z batch 65 rc=0
+10 rows affected. (12.795902 sec) Committed. (0.000000 sec) 
+2026-11-19T16:02:43.740Z batch 66 rc=0
+10 rows affected. (16.427873 sec) Committed. (0.000000 sec) 
+2026-11-19T16:02:55.352Z batch 67 rc=0
+10 rows affected. (10.435919 sec) Committed. (0.000000 sec) 

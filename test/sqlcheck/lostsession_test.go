@@ -641,3 +641,102 @@ func TestOnlyLostSessionKeepsAnotherHeader(t *testing.T) {
 		t.Error("the pair as the Kind runs print it is not only the pair")
 	}
 }
+
+// The parts of what csql printed on a slave in the Kind run 44071887865
+// (2026-11-17): the server refused the INSERT with -581, and 5 ms later csql
+// printed -199 and -111 and exited 1. The file paths are shortened.
+const (
+	slaveConnect = "\nTime: 11/17/26 11:33:34.408 - NOTIFICATION *** file boot_cl.c, line 1085  " +
+		"CODE = -971, Tran = -1, EID = 1\n" +
+		"Program 'csql' (pid 494) connected to database server 'appdb@localhost' on the host 'localhost' " +
+		"(port 1523).\n\n"
+	slaveRefusal = "Time: 11/17/26 11:33:34.431 - ERROR *** file Unknown from server, line -1 " +
+		"ERROR CODE = -581, Tran = 5, EID = 2\n" +
+		"Attempted to update the database when updates are disabled. \n\nIn the command from line 1,\n\n" +
+		"ERROR: Attempted to update the database when updates are disabled. \n\n\n"
+	slavePair = "Time: 11/17/26 11:33:34.436 - ERROR *** file network_cl.c, line 177 " +
+		"ERROR CODE = -199, Tran = 5, EID = 3\n" +
+		"Server no longer responding.... Invalid argument\n\n" +
+		"Time: 11/17/26 11:33:34.436 - ERROR *** file transaction_cl.c, line 600 " +
+		"ERROR CODE = -111, Tran = 5, EID = 4\n" +
+		"Your transaction has been aborted by the system due to server failure or mode change.\n"
+	kubectlExit1         = "command terminated with exit code 1\n"
+	slaveRefusalThenPair = slaveConnect + slaveRefusal + slavePair + kubectlExit1
+)
+
+// RunRefusal accepts a -581 followed by the pair as a refusal only when the
+// server read before the write is the same process in the same HA mode after
+// it (#238). Every other combination keeps the verdict of RefusedAsReadOnly,
+// and the write is never repeated.
+func TestRunRefusal(t *testing.T) {
+	const sql = "INSERT INTO s00_check VALUES (99, 'on-a-slave');"
+	const standby = "ha_mode standby\n"
+	exit1 := errors.New("exit status 1")
+	same := []answer{{out: serverA + standby}, {out: serverA + standby}}
+	before := []answer{{out: serverA + standby}}
+	after := func(a answer) []answer { return []answer{{out: serverA + standby}, a} }
+	const committed = "1 row affected. (0.001 sec) Committed. (0.000 sec)\n"
+	for name, tc := range map[string]struct {
+		out      string
+		cmdErr   error
+		reads    []answer
+		refused  bool
+		identity IdentityResult
+	}{
+		"-581, then the pair, the same server and mode": {out: slaveRefusalThenPair, cmdErr: exit1, reads: same,
+			refused: true, identity: IdentityUnchanged},
+		"-581, then the pair, with exit 0": {out: slaveConnect + slaveRefusal + slavePair, reads: same,
+			refused: true, identity: IdentityUnchanged},
+		"-581, then the pair, another server": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads: after(answer{out: serverB + standby}), identity: IdentityChanged},
+		"-581, then the pair, a reused pid": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads: after(answer{out: serverReused + standby}), identity: IdentityChanged},
+		"-581, then the pair, the server promoted": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads: after(answer{out: serverA + "ha_mode active\n"}), identity: IdentityModeChanged},
+		"-581, then the pair, no server after": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads: after(answer{out: standby}), identity: IdentityVanished},
+		"-581, then the pair, an identity that could not be read after": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads: after(answer{err: errors.New("exec")}), identity: IdentityUnreadable},
+		"-581, then the pair, an identity that could not be read before": {out: slaveRefusalThenPair, cmdErr: exit1,
+			reads:    []answer{{err: errors.New("exec")}, {out: serverA + standby}},
+			identity: IdentityUnreadable},
+		"-581 alone": {out: slaveConnect + slaveRefusal + kubectlExit1, cmdErr: exit1, reads: before,
+			refused: true, identity: IdentityNotRead},
+		"the pair without -581": {out: slaveConnect + slavePair + kubectlExit1, cmdErr: exit1, reads: before,
+			identity: IdentityNotRead},
+		"the pair before -581": {out: slaveConnect + slavePair + slaveRefusal + kubectlExit1, cmdErr: exit1,
+			reads: before, identity: IdentityNotRead},
+		// Not the pair, so RefusedAsReadOnly decides, as it did before.
+		"-581, then -199 alone": {out: strings.Replace(slaveRefusalThenPair, "ERROR CODE = -111", "CODE = -971", 1),
+			cmdErr: exit1, reads: before, refused: true, identity: IdentityNotRead},
+		"-581, then the pair and another error": {out: slaveConnect + slaveRefusal +
+			"ERROR: Table s00_check does not exist.\n" + slavePair + kubectlExit1, cmdErr: exit1, reads: before,
+			identity: IdentityNotRead},
+		"-581 twice, then the pair": {out: slaveConnect + slaveRefusal + slaveRefusal + slavePair + kubectlExit1,
+			cmdErr: exit1, reads: before, identity: IdentityNotRead},
+		"-581, then the pair, then a failed connection": {out: slaveRefusalThenPair +
+			"Failed to connect to database server\n", cmdErr: exit1, reads: before, identity: IdentityNotRead},
+		"a write that succeeded": {out: slaveConnect + committed, reads: before, identity: IdentityNotRead},
+		"a write that succeeded, then the pair": {out: slaveConnect + committed + slavePair, reads: before,
+			identity: IdentityNotRead},
+		"a command that could not be run": {cmdErr: errors.New("error dialing backend: EOF"), reads: before,
+			identity: IdentityNotRead},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run, calls := fakeRunner(t, answer{out: tc.out, err: tc.cmdErr})
+			guard := identities(t, tc.reads...)
+			guard.HA = true
+			refused, identity, err := RunRefusal(guard, run, sql)
+			if refused != tc.refused || identity != tc.identity || *calls != 1 {
+				t.Errorf("refused %v, identity %s, %d calls; want refused %v, identity %s, one call; error %v",
+					refused, identity, *calls, tc.refused, tc.identity, err)
+			}
+			if err == nil && strings.Contains(tc.out, "ERROR") {
+				t.Error("no error for an output that holds one")
+			}
+			if tc.identity != IdentityNotRead && tc.identity != IdentityUnchanged {
+				wantLost(t, err, tc.identity, false)
+			}
+		})
+	}
+}

@@ -1,0 +1,27 @@
+=== 2026-11-19T17:02:52.765Z poc68-stall-ha-0
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)  sum( cast(id as bigint))
+==========================================================================
+                   770           11          780                    304535
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+=== 2026-11-19T17:02:52.896Z poc68-stall-ha-1
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)  sum( cast(id as bigint))
+==========================================================================
+                   770           11          780                    304535
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+=== 2026-11-19T17:02:53.029Z poc68-stall-ha-2
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)  sum( cast(id as bigint))
+==========================================================================
+                   770           11          780                    304535
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
