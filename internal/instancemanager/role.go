@@ -97,10 +97,12 @@ const (
 	// than this one.
 	CapabilityExpectedMember = "expected-member"
 	// CapabilityRebuildRestore: a restore with rebuild asks the source named
-	// by seedFromMaster for its role before it reads or writes anything, and
-	// is refused unless that source answers as the active master; it then
-	// takes only an artifact whose manifest carries the same rebuild. A seed
-	// backup with upload.rebuild records the rebuild in its manifest.
+	// by seedFromMaster for its role before it touches the target or reads
+	// the artifact, and is refused unless that source answers as the active
+	// master; it then takes only an artifact whose manifest carries the same
+	// rebuild. A seed backup with upload.rebuild records the rebuild in its
+	// manifest and is uploaded only to that rebuild's location
+	// (RebuildSeedDir).
 	CapabilityRebuildRestore = "rebuild-restore"
 )
 

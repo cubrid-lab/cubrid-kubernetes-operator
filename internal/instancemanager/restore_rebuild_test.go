@@ -48,14 +48,20 @@ type sourceIM struct {
 	answer *HAStatus
 	// delay holds every answer back this long.
 	delay time.Duration
+	// raw, when set, answers instead of answer.
+	raw http.HandlerFunc
 }
 
 func (f *sourceIM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.asked = append(f.asked, r.Method+" "+r.URL.Path)
 	f.tokens = append(f.tokens, r.Header.Get("Authorization"))
-	answer, delay := f.answer, f.delay
+	answer, delay, raw := f.answer, f.delay, f.raw
 	f.mu.Unlock()
+	if raw != nil {
+		raw(w, r)
+		return
+	}
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
@@ -105,8 +111,12 @@ type rebuildCase struct {
 	manifest *RebuildBinding
 	// source is the source member's manager.
 	source *sourceIM
-	// prepareTarget, when set, lays out the target before the restore.
-	prepareTarget func(t *testing.T, target string)
+	// prepareTarget, when set, lays out the target and the operation store
+	// before the restore.
+	prepareTarget func(t *testing.T, target string, store *OperationStore)
+	// sourceDown closes the source's manager before the restore, so that a
+	// connection to it is refused.
+	sourceDown bool
 	// sourceTimeout bounds the question to the source; zero keeps the default.
 	sourceTimeout time.Duration
 }
@@ -126,12 +136,11 @@ func runRebuildRestore(t *testing.T, c rebuildCase) rebuildRestore {
 	req := baseRestoreRequest(t, bucket, prefix)
 	req.SeedFromMaster, req.ExpectedClusterUID, req.ExpectedMember = seedMaster, seedClusterUID, namedMember
 	req.Rebuild = c.request
-	if c.prepareTarget != nil {
-		c.prepareTarget(t, req.TargetDir)
-	}
-
 	ts := httptest.NewServer(c.source)
 	t.Cleanup(ts.Close)
+	if c.sourceDown {
+		ts.Close()
+	}
 
 	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
 	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
@@ -142,6 +151,9 @@ func runRebuildRestore(t *testing.T, c rebuildCase) rebuildRestore {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { awaitTerminalOperations(t, store) })
+	if c.prepareTarget != nil {
+		c.prepareTarget(t, req.TargetDir, store)
+	}
 	roots := rootsFor(req)
 	roots.Member = namedMember
 	cli := &stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}
@@ -302,7 +314,7 @@ func TestServer_RebuildRestore_RefusesATargetHoldingUnrecordedDatabaseFiles(t *t
 	}
 	r := runRebuildRestore(t, rebuildCase{request: &testRebuild, manifest: &testRebuild,
 		source: &sourceIM{answer: activeMasterAnswer()},
-		prepareTarget: func(t *testing.T, target string) {
+		prepareTarget: func(t *testing.T, target string, _ *OperationStore) {
 			for name, content := range files {
 				path := filepath.Join(target, name)
 				if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -377,12 +389,108 @@ func TestServer_RestoreWithoutRebuild_KeepsTheBootstrapSeedBehaviour(t *testing.
 	}
 }
 
-// The default address of the source's manager is the member's own name, which
-// its per-member Service resolves in the cluster's namespace (ADR-0004), on
-// the manager's port.
-func TestSourceRoleURL_IsTheMemberNameOnTheManagerPort(t *testing.T) {
-	if got, want := defaultSourceRoleURL("demo-0"), "http://demo-0:9090/v1/role"; got != want {
+// The address of the source's manager is its per-member Service qualified
+// with the namespace, as the Operator names it (ADR-0004): a bare member name
+// would be completed by the DNS search list, and the token could go to
+// whatever host that list makes of it.
+func TestSourceRoleURL_IsTheMemberServiceInTheNamespace(t *testing.T) {
+	if got, want := defaultSourceRoleURL("demo-0", "shop"), "http://demo-0.shop.svc:9090/v1/role"; got != want {
 		t.Errorf("defaultSourceRoleURL = %q, want %q", got, want)
+	}
+}
+
+// A manager that does not know its namespace cannot name the source's
+// address, so it asks nobody and refuses the restore before anything is read
+// or written.
+func TestServer_RebuildRestore_WithoutANamespaceAsksNobody(t *testing.T) {
+	srv := NewServer(&stepCLI{}, "tok")
+	code, err := srv.confirmRebuildSource(t.Context(), seedMaster)
+	if code != FailureRebuildSourceUnconfirmed || err == nil || !strings.Contains(err.Error(), "POD_NAMESPACE") {
+		t.Errorf("confirmRebuildSource without a namespace = %q, %v; want %q naming POD_NAMESPACE",
+			code, err, FailureRebuildSourceUnconfirmed)
+	}
+}
+
+// What a failed restore of this manager left in the target (its ownership
+// marker, with no data recorded as restored) is removed by the next restore
+// once it goes on. A rebuild restore whose source answers as a slave does not
+// go on: the source is asked before the leftover is reclaimed or taken over,
+// so the leftover stays exactly as it was.
+func TestServer_RebuildRestore_RefusedSourceLeavesAFailedRestoresLeftoversAlone(t *testing.T) {
+	files := map[string]string{
+		filepath.Join(dbName, dbName):         "partial data volume",
+		filepath.Join(dbName, dbName+"_lgat"): "partial active log",
+	}
+	var marker string
+	r := runRebuildRestore(t, rebuildCase{request: &testRebuild, manifest: &testRebuild,
+		source: &sourceIM{answer: slaveAnswer()},
+		prepareTarget: func(t *testing.T, target string, store *OperationStore) {
+			op, _, err := store.FindOrCreate(OpRestore, "an-earlier-restore", "hash", dbName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Settle(op.ID, func(o *Operation) { o.State, o.FailureReason = OpFailed, "restoredb failed" }); err != nil {
+				t.Fatal(err)
+			}
+			marker = op.ID + "\n"
+			files[filepath.Join(dbName, ownershipMarker)] = marker
+			for name, content := range files {
+				path := filepath.Join(target, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}})
+	if r.final.State != OpFailed || r.final.FailureCode != FailureRebuildSourceNotMaster {
+		t.Fatalf("final = %s with code %q (%s), want Failed with %q", r.final.State, r.final.FailureCode,
+			r.final.FailureReason, FailureRebuildSourceNotMaster)
+	}
+	for name, content := range files {
+		got, err := os.ReadFile(filepath.Join(r.req.TargetDir, name)) // #nosec G304 -- the test's own target
+		if err != nil || string(got) != content {
+			t.Errorf("%s = %q, %v; want the leftover untouched (%q)", name, got, err, content)
+		}
+	}
+	if calls := r.cli.recorded(); len(calls) != 0 {
+		t.Errorf("calls = %q, want none", calls)
+	}
+	if r.objects.gets != 0 {
+		t.Errorf("the refused restore read the artifact %d times", r.objects.gets)
+	}
+}
+
+// Answers that are no readable role answer of the source show nothing about
+// its role: a refused connection, a redirect (which is not followed, so the
+// answer cannot come from another host), a refused token and a body that is
+// not JSON. Each is refused as unconfirmed, with nothing staged or written.
+func TestServer_RebuildRestore_RefusesUnusableSourceAnswers(t *testing.T) {
+	for name, c := range map[string]rebuildCase{
+		"a refused connection": {source: &sourceIM{answer: activeMasterAnswer()}, sourceDown: true},
+		"a redirect": {source: &sourceIM{raw: func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://example.invalid/v1/role", http.StatusFound)
+		}}},
+		"a refused token": {source: &sourceIM{raw: func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}}},
+		"a body that is not JSON": {source: &sourceIM{raw: func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("{\"role\": master"))
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c.request, c.manifest = &testRebuild, &testRebuild
+			r := runRebuildRestore(t, c)
+			if r.final.State != OpFailed || r.final.FailureCode != FailureRebuildSourceUnconfirmed {
+				t.Fatalf("final = %s with code %q (%s), want Failed with %q", r.final.State, r.final.FailureCode,
+					r.final.FailureReason, FailureRebuildSourceUnconfirmed)
+			}
+			if r.objects.gets != 0 {
+				t.Errorf("the refused restore read the artifact %d times", r.objects.gets)
+			}
+			r.leftNothing(t)
+		})
 	}
 }
 
@@ -435,7 +543,7 @@ func TestServer_RebuildBackup_RecordsTheRebuildInTheManifest(t *testing.T) {
 	upload := *testUpload
 	upload.SourceRole = string(RoleMaster)
 	upload.Seed = true
-	upload.Prefix = "prod/" + upload.ClusterUID + "/seed/" + dbName
+	upload.Prefix = "prod/" + upload.ClusterUID + "/" + RebuildSeedDir(testRebuild.OperationID) + "/" + dbName
 	b := testRebuild
 	upload.Rebuild = &b
 	body, err := json.Marshal(BackupRequest{Database: dbName, Destination: filepath.Join(root, "uid-1"), Upload: &upload})
@@ -481,7 +589,10 @@ func TestValidateBackupRequest_RebuildNeedsASeedUpload(t *testing.T) {
 		t.Errorf("validateBackupRequest of a non-seed rebuild backup = %v, want a refusal that names the seed", err)
 	}
 	upload.Seed, upload.SourceRole = true, string(RoleMaster)
-	upload.Prefix = "prod/" + upload.ClusterUID + "/seed/" + dbName
+	upload.Prefix = "prod/" + upload.ClusterUID + "/" + RebuildSeedDir(testRebuild.OperationID) + "/" + dbName
+	if err := validateBackupRequest(BackupRequest{Database: dbName, Destination: "/x", Upload: &upload}); err != nil {
+		t.Errorf("validateBackupRequest refused a rebuild backup to its own location: %v", err)
+	}
 	upload.Rebuild = &RebuildBinding{OperationID: testRebuild.OperationID}
 	if err := validateBackupRequest(BackupRequest{Database: dbName, Destination: "/x", Upload: &upload}); err == nil {
 		t.Error("validateBackupRequest accepted a rebuild without a token")
@@ -493,5 +604,48 @@ func TestValidateBackupRequest_RebuildNeedsASeedUpload(t *testing.T) {
 func TestCapabilities_ReportTheRebuildRestoreCheck(t *testing.T) {
 	if !slices.Contains(Capabilities(), CapabilityRebuildRestore) {
 		t.Errorf("capabilities = %v, want %q among them", Capabilities(), CapabilityRebuildRestore)
+	}
+}
+
+// A rebuild's seed backup goes only to the location of that rebuild,
+// <clusterUID>/rebuild-<operationID>/<database>. The HA bootstrap's seed
+// locations ("seed" and "seed-<artifact>") and another rebuild's location are
+// refused, at the request and again at the upload, so a rebuild's backup can
+// never replace the bootstrap's seed or another rebuild's copy.
+func TestRebuildBackup_RefusesEveryLocationButItsOwn(t *testing.T) {
+	for _, dir := range []string{"seed", "seed-demo-1-from-demo-0", "seed-" + RebuildSeedDir(testRebuild.OperationID),
+		RebuildSeedDir(otherRebuild.OperationID), "rebuild-"} {
+		t.Run(dir, func(t *testing.T) {
+			upload := *testUpload
+			b := testRebuild
+			upload.Seed, upload.SourceRole, upload.Rebuild = true, string(RoleMaster), &b
+			upload.Prefix = "prod/" + upload.ClusterUID + "/" + dir + "/" + dbName
+			if err := validateBackupRequest(BackupRequest{Database: dbName, Destination: "/x", Upload: &upload}); err == nil ||
+				!strings.Contains(err.Error(), RebuildSeedDir(testRebuild.OperationID)) {
+				t.Errorf("validateBackupRequest to %s = %v, want a refusal naming the rebuild's location", dir, err)
+			}
+			staging := stageBackup(t, map[string]string{stagedFileName: backupContent})
+			store := newFakeStore()
+			spec := baseSpec(staging)
+			spec.Seed, spec.Prefix = true, upload.Prefix
+			spec.Manifest.ClusterUID, spec.Manifest.SourceRole, spec.Manifest.Rebuild = upload.ClusterUID, string(RoleMaster), &b
+			if _, err := UploadBackup(t.Context(), store, spec); err == nil {
+				t.Errorf("UploadBackup of a rebuild seed to %s succeeded", dir)
+			}
+			if len(store.objects) != 0 {
+				t.Errorf("UploadBackup to %s wrote %d objects", dir, len(store.objects))
+			}
+		})
+	}
+}
+
+// An HA bootstrap seed, which names no rebuild, still goes to its stable
+// location.
+func TestBootstrapSeedUpload_KeepsItsStableLocation(t *testing.T) {
+	upload := *testUpload
+	upload.Seed, upload.SourceRole = true, string(RoleMaster)
+	upload.Prefix = "prod/" + upload.ClusterUID + "/seed/" + dbName
+	if err := validateBackupRequest(BackupRequest{Database: dbName, Destination: "/x", Upload: &upload}); err != nil {
+		t.Errorf("validateBackupRequest refused the bootstrap seed location: %v", err)
 	}
 }

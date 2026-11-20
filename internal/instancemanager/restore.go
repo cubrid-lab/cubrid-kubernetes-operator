@@ -69,7 +69,7 @@ type RestoreRequest struct {
 	ExpectedMember string `json:"expectedMember,omitempty"`
 	// Rebuild, when set, binds the restore to an accepted member rebuild. It
 	// requires SeedFromMaster, the rebuild's source, and ExpectedMember, the
-	// member being rebuilt. Before it reads the artifact or writes anything
+	// member being rebuilt. Before it touches the target or reads the artifact
 	// the manager asks the source's Instance Manager for its role, and goes
 	// on only on a fresh answer that the source is the active master; the
 	// artifact's manifest must then carry the same rebuild. Empty for any

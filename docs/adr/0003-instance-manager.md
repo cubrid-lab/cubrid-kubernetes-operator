@@ -535,21 +535,31 @@ one-time token its request consumed (`status.memberRebuild`). Both are plain
 identifiers of at most 128 characters. Without the field a backup or restore
 works as it does for the HA bootstrap seed and a recovery restore.
 
-- `upload.rebuild` needs `upload.seed`. The manifest records it as `rebuild`.
+- `upload.rebuild` needs `upload.seed` and the location
+  `<clusterUID>/rebuild-<operationID>/<database>` of that rebuild; the
+  manifest records it as `rebuild`. The HA bootstrap's seed locations
+  (`seed`, `seed-<artifact>`) and another rebuild's location are refused, at
+  the request and again at the upload, so a rebuild's backup never replaces
+  the bootstrap's seed.
 - `rebuild` on a restore needs `seedFromMaster`, the rebuild's source, and
   `expectedMember`, the member being rebuilt, and the two must differ;
   otherwise the request is answered 400 before it is recorded.
-- Before the restore takes over, removes, reads or writes anything, the
-  manager asks the source's Instance Manager for `GET /v1/role`, at
-  `http://<seedFromMaster>:9090/v1/role` (the member's name, which its
-  per-member Service resolves in the namespace, ADR-0004), with its own
+- Before the restore touches the target or reads the artifact (before it
+  takes over or removes what an earlier restore left), the manager asks the
+  source's Instance Manager for `GET /v1/role`, at
+  `http://<seedFromMaster>.<namespace>.svc:9090/v1/role`, the source's
+  per-member Service (ADR-0004) in the namespace `POD_NAMESPACE` names. A
+  name qualified this way is not completed by the DNS search list into
+  another host. A manager without `POD_NAMESPACE` asks nobody and refuses
+  the restore with `RebuildSourceUnconfirmed`. It asks with its own
   bearer token, the cluster's token, within 5 seconds and without following
   a redirect. It goes on only when the answer names that member as current,
   with role `master` and an active server. Any other answer ends the
   operation `Failed` with `failureCode: RebuildSourceNotMaster`; no answer,
   an error status, an unreadable answer or a timeout ends it with
   `RebuildSourceUnconfirmed`. Either leaves nothing staged, no ownership
-  marker and no `databases.txt` entry. The question reaches the source
+  marker, no `databases.txt` entry, and what an earlier failed restore left
+  in the target as it was. The question reaches the source
   only where the NetworkPolicy admits the cluster's member Pods to the
   manager port; where it does not, the restore is refused with
   `RebuildSourceUnconfirmed`.
@@ -598,6 +608,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `CUBRID_LOG_VOLUME_SIZE` | a 32nd of `spec.storage.data.size` in whole MiB, between `20M` and `512M`: the `--log-volume-size` of the database the entrypoint (one member) or the HA bootstrap (the first HA member) creates. Unset leaves the image's `log_volume_size` (512M). It counts only when a database is created (DESIGN.md, "Log Volume Size"; #666) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| `POD_NAMESPACE` | the namespace of the member's Pod; it qualifies the address of the source's Instance Manager that a restore for a member rebuild asks. Without it such a restore is refused |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |

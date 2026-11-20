@@ -160,8 +160,13 @@ type Server struct {
 	// start needs (observeStartable).
 	heartbeatProcesses func() (map[string]bool, error)
 	heartbeatSettle    time.Duration
+	// namespace is the Kubernetes namespace of this member's Pod, which
+	// qualifies the address of another member's Instance Manager; empty when
+	// the manager was not told it (WithNamespace).
+	namespace string
 	// sourceRoleURL is where a restore for a member rebuild asks the
-	// source's Instance Manager for its role; nil is defaultSourceRoleURL.
+	// source's Instance Manager for its role; nil is defaultSourceRoleURL in
+	// namespace.
 	// sourceRoleTimeout bounds that question; zero is sourceRoleBudget.
 	sourceRoleURL     func(member string) string
 	sourceRoleTimeout time.Duration
@@ -261,6 +266,15 @@ func (s *Server) WithObjectStore(objects ObjectStore) *Server {
 
 // WithRestoreRoots sets the directories a restore may touch; a request naming a
 // path outside them is rejected. Returns the server for chaining.
+// WithNamespace sets the namespace of this member's Pod (POD_NAMESPACE). A
+// restore for a member rebuild asks the source's Instance Manager at its
+// name qualified with it, so the token is sent to no host a DNS search list
+// completes. Returns the server for chaining.
+func (s *Server) WithNamespace(namespace string) *Server {
+	s.namespace = namespace
+	return s
+}
+
 func (s *Server) WithRestoreRoots(roots RestoreRoots) *Server {
 	s.restoreRoots = roots
 	return s
@@ -1529,7 +1543,7 @@ func validateBackupRequest(req BackupRequest) error {
 		}
 	}
 	if up.Seed {
-		if err := validateSeedUpload(up.Prefix, up.ClusterUID, req.Database, up.SourceRole); err != nil {
+		if err := validateSeedUpload(up.Prefix, up.ClusterUID, req.Database, up.SourceRole, up.Rebuild); err != nil {
 			return err
 		}
 	}
@@ -1683,11 +1697,11 @@ const sourceRoleBudget = 5 * time.Second
 // maxSourceRoleAnswer is the largest answer to that question that is read.
 const maxSourceRoleAnswer = 1 << 20
 
-// defaultSourceRoleURL is the role endpoint of member's Instance Manager. A
-// member's own name resolves, in the cluster's namespace, to its per-member
-// Service (ADR-0004), the name CUBRID's heartbeat and restoreslave use too.
-func defaultSourceRoleURL(member string) string {
-	return fmt.Sprintf("http://%s:%d/v1/role", member, DefaultPort)
+// defaultSourceRoleURL is the role endpoint of member's Instance Manager in
+// namespace: the member's per-member Service (ADR-0004), named as the
+// Operator names it, <member>.<namespace>.svc, on the manager's port.
+func defaultSourceRoleURL(member, namespace string) string {
+	return fmt.Sprintf("http://%s.%s.svc:%d/v1/role", member, namespace, DefaultPort)
 }
 
 // confirmRebuildSource asks the Instance Manager of source, with this
@@ -1704,15 +1718,20 @@ func (s *Server) confirmRebuildSource(ctx context.Context, source string) (strin
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	address := defaultSourceRoleURL
-	if s.sourceRoleURL != nil {
-		address = s.sourceRoleURL
-	}
 	unconfirmed := func(why string) (string, error) {
 		return FailureRebuildSourceUnconfirmed, fmt.Errorf("the Instance Manager of the rebuild source %s could not be "+
 			"asked for its role (%s), so it is not shown to be the active master", source, why)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address(source), nil)
+	var address string
+	switch {
+	case s.sourceRoleURL != nil:
+		address = s.sourceRoleURL(source)
+	case hostLabelPattern.MatchString(s.namespace):
+		address = defaultSourceRoleURL(source, s.namespace)
+	default:
+		return unconfirmed("this manager does not know its namespace (POD_NAMESPACE), which qualifies the source's address")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return unconfirmed(err.Error())
 	}
