@@ -369,3 +369,62 @@ func TestRunS15FailsWhenTheSecondMemberIsEvicted(t *testing.T) {
 			node.Spec.Unschedulable, rec.Uncordoned)
 	}
 }
+
+// When the drained master's Pod comes back and keeps reporting itself an
+// active master next to the promoted one, two members are masters in two
+// consecutive sweeps: S15 fails with the never-event, instead of waiting out
+// the rejoin as a cluster that has not converged yet.
+func TestRunS15FailsOnTwoActiveMastersAfterTheRejoin(t *testing.T) {
+	cfg := testS15Config(t, FaultDrainMasterNode)
+	f, cluster := newS15Fixture(t, cfg)
+	f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		was := cluster.pending
+		err := cluster.podRead(ctx, c, key)
+		if was != "" && cluster.pending == "" {
+			f.mu.Lock()
+			f.roles[was] = roleMaster
+			f.mu.Unlock()
+		}
+		return err
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() = nil, want S15 failed")
+	}
+	s15 := s15RunScenario(t, cfg.EvidenceDir, FaultDrainMasterNode)
+	rec := readS15Record(t, cfg.EvidenceDir, FaultDrainMasterNode)
+	if s15.Result != evidence.Fail || len(s15.NeverEvents) == 0 ||
+		!strings.Contains(strings.Join(s15.NeverEvents, "; "), "active masters") || len(rec.TwoMasters) != 2 {
+		t.Fatalf("S15 = %+v, twoActiveMasters %v; want a fail naming two active masters", s15, rec.TwoMasters)
+	}
+}
+
+// A surviving member whose database container restarted while the drained
+// member was missing is recorded as soon as it is seen, so a run that ends
+// before the member rejoins still fails on it rather than ending blocked.
+func TestRunS15RecordsASurvivorRestartWhileTheMemberIsMissing(t *testing.T) {
+	cfg := testS15Config(t, FaultDrainSlaveNode)
+	f, cluster := newS15Fixture(t, cfg)
+	f.evicted = func(ctx context.Context, c client.Client, obj client.Object) error {
+		if err := cluster.evict(ctx, c, obj); err != nil {
+			return err
+		}
+		// The replacement is never scheduled, so the member never rejoins.
+		cluster.pending = ""
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: testMemberLast}, pod); err != nil {
+			return err
+		}
+		pod.Status.ContainerStatuses[0].ContainerID = "containerd://" + testMemberLast + "-restarted"
+		return c.Status().Update(ctx, pod)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() = nil, want S15 failed")
+	}
+	s15 := s15RunScenario(t, cfg.EvidenceDir, FaultDrainSlaveNode)
+	rec := readS15Record(t, cfg.EvidenceDir, FaultDrainSlaveNode)
+	if s15.Result != evidence.Fail || len(rec.OthersChanged) != 1 ||
+		!strings.Contains(strings.Join(s15.NeverEvents, "; "), "replaced or restarted") {
+		t.Fatalf("S15 = %+v, otherMembersChanged %v; want a fail naming %s restarted", s15, rec.OthersChanged,
+			testMemberLast)
+	}
+}

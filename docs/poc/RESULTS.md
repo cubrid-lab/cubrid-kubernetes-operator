@@ -2424,7 +2424,8 @@ as written. Later POCs confirm parts of it and contradict others:
   reproduced (POC-26, state 4d).
 - **Split brain.** Two masters with divergent data were seen in one run of
   an unknown environment with `ha_ping_hosts` unset (POC-6); whether
-  `ha_ping_hosts` changes that is open (scenario contract, Q3).
+  `ha_ping_hosts` changes that is open (scenario contract, Q3). POC-40 and
+  POC-52 later tested it in one VM-lab and several Docker configurations.
 - **Not tested.** The per-member Service fix for the short-name problem of
   POC-3 has not been tested in Kubernetes by a POC (the Instance Manager
   image sets `hosts: files dns`, POC-26); the POC-9 slave restart was a

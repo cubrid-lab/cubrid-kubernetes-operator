@@ -1270,8 +1270,15 @@ type MemberRebuildOffer struct {
 	// sourcePodUID is the UID of the source's Pod.
 	SourcePodUID string `json:"sourcePodUID"`
 	// token is the one-time token that requests this rebuild: the annotation
-	// database.cubrid.io/rebuild-member set to "<member>:<token>".
+	// database.cubrid.io/rebuild-member set to "<member>:<token>", or to
+	// "<member>:<token>:<source>" when formerPrimary is true.
 	Token string `json:"token"`
+	// formerPrimary says that the member is status.lastResolvedPrimary: it
+	// may have acknowledged writes the source lacks. Its request must name
+	// the source as a third field, stating that the source's data becomes the
+	// member's data (ADR-0006).
+	// +optional
+	FormerPrimary bool `json:"formerPrimary,omitempty"`
 }
 
 // MemberRebuildState is what became of a requested rebuild.
@@ -1314,6 +1321,11 @@ type MemberRebuild struct {
 	SourcePodUID string `json:"sourcePodUID"`
 	// token is the one-time token the request consumed.
 	Token string `json:"token"`
+	// formerPrimary says that the member was status.lastResolvedPrimary and
+	// the request named the source, accepting the source's data as the
+	// member's data (ADR-0006).
+	// +optional
+	FormerPrimary bool `json:"formerPrimary,omitempty"`
 	// operationID identifies this rebuild's operations on the Instance
 	// Managers. It is chosen when the request is accepted and never changes.
 	OperationID string `json:"operationID"`
