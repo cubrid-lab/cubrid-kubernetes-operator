@@ -41,6 +41,32 @@ import (
 // member").
 const rebuildMemberAnnotation = "database.cubrid.io/rebuild-member"
 
+// releaseWriteQuarantineAnnotation is the annotation with which an
+// administrator releases a write quarantine (docs/observability.md, "Manual
+// release").
+const releaseWriteQuarantineAnnotation = "database.cubrid.io/release-write-quarantine"
+
+// rebuildTarget picks the slave whose storage the rebuild step empties.
+// members are the cluster's members in the order of their ordinals. A member
+// that gives no role while it outranks the only active master (has a lower
+// ordinal) is an unverified member, and the Operator quarantines the
+// read-write path for it (ADR-0005, section 8); a member with an empty data
+// volume never answers, so that quarantine is not released automatically. The
+// first slave ranked below the master is therefore preferred. When every
+// slave outranks the master, the first slave is returned with outranksMaster
+// set, and the step has to release the quarantine as an administrator would.
+// A master that is not among members counts as ranked below every slave.
+func rebuildTarget(master string, slaves, members []string) (member string, outranksMaster bool) {
+	if at := slices.Index(members, master); at >= 0 {
+		for _, m := range members[at+1:] {
+			if slices.Contains(slaves, m) {
+				return m, false
+			}
+		}
+	}
+	return slaves[0], true
+}
+
 // memberRebuildLimit bounds the wait from the accepted request until the
 // rebuild ends. The copy is a backup on the source, an upload to and a
 // download from the mock object store, restoredb, the start of the member as
@@ -67,6 +93,13 @@ const memberRebuildLimit = 10 * time.Minute
 // cluster's NetworkPolicy admits one member's Instance Manager to another's
 // (#1045).
 //
+// The slave emptied is one ranked below the master when there is one. When
+// the earlier steps left the member with the highest ordinal as master, every
+// slave outranks it, and the emptied slave starts a write quarantine that
+// cannot end by itself (rebuildTarget). The step then releases it with the
+// documented manual release before it writes again; the output and
+// member-rebuild/result.txt say which of the two the run took (#1058).
+//
 // The member's Pod and claim are replaced, and the step leaves the cluster
 // in the common starting state, which the next step verifies. It is not a
 // scenario of the contract and records nothing in the summary. It runs in
@@ -85,8 +118,10 @@ func memberRebuildStep(r *haRun) {
 		// Never the master: the Operator refuses to rebuild the current
 		// primary, and losing the master's storage is a failover, not this
 		// step.
-		member := slaves[0]
+		member, outranksMaster := rebuildTarget(master, slaves, r.members)
 		claim := "data-" + member
+		_, _ = fmt.Fprintf(GinkgoWriter, "rebuilding %s; the master is %s; %s outranks the master and needs "+
+			"a manual release of the write quarantine: %t\n", member, master, member, outranksMaster)
 
 		readCluster := func() (*databasev1alpha1.CubridCluster, error) {
 			out, err := r.kubectlQuiet(context.Background(), "get", "cubridcluster", r.cluster,
@@ -172,7 +207,7 @@ func memberRebuildStep(r *haRun) {
 		_, err = r.kubectl(context.Background(), "delete", "pod", member, "--timeout=5m")
 		Expect(err).NotTo(HaveOccurred())
 		lostAt := time.Now()
-		var newClaimUID string
+		var newClaimUID, newPodUID string
 		Eventually(func(g Gomega) {
 			uid, volume, deleting, err := readClaim()
 			g.Expect(err).NotTo(HaveOccurred())
@@ -185,8 +220,80 @@ func memberRebuildStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(pod).NotTo(BeEmpty(), "a new Pod %s", member)
 			g.Expect(pod).NotTo(Equal(oldPodUID), "the Pod %s is replaced", member)
-			newClaimUID = uid
+			newClaimUID, newPodUID = uid, pod
 		}, 5*time.Minute, 3*time.Second).Should(Succeed())
+
+		releasedGeneration := ""
+		if outranksMaster {
+			// The member outranks the only active master and gives no role,
+			// so the Operator quarantined the read-write path for it
+			// (WriteQuarantinedMemberUnverified), and that quarantine never
+			// ends by itself because a member with an empty data volume never
+			// answers. No rebuild is offered while it is in force. Releasing
+			// it is the administrator's documented path (docs/observability.md,
+			// "Manual release"), and it is safe here: the member's data claim
+			// was replaced by an empty one, so the member holds no database
+			// and no acknowledged write can be lost by the release.
+			By("releasing the write quarantine " + member + " started, as an administrator who replaced its storage")
+			DeferCleanup(func() {
+				_, _ = r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
+					releaseWriteQuarantineAnnotation+"-")
+			})
+			lastSet := ""
+			Eventually(func(g Gomega) {
+				c, err := readCluster()
+				g.Expect(err).NotTo(HaveOccurred())
+				if q := c.Status.WriteQuarantine; q != nil {
+					if q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
+						StopTrying(fmt.Sprintf("the write quarantine in force has the reason %s, not %s; "+
+							"this step releases only the quarantine of a member without storage",
+							q.Reason, databasev1alpha1.WriteQuarantinedMemberUnverified)).Now()
+					}
+					i := slices.IndexFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+						return m.Name == member
+					})
+					g.Expect(i).To(BeNumerically(">=", 0), "the quarantine names %s: %+v", member, q.Members)
+					// The release covers the Pods the quarantine records; a
+					// record made before the new Pod existed is revised, with
+					// a new token, once the Operator sees the new Pod.
+					g.Expect(q.Members[i].PodUID).To(Equal(newPodUID), "the quarantine records the new Pod of %s", member)
+					g.Expect(q.ReleaseToken).NotTo(BeEmpty(), "status.writeQuarantine.releaseToken")
+					// The token is new at each revision of the quarantine, so
+					// the current one is read and set again on each attempt.
+					// It is redacted from the test output.
+					redactor.Add(q.ReleaseToken)
+					if q.ReleaseToken != lastSet {
+						_, err := r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
+							releaseWriteQuarantineAnnotation+"="+q.ReleaseToken, "--overwrite")
+						g.Expect(err).NotTo(HaveOccurred())
+						lastSet = q.ReleaseToken
+					}
+					releasedGeneration = q.GenerationID
+					g.Expect(q).To(BeNil(), "status.writeQuarantine (revision %d, release refusal %q)",
+						q.Revision, q.ReleaseRefusal)
+				}
+				g.Expect(releasedGeneration).NotTo(BeEmpty(),
+					"a %s quarantine naming %s", databasev1alpha1.WriteQuarantinedMemberUnverified, member)
+				rel := c.Status.LastWriteQuarantineRelease
+				g.Expect(rel).NotTo(BeNil(), "status.lastWriteQuarantineRelease")
+				g.Expect(rel.GenerationID).To(Equal(releasedGeneration), "the release is of the quarantine for %s", member)
+				g.Expect(rel.Method).To(Equal(databasev1alpha1.WriteQuarantineReleasedManually))
+			}, 5*time.Minute, 3*time.Second).Should(Succeed())
+
+			By("waiting for the read-write Brokers to be available again")
+			Eventually(func(g Gomega) {
+				c, err := readCluster()
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(c.Status.WriteQuarantine).To(BeNil(), "status.writeQuarantine after the release")
+				out, err := r.kubectlQuiet(context.Background(), "get", "deployment", r.cluster+"-broker-rw",
+					"-o", "jsonpath={.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}")
+				g.Expect(err).NotTo(HaveOccurred())
+				f := strings.Fields(out)
+				g.Expect(f).To(HaveLen(3), "replicas, updated, available: %q", out)
+				g.Expect(f[0]).NotTo(Equal("0"), "the read-write Brokers are scaled back after the release")
+				g.Expect(f[1:]).To(HaveEach(f[0]), "replicas, updated, available: %q", out)
+			}, 5*time.Minute, 3*time.Second).Should(Succeed())
+		}
 
 		By("writing rows while " + member + " has no database")
 		h, err = r.runWorkload(context.Background(), "CLIENT_ID="+clients+"-during OPS=10")
@@ -297,10 +404,15 @@ func memberRebuildStep(r *haRun) {
 		report := r.passingDataCheck("member-rebuild", 3*time.Minute)
 		Expect(report.Members).To(HaveKey(member))
 		files := r.evidenceFiles("member-rebuild", report)
-		summary := fmt.Sprintf("rebuilt member: %s\nsource: %s\nlost claim: %s (volume %s)\nnew claim: %s\n"+
+		release := "not started, " + member + " is ranked below the master"
+		if outranksMaster {
+			release = "released manually, " + member + " outranks the master (quarantine " + releasedGeneration + ")"
+		}
+		summary := fmt.Sprintf("rebuilt member: %s\nsource: %s\nwrite quarantine: %s\n"+
+			"lost claim: %s (volume %s)\nnew claim: %s\n"+
 			"offer published after the loss: %s\nrebuild from the request to Completed: %s\n"+
 			"operation: %s\nrows on %s: %d, acknowledged rows missing: %d\n",
-			member, master, oldClaimUID, oldVolume, newClaimUID, offeredAfter.Round(time.Second),
+			member, master, release, oldClaimUID, oldVolume, newClaimUID, offeredAfter.Round(time.Second),
 			rebuilt.Round(time.Second), done.OperationID, member, report.Members[member].Rows, report.AcknowledgedMissing)
 		if f := writeScenarioFile("member-rebuild/result.txt", []byte(summary)); f != "" {
 			files = append(files, f)
