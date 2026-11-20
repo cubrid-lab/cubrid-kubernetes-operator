@@ -58,7 +58,7 @@ not stop independent analysis or an owner's safe, scoped work.
 | **1a — VM failure (S04)** | #1000 harness fix merged (#1002). #1003/#110: 40.483 s from Node fence to first `-rw` write, above the 30 s limit. | Measure observations, release passes and Broker startup; fix without weakening ADR-0005, then pass an authorized pinned VM S04 rerun. |
 | **1b — HA data safety** | #702/#115: a partition/heal trial's promoted member missed 73 acknowledged writes. | Qualify S07–S08 against independent new/existing-session SQL and each member's dataset; keep failed evidence. |
 | **1c — Other safety regressions** | #938: S03 graceful exceeded 30 s; #949: possible observation gap on child-write failure. | Bounded reproduction, safe fix and relevant regressions under existing owners. |
-| **2 — Rejoin/rebuild** | #116–#118: S09–S10 implementation, permissioned PVC-loss rebuild and SQL comparisons incomplete. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
+| **2 — Rejoin/rebuild** | #116, #118: S09 rejoin incomplete; S10 rebuild passed on the VM lab, a master change during the copy is unrun. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
 | **3 — Other required gates** | #88/#89 backup/restore, #666 capacity and #94/#124 release controls; the API group decision (#20) moved to v0.2 on 2026-11-20 UTC. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
 | **4 — Release qualification** | #126 candidate repetitions/24-hour soak and #127 independent reproduction outstanding. | Freeze one exact candidate after required gates, run the full qualification, then decide Go/No-Go. |
 
@@ -173,8 +173,8 @@ higher-ranked member became heartbeat master without 50 acknowledged writes on
 the VM lab (#702), and a graceful master deletion triggered an avoidable
 write-path interruption (#938). The #931 restart regression is now verified
 on the VM lab after #932, but #115's partition safety gates remain open.
-Rejoin and rebuild are
-`unit-envtest`. Backup and restore variants passed on the VM lab once or a few
+Rebuild after PVC loss passed on Kind and twice on the VM lab; rejoin
+is `unit-envtest`. Backup and restore variants passed on the VM lab once or a few
 times each; one S12 `exact` run failed (#416). Retention, authentication and
 voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
 reach Kind.
@@ -200,7 +200,7 @@ The reproducible, reviewed release is not run.
 | Healthy RW path after Operator restart | VM-lab (1 post-fix run) | #115, #126 | [VM evidence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/931#issuecomment-6977472448): #932 fix on `ce1dadf`; 68–73 s observation gap, two RW paths open, 621/621 acknowledged writes, all 641 checked rows on each member. #931 closed; not partition or candidate acceptance. |
 | Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
 | Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
-| Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. Former primary: #1015. [Database copy for an accepted request](docs/observability.md#rebuilding-a-member): unit-envtest only, Kind pending (#1043). Rejoin and SQL checks require #112–#118 |
+| Rejoin and rebuild (S09–S10) | S10: Kind; VM-lab (2 runs). S09: unit-envtest | #87, #116, #118, #126 | Rebuild on a one-time-token request; the member is held until caught up ([docs](docs/observability.md#rebuilding-a-member)). VM 11/20 (#118): slave and former primary rebuilt, rows equal, no failback. Open: master change mid-copy, S09 (#116) |
 | Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
 | Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
 | Backup safeguards in code | unit-envtest; Kind (standby) | #291, #369 | Standby choice (#291; Kind: all slaves stuck, #1026), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
