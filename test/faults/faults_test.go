@@ -452,7 +452,7 @@ func TestRun_ConfirmedRunsBetweenTheFaultAndTheFirstCheck(t *testing.T) {
 	f := &fakeFault{confirmAfter: 2}
 	var order []string
 	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok,
-		Confirmed: func(context.Context) { order = append(order, "confirmed") },
+		Confirmed: func(context.Context) error { order = append(order, "confirmed"); return nil },
 		Check: func(context.Context) (bool, error) {
 			order = append(order, "check")
 			return true, nil
@@ -471,33 +471,56 @@ func TestRun_ConfirmedDoesNotRunWithoutAConfirmedFault(t *testing.T) {
 	f := &fakeFault{}
 	ran := false
 	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: holds,
-		Confirmed: func(context.Context) { ran = true }})
+		Confirmed: func(context.Context) error { ran = true; return nil }})
 	if o.FaultConfirmed || ran {
 		t.Errorf("confirmed %t, Confirmed ran %t", o.FaultConfirmed, ran)
 	}
 }
 
-// A Confirmed that ignores its context does not hold the run: the run is
-// blocked as for any other step that does not stop, and the fault is removed.
-func TestRun_ReportsAConfirmedThatDoesNotStop(t *testing.T) {
-	f := &fakeFault{confirmAfter: 1}
-	checked := false
-	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok,
-		Confirmed: func(context.Context) { select {} },
-		Check: func(context.Context) (bool, error) {
-			checked = true
-			return true, nil
-		}})
-	if len(o.StillRunning) != 1 || o.StillRunning[0] != stepNameConfirmed {
-		t.Errorf("still running = %v, want [%s]", o.StillRunning, stepNameConfirmed)
-	}
-	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, ReasonStepStillRunning) {
-		t.Errorf("result = %q (%s), want blocked, %s", o.Result, o.Reason, ReasonStepStillRunning)
-	}
-	if checked {
-		t.Error("the outcome was checked after Confirmed did not stop")
-	}
-	if !o.CleanupSucceeded {
-		t.Errorf("the fault was not removed: %+v", o.Timeline)
+// A Confirmed that does not establish its observation blocks the run before
+// the outcome is checked, and the fault is still removed: one that returns
+// an error, one that stops on the cancellation at its limit (an ordinary
+// timeout), and one that ignores its context.
+func TestRun_BlocksWhenConfirmedDoesNotEstablishItsObservation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		confirmed    func(context.Context) error
+		reason       string
+		stillRunning bool
+	}{
+		"returns an error": {
+			confirmed: func(context.Context) error { return errors.New("the status read failed") },
+			reason:    ReasonConfirmedStepFailed,
+		},
+		"stops at its limit": {
+			confirmed: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
+			reason:    ReasonConfirmedStepFailed,
+		},
+		"ignores its context": {
+			confirmed:    func(context.Context) error { select {} },
+			reason:       ReasonStepStillRunning,
+			stillRunning: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checked := false
+			o := Run(context.Background(), Scenario{Fault: &fakeFault{confirmAfter: 1}, Limits: short, Before: ok,
+				Confirmed: tc.confirmed,
+				Check: func(context.Context) (bool, error) {
+					checked = true
+					return true, nil
+				}})
+			if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, tc.reason) {
+				t.Errorf("result = %q (%s), want blocked, %s", o.Result, o.Reason, tc.reason)
+			}
+			if got := len(o.StillRunning) == 1 && o.StillRunning[0] == stepNameConfirmed; got != tc.stillRunning {
+				t.Errorf("still running = %v", o.StillRunning)
+			}
+			if checked {
+				t.Error("the outcome was checked although Confirmed did not establish its observation")
+			}
+			if !o.CleanupSucceeded {
+				t.Errorf("the fault was not removed: %+v", o.Timeline)
+			}
+		})
 	}
 }

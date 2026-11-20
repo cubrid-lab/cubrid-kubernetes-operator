@@ -36,6 +36,10 @@ const (
 	ReasonInjectionFailed   = "fault_injection_failed"
 	ReasonFaultNotConfirmed = "fault_not_confirmed"
 	ReasonStepStillRunning  = "step_still_running"
+	// ReasonConfirmedStepFailed blocks a run whose Confirmed step returned an
+	// error or did not end within its limit: what it was to observe between
+	// the fault and the outcome is not established.
+	ReasonConfirmedStepFailed = "confirmed_step_failed"
 )
 
 // Fault is what a scenario plugs in.
@@ -83,8 +87,10 @@ type Scenario struct {
 	// Confirmed, when set, runs once right after the fault is confirmed and
 	// before Check is first called, within the confirmation limit. What it
 	// observes, such as a status read, lies between the fault and the
-	// outcome however soon the outcome comes (#1027). It judges nothing.
-	Confirmed func(ctx context.Context)
+	// outcome however soon the outcome comes (#1027). An error, or not
+	// ending within the limit, blocks the run: the observation it was to
+	// make is not established.
+	Confirmed func(ctx context.Context) error
 }
 
 // Step is one line of the run's timeline.
@@ -216,11 +222,13 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	o.FaultConfirmed = true
 	note("fault_confirmed", "")
 	if s.Confirmed != nil {
-		if err := bounded(ctx, l.Confirm, l.Stop, func(ctx context.Context) error {
-			s.Confirmed(ctx)
-			return nil
-		}); stillRunning(stepNameConfirmed, err) {
+		err := bounded(ctx, l.Confirm, l.Stop, s.Confirmed)
+		switch {
+		case stillRunning(stepNameConfirmed, err):
 			end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameConfirmed)
+			return o
+		case err != nil:
+			end(evidence.Blocked, ReasonConfirmedStepFailed, ReasonConfirmedStepFailed+": "+err.Error())
 			return o
 		}
 	}

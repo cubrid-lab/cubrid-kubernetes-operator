@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,9 +84,9 @@ type conditionSampler struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once
-	// now asks for a round at once (readNow); the channel it sends is closed
-	// when that round's status read has started.
-	now chan chan struct{}
+	// now asks for a round at once (readNow); the round sends the outcome of
+	// its status read on the channel once that read has ended.
+	now chan chan error
 	// rounds is written by the sampler's goroutine only, and read after it
 	// has ended.
 	rounds []conditionRound
@@ -95,22 +96,22 @@ type conditionSampler struct {
 // in each round what the sampling asks for besides.
 func (r *haRun) sampleConditions(sampling conditionSampling) *conditionSampler {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &conditionSampler{cancel: cancel, done: make(chan struct{}), now: make(chan chan struct{})}
+	c := &conditionSampler{cancel: cancel, done: make(chan struct{}), now: make(chan chan error)}
 	go func() {
 		defer close(c.done)
-		var started chan struct{}
+		var report chan error
 		for {
 			start := time.Now()
-			round := r.conditionRound(ctx, sampling, started)
+			round := r.conditionRound(ctx, sampling, report)
 			if ctx.Err() != nil {
 				return // a round cut short by stop is not kept
 			}
 			c.rounds = append(c.rounds, round)
-			started = nil
+			report = nil
 			select {
 			case <-ctx.Done():
 				return
-			case started = <-c.now:
+			case report = <-c.now:
 			case <-time.After(time.Until(start.Add(conditionSampleEvery))):
 			}
 		}
@@ -119,22 +120,26 @@ func (r *haRun) sampleConditions(sampling conditionSampling) *conditionSampler {
 }
 
 // readNow starts a round as soon as the one in progress, if any, has ended,
-// and returns once that round's status read has started, so the read begins
+// and returns once that round's status read has ended, so the whole read lies
 // after readNow was called and before anything that follows it (#1027). It
-// returns early when the sampler stops or ctx ends.
-func (c *conditionSampler) readNow(ctx context.Context) {
-	started := make(chan struct{})
+// returns an error when the read failed, or when it did not end because the
+// sampler stopped or ctx ended: then no such read is established.
+func (c *conditionSampler) readNow(ctx context.Context) error {
+	report := make(chan error, 1)
 	select {
-	case c.now <- started:
+	case c.now <- report:
 	case <-c.done:
-		return
+		return errors.New("the condition sampler stopped before a status read could start")
 	case <-ctx.Done():
-		return
+		return fmt.Errorf("no status read could start: %w", ctx.Err())
 	}
 	select {
-	case <-started:
+	case err := <-report:
+		return err
 	case <-c.done:
+		return errors.New("the condition sampler stopped before the status read ended")
 	case <-ctx.Done():
+		return fmt.Errorf("the status read did not end: %w", ctx.Err())
 	}
 }
 
@@ -148,17 +153,15 @@ func (c *conditionSampler) stop() []conditionRound {
 	return c.rounds
 }
 
-// conditionRound reads one round; started, when not nil, is closed once the
-// status read has started (readNow).
+// conditionRound reads one round. report, when not nil, gets the outcome of
+// the status read as soon as it has ended (readNow): nil when the status was
+// read, the reason otherwise. It is buffered, so the round never waits on it.
 func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling,
-	started chan struct{}) conditionRound {
+	report chan<- error) conditionRound {
 	ctx, cancel := context.WithTimeout(ctx, conditionReadLimit)
 	defer cancel()
 	var round conditionRound
 	start := time.Now().UTC()
-	if started != nil {
-		close(started)
-	}
 	out, err := r.kubectlQuiet(ctx, "get", "cubridcluster", r.cluster, "-o", "json")
 	var s statusSnapshot
 	if err == nil {
@@ -182,6 +185,13 @@ func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling,
 		}
 		sample.ReadEnd = time.Now().UTC()
 		round.Status = &sample
+	}
+	if report != nil {
+		if round.Status != nil {
+			report <- nil
+		} else {
+			report <- fmt.Errorf("the status read failed: %s", round.StatusError)
+		}
 	}
 	if len(sampling.rows) > 0 {
 		counts := faults.RowCounts{Start: time.Now().UTC(), Rows: make(map[string]int, len(sampling.rows))}
