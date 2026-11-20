@@ -1290,7 +1290,7 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	res, quarantine, seen := r.observeAndQuarantine(ctx, cluster)
 	// A rebuild request is decided from the same observation (#117).
 	rebuild := r.reconcileMemberRebuild(ctx, cluster, seen.members, seen.obs, seen.observedAt, seen.lastResolved,
-		seen.podsBefore, seen.podsErr)
+		seen.podsBefore, seen.podsErr, quarantine.err)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the

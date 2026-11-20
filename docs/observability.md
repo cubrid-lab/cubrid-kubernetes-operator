@@ -1353,7 +1353,28 @@ Operator records that claim's UID and the PersistentVolume it is bound to in
 `status.memberDataClaims`. That claim and that volume have held the
 database, and their data is never discarded on a request. A member recorded
 there also counts as holding the database, as a member in `seededMembers`
-does.
+does. When a member is later seen running the database on another claim, for
+example after its rebuild, its earlier record moves to
+`status.formerDataClaims` and is never removed: the volume it names may hold
+the only copy of writes no other member has, such as a lost primary's
+storage, and is never taken for a replacement of any member if it is bound to
+a new claim. That list holds at most 64 records. Once it is full, a later
+claim is not recorded, the member's earlier record stays in
+`status.memberDataClaims`, and no rebuild is offered or accepted for any
+member of the cluster: every request is refused with "the list is full". The
+Operator never removes a record to make room. To replace a member's storage
+after that, restore the database from a backup into a new cluster
+(`spec.bootstrap.recovery`) and move the clients to it.
+
+These records are compared by claim UID and PersistentVolume name only. The
+Operator does not read PersistentVolumes, so a retained disk exposed again
+under a new PersistentVolume name (the same CSI volume handle, or the same
+local path on the same node) is not recognised. The records also live only
+in the cluster's status: deleting and recreating the CubridCluster, restoring
+it without its status, or running an older Operator that does not know the
+field loses them. In all of these cases the restore's own check is the guard
+that remains: the Instance Manager refuses to restore into a target that
+already holds a database.
 
 **When a token is published.** `status.memberRebuildOffers` lists one entry
 per member that can be rebuilt now, with its `token`, the member's `podUID`,
@@ -1376,9 +1397,18 @@ A member is listed only when all of these hold in the latest observation:
 - the member has a Pod and a data claim that is bound to a volume, is not
   being deleted and was created no later than the Pod, a claim of the member
   is recorded in `status.memberDataClaims`, the current claim has another
-  UID, and its volume is not one recorded for any member: the claim was
-  replaced, and a retained volume bound to a new claim is not taken for an
-  empty one.
+  UID, and neither the claim nor its PersistentVolume name is in any
+  member's record in `status.memberDataClaims` or `status.formerDataClaims`:
+  the claim was replaced, and a retained PersistentVolume bound to a new
+  claim is not taken for an empty one;
+- the observation is complete: the members' Pods and data claims were read,
+  and the write quarantine step did not fail in the same pass. When it fails,
+  the status may still show the quarantine of an earlier pass, so a request
+  in that pass is refused ("the write quarantine step failed"), the offers
+  stay as they were, nothing is recorded, and an accepted rebuild is kept
+  unless the status shows a quarantine. A failure that persists, such as a
+  Node read the Operator is forbidden, refuses every request until it is
+  fixed; the reconcile error and the Operator's log name it.
 
 The token is kept while the member's Pod, claim and volume, the source and
 the source's Pod stay the same, also across an Operator restart, and
@@ -1485,7 +1515,9 @@ Warning Event `MemberRebuildWithdrawn`, and a new token is published once the
 member can be rebuilt again. An observation that sees no healthy primary
 among the other members keeps it, unless a write quarantine is in force or
 the member became the last resolved primary while its request did not name
-the source.
+the source. An observation whose Pods or claims could not be read, or whose
+write quarantine step failed, also keeps it, unless the status shows a write
+quarantine: that withdraws it even then.
 
 Whether this build restores the database on the member for an accepted
 request is recorded in [ROADMAP.md](../ROADMAP.md). An accepted request has

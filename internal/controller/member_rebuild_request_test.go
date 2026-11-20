@@ -379,6 +379,38 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 		Expect(offers[0].FormerPrimary).To(BeTrue())
 		token := offers[0].Token
 
+		// The release exempted the lost member only while the master it was
+		// given for runs in the same Pod, so a new source Pod quarantines
+		// again before the request is decided.
+		By("the source's Pod is replaced after the token was published: the request naming the source is refused")
+		drain(recorder)
+		sourcePod := offers[0].SourcePodUID
+		deleteMemberPod(ctx, key.Namespace, m1)
+		createMemberPod(ctx, key.Namespace, m1, nil)
+		annotate(rebuildMemberAnnotation, m0+":"+token+":"+m1)
+		pass()
+		c = stored()
+		Expect(c.Status.MemberRebuild).To(BeNil(), "the source the administrator saw is not the one that runs now")
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.MemberRebuildOffers).To(BeEmpty())
+		Expect(drain(recorder)).To(ContainElement(SatisfyAll(
+			ContainSubstring("Warning "+reasonMemberRebuildRefused), ContainSubstring("write quarantine"))))
+
+		By("after a second release the earlier token is ignored, and a new one bound to the new source Pod is published")
+		annotate(releaseWriteQuarantineAnnotation, c.Status.WriteQuarantine.ReleaseToken)
+		pass()
+		pass()
+		c = stored()
+		Expect(c.Status.WriteQuarantine).To(BeNil())
+		Expect(c.Status.MemberRebuild).To(BeNil())
+		Expect(drain(recorder)).To(ContainElement(SatisfyAll(
+			ContainSubstring("Warning "+reasonMemberRebuildIgnored), ContainSubstring("not the current rebuild token"))))
+		Expect(c.Status.MemberRebuildOffers).To(HaveLen(1))
+		Expect(c.Status.MemberRebuildOffers[0].Source).To(Equal(m1))
+		Expect(c.Status.MemberRebuildOffers[0].SourcePodUID).NotTo(Equal(sourcePod))
+		Expect(c.Status.MemberRebuildOffers[0].Token).NotTo(Equal(token), "the new source Pod gets a new token")
+		token = c.Status.MemberRebuildOffers[0].Token
+
 		By("the current token without the source named is refused")
 		drain(recorder)
 		annotate(rebuildMemberAnnotation, m0+":"+token)
@@ -414,5 +446,29 @@ var _ = Describe("Rebuild of a member's replacement storage on request (#117)", 
 		Expect(annotated).To(BeFalse())
 		Expect(stored().Status.MemberRebuild).To(Equal(rebuild))
 		Expect(stored().Status.LastResolvedPrimary).To(Equal(m0))
+
+		// The release exempted the lost member only while the master it was
+		// given for keeps its Pod and container start; a restart of the
+		// source's container in the same Pod ends the exemption, and rule 2
+		// names the unverified former primary again.
+		By("the source's container restarts in the same Pod: rule 2 quarantines again and withdraws the rebuild")
+		drain(recorder)
+		pod := &corev1.Pod{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: m1, Namespace: key.Namespace}, pod)).To(Succeed())
+		Expect(string(pod.UID)).To(Equal(rebuild.SourcePodUID), "the source keeps its Pod")
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: appName, Image: pod.Spec.Containers[0].Image,
+			RestartCount: 1}}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+		pass()
+		c = stored()
+		Expect(c.Status.WriteQuarantine).NotTo(BeNil())
+		Expect(c.Status.WriteQuarantine.Reason).To(Equal(databasev1alpha1.WriteQuarantinedMemberUnverified))
+		Expect(c.Status.MemberRebuild).To(BeNil(), "nothing is restored while a quarantine is in force")
+		Expect(c.Status.LastMemberRebuild).NotTo(BeNil())
+		Expect(c.Status.LastMemberRebuild.OperationID).To(Equal(rebuild.OperationID))
+		Expect(c.Status.LastMemberRebuild.State).To(Equal(databasev1alpha1.MemberRebuildWithdrawn))
+		Expect(c.Status.LastMemberRebuild.Message).To(ContainSubstring("write quarantine"))
+		Expect(c.Status.MemberRebuildOffers).To(BeEmpty())
+		Expect(drain(recorder)).To(ContainElement(ContainSubstring("Warning " + reasonMemberRebuildWithdrawn)))
 	})
 })

@@ -953,6 +953,42 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              formerDataClaims:
+                description: |-
+                  formerDataClaims keeps every record that memberDataClaims held before
+                  a later claim of the same member replaced it: a claim and a volume
+                  that once held the database. Such a volume may hold the only copy of
+                  writes no other member has, for example the storage of a primary that
+                  was lost and rebuilt, so a claim UID or PersistentVolume name listed
+                  here is never offered or accepted as a replacement, for any member; the
+                  same disk under another PersistentVolume name is not recognised. The
+                  list lives only in this status. Nothing is ever removed
+                  from this list. It holds at most 64 records; once it is full, a
+                  member's later claim is not recorded, its earlier record stays in
+                  memberDataClaims, and no rebuild is offered or accepted any more.
+                items:
+                  description: |-
+                    MemberDataClaim is the data claim a member was last seen running the
+                    database on.
+                  properties:
+                    claimUID:
+                      description: claimUID is the UID of the member's data PersistentVolumeClaim.
+                      type: string
+                    name:
+                      description: name is the member.
+                      type: string
+                    volumeName:
+                      description: |-
+                        volumeName is the PersistentVolume the claim was bound to; empty when
+                        it was not bound.
+                      type: string
+                  required:
+                  - claimUID
+                  - name
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
               instances:
                 description: instances reports per-instance observed state.
                 items:
