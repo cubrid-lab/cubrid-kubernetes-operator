@@ -143,13 +143,17 @@ type record struct {
 	OperatorAfter         managerIdentity `json:"operatorAfter"`
 	Database              imageIdentity   `json:"database"`
 	SQL                   []sqlStep       `json:"sql"`
-	Cleanup               string          `json:"cleanup"`
-	NamespaceMode         NamespaceMode   `json:"namespaceMode"`
-	OwnershipEpoch        *ownershipEpoch `json:"ownershipEpoch,omitempty"`
-	CleanupScope          string          `json:"cleanupScope"`
-	RetainedPVCs          []pvcIdentity   `json:"retainedPVCs"`
-	FixtureReusable       *bool           `json:"fixtureReusable,omitempty"`
-	ResetRequired         *bool           `json:"resetRequired,omitempty"`
+	// SQLFailureState is what was read from the database Pod when a csql
+	// statement failed or printed -199 and -111, before cleanup. It never
+	// changes the verdict.
+	SQLFailureState *sqlFailureState `json:"sqlFailureState,omitempty"`
+	Cleanup         string           `json:"cleanup"`
+	NamespaceMode   NamespaceMode    `json:"namespaceMode"`
+	OwnershipEpoch  *ownershipEpoch  `json:"ownershipEpoch,omitempty"`
+	CleanupScope    string           `json:"cleanupScope"`
+	RetainedPVCs    []pvcIdentity    `json:"retainedPVCs"`
+	FixtureReusable *bool            `json:"fixtureReusable,omitempty"`
+	ResetRequired   *bool            `json:"resetRequired,omitempty"`
 	// NodeFreeBytes is the free space each schedulable node reported before
 	// the run created anything, when a minimum was set.
 	NodeFreeBytes map[string]int64 `json:"nodeFreeBytes,omitempty"`
@@ -478,12 +482,22 @@ func (r *Runner) checkSQL(
 	if !strings.HasPrefix(env.EngineVersion, "11.4.") {
 		return errors.New("the expected CUBRID 11.4 engine version was not observed")
 	}
+	failedStep := -1
+	startRestarts := r.databaseRestartCount(ctx, cfg, rec)
+	defer func() {
+		if failedStep >= 0 {
+			rec.SQLFailureState = r.readSQLFailureState(ctx, cfg, rec, failedStep, startRestarts)
+		}
+	}()
 	runSQL := func(statement string) (string, error) {
 		out, err := execInDatabase("bash", "-c",
 			"PATH=\"$CUBRID/bin:$PATH\" csql -u dba \"$0\" -c \"$1\"", databaseName+"@localhost", statement)
 		step := sqlStep{Statement: statement, Output: out}
 		if err != nil {
 			step.Error = err.Error()
+		}
+		if failedStep < 0 && (err != nil || sqlcheck.SessionLost(out)) {
+			failedStep = len(rec.SQL)
 		}
 		rec.SQL = append(rec.SQL, step)
 		return out, err
