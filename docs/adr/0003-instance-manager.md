@@ -582,7 +582,13 @@ that no longer answers as the active master then ends the operation
 ownership marker are kept, and nothing is started. A member that
 restoreslave copied across a change of master can lack acknowledged writes
 without showing it (docs/poc/RESULTS.md, POC-57). A change of master
-between that second question and the start is not detected here. The write
+between that second question and the start is not detected here, and
+neither is a change from the source to another member and back during the
+copy: both questions then find the source the active master. From
+`heartbeat start` on, the member runs as a slave that CUBRID can promote,
+until the Operator's verdict on the rebuild; the Operator detects such a
+change from its own readings and stops the member, but a master failure
+inside that window can promote a member that lacks acknowledged rows. The write
 quarantine is not checked here either: re-checking it and the source
 immediately before the restore is sent is the Operator's part (#117).
 

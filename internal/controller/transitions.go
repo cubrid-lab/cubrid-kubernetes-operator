@@ -258,15 +258,18 @@ func unfinishedTransitions(member string, was, now *databasev1alpha1.InstanceUnf
 	case was != nil && was.Database == now.Database && was.Operation == now.Operation && was.State == now.State:
 		return nil
 	}
-	marker := "the marker of an unfinished createdb or restoredb"
+	marker := "the ownership marker of a createdb or restoredb"
 	if now.Operation != "" {
 		marker += " (operation " + now.Operation + ")"
 	}
 	t := transition{
 		Event:  "member_database_unfinished",
 		Reason: reasonUnfinishedDatabaseWaiting,
-		Message: fmt.Sprintf("Member %s does not start database %s: it carries %s, which the Instance Manager "+
-			"takes up: %s", member, now.Database, marker, now.Message),
+		// A member rebuild's restore keeps its marker while the member runs,
+		// so this does not say that the database is stopped.
+		Message: fmt.Sprintf("Database %s on member %s carries %s, which the Instance Manager takes up; the "+
+			"entrypoint does not start it after a restart while it does: %s", now.Database, member, marker,
+			now.Message),
 		Fields: []any{logKeyMember, member, logKeyDatabase, now.Database, logKeyOperationID, now.Operation,
 			"state", string(now.State)},
 	}

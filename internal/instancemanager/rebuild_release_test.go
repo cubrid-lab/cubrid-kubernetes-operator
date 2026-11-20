@@ -165,3 +165,38 @@ func TestResumeCompletedRestores_DoesNotStartAnUnreleasedRebuild(t *testing.T) {
 		t.Fatalf("marker = %q, want it kept", got)
 	}
 }
+
+// A release while the restore of the rebuild still runs is refused and
+// changes nothing: only a completed restore is released.
+func TestServer_RebuildRelease_RefusedWhileTheRestoreRuns(t *testing.T) {
+	target := t.TempDir()
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _, err := store.FindOrCreate(OpRestore, "rebuild-restore", "hash", dbName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(op.ID, func(o *Operation) {
+		o.State = OpRestoring
+		o.Rebuild = operationRebuild(&testRebuild)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, dbName, ownershipMarker)
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(op.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(&stepCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: target})
+	r := rebuildRestore{req: RestoreRequest{Database: dbName, TargetDir: target}, h: srv.Handler()}
+	if code := r.release(t, testRebuild); code != http.StatusConflict {
+		t.Fatalf("a release while the restore runs = %d, want 409", code)
+	}
+	if got := r.marker(t); got != op.ID {
+		t.Fatalf("marker = %q, want it kept", got)
+	}
+}

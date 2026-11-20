@@ -52,6 +52,9 @@ type rebuildCopyFixture struct {
 	seed     *fakeSeedClient
 	member   *fakeRebuildMember
 	intercep *interceptor.Funcs
+	// quarantineErr is the failure of the pass's write quarantine step,
+	// which makes the pass one that could not be read.
+	quarantineErr error
 }
 
 const (
@@ -165,7 +168,7 @@ func (f *rebuildCopyFixture) pass() (*databasev1alpha1.CubridCluster, []string, 
 		f.t.Fatal(err)
 	}
 	got := f.cluster.DeepCopy()
-	r.reconcileMemberRebuild(ctx, got, members, f.obs, f.now, cpSource, before, nil, nil)
+	r.reconcileMemberRebuild(ctx, got, members, f.obs, f.now, cpSource, before, nil, f.quarantineErr)
 	var events []string
 	for len(recorder.Events) > 0 {
 		events = append(events, <-recorder.Events)

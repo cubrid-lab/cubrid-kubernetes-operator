@@ -1623,7 +1623,21 @@ member between the failure and the stop. To recover, check that nothing on
 the member's claim is needed, then delete the member's Pod and its claim
 `data-<member>` so that the StatefulSet creates an empty one, wait for a
 new offer for the member, and request a new rebuild. `Degraded` is removed
-once the member runs on another claim.
+once the member runs on another claim. The stop is sent only while the
+member's Pod and claim, read from the API server right before it, are the
+ones the observation decided on, so a Pod or claim replaced since is never
+stopped. A held member that CUBRID has meanwhile promoted is stopped as
+well: that is an outage of writes until a person acts, not a promotion.
+
+**The promotion window.** From the restored member's `heartbeat start` until
+the Operator's verdict, the member runs as a slave that CUBRID can promote.
+The Instance Manager's second question to the source finds a change of
+master that lasts until the start, but not a change from the source to
+another member and back during the copy. The Operator detects that change
+from its own readings and stops the member, but a master failure inside
+that window can promote a member that lacks acknowledged rows
+(docs/poc/RESULTS.md, POC-57). The VM-lab storage-loss run (#118) has to
+exercise this window.
 
 An accepted request has no other way out: removing the annotation does not
 cancel it.

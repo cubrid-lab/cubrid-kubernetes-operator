@@ -438,6 +438,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if apierrors.IsNotFound(err) {
 			r.forgetQuarantines(req.NamespacedName)
 			r.rebuildReported.Delete(req.NamespacedName)
+			r.forgetRebuildStops(req.String()+"/", "")
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
 		}

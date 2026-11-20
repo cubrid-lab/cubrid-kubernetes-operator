@@ -573,6 +573,43 @@ func (r *CubridClusterReconciler) releaseRebuiltMember(ctx context.Context, clus
 	return true
 }
 
+// forgetRebuildStops removes the stops remembered under prefix, a cluster's
+// key, except the one of the Pod UID keep.
+func (r *CubridClusterReconciler) forgetRebuildStops(prefix, keep string) {
+	r.rebuildStops.Range(func(k, _ any) bool {
+		if key := k.(string); strings.HasPrefix(key, prefix) && key != prefix+keep {
+			r.rebuildStops.Delete(key)
+		}
+		return true
+	})
+}
+
+// memberStillOn says why member's Pod is not podUID or its data claim is not
+// claimUID, read from the API server now, "" when both are.
+func (r *CubridClusterReconciler) memberStillOn(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	member, podUID, claimUID string) string {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var pod corev1.Pod
+	if err := reader.Get(ctx, client.ObjectKey{Name: member, Namespace: cluster.Namespace}, &pod); err != nil {
+		return fmt.Sprintf("the Pod of %s could not be read: %v", member, err)
+	}
+	if string(pod.UID) != podUID {
+		return fmt.Sprintf("the Pod of %s was replaced", member)
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err := reader.Get(ctx, client.ObjectKey{Name: dataVolume + "-" + member, Namespace: cluster.Namespace},
+		&pvc); err != nil {
+		return fmt.Sprintf("the data claim of %s could not be read: %v", member, err)
+	}
+	if string(pvc.UID) != claimUID {
+		return fmt.Sprintf("the data claim of %s was replaced", member)
+	}
+	return ""
+}
+
 // heldFailedRebuild is status.lastMemberRebuild when it is a rebuild that
 // ended Failed after its restore was started, nil otherwise.
 func heldFailedRebuild(cluster *databasev1alpha1.CubridCluster) *databasev1alpha1.MemberRebuild {
@@ -604,11 +641,13 @@ func (r *CubridClusterReconciler) holdFailedRebuild(ctx context.Context, cluster
 		return nil
 	}
 	last := heldFailedRebuild(cluster)
+	prefix := client.ObjectKeyFromObject(cluster).String() + "/"
 	if last == nil || in.Claims[last.Member].UID != last.ClaimUID {
 		if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); c != nil &&
 			c.Reason == reasonRebuildFailed {
 			meta.RemoveStatusCondition(&cluster.Status.Conditions, conditionDegraded)
 		}
+		r.forgetRebuildStops(prefix, "")
 		return nil
 	}
 	setCondition(cluster, conditionDegraded, metav1.ConditionTrue, reasonRebuildFailed, fmt.Sprintf(
@@ -617,11 +656,21 @@ func (r *CubridClusterReconciler) holdFailedRebuild(ctx context.Context, cluster
 			"empty one and request a new rebuild; nothing was deleted", last.Member, last.OperationID, last.Message,
 		last.Member, dataVolume, last.Member))
 	pod := in.Identities[last.Member].PodUID
+	// Only the stop of the member's current Pod is remembered.
+	r.forgetRebuildStops(prefix, pod)
 	if pod == "" || r.RebuildMember == nil || len(cluster.Spec.Databases) == 0 {
 		return nil
 	}
-	key := client.ObjectKeyFromObject(cluster).String() + "/" + pod
+	key := prefix + pod
 	if _, stopped := r.rebuildStops.Load(key); stopped && !runsDatabase(in.answer(last.Member), in.Now) {
+		return nil
+	}
+	// The stop is sent only while the member's Pod and claim, read again
+	// from the API server, are the ones this pass decided on: a Pod or a
+	// claim replaced since is never stopped.
+	if why := r.memberStillOn(ctx, cluster, last.Member, pod, last.ClaimUID); why != "" {
+		logf.FromContext(ctx).Info("Did not stop the member of a failed member rebuild", "member", last.Member,
+			"operationID", last.OperationID, "reason", why)
 		return nil
 	}
 	if err := r.RebuildMember.Shutdown(ctx, last.Member, cluster.Namespace, cluster.Spec.Databases[0].Name); err != nil {
