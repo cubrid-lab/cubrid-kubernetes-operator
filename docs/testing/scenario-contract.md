@@ -870,8 +870,9 @@ of these hold:
   was on a standby. That the read ran on the same connection is inferred
   from the read-write Broker keeping the client on one CAS (POC-60), not
   proven;
-- the row is an acknowledged insert, and every member and both Services hold
-  it with the values sent.
+- the row is the same client's own insert, acknowledged no later than the
+  read was attempted, and every member and both Services hold it with the
+  values sent.
 
 On Kind, S03 and the `absent-during-failover` variant of S06 record such a
 window; no other scenario does, and the installed harness records none, so

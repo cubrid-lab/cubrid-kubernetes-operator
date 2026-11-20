@@ -329,8 +329,9 @@ func Check(h History, members map[string][]Row) Report {
 //     failed with ReadOnlyRefusal. That proves the write's connection was on
 //     a standby; that the read ran on the same connection is inferred from
 //     the Broker keeping the client on one CAS (POC-60), not proven;
-//   - the row is an acknowledged insert, and every member and endpoint checked
-//     holds it with the values sent.
+//   - the row is an insert of the same client, acknowledged no later than
+//     the read was attempted, and every member and endpoint checked holds it
+//     with the values sent.
 //
 // Any other read mismatch fails the check as in Check.
 func CheckDuringFailovers(h History, members map[string][]Row, failovers []FailoverWindow) Report {
@@ -447,7 +448,8 @@ func staleReadDuringFailover(h History, read Operation, present map[string]map[s
 		return ""
 	}
 	target, known := h.Operations[read.Target]
-	if !known || target.Op != OpInsert || target.Outcome != Acknowledged {
+	if !known || target.Op != OpInsert || target.Outcome != Acknowledged || target.Client != read.Client ||
+		target.AcknowledgedAt.IsZero() || target.AcknowledgedAt.After(read.AttemptedAt) {
 		return ""
 	}
 	sent := Row{OpID: target.OpID, Client: target.Client, Seq: target.Seq, Amount: target.Amount, Note: target.Note}

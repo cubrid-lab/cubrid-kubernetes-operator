@@ -560,12 +560,30 @@ func TestCheckDuringFailovers_StaleRead(t *testing.T) {
 	// The new master is first seen active 4.8 s after the fault.
 	window := []FailoverWindow{{From: staleReadBase, To: staleReadBase.Add(4800 * time.Millisecond)}}
 	ms := func(n int) time.Time { return staleReadBase.Add(time.Duration(n) * time.Millisecond) }
+	// otherClientOp is the first operation of client c2.
+	const otherClientOp = "c2-1"
 	// otherRefused is a write of client c2 that a standby refuses right after
 	// the read of c1.
 	otherRefused := []Event{
-		{T: ms(300), Client: "c2", Seq: 1, Op: OpInsert, OpID: "c2-1", Event: Attempted, Amount: 1, Note: "m1"},
-		{T: ms(320), Client: "c2", Seq: 1, Op: OpInsert, OpID: "c2-1", Event: refused.Event, Error: refused.Error},
+		{T: ms(300), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Attempted, Amount: 1, Note: "m1"},
+		{T: ms(320), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: refused.Event, Error: refused.Error},
 	}
+	// otherClientsRow is a history in which the read of c1 missed a row that
+	// client c2 inserted and had acknowledged before the read, not a row of
+	// c1's own.
+	otherClientsRow := staleReadHistory(t, refused, false,
+		Event{T: ms(50), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Attempted, Amount: 7, Note: "m1"},
+		Event{T: ms(60), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Acknowledged})
+	read := otherClientsRow.Operations[staleRead]
+	read.Target, read.Error = otherClientOp, ReadMismatch+" c2-1 not found"
+	otherClientsRow.Operations[staleRead] = read
+	withOthers := append([]Row{{OpID: otherClientOp, Client: "c2", Seq: 1, Amount: 7, Note: "m1"}}, all...)
+	// ackedAfterRead is a history in which c1-2 was acknowledged only after
+	// the read that missed it had started.
+	ackedAfterRead := staleReadHistory(t, refused, false)
+	target := ackedAfterRead.Operations[secondOp]
+	target.AcknowledgedAt = ms(220)
+	ackedAfterRead.Operations[secondOp] = target
 
 	report := CheckDuringFailovers(staleReadHistory(t, refused, false), members(all, all), window)
 	if !report.OK {
@@ -607,6 +625,8 @@ func TestCheckDuringFailovers_StaleRead(t *testing.T) {
 		{"the read found other values", staleReadHistory(t, refused, true), all, all, window},
 		{"the row is absent on a member", staleReadHistory(t, refused, false), all, lostSecond, window},
 		{"the row is absent on every member", staleReadHistory(t, refused, false), lostSecond, lostSecond, window},
+		{"the row the read missed is another client's", otherClientsRow, withOthers, withOthers, window},
+		{"the row was acknowledged after the read started", ackedAfterRead, all, all, window},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			report := CheckDuringFailovers(c.h, members(c.rows, c.onB), c.failovers)
