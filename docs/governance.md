@@ -36,13 +36,16 @@ right to submit their work under the repository license.
 
 ## API group ownership (#20)
 
-**Status: pending organizational confirmation (before public release).**
+**Status: pending organizational confirmation, planned for v0.2.** The
+maintainers decided on 2026-11-20 UTC that v0.1 does not wait for it, so v0.1
+is published with this group unconfirmed and the group may change in a later
+release.
 
 The API group is `database.cubrid.io` (domain `cubrid.io`, group `database`).
 This was chosen to keep this experimental project distinct from the official
 CUBRID Operator's `k8s.cubrid.com` group.
 
-To resolve before any public release, maintainers must confirm:
+To resolve the decision, maintainers must confirm:
 
 - the project/organization controls the `cubrid.io` domain,
 - the group can be maintained long-term,
