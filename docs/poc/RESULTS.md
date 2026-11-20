@@ -6693,3 +6693,36 @@ revisit the record when those inputs or the image/runtime change.
 This supplies no backup target, artifact, sole-candidate exclusion, copy-gap
 ranking, Operator or fencing qualification. The existing long-transaction and
 missing-evidence rules and all backup acceptance under #291 remain unchanged.
+
+## POC-68 — what a 3-member HA group does while the applier of every slave is paused, in Docker on 11.4.7.1995 (#291) — **observation: in both trials, for 171 s of `SIGSTOP` on every `applylogdb` of both slaves while the master took writes, every slave stayed a heartbeat `slave` with a `standby` server, every `applyinfo` read returned the counters with a failure count of 0, the applier's insert counter and (in trial-2, read with `-v`) its `Final LSA` did not move while the copied log's end and the pages waiting grew, heartbeat did not restart or replace any applier (same pids, state `T`, no cub_master process event after registration), and every one of the 144 batches written was acknowledged, 85 of them during the pauses; after `SIGCONT` every member ended with exactly the acknowledged rows (670 and 770; identical id lists in trial-2), but catch-up took 639 and 831 s on this loaded host, where the slaves applied about one batch every 7 to 10 s even before the pause**
+
+**Question (#291).** A backup that must be taken from a standby should be refused when the only candidates are stuck; the maintainer decided on 2026-11-20 UTC that "every slave stuck" counts as that case. Is that state steady and safe on the engine, so that a Kind step can rely on it: does every slave stay an authoritative slave with a readable, unmoving applier of the master's log and a growing copy, does heartbeat leave the paused applier alone, does the master stay writable, and do the slaves converge after the resume?
+
+**Environment (2026-11-19 15:32Z to 17:06Z).** Local Docker on a native linux/amd64 host shared with other work (load average about 25 to 67); `cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604`, the pinned base of the Instance Manager image, CUBRID 11.4.7.1995; no Instance Manager, Operator or Brokers. `cubrid_ha.conf` as the Operator renders it (copiers `-m sync`); table `t` with a primary key. Containers and network labelled `poc=poc68` and removed with `--filter label=poc=poc68`, nothing left after either trial.
+
+**Method.** `docs/poc/poc68/README.md` is the full record, with the scripts, the raw sweeps and logs under `out/`, and two recount scripts. Each trial: create the group (`createdb` on ha-0, `restoreslave` on ha-1 and ha-2), write batches of 10 rows on ha-0 (one csql call each, a new one 1 s after the last ended: one about every 4 s here), after 60 s send `SIGSTOP` to every `cub_admin applylogdb` process of both slaves, sample every member about every 11 s, send `SIGCONT` 171 s later, stop the writer 60 s after that and wait until every member holds the same number of rows.
+
+**Results.**
+
+| | trial-1 | trial-2 |
+|---|---|---|
+| paused (UTC) | 15:58:57.2 to 16:01:48.8 (171.6 s) | 16:49:22.8 to 16:52:14.2 (171.4 s) |
+| sweeps inside the pause | 15 | 15 |
+| batches written / acknowledged / during the pause | 67 / 67 / 42 | 77 / 77 / 43 |
+| rows on ha-0 / ha-1 / ha-2 at 20 s before the resume | 560 / 20 / 0 | 510 / 0 / 0 |
+| copied log end on the slaves during the pause | `151|13120` → `160|15784` | `150|10720` → `160|14840` |
+| pages waiting during the pause | 4 → 13 | 3–4 → 13–14 |
+| applier `Final LSA` during the pause | not read (no `-v`) | ha-1 `147|8`, ha-2 `146|13624` at all 15 reads |
+| from `SIGCONT` to equal counts | 831 s | 639 s |
+| rows at the end on every member | 670, `SUM(id)` 231485 | 770, `SUM(id)` 304535, id lists identical |
+
+- **Roles.** In all 92 and 80 sweeps, ha-1 and ha-2 answered `slave` / `registered_and_standby` / `standby` and ha-0 `master` / `registered_and_active` / `active`.
+- **Source.** Each slave's appliers ran on its copies of ha-0's log and of the other slave's log; the one read was the applier of ha-0's log, and heartbeat listed every applier `registered` at every sweep.
+- **No restart.** Every copylogdb and applylogdb pid stayed the same in every sweep; the paused appliers were in kernel state `T` at all 15 sweeps of each pause; cub_master's logs hold only the 15 registrations from the start of each trial.
+- **The copy did not grow at every read.** In trial-1 its end stayed `159|6920` at three reads over about 23 s while the master took writes.
+- **Slow applying, independent of the pause.** In trial-2 neither slave had applied a row 60 s after the writes began; ha-2's applier position had not moved since 36 s before the pause, its log showing `working` → `done` 3 s after it read the master's state as `dead` in the copied log header. That header read `dead` at some reads and `active` at others in both trials while ha-0 was `active` at every sweep. Why is not known.
+
+**What this does not show.** The Operator's readings and decisions on this state; a longer pause; a paused copier; a failover or restart during the pause; the VM lab; timings anywhere but this loaded host.
+
+**Consequences.**
+- **#291:** the "every slave stuck" state is steady for at least 171 s and reversible, and its outputs have the shape the Operator's stall exclusion acts on (an authoritative slave of the master, failure count 0, a copy end, growing pages waiting, an unmoving applier position). A Kind step can build its negative oracle on it: wait until the status shows every slave otherwise eligible with `stalledSince` at least 60 s old, then require a `StandbyOnly` backup to stay unassigned with exactly `NoHealthyStandby`, failing on any other reason or a missing observation; after `SIGCONT`, require the same backup to go to a slave and every slave to hold the master's rows. The status keeps a copy end only while pages wait to be copied, so a run of the step with the stalled-standby exclusion switched off, in which the backup goes to a slave, is what shows that nothing else excluded them. The step must resume the appliers on every exit path and keep its writes small. This is Docker evidence for the engine state only; the exclusion itself is shown by that Kind step, not here.

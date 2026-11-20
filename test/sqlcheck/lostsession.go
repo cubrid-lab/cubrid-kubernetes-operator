@@ -293,6 +293,59 @@ func RunOnce(g Guard, run Runner, sql string, complete func(string) error) (Iden
 	return watch.judge(out, complete, err)
 }
 
+// readOnlyRefusalMessage is the line csql prints for the statement that -581
+// refused.
+const readOnlyRefusalMessage = "ERROR: Attempted to update the database when updates are disabled."
+
+// refusalThenLostSession reports whether err, an error of Run, holds one -581
+// and, after it, the pair of SessionLost, and no other error. The command may
+// have exited 1, as csql did in the Kind runs that printed this (#238).
+func refusalThenLostSession(err error) bool {
+	var statement *StatementError
+	if !errors.As(err, &statement) || !SessionLost(statement.out) {
+		return false
+	}
+	out := statement.out
+	refusals := readOnlyRefusal.FindAllStringIndex(out, -1)
+	if len(refusals) != 1 || lostSessionCodes.FindStringIndex(out)[0] < refusals[0][1] {
+		return false
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		line = withoutPair(line)
+		if readOnlyRefusal.MatchString(line) && strings.Count(line, "ERROR CODE") == 1 ||
+			strings.TrimSpace(line) == readOnlyRefusalMessage {
+			continue
+		}
+		if strings.Contains(line, "ERROR") || strings.Contains(line, "Failed to connect") {
+			return false
+		}
+	}
+	return true
+}
+
+// RunRefusal runs sql, a write a member must refuse, exactly once, and
+// reports whether the server refused it as read-only, with what the identity
+// comparison found. A -581 is a refusal as RefusedAsReadOnly says. A -581
+// followed by the pair of SessionLost, with no other error, is one only when
+// cub_server read before the call is the same process, and on an HA member
+// in the same HA mode, after it: the server answered the statement with the
+// refusal, and the pair at csql's exit then says nothing more about it unless
+// the server may have died or changed mode (#238). Any other identity returns
+// a *LostSessionError and no refusal. Every other output keeps the verdict of
+// RefusedAsReadOnly, and the error of Run is returned either way.
+func RunRefusal(g Guard, run Runner, sql string) (bool, IdentityResult, error) {
+	watch := g.Before()
+	_, err := Run(run, sql)
+	if !refusalThenLostSession(err) {
+		return RefusedAsReadOnly(err), IdentityNotRead, err
+	}
+	identity := watch.Compare()
+	if identity != IdentityUnchanged {
+		return false, identity, &LostSessionError{Identity: identity, err: err}
+	}
+	return true, identity, err
+}
+
 // ErrNotARead is the error of Read for text that is not one SELECT.
 var ErrNotARead = errors.New("not a single SELECT")
 

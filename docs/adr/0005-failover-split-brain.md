@@ -441,8 +441,10 @@ The records are in `docs/poc/RESULTS.md`.
   is set to the member `currentPrimary` names on every pass that reports
   `PrimaryResolved=True`, and is never cleared. `currentPrimary` itself is
   cleared as soon as the primary is unresolved, so it cannot serve here.
-  The field is read only to close the write path, as section 3 allows for
-  no other use.
+  The field is read only to close the write path and, by the rebuild
+  request of ADR-0006, to refuse the rebuild of the member it names or to
+  require the administrator's acknowledgement first. It never makes a member
+  primary or resolves one, as section 3 allows for no other use.
 
 **When the write path is quarantined.** The rules are checked in this
 order on every pass:

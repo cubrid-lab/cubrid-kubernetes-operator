@@ -176,6 +176,16 @@ scenarios stays as it is too: only the check of a starting state listed above
 is given the rule. Reads that a loop retries are not given the rule:
 they already read again, and they do not pay for an identity read.
 
+**A slave's refusal of a write.** The HA bootstrap check that a slave
+refuses a write passes on the server's `-581` refusal. A `-581` followed by
+the pair, with no other error and whatever the exit status, also counts as
+that refusal, but only when the slave's server identity and HA mode, read
+before the write and after it as above, are unchanged; any other comparison
+fails the check. The write is never repeated, and the pair is recorded in
+`suite/csql-lost-sessions.jsonl` with what the comparison found. The pair
+before the `-581`, a second `-581`, another error, and the pair without a
+`-581` are not a refusal (#238).
+
 **What is counted.** Every pair in a `csql` call of the Kind suite, and in the
 held session, is counted for the whole run, also on reads a loop absorbs and on
 a run that passes. `suite/csql-lost-sessions.jsonl` has a line for each: its
@@ -847,8 +857,9 @@ under the run directory when the scenario completes. They also write both
 when the data rules never held within the check's time limit, so that a
 violation can be placed in time against the logs. When no check produced a
 report, for example because a member could not be read, only the history is
-written. S02 also writes them when a later step fails; the other scenarios
-do not.
+written. Each of them also writes both when a later assertion of the same
+step fails after the data rules held, such as the applier's fail count or a
+search of the logs, so that failure can be placed in time as well.
 
 ### Measurements
 
@@ -3113,6 +3124,16 @@ because they move the master.
   the Secret still keeps `previousToken`. After the last one, `previousToken`
   is dropped and the Normal Event `InstanceManagerTokenOverlapEnded` is
   recorded; every member refuses the old token (401) and accepts the new one.
+- **After the overlap:** the master was replaced last, so the members'
+  refusals are counted from the old-token check on, first while the roles
+  settle and the primary is resolved again, by the rules of the starting
+  roles above, and then for 30 seconds; a refusal fails the step. In those
+  30 seconds `PrimaryResolved` is read as well. `False` with
+  `PrimaryObservationIncomplete`, which the Operator reports while it cannot
+  read a member's role (#438), is recorded and read again; any other reading
+  but `True` with `SinglePrimaryObserved` fails the step. The measurements
+  `afterOverlapToBeMasterMembers` and `afterOverlapIncompleteReads` count
+  what was recorded.
 - **Must never happen:** the overlap ending while a member holds the previous
   token; an Event `InstanceManagerTokenRegenerated` or
   `InstanceManagerTokenRefused`; either token in a log, in `status`, in an
