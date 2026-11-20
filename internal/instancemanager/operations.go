@@ -157,10 +157,36 @@ func (s *Server) Stop(ctx context.Context, database string) error {
 	}
 	waitErr := s.awaitOperations(waitCtx)
 	if err := Shutdown(ctx, s.cli, database); err != nil || waitErr != nil {
+		if waitErr == nil && s.nothingRuns(ctx) {
+			// The stop commands exit non-zero when cub_master is not
+			// running, which is what a stopped member looks like. It is
+			// not recorded as stopped: a later stop looks again.
+			return nil
+		}
 		return errors.Join(waitErr, err)
 	}
 	s.stopped = true
 	return nil
+}
+
+// nothingRuns reports whether the member is positively stopped: heartbeat
+// status answered with no HA node information, and none of cub_master,
+// cub_server and cub_pl runs. A status that did not answer or a process
+// table that cannot be read is not a positive answer.
+func (s *Server) nothingRuns(ctx context.Context) bool {
+	if hb := observeHeartbeat(ctx, s.cli); !hb.startable {
+		return false
+	}
+	running, err := s.heartbeatProcesses()
+	if err != nil {
+		return false
+	}
+	for _, name := range heartbeatVeto {
+		if running[name] {
+			return false
+		}
+	}
+	return true
 }
 
 // admit counts a new mutating operation as running, or says why it is

@@ -179,12 +179,15 @@ func (r *CubridClusterReconciler) endRebuild(cluster *databasev1alpha1.CubridClu
 			in.FormerDataClaims = append(slices.Clone(in.FormerDataClaims), record)
 			cluster.Status.FormerDataClaims = in.FormerDataClaims
 		}
+		// The member is held: the Operator asks it to stop (holdFailedRebuild),
+		// which ends a restore still running.
+		held := fmt.Sprintf("%s is held and stopped, and what was restored on it is not trusted", ended.Member)
+		ended.Message = why + "; " + held
 		r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberRebuildFailed, fmt.Sprintf(
-			"the rebuild of %s from %s (operation %s) failed: %s. Nothing was deleted, and nothing was stopped: a "+
-				"restore on %s may still be running, and the member may join with what it restored, which is not "+
-				"trusted. Its data claim %s and volume %s are never offered for a rebuild again "+
+			"the rebuild of %s from %s (operation %s) failed: %s. Nothing was deleted. %s. "+
+				"Its data claim %s and volume %s are never offered for a rebuild again "+
 				"(status.formerDataClaims); a new request needs a new empty claim",
-			ended.Member, ended.Source, ended.OperationID, why, ended.Member, ended.ClaimUID, ended.VolumeName))
+			ended.Member, ended.Source, ended.OperationID, why, held, ended.ClaimUID, ended.VolumeName))
 	}
 }
 
@@ -196,7 +199,7 @@ func (r *CubridClusterReconciler) endRebuild(cluster *databasev1alpha1.CubridClu
 // A write quarantine in the status, a change of the member's claim or volume
 // or of the source's Pod, a failed or unrelated restore, a change of master
 // or a gap in the readings ends the rebuild Failed: something may have been
-// restored, so it is not Withdrawn, nothing is deleted or stopped, and the
+// restored, so it is not Withdrawn, nothing is deleted, the member is held and stopped, and the
 // member's claim and volume are never offered again (endRebuild). A restore
 // the member refused because its source was not confirmed as the active
 // master wrote nothing, and ends the rebuild Withdrawn. Otherwise it is Completed
