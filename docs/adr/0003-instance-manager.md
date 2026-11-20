@@ -526,6 +526,47 @@ operation rather than starting a second one. Restore requests are unchanged.
 See [ADR-0007](0007-backup-execution.md#artifact-and-upload-model) for retention,
 compatibility and the distinction between requested prefix and returned URI.
 
+### Restore for an accepted member rebuild
+
+A seed backup and a restore can name the accepted member rebuild they run
+for, as `rebuild: {"operationID": "...", "token": "..."}` (`upload.rebuild`
+on the backup, `rebuild` on the restore): the rebuild's operation ID and the
+one-time token its request consumed (`status.memberRebuild`). Both are plain
+identifiers of at most 128 characters. Without the field a backup or restore
+works as it does for the HA bootstrap seed and a recovery restore.
+
+- `upload.rebuild` needs `upload.seed`. The manifest records it as `rebuild`.
+- `rebuild` on a restore needs `seedFromMaster`, the rebuild's source, and
+  `expectedMember`, the member being rebuilt, and the two must differ;
+  otherwise the request is answered 400 before it is recorded.
+- Before the restore takes over, removes, reads or writes anything, the
+  manager asks the source's Instance Manager for `GET /v1/role`, at
+  `http://<seedFromMaster>:9090/v1/role` (the member's name, which its
+  per-member Service resolves in the namespace, ADR-0004), with its own
+  bearer token, the cluster's token, within 5 seconds and without following
+  a redirect. It goes on only when the answer names that member as current,
+  with role `master` and an active server. Any other answer ends the
+  operation `Failed` with `failureCode: RebuildSourceNotMaster`; no answer,
+  an error status, an unreadable answer or a timeout ends it with
+  `RebuildSourceUnconfirmed`. Either leaves nothing staged, no ownership
+  marker and no `databases.txt` entry. The question reaches the source
+  only where the NetworkPolicy admits the cluster's member Pods to the
+  manager port; where it does not, the restore is refused with
+  `RebuildSourceUnconfirmed`.
+- The artifact's manifest must then carry the same operation ID and token,
+  or the restore fails before any object is staged, so a restore for one
+  request cannot take the copy of another.
+- The wrong-target guard (ADR-0008) runs after the source check, as for
+  every restore: a target that holds the database, or files of it the
+  Operator has no record of, is refused with `TargetHoldsDatabase` and left
+  untouched.
+
+The answer is read once, when the restore starts. A change of master during
+the copy is not detected here. The write quarantine is not checked here
+either: re-checking it and the source immediately before the restore is
+sent is the Operator's part (#117). The manager reports this
+behaviour as the `rebuild-restore` capability (ADR-0013).
+
 ## Revisit When
 
 - mTLS/cert rotation infrastructure exists → upgrade `/v1/*` auth.

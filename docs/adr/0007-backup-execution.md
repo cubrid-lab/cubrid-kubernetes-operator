@@ -375,7 +375,9 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   backup whose manifest declares that master as `sourceInstance` and
   `master` as `sourceRole`, and, when the request carries
   `expectedClusterUID` (the operator always sends it for a seed), whose
-  `clusterUID` is that cluster's. A restore into a new cluster takes
+  `clusterUID` is that cluster's. A restore for an accepted member rebuild
+  (`rebuild`) also takes only a backup whose manifest carries the same
+  rebuild operation ID and token (ADR-0003). A restore into a new cluster takes
   another cluster's full backup from a standby or the master. The engine
   version is compared by series (ADR-0011): the manifest's `cubridVersion`
   is the full version the backup's member read from `cubrid_rel`, a backup

@@ -76,6 +76,17 @@ const (
 	// retry of the same request there is refused again until a person
 	// changes what the target holds (#798).
 	FailureTargetHoldsDatabase = "TargetHoldsDatabase"
+	// FailureRebuildSourceNotMaster: a restore for a member rebuild was
+	// refused before anything was read or written, because the source's
+	// Instance Manager answered, but not as the active master the request
+	// names: as a slave, with a master whose server is not active, under
+	// another member's name, or without a role.
+	FailureRebuildSourceNotMaster = "RebuildSourceNotMaster"
+	// FailureRebuildSourceUnconfirmed: a restore for a member rebuild was
+	// refused before anything was read or written, because the source's
+	// Instance Manager could not be asked for its role: no answer within the
+	// bound, an error status or an answer that could not be read.
+	FailureRebuildSourceUnconfirmed = "RebuildSourceUnconfirmed"
 )
 
 // writeError answers with status and an ErrorResponse; an empty code is left

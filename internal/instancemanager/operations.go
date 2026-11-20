@@ -53,6 +53,10 @@ type BackupUpload struct {
 	// Seed names the internal HA seed purpose, whose stable location may be
 	// replaced. It requires an HA seed suffix and master metadata (ADR-0007).
 	Seed bool `json:"seed,omitempty"`
+	// Rebuild, when set, is the accepted member rebuild this seed backup is
+	// taken for. It is recorded in the manifest, where the rebuild's restore
+	// looks for it. It requires Seed.
+	Rebuild *RebuildBinding `json:"rebuild,omitempty"`
 }
 
 // BackupResult reports the outcome of a local backup.
