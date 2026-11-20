@@ -1,0 +1,290 @@
+2026-11-19T15:32:18.281Z run start, image cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604
+sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604 ["cubrid/cubrid@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604"] linux/amd64
+left: containers=[] networks=[]
+setup start 2026-11-19T15:32:18.369Z
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+heartbeat start rc=0
+heartbeat start rc=0
+heartbeat start rc=0
+2026-11-19T15:57:07.965Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-19T15:57:18.035Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+Execute OK. (3.703979 sec) Committed. (4.379976 sec) 
+2026-11-19T15:57:46.873Z table t on poc68-stall-ha-1
+2026-11-19T15:57:56.809Z table t on poc68-stall-ha-2
+## 2026-11-19T15:57:56.810Z poc68-stall-ha-0
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc68-stall-ha-0, state master)
+   Node poc68-stall-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc68-stall-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc68-stall-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 111, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 (pid 387, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:54:39.677
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 (pid 385, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:54:39.663
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-2:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 (pid 383, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 -m sync appdb@poc68-stall-ha-2 ] 
+    - registered-time   11/19/26 15:54:39.635
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-1:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 (pid 381, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 -m sync appdb@poc68-stall-ha-1 ] 
+    - registered-time   11/19/26 15:54:39.634
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 120, state registered_and_active)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/19/26 15:54:38.134
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-19T15:57:56.891Z poc68-stall-ha-1
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc68-stall-ha-1, state slave)
+   Node poc68-stall-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc68-stall-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc68-stall-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 115, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 (pid 392, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:55:56.820
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 (pid 390, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:55:56.813
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-2:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 (pid 388, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 -m sync appdb@poc68-stall-ha-2 ] 
+    - registered-time   11/19/26 15:55:56.806
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-0:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 (pid 386, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 ] 
+    - registered-time   11/19/26 15:55:56.799
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 124, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/19/26 15:55:55.051
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-19T15:57:56.977Z poc68-stall-ha-2
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc68-stall-ha-2, state slave)
+   Node poc68-stall-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc68-stall-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc68-stall-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 115, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 (pid 390, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:56:58.875
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 (pid 388, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/19/26 15:56:58.869
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-1:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 (pid 386, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 -m sync appdb@poc68-stall-ha-1 ] 
+    - registered-time   11/19/26 15:56:58.862
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc68-stall-ha-0:/home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 (pid 384, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 ] 
+    - registered-time   11/19/26 15:56:58.856
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 124, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/19/26 15:56:57.757
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+setup end 2026-11-19T15:57:57.061Z
+2026-11-19T15:57:57.062Z sampler 3858547 and writer 3858548 started
+2026-11-19T15:58:57.063Z pause: SIGSTOP to every applylogdb on poc68-stall-ha-1 poc68-stall-ha-2
+2026-11-19T15:58:57.064Z poc68-stall-ha-1:
+sent SIGSTOP to 390
+sent SIGSTOP to 392
+386 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+388 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 -m sync appdb@poc68-stall-ha-2 
+390 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+392 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 --max-mem-size=500 appdb@localhost 
+2026-11-19T15:58:57.138Z poc68-stall-ha-2:
+sent SIGSTOP to 388
+sent SIGSTOP to 390
+384 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+386 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 -m sync appdb@poc68-stall-ha-1 
+388 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+390 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 --max-mem-size=500 appdb@localhost 
+2026-11-19T15:58:57.210Z pause issued
+2026-11-19T16:01:27.218Z rows while paused
+2026-11-19T16:01:48.464Z poc68-stall-ha-1 before resume:
+386 State: R (running) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+388 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 -m sync appdb@poc68-stall-ha-2 
+390 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+392 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 --max-mem-size=500 appdb@localhost 
+2026-11-19T16:01:48.575Z poc68-stall-ha-2 before resume:
+384 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+386 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 -m sync appdb@poc68-stall-ha-1 
+388 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+390 State: T (stopped) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 --max-mem-size=500 appdb@localhost 
+2026-11-19T16:01:48.652Z resume: SIGCONT to every applylogdb on poc68-stall-ha-1 poc68-stall-ha-2
+2026-11-19T16:01:48.653Z poc68-stall-ha-1:
+sent SIGCONT to 390
+sent SIGCONT to 392
+386 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+388 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 -m sync appdb@poc68-stall-ha-2 
+390 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+392 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-2 --max-mem-size=500 appdb@localhost 
+2026-11-19T16:01:48.724Z poc68-stall-ha-2:
+sent SIGCONT to 388
+sent SIGCONT to 390
+384 State: D (disk sleep) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 -m sync appdb@poc68-stall-ha-0 
+386 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 -m sync appdb@poc68-stall-ha-1 
+388 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-0 --max-mem-size=500 appdb@localhost 
+390 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc68-stall-ha-1 --max-mem-size=500 appdb@localhost 
+2026-11-19T16:01:48.792Z resume issued
+2026-11-19T16:02:56.354Z writer stopped
+2026-11-19T16:02:57.303Z counts ha-0 ha-1 ha-2: 670 60 40
+2026-11-19T16:03:07.538Z counts ha-0 ha-1 ha-2: 670 60 40
+2026-11-19T16:03:17.779Z counts ha-0 ha-1 ha-2: 670 60 40
+2026-11-19T16:03:28.024Z counts ha-0 ha-1 ha-2: 670 70 50
+2026-11-19T16:03:38.283Z counts ha-0 ha-1 ha-2: 670 70 50
+2026-11-19T16:03:48.967Z counts ha-0 ha-1 ha-2: 670 80 60
+2026-11-19T16:03:59.195Z counts ha-0 ha-1 ha-2: 670 80 60
+2026-11-19T16:04:09.443Z counts ha-0 ha-1 ha-2: 670 80 70
+2026-11-19T16:04:19.904Z counts ha-0 ha-1 ha-2: 670 80 80
+2026-11-19T16:04:30.885Z counts ha-0 ha-1 ha-2: 670 90 80
+2026-11-19T16:04:41.320Z counts ha-0 ha-1 ha-2: 670 90 80
+2026-11-19T16:04:51.547Z counts ha-0 ha-1 ha-2: 670 100 90
+2026-11-19T16:05:01.809Z counts ha-0 ha-1 ha-2: 670 100 90
+2026-11-19T16:05:12.279Z counts ha-0 ha-1 ha-2: 670 100 100
+2026-11-19T16:05:22.648Z counts ha-0 ha-1 ha-2: 670 110 100
+2026-11-19T16:05:33.171Z counts ha-0 ha-1 ha-2: 670 120 110
+2026-11-19T16:05:44.553Z counts ha-0 ha-1 ha-2: 670 130 120
+2026-11-19T16:05:55.192Z counts ha-0 ha-1 ha-2: 670 140 130
+2026-11-19T16:06:05.432Z counts ha-0 ha-1 ha-2: 670 150 140
+2026-11-19T16:06:15.712Z counts ha-0 ha-1 ha-2: 670 150 140
+2026-11-19T16:06:25.967Z counts ha-0 ha-1 ha-2: 670 160 160
+2026-11-19T16:06:36.214Z counts ha-0 ha-1 ha-2: 670 160 160
+2026-11-19T16:06:46.442Z counts ha-0 ha-1 ha-2: 670 170 170
+2026-11-19T16:07:00.927Z counts ha-0 ha-1 ha-2: 670 170 170
+2026-11-19T16:07:15.395Z counts ha-0 ha-1 ha-2: 670 180 180
+2026-11-19T16:07:26.796Z counts ha-0 ha-1 ha-2: 670 190 190
+2026-11-19T16:07:37.230Z counts ha-0 ha-1 ha-2: 670 200 200
+2026-11-19T16:07:48.314Z counts ha-0 ha-1 ha-2: 670 200 200
+2026-11-19T16:08:04.479Z counts ha-0 ha-1 ha-2: 670 220 210
+2026-11-19T16:08:14.760Z counts ha-0 ha-1 ha-2: 670 220 220
+2026-11-19T16:08:26.297Z counts ha-0 ha-1 ha-2: 670 240 230
+2026-11-19T16:08:37.109Z counts ha-0 ha-1 ha-2: 670 250 230
+2026-11-19T16:08:47.640Z counts ha-0 ha-1 ha-2: 670 250 240
+2026-11-19T16:08:58.754Z counts ha-0 ha-1 ha-2: 670 260 250
+2026-11-19T16:09:08.957Z counts ha-0 ha-1 ha-2: 670 270 250
+2026-11-19T16:09:19.771Z counts ha-0 ha-1 ha-2: 670 290 270
+2026-11-19T16:09:30.069Z counts ha-0 ha-1 ha-2: 670 290 280
+2026-11-19T16:09:40.390Z counts ha-0 ha-1 ha-2: 670 300 290
+2026-11-19T16:09:50.981Z counts ha-0 ha-1 ha-2: 670 310 300
+2026-11-19T16:10:01.180Z counts ha-0 ha-1 ha-2: 670 320 310
+2026-11-19T16:10:11.395Z counts ha-0 ha-1 ha-2: 670 330 330
+2026-11-19T16:10:21.663Z counts ha-0 ha-1 ha-2: 670 340 340
+2026-11-19T16:10:31.911Z counts ha-0 ha-1 ha-2: 670 360 350
+2026-11-19T16:10:42.408Z counts ha-0 ha-1 ha-2: 670 370 360
+2026-11-19T16:10:52.626Z counts ha-0 ha-1 ha-2: 670 390 370
+2026-11-19T16:11:03.090Z counts ha-0 ha-1 ha-2: 670 400 380
+2026-11-19T16:11:13.315Z counts ha-0 ha-1 ha-2: 670 410 390
+2026-11-19T16:11:23.578Z counts ha-0 ha-1 ha-2: 670 410 400
+2026-11-19T16:11:33.791Z counts ha-0 ha-1 ha-2: 670 420 410
+2026-11-19T16:11:44.031Z counts ha-0 ha-1 ha-2: 670 440 420
+2026-11-19T16:11:54.242Z counts ha-0 ha-1 ha-2: 670 450 430
+2026-11-19T16:12:04.805Z counts ha-0 ha-1 ha-2: 670 460 450
+2026-11-19T16:12:15.063Z counts ha-0 ha-1 ha-2: 670 470 460
+2026-11-19T16:12:25.253Z counts ha-0 ha-1 ha-2: 670 480 470
+2026-11-19T16:12:35.535Z counts ha-0 ha-1 ha-2: 670 490 480
+2026-11-19T16:12:45.771Z counts ha-0 ha-1 ha-2: 670 500 490
+2026-11-19T16:12:56.003Z counts ha-0 ha-1 ha-2: 670 500 500
+2026-11-19T16:13:06.208Z counts ha-0 ha-1 ha-2: 670 510 520
+2026-11-19T16:13:16.467Z counts ha-0 ha-1 ha-2: 670 530 530
+2026-11-19T16:13:26.682Z counts ha-0 ha-1 ha-2: 670 540 540
+2026-11-19T16:13:36.917Z counts ha-0 ha-1 ha-2: 670 550 540
+2026-11-19T16:13:47.187Z counts ha-0 ha-1 ha-2: 670 550 550
+2026-11-19T16:13:57.379Z counts ha-0 ha-1 ha-2: 670 560 560
+2026-11-19T16:14:07.595Z counts ha-0 ha-1 ha-2: 670 580 580
+2026-11-19T16:14:17.789Z counts ha-0 ha-1 ha-2: 670 580 580
+2026-11-19T16:14:28.019Z counts ha-0 ha-1 ha-2: 670 590 600
+2026-11-19T16:14:38.268Z counts ha-0 ha-1 ha-2: 670 600 610
+2026-11-19T16:14:48.499Z counts ha-0 ha-1 ha-2: 670 610 620
+2026-11-19T16:14:58.839Z counts ha-0 ha-1 ha-2: 670 620 630
+2026-11-19T16:15:09.103Z counts ha-0 ha-1 ha-2: 670 640 640
+2026-11-19T16:15:19.299Z counts ha-0 ha-1 ha-2: 670 650 650
+2026-11-19T16:15:29.527Z counts ha-0 ha-1 ha-2: 670 660 670
+2026-11-19T16:15:39.834Z counts ha-0 ha-1 ha-2: 670 670 670
+left: containers=[] networks=[]
+2026-11-19T16:38:10.389Z run end

@@ -313,13 +313,15 @@ func (r *haRun) s06Restart() {
 
 	By("applying the data rules to every member and to both Services")
 	report := r.passingDataCheck("S06/"+s06Restart, 3*time.Minute)
+	storeEvidence := r.evidenceOnce("S06/"+s06Restart, report)
+	defer storeEvidence()
 	for _, slave := range slaves {
 		count, err := r.failCount(context.Background(), slave, master)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}
 
-	files := r.evidenceFiles("S06/"+s06Restart, report)
+	files := storeEvidence()
 	if timeline != "" {
 		files = append(files, timeline)
 	}
@@ -594,13 +596,15 @@ func (r *haRun) s06Absent() {
 
 	By("applying the data rules to every member and to both Services")
 	report := r.passingDataCheck("S06/"+s06Absent, 3*time.Minute)
+	storeEvidence := r.evidenceOnce("S06/"+s06Absent, report)
+	defer storeEvidence()
 	for _, slave := range nowSlaves {
 		count, err := r.failCount(context.Background(), slave, newMaster)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}
 
-	files := r.evidenceFiles("S06/"+s06Absent, report)
+	files := storeEvidence()
 	if timeline != "" {
 		files = append(files, timeline)
 	}
