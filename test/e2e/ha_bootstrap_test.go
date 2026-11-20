@@ -395,7 +395,16 @@ spec:
 			}, 15*time.Minute, 3*time.Second).Should(Succeed())
 
 			By("asking CUBRID on every member for the roles")
-			Eventually(func(g Gomega) {
+			// When the roles are not seen in time, the members' logs and
+			// connections are kept before the spec fails with the unchanged
+			// message (#1051). A passing check waits for nothing.
+			rowCaptureFailure(func(string) {
+				for member, text := range captureActiveWait(context.Background(), haNamespace, database,
+					append([]string{first}, peers...)) {
+					_, _ = fmt.Fprintf(GinkgoWriter, "%s\n", text)
+					writeScenarioFile("ha-bootstrap/master-not-active-"+member+".txt", []byte(text))
+				}
+			}).Eventually(func(g Gomega) {
 				out, err := heartbeatStatus(first)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(ContainSubstring("current " + first + ", state master"))
