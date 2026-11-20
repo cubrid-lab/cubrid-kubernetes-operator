@@ -461,7 +461,7 @@ order on every pass:
    - The second is a cut-off former master, of any rank, that may go on
      accepting writes from Brokers or open sessions that still reach it
      (POC-52, POC-58).
-   - *Proposed by #931, pending maintainer review:* when no quarantine is in
+   - *Accepted with #932 (merged 2026-11-18 UTC), from #931:* when no quarantine is in
      force and every member this rule names is *pending*, the quarantine
      does not start in this pass. A pending member gave a fresh,
      authenticated, non-master answer in this pass and lacks only an answer
@@ -514,7 +514,7 @@ order on every pass:
      first member, a slave beside master `ha-1`, had only one answer
      (#931). That contradicts "a missing Operator observation is not, on its
      own, a reason to quarantine" under *Negative* below.
-   - *Decided on #938, pending maintainer review:* **one probe that gives no
+   - *Accepted by the maintainer on 2026-11-20 UTC (#1019), from #938:* **one probe that gives no
      role is enough.** A member that outranks M, or is the last resolved
      primary, and gives no usable answer in a pass starts the quarantine in
      that pass. This holds when the member was just restarted after a

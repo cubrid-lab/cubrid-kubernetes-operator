@@ -227,7 +227,7 @@ stale data as authoritative; never restore over unknown existing data.
 
 ### Rebuilding a former primary whose storage was replaced (#117)
 
-*Proposed on 2026-11-20 UTC, pending maintainer review.* It amends the
+*Accepted by the maintainer on 2026-11-20 UTC (#1015).* It amends the
 rebuild request that #963 added (`status.memberRebuildOffers` and the
 annotation `database.cubrid.io/rebuild-member`, described in
 docs/observability.md).
