@@ -50,6 +50,9 @@ type sourceIM struct {
 	delay time.Duration
 	// raw, when set, answers instead of answer.
 	raw http.HandlerFunc
+	// then, when set, answers every request after the first instead of
+	// answer: the source's role changed after the restore asked it first.
+	then *HAStatus
 }
 
 func (f *sourceIM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +60,9 @@ func (f *sourceIM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.asked = append(f.asked, r.Method+" "+r.URL.Path)
 	f.tokens = append(f.tokens, r.Header.Get("Authorization"))
 	answer, delay, raw := f.answer, f.delay, f.raw
+	if f.then != nil && len(f.asked) > 1 {
+		answer = f.then
+	}
 	f.mu.Unlock()
 	if raw != nil {
 		raw(w, r)
@@ -101,6 +107,9 @@ type rebuildRestore struct {
 	objects *countingStore
 	req     RestoreRequest
 	source  *sourceIM
+	srv     *Server
+	h       http.Handler
+	store   *OperationStore
 }
 
 // rebuildCase says how a rebuild restore is set up.
@@ -180,7 +189,8 @@ func runRebuildRestore(t *testing.T, c rebuildCase) rebuildRestore {
 	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
 		t.Fatal(err)
 	}
-	return rebuildRestore{final: pollUntilSettled(t, srv, h, op.ID), cli: cli, objects: objects, req: req, source: c.source}
+	return rebuildRestore{final: pollUntilSettled(t, srv, h, op.ID), cli: cli, objects: objects, req: req, source: c.source,
+		srv: srv, h: h, store: store}
 }
 
 // leftNothing checks that a refused rebuild restore ran no command, staged
@@ -363,9 +373,11 @@ func TestServer_RebuildRestore_ProceedsWithAMatchingArtifactAndAnActiveMaster(t 
 	if len(calls) == 0 || !strings.HasPrefix(calls[0], "cubrid restoreslave -u -s master -m "+seedMaster+" ") {
 		t.Errorf("calls = %q, want restoreslave from %s first", calls, seedMaster)
 	}
+	// Once before anything is touched, and again right before heartbeat
+	// is started.
 	asked := r.source.requests()
-	if len(asked) != 1 || asked[0] != "GET /v1/role" {
-		t.Errorf("source requests = %q, want one GET /v1/role", asked)
+	if len(asked) != 2 || asked[0] != "GET /v1/role" || asked[1] != "GET /v1/role" {
+		t.Errorf("source requests = %q, want GET /v1/role before the restore and before the start", asked)
 	}
 	if r.source.tokens[0] != "Bearer tok" {
 		t.Errorf("the source was asked with %q, want the cluster's token", r.source.tokens[0])

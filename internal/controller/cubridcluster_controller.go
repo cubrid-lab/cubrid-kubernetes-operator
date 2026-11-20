@@ -125,6 +125,9 @@ type CubridClusterReconciler struct {
 	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
 	// (BootstrapReady=False/RestoreClientNotConfigured).
 	Restore RestoreClient
+	// RebuildMember is nil-safe: nil leaves the member of a member rebuild
+	// held after its restore, and a failed rebuild's member unstopped.
+	RebuildMember RebuildMemberClient
 	// HABootstrap is nil-safe: nil leaves the first database of an HA cluster
 	// uncreated.
 	HABootstrap HABootstrapClient
@@ -195,6 +198,9 @@ type CubridClusterReconciler struct {
 	// rebuildReported holds, per cluster key, the rebuild annotation's value
 	// and outcome last reported with a Warning Event (reconcileMemberRebuild).
 	rebuildReported sync.Map
+	// rebuildStops holds, per cluster key and Pod UID, the members of a
+	// failed member rebuild that accepted a stop (holdFailedRebuild).
+	rebuildStops sync.Map
 	// podTerminations holds, per Pod UID, a database Pod the kubelet
 	// reported terminated while it was being deleted, as the Pod watch saw
 	// it (notePodTermination).

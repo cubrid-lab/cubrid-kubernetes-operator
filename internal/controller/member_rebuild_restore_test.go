@@ -50,6 +50,7 @@ type rebuildCopyFixture struct {
 	cluster  *databasev1alpha1.CubridCluster
 	obs      map[string]RoleObservation
 	seed     *fakeSeedClient
+	member   *fakeRebuildMember
 	intercep *interceptor.Funcs
 }
 
@@ -116,6 +117,7 @@ func newRebuildCopyFixture(t *testing.T) *rebuildCopyFixture {
 		o.ObservedAt = now
 		f.obs[m] = o
 	}
+	f.member = &fakeRebuildMember{}
 	f.seed = &fakeSeedClient{backupState: instancemanager.OpCompleted,
 		restore: map[string]instancemanager.OperationState{cpTarget: instancemanager.OpRestoring}}
 	return f
@@ -155,7 +157,7 @@ func (f *rebuildCopyFixture) pass() (*databasev1alpha1.CubridCluster, []string, 
 	c := builder.Build()
 	recorder := record.NewFakeRecorder(20)
 	r := &CubridClusterReconciler{Client: c, APIReader: c, Scheme: f.sch, Recorder: recorder,
-		Backup: f.seed, Restore: f.seed, Clock: func() time.Time { return f.now }}
+		Backup: f.seed, Restore: f.seed, RebuildMember: f.member, Clock: func() time.Time { return f.now }}
 	ctx := context.Background()
 	members := []string{cpSource, cpSlave, cpTarget}
 	before, err := r.memberIdentities(ctx, f.cluster, members)

@@ -619,6 +619,9 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 			r.endRebuild(cluster, &in, databasev1alpha1.MemberRebuildWithdrawn, why)
 		}
 	}
+	if err := r.holdFailedRebuild(ctx, cluster, in); err != nil {
+		steps.err = errors.Join(steps.err, err)
+	}
 
 	offers, err := rebuildOffers(in)
 	if err != nil {

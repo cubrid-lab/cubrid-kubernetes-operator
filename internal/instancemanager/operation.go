@@ -94,6 +94,12 @@ type Operation struct {
 	// upload reads from: a directory named after the operation, below the
 	// destination the request named. It is set before backupdb runs.
 	StagingDir string `json:"stagingDir,omitempty"`
+	// Rebuild is set on a restore for an accepted member rebuild: the
+	// rebuild's operation ID and a SHA-256 digest of its token, never the
+	// token. Such a restore keeps its ownership marker after it completed,
+	// so the member is not started again after a restart, until the
+	// Operator releases it (POST /v1/rebuild/release).
+	Rebuild *OperationRebuild `json:"rebuild,omitempty"`
 	// CreatedAt / UpdatedAt are RFC3339 timestamps.
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

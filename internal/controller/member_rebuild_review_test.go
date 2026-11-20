@@ -115,6 +115,24 @@ func TestRebuildRestoreRefusedForItsSourceIsWithdrawn(t *testing.T) {
 	}
 }
 
+// The same refusal after restoredb, from the check of the source right before
+// the member is started, leaves restored data: the rebuild is Failed, and the
+// member is stopped.
+func TestRebuildSourceRefusedAfterRestoredbFails(t *testing.T) {
+	f := newRebuildCopyFixture(t)
+	f.restoreRecorded(instancemanager.OpFailed)
+	f.seed.code = instancemanager.FailureRebuildSourceNotMaster
+	f.seed.restoredFrom = map[string]string{cpRestoreKey: "s3://" + uriBucket + "/pre" + cpExpectedSeedDirPart + "/" +
+		instancemanager.ManifestObjectName}
+	got, _, _ := f.pass()
+	if last := got.Status.LastMemberRebuild; last == nil || last.State != databasev1alpha1.MemberRebuildFailed {
+		t.Fatalf("a refusal after restoredb ends the rebuild Failed, got %+v", last)
+	}
+	if len(f.member.shutdowns) != 1 {
+		t.Fatalf("the member is stopped, got %v", f.member.shutdowns)
+	}
+}
+
 // A restore started in passes whose status writes were lost is found by its
 // key, whether the backup was recorded or nothing of the copy was, and the
 // rebuild is judged, never Withdrawn as one that restored nothing.

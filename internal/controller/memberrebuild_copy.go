@@ -27,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,6 +39,14 @@ import (
 // reasonMemberRebuildRestoreStarted is the Normal Event of a rebuild whose
 // restore on the member was started.
 const reasonMemberRebuildRestoreStarted = "MemberRebuildRestoreStarted"
+
+// conditionDegraded is True while the member of a member rebuild that failed
+// after its restore was started is held stopped for a person (reason
+// reasonRebuildFailed), and absent otherwise.
+const (
+	conditionDegraded   = "Degraded"
+	reasonRebuildFailed = "RebuildFailed"
+)
 
 // rebuildBackupKey and rebuildRestoreKey are the idempotency keys of the copy
 // of the accepted rebuild a. They are built from its operation ID, which is
@@ -208,13 +217,8 @@ func (r *CubridClusterReconciler) judgeRebuildRestore(ctx context.Context, clust
 	if in.Unknown {
 		return
 	}
-	claim := in.Claims[a.Member]
-	switch {
-	case claim.UID != a.ClaimUID || claim.VolumeName != a.VolumeName:
-		fail(fmt.Sprintf("the data claim of %s or its volume changed after the restore was started", a.Member))
-		return
-	case in.Identities[a.Source].PodUID != a.SourcePodUID:
-		fail(fmt.Sprintf("the Pod of the source %s changed after the restore was started", a.Source))
+	if why := rebuildIdentityChange(*in, a); why != "" {
+		fail(why)
 		return
 	}
 	if cp.ActiveMasterSince == nil {
@@ -257,10 +261,12 @@ func (r *CubridClusterReconciler) judgeRebuildRestore(ctx context.Context, clust
 	obs := rebuildReading(*in)
 	gap := recordSeedReading(cp, rebuildHolders(*in, a.Member), obs, in.Now, true, completed)
 	if err == nil && restore.State == instancemanager.OpFailed {
-		if restore.FailureCode == instancemanager.FailureRebuildSourceUnconfirmed ||
-			restore.FailureCode == instancemanager.FailureRebuildSourceNotMaster {
+		if restore.Restored == nil && (restore.FailureCode == instancemanager.FailureRebuildSourceUnconfirmed ||
+			restore.FailureCode == instancemanager.FailureRebuildSourceNotMaster) {
 			// The Instance Manager asks the source before it touches the
-			// target or stages anything (#1047), so nothing was restored.
+			// target or stages anything (#1047), so nothing was restored. The
+			// same codes after restoredb (the check before the start) leave
+			// restored data, and fail the rebuild below.
 			r.endRebuild(cluster, in, databasev1alpha1.MemberRebuildWithdrawn, fmt.Sprintf(
 				"%s refused the restore before writing anything, because %s was not confirmed as the active master "+
 					"(%s: %s)", a.Member, a.Source, restore.FailureCode, restore.FailureReason))
@@ -287,6 +293,9 @@ func (r *CubridClusterReconciler) judgeRebuildRestore(ctx context.Context, clust
 		fail(fmt.Sprintf("no reading confirmed %s as the only master for more than %s (%s), so a change of master "+
 			"during the copy cannot be ruled out", a.Source, seedReadingGap, last))
 	case seedSeeded:
+		if !r.releaseRebuiltMember(ctx, cluster, a, database) {
+			return
+		}
 		r.endRebuild(cluster, in, databasev1alpha1.MemberRebuildCompleted, fmt.Sprintf(
 			"the restore completed and %s answers as a slave of %s whose copy and applier reached the end of the "+
 				"source's log read after the restore", a.Member, a.Source))
@@ -522,4 +531,104 @@ func (r *CubridClusterReconciler) rebuildBackup(ctx context.Context, cluster *da
 		return false, fmt.Sprintf("the backup on %s failed: %s", a.Source, backup.FailureReason)
 	}
 	return false, ""
+}
+
+// rebuildIdentityChange says what changed since the rebuild a was accepted
+// that ends it once its restore was started, "" for nothing: the member's
+// claim or volume, the source's Pod, or the member's Pod. A new Pod of the
+// member does not start the database the restore holds (releaseRebuild), so
+// the member could never catch up under this rebuild.
+func rebuildIdentityChange(in rebuildInput, a *databasev1alpha1.MemberRebuild) string {
+	claim := in.Claims[a.Member]
+	switch {
+	case claim.UID != a.ClaimUID || claim.VolumeName != a.VolumeName:
+		return fmt.Sprintf("the data claim of %s or its volume changed after the restore was started", a.Member)
+	case in.Identities[a.Source].PodUID != a.SourcePodUID:
+		return fmt.Sprintf("the Pod of the source %s changed after the restore was started", a.Source)
+	case in.Identities[a.Member].PodUID != a.PodUID:
+		return fmt.Sprintf("the Pod of %s was replaced after the restore was started; its database is held and "+
+			"not started", a.Member)
+	}
+	return ""
+}
+
+// releaseRebuiltMember releases the member of the rebuild a, which caught up
+// with its source: its database was held, and not started after a restart,
+// since its restore completed (ADR-0006). It reports whether the member
+// released it; the rebuild is Completed only then.
+func (r *CubridClusterReconciler) releaseRebuiltMember(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	a *databasev1alpha1.MemberRebuild, database string) bool {
+	if r.RebuildMember == nil {
+		logf.FromContext(ctx).Info("Waiting to release a rebuilt member: no client is configured",
+			"member", a.Member, "operationID", a.OperationID)
+		return false
+	}
+	if err := r.RebuildMember.ReleaseRebuild(ctx, a.Member, cluster.Namespace, instancemanager.RebuildReleaseRequest{
+		Database: database, Rebuild: instancemanager.RebuildBinding{OperationID: a.OperationID, Token: a.Token},
+	}); err != nil {
+		logf.FromContext(ctx).Info("Could not release a rebuilt member that caught up; trying again",
+			"member", a.Member, "operationID", a.OperationID, "reason", err.Error())
+		return false
+	}
+	return true
+}
+
+// heldFailedRebuild is status.lastMemberRebuild when it is a rebuild that
+// ended Failed after its restore was started, nil otherwise.
+func heldFailedRebuild(cluster *databasev1alpha1.CubridCluster) *databasev1alpha1.MemberRebuild {
+	last := cluster.Status.LastMemberRebuild
+	if last == nil || last.State != databasev1alpha1.MemberRebuildFailed || last.Copy == nil ||
+		last.Copy.RestoreOperationID == "" {
+		return nil
+	}
+	return last
+}
+
+// holdFailedRebuild keeps the member of a rebuild that failed after its
+// restore was started out of service while it still runs on the claim the
+// rebuild restored into. The restore may have finished after the failure, or
+// may still finish, and start the member with data copied across a change of
+// master, which can lack acknowledged writes and still look caught up
+// (docs/poc/RESULTS.md, POC-57); CUBRID could then make it the master. So the
+// member is asked to stop (POST /v1/shutdown), which also ends a restore
+// still running and admits nothing that would start it again until its Pod
+// is replaced. The stop is asked again in every pass while the member answers
+// as a master or a slave, and until a stop of its current Pod was accepted.
+// The cluster is Degraded (RebuildFailed) meanwhile, and the member is left
+// for a person: nothing is deleted. Once the member's claim is another one,
+// the administrator has replaced the storage and the hold ends. A pass whose
+// Pods or claims could not be read changes nothing.
+func (r *CubridClusterReconciler) holdFailedRebuild(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	in rebuildInput) error {
+	if in.Unknown {
+		return nil
+	}
+	last := heldFailedRebuild(cluster)
+	if last == nil || in.Claims[last.Member].UID != last.ClaimUID {
+		if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); c != nil &&
+			c.Reason == reasonRebuildFailed {
+			meta.RemoveStatusCondition(&cluster.Status.Conditions, conditionDegraded)
+		}
+		return nil
+	}
+	setCondition(cluster, conditionDegraded, metav1.ConditionTrue, reasonRebuildFailed, fmt.Sprintf(
+		"the rebuild of %s (operation %s) failed after its restore was started: %s. %s is stopped and kept out of "+
+			"service, as its data may lack writes the master acknowledged. Replace its data claim %s-%s with an "+
+			"empty one and request a new rebuild; nothing was deleted", last.Member, last.OperationID, last.Message,
+		last.Member, dataVolume, last.Member))
+	pod := in.Identities[last.Member].PodUID
+	if pod == "" || r.RebuildMember == nil || len(cluster.Spec.Databases) == 0 {
+		return nil
+	}
+	key := client.ObjectKeyFromObject(cluster).String() + "/" + pod
+	if _, stopped := r.rebuildStops.Load(key); stopped && !runsDatabase(in.answer(last.Member), in.Now) {
+		return nil
+	}
+	if err := r.RebuildMember.Shutdown(ctx, last.Member, cluster.Namespace, cluster.Spec.Databases[0].Name); err != nil {
+		return fmt.Errorf("stop %s, the member of the failed rebuild %s: %w", last.Member, last.OperationID, err)
+	}
+	r.rebuildStops.Store(key, true)
+	logf.FromContext(ctx).Info("Stopped the member of a failed member rebuild", "member", last.Member,
+		"operationID", last.OperationID)
+	return nil
 }

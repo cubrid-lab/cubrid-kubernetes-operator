@@ -71,6 +71,19 @@ type RestoreClient interface {
 	OperationFinder
 }
 
+// RebuildMemberClient holds and stops the member of a member rebuild
+// (ADR-0006). It is an interface so the reconciler can be tested without a
+// live manager.
+type RebuildMemberClient interface {
+	// ReleaseRebuild POSTs /v1/rebuild/release: the member's database, held
+	// since its rebuild restore completed, may be started again after a
+	// restart.
+	ReleaseRebuild(ctx context.Context, podName, namespace string, req instancemanager.RebuildReleaseRequest) error
+	// Shutdown POSTs /v1/shutdown: the member stops CUBRID and admits no
+	// operation that would start it again until its Pod is replaced.
+	Shutdown(ctx context.Context, podName, namespace, database string) error
+}
+
 // OperationFinder asks GET /v1/operations?idempotencyKey= for the operation
 // of kind that the member holds under the key. It never starts anything.
 // found is false only when the member answered that it holds none; any other
@@ -544,6 +557,49 @@ func (c *HTTPBackupClient) FindOperation(ctx context.Context, podName, namespace
 		}
 	}
 	return instancemanager.Operation{}, false, nil
+}
+
+// ReleaseRebuild asks the member to release its database, held since the
+// restore of the member rebuild req names completed.
+func (c *HTTPBackupClient) ReleaseRebuild(ctx context.Context, podName, namespace string,
+	req instancemanager.RebuildReleaseRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL(podName, namespace)+"/v1/rebuild/release", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(ctx, httpReq, podName, namespace)
+	if err != nil {
+		return fmt.Errorf("release the rebuild on %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("release the rebuild on %s: %w", podName, unexpectedStatus(resp))
+	}
+	return nil
+}
+
+// Shutdown asks the member to stop CUBRID (POST /v1/shutdown).
+func (c *HTTPBackupClient) Shutdown(ctx context.Context, podName, namespace, database string) error {
+	target := c.baseURL(podName, namespace) + "/v1/shutdown?database=" + neturl.QueryEscape(database)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(ctx, httpReq, podName, namespace)
+	if err != nil {
+		return fmt.Errorf("stop %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("stop %s: %w", podName, unexpectedStatus(resp))
+	}
+	return nil
 }
 
 func (c *HTTPBackupClient) baseURL(podName, namespace string) string {
