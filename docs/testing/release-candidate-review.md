@@ -29,7 +29,7 @@ an empty string that happens to compare equal.
 | Operator image repository and observed digest | _Not assessed_ |
 | Derived Instance Manager image and observed digest | _Not assessed_ |
 | CUBRID base image identity and observed engine build | _Not assessed_ |
-| Kubernetes distribution/version, architecture, CSI/StorageClass | _Not assessed_ |
+| Kubernetes distribution/version, architecture, StorageClass (CSI untested) | _Not assessed_ |
 | Storage and object-store scope, including retention | _Not assessed_ |
 | Release-PR identity and non-publishing #124 dry-run link | _Not assessed_ |
 | Approved VM-lab reservation, context/ownership and fault authority | _Not assessed_ |
@@ -40,7 +40,8 @@ The derived Instance Manager digest does not identify the CUBRID base
 image on its own. Record both intended and **observed** identities.
 Use the [compatibility limits](../compatibility.md) and
 [controlled lab instructions](lab-runs.md); do not treat a local-path,
-single-node or emulated run as a qualifying CSI-backed VM environment.
+single-node or emulated run as the three-VM k3s `local-path` reference
+environment, and do not read any run as evidence of CSI behavior.
 
 ## 2. Expand every mandatory scenario and variant
 
