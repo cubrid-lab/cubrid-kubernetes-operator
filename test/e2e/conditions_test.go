@@ -83,6 +83,9 @@ type conditionSampler struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once
+	// now asks for a round at once (readNow); the channel it sends is closed
+	// when that round's status read has started.
+	now chan chan struct{}
 	// rounds is written by the sampler's goroutine only, and read after it
 	// has ended.
 	rounds []conditionRound
@@ -92,24 +95,47 @@ type conditionSampler struct {
 // in each round what the sampling asks for besides.
 func (r *haRun) sampleConditions(sampling conditionSampling) *conditionSampler {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &conditionSampler{cancel: cancel, done: make(chan struct{})}
+	c := &conditionSampler{cancel: cancel, done: make(chan struct{}), now: make(chan chan struct{})}
 	go func() {
 		defer close(c.done)
+		var started chan struct{}
 		for {
 			start := time.Now()
-			round := r.conditionRound(ctx, sampling)
+			round := r.conditionRound(ctx, sampling, started)
 			if ctx.Err() != nil {
 				return // a round cut short by stop is not kept
 			}
 			c.rounds = append(c.rounds, round)
+			started = nil
 			select {
 			case <-ctx.Done():
 				return
+			case started = <-c.now:
 			case <-time.After(time.Until(start.Add(conditionSampleEvery))):
 			}
 		}
 	}()
 	return c
+}
+
+// readNow starts a round as soon as the one in progress, if any, has ended,
+// and returns once that round's status read has started, so the read begins
+// after readNow was called and before anything that follows it (#1027). It
+// returns early when the sampler stops or ctx ends.
+func (c *conditionSampler) readNow(ctx context.Context) {
+	started := make(chan struct{})
+	select {
+	case c.now <- started:
+	case <-c.done:
+		return
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-started:
+	case <-c.done:
+	case <-ctx.Done():
+	}
 }
 
 // stop ends the sampling and returns the rounds. It is safe to call more than
@@ -122,11 +148,17 @@ func (c *conditionSampler) stop() []conditionRound {
 	return c.rounds
 }
 
-func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling) conditionRound {
+// conditionRound reads one round; started, when not nil, is closed once the
+// status read has started (readNow).
+func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling,
+	started chan struct{}) conditionRound {
 	ctx, cancel := context.WithTimeout(ctx, conditionReadLimit)
 	defer cancel()
 	var round conditionRound
 	start := time.Now().UTC()
+	if started != nil {
+		close(started)
+	}
 	out, err := r.kubectlQuiet(ctx, "get", "cubridcluster", r.cluster, "-o", "json")
 	var s statusSnapshot
 	if err == nil {

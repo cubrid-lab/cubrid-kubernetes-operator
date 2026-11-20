@@ -80,6 +80,11 @@ type Scenario struct {
 	// Check observes the expected behavior. It returns true when it holds,
 	// false to be asked again, and an error when an expectation is broken.
 	Check func(ctx context.Context) (bool, error)
+	// Confirmed, when set, runs once right after the fault is confirmed and
+	// before Check is first called, within the confirmation limit. What it
+	// observes, such as a status read, lies between the fault and the
+	// outcome however soon the outcome comes (#1027). It judges nothing.
+	Confirmed func(ctx context.Context)
 }
 
 // Step is one line of the run's timeline.
@@ -115,11 +120,12 @@ var errStepStillRunning = fmt.Errorf("%w, and did not stop when it was cancelled
 
 // Names of the steps, as Outcome.StillRunning reports them.
 const (
-	stepNameBefore  = "before"
-	stepNameInject  = "inject"
-	stepNameConfirm = "confirm"
-	stepNameCheck   = "check"
-	stepNameRemove  = "remove"
+	stepNameBefore    = "before"
+	stepNameInject    = "inject"
+	stepNameConfirm   = "confirm"
+	stepNameConfirmed = "confirmed"
+	stepNameCheck     = "check"
+	stepNameRemove    = "remove"
 )
 
 // Run executes the scenario. It always returns: no step waits longer than its
@@ -209,6 +215,15 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	}
 	o.FaultConfirmed = true
 	note("fault_confirmed", "")
+	if s.Confirmed != nil {
+		if err := bounded(ctx, l.Confirm, l.Stop, func(ctx context.Context) error {
+			s.Confirmed(ctx)
+			return nil
+		}); stillRunning(stepNameConfirmed, err) {
+			end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameConfirmed)
+			return o
+		}
+	}
 
 	reached, err := poll(ctx, l.Outcome, l.Poll, l.Stop, true, s.Check)
 	switch {

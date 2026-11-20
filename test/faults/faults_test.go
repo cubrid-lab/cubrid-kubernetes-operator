@@ -415,3 +415,60 @@ func TestRun_ReportsAStepThatDoesNotStop(t *testing.T) {
 		}
 	}
 }
+
+// Confirmed runs once, after the fault is confirmed and before the outcome is
+// first checked, so that what it observes lies between the fault and the
+// outcome however soon the outcome comes (#1027).
+func TestRun_ConfirmedRunsBetweenTheFaultAndTheFirstCheck(t *testing.T) {
+	f := &fakeFault{confirmAfter: 2}
+	var order []string
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok,
+		Confirmed: func(context.Context) { order = append(order, "confirmed") },
+		Check: func(context.Context) (bool, error) {
+			order = append(order, "check")
+			return true, nil
+		}})
+	if o.Result != evidence.Pass {
+		t.Fatalf("outcome = %+v", o)
+	}
+	if got := strings.Join(order, ","); got != "confirmed,check" {
+		t.Errorf("order = %s, want confirmed,check", got)
+	}
+}
+
+// A fault that was not confirmed has no window to observe, so Confirmed does
+// not run.
+func TestRun_ConfirmedDoesNotRunWithoutAConfirmedFault(t *testing.T) {
+	f := &fakeFault{}
+	ran := false
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: holds,
+		Confirmed: func(context.Context) { ran = true }})
+	if o.FaultConfirmed || ran {
+		t.Errorf("confirmed %t, Confirmed ran %t", o.FaultConfirmed, ran)
+	}
+}
+
+// A Confirmed that ignores its context does not hold the run: the run is
+// blocked as for any other step that does not stop, and the fault is removed.
+func TestRun_ReportsAConfirmedThatDoesNotStop(t *testing.T) {
+	f := &fakeFault{confirmAfter: 1}
+	checked := false
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok,
+		Confirmed: func(context.Context) { select {} },
+		Check: func(context.Context) (bool, error) {
+			checked = true
+			return true, nil
+		}})
+	if len(o.StillRunning) != 1 || o.StillRunning[0] != stepNameConfirmed {
+		t.Errorf("still running = %v, want [%s]", o.StillRunning, stepNameConfirmed)
+	}
+	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, ReasonStepStillRunning) {
+		t.Errorf("result = %q (%s), want blocked, %s", o.Result, o.Reason, ReasonStepStillRunning)
+	}
+	if checked {
+		t.Error("the outcome was checked after Confirmed did not stop")
+	}
+	if !o.CleanupSucceeded {
+		t.Errorf("the fault was not removed: %+v", o.Timeline)
+	}
+}

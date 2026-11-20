@@ -71,7 +71,7 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 			roles.sample(ctx, r)
 		},
 		"conditionRound": func(ctx context.Context) {
-			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}})
+			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}}, nil)
 		},
 		"heartbeatRole":     func(ctx context.Context) { _, _ = r.heartbeatRole(ctx, pod0) },
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
@@ -136,7 +136,7 @@ func TestConditionRoundRunsNoHeartbeatWithoutSweep(t *testing.T) {
 	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
 	execs := func(sampling conditionSampling) int {
 		_ = os.Remove(log)
-		round := r.conditionRound(context.Background(), sampling)
+		round := r.conditionRound(context.Background(), sampling, nil)
 		if (round.Roles != nil) != sampling.roles {
 			t.Errorf("sampling %+v gave sweep %+v", sampling, round.Roles)
 		}
@@ -148,5 +148,37 @@ func TestConditionRoundRunsNoHeartbeatWithoutSweep(t *testing.T) {
 	}
 	if n := execs(conditionSampling{roles: true}); n != 1 {
 		t.Errorf("a round with a sweep ran %d commands in a Pod, want 1", n)
+	}
+}
+
+// TestConditionSamplerReadNowStartsARoundAtOnce checks that readNow starts a
+// round right away instead of at the next conditionSampleEvery tick, and
+// returns once that round has started, so a status read can be placed between
+// a fault and an outcome that comes sooner than the sampling period (#1027).
+func TestConditionSamplerReadNowStartsARoundAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
+	sampler := r.sampleConditions(conditionSampling{})
+	time.Sleep(200 * time.Millisecond) // the first round is done; the next is due in about 2s
+	asked := time.Now()
+	sampler.readNow(context.Background())
+	if waited := time.Since(asked); waited > conditionSampleEvery/2 {
+		t.Errorf("readNow returned after %s, want well before the next tick", waited)
+	}
+	time.Sleep(200 * time.Millisecond) // let the asked-for round finish
+	if rounds := sampler.stop(); len(rounds) != 2 {
+		t.Errorf("got %d rounds, want the first one and the one readNow asked for", len(rounds))
+	}
+	// After stop, readNow does not wait.
+	done := make(chan struct{})
+	go func() { sampler.readNow(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readNow waited on a stopped sampler")
 	}
 }

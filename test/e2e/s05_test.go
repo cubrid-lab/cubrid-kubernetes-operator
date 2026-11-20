@@ -221,6 +221,9 @@ func (r *haRun) s05(variant string) {
 	outcome := r.runFault(faults.Scenario{
 		Fault:  logs.observeFault(fault),
 		Limits: s03FlowLimits,
+		// One status read right after the fault is confirmed lies between the
+		// fault and the outcome however soon the outcome comes (#1027).
+		Confirmed: sampler.readNow,
 		Before: func(ctx context.Context) error {
 			now, _, err := r.master(ctx)
 			if err == nil && now != master {
