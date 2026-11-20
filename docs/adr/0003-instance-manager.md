@@ -608,7 +608,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `CUBRID_LOG_VOLUME_SIZE` | a 32nd of `spec.storage.data.size` in whole MiB, between `20M` and `512M`: the `--log-volume-size` of the database the entrypoint (one member) or the HA bootstrap (the first HA member) creates. Unset leaves the image's `log_volume_size` (512M). It counts only when a database is created (DESIGN.md, "Log Volume Size"; #666) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
-| `POD_NAMESPACE` | the namespace of the member's Pod; it qualifies the address of the source's Instance Manager that a restore for a member rebuild asks. Without it such a restore is refused |
+| `POD_NAMESPACE` | the namespace of the member's Pod, set by the Operator through the downward API (`metadata.namespace`); it qualifies the address of the source's Instance Manager that a restore for a member rebuild asks. Without it such a restore is refused |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |

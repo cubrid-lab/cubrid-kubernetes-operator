@@ -1068,6 +1068,11 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 		// Where the entrypoint and the manager find cubrid_ha.conf. The file is
 		// there only for an HA cluster.
 		{Name: "CUBRID_HA_CONF", Value: haConfMountPath + "/" + haConfFileName},
+		// The manager addresses the source of a member rebuild by its
+		// namespace-qualified Service name, and refuses a rebuild restore
+		// without its own namespace (ADR-0003).
+		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{
+			APIVersion: "v1", FieldPath: "metadata.namespace"}}},
 	}, objectStorageEnv(cluster.Spec.ObjectStorage)...)
 }
 

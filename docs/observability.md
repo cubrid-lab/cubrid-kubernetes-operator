@@ -1519,10 +1519,63 @@ the source. An observation whose Pods or claims could not be read, or whose
 write quarantine step failed, also keeps it, unless the status shows a write
 quarantine: that withdraws it even then.
 
-Whether this build restores the database on the member for an accepted
-request is recorded in [ROADMAP.md](../ROADMAP.md). An accepted request has
-no other way out: removing the annotation does not cancel it, and only a
-withdrawal as above ends it.
+**The copy of an accepted rebuild.** The Operator copies the database from
+the accepted `source` to the member, one step per observation, and records
+the copy in `status.memberRebuild.copy`:
+
+- Every step needs an observation in which the accepted source is the only
+  active master among the other members and the member is neither the
+  current primary nor answering as a master. The source is the one the
+  request was accepted with; it is never chosen again.
+- Nothing is started until the Instance Managers of the source and of the
+  member both report the `rebuild-restore` capability (ADR-0013); the
+  Operator's log says what it waits for.
+- The backup runs on the source under the idempotency key
+  `rebuild-backup-<operationID>` and is uploaded to
+  `<prefix>/<clusterUID>/rebuild-<operationID>/<database>` in
+  `spec.objectStorage`, never to the HA bootstrap's seed location. Its
+  manifest carries the rebuild's operation ID and token.
+- Immediately before the restore is started, the Operator checks again that
+  no write quarantine is in the status, and reads the source's Pod and the
+  member's claim from the API server: a Pod UID, claim UID or volume name
+  that is not the accepted one means no restore call in that observation.
+- The restore runs on the member under the key
+  `rebuild-restore-<operationID>-<member>`, bound to the operation ID and
+  token, with a Normal Event `MemberRebuildRestoreStarted`. The member's
+  Instance Manager asks the source's Instance Manager whether it is the
+  active master, and refuses a target that already holds a database.
+- Every operation is recorded once started and only polled from then on. An
+  Operator restart keeps the operation ID and the keys and polls the
+  recorded operations; a restore started in a pass whose status was not
+  written is found by its key.
+
+Until the restore is started, the rebuild can be withdrawn as above. A change
+of master or more than 30 seconds without a reading that confirms the source
+as the only master also withdraws it then: its backup may predate the change.
+A backup that fails or is refused, or a restore the member refuses before
+recording it, ends the rebuild `Failed`; nothing was restored then.
+
+Once the restore is started, the rebuild is never withdrawn; its outcome is
+decided first, by the same rule as a member seeded by the HA bootstrap
+(#768):
+
+- It is `Completed`, with a Normal Event `MemberRebuildCompleted`, only when
+  the restore completed and the member answers as a slave that applies the
+  source's log with no failed change and no page waiting, and whose copy
+  and applier reached the end of the source's log read after the restore
+  completed. A restore that completed does not by itself make the member
+  healthy.
+- It is `Failed`, with a Warning Event `MemberRebuildFailed` and a message,
+  when a write quarantine is in the status, the member's claim or volume or
+  the source's Pod changed, the restore failed or restored another backup,
+  another member (or the member itself) reported itself master or the source
+  reported itself a slave, or no reading confirmed the source as the only
+  master for more than 30 seconds. Nothing is deleted. The member's claim
+  may hold a partial copy, which the Instance Manager does not take over
+  under another request: a new request needs a new empty claim.
+
+An accepted request has no other way out: removing the annotation does not
+cancel it.
 Restrict `update`/`patch` on `cubridclusters` to administrators; the actor is
 in the API audit log.
 

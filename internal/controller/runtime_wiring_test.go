@@ -235,6 +235,21 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		}
 	})
 
+	// The Instance Manager addresses the source of a member rebuild as
+	// <member>.<namespace>.svc and refuses a rebuild restore without its own
+	// namespace (#1041, #1043).
+	It("gives the manager its Pod's namespace through the downward API", func() {
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-namespace"))
+		c := statefulSet("wiring-namespace").Spec.Template.Spec.Containers[0]
+
+		ns, ok := envValue(c, "POD_NAMESPACE")
+		Expect(ok).To(BeTrue(), "without POD_NAMESPACE the manager refuses every rebuild restore")
+		Expect(ns.Value).To(BeEmpty())
+		Expect(ns.ValueFrom).NotTo(BeNil())
+		Expect(ns.ValueFrom.FieldRef).NotTo(BeNil())
+		Expect(ns.ValueFrom.FieldRef.FieldPath).To(Equal("metadata.namespace"))
+	})
+
 	It("passes the cluster's object storage, with credentials only as Secret references", func() {
 		cluster := standaloneCluster("wiring-storage")
 		cluster.Spec.ObjectStorage = testObjectStorage()
