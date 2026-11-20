@@ -56,6 +56,9 @@ const (
 	// reReadNeverWrite is recorded for the pair of a statement that is not
 	// repeated, which a separate check then decides.
 	reReadNeverWrite = "not made: it is not repeated, and a separate check of the rows decides"
+	// reReadRefusedWrite is recorded for the pair of a write a member must
+	// refuse, which the -581 before it and the identity comparison decide.
+	reReadRefusedWrite = "not made: a write is not repeated; the -581 refusal before the pair and the identity decide"
 )
 
 // lostSessionRecord is one time csql printed -199 and -111 in this run.
@@ -404,6 +407,18 @@ func (m csqlMember) runOnce(sql string, complete func(string) error) error {
 		csqlLedger.settle(record, identity, reReadNeverWrite)
 	}
 	return err
+}
+
+// refusedAsReadOnly is sqlcheck.RunRefusal on the member: it runs a write the
+// member must refuse once, and adds what the identity comparison found to the
+// record of a pair.
+func (m csqlMember) refusedAsReadOnly(sql string) (bool, error) {
+	var lost []*lostSessionRecord
+	refused, identity, err := sqlcheck.RunRefusal(m.guard, m.runner(&lost), sql)
+	for _, record := range lost {
+		csqlLedger.settle(record, identity, reReadRefusedWrite)
+	}
+	return refused, err
 }
 
 // statementFinished is the check of a statement that csql ran in autocommit

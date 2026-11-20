@@ -278,6 +278,10 @@ type reconcileReport struct {
 	// reconcile released; once its status is written, memory no longer holds
 	// it.
 	releasedQuarantine string
+	// releaseWritten says that the status recording releasedQuarantine's
+	// release was written, so this reconcile no longer holds the read-write
+	// Brokers at zero for it (writesHeld).
+	releaseWritten bool
 	// consumedReleaseToken is the release token this reconcile consumed;
 	// once its release is written, the annotation that names it is removed.
 	consumedReleaseToken string
@@ -358,6 +362,7 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 		publishClusterMetrics(cluster, readyReplicas)
 		if ok && report.(*reconcileReport).releasedQuarantine != "" {
 			r.releaseWritten(cluster, report.(*reconcileReport).releasedQuarantine)
+			report.(*reconcileReport).releaseWritten = true
 		}
 		if ok && report.(*reconcileReport).consumedReleaseToken != "" {
 			r.ownExemption(cluster, report.(*reconcileReport).consumedReleaseToken)
@@ -1341,7 +1346,7 @@ func (r *CubridClusterReconciler) observeAndQuarantine(ctx context.Context,
 	// The members' Pods are read before and after the probes, so that an
 	// answer is counted only for the Pod it came from.
 	podsBefore, podsErr := r.memberIdentities(ctx, cluster, members)
-	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers)
+	res, obs, observedAt := r.observeHAStatus(ctx, cluster, cluster.Spec.Topology.PromotableMembers, podsBefore)
 	seen := haObservation{members: members, obs: obs, observedAt: observedAt, lastResolved: lastResolved,
 		podsBefore: podsBefore, podsErr: podsErr}
 	return res, r.reconcileWriteQuarantine(ctx, cluster, members, obs, observedAt, lastResolved, podsBefore, podsErr),
@@ -1350,7 +1355,9 @@ func (r *CubridClusterReconciler) observeAndQuarantine(ctx context.Context,
 
 // updateStatus sets Ready and the Updating condition of an image change from
 // what the steps left, writes the status and decides what the reconcile
-// returns. It writes no child object and calls no Instance Manager.
+// returns. It calls no Instance Manager, and writes no child object except
+// the Broker tier once the status that releases a write quarantine is
+// written, so that the read-write Brokers start in the same pass.
 //
 // A step's failed write is returned as the reconcile's error once the status
 // that explains it is written, or together with the error of a status write
@@ -1387,6 +1394,17 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	// The pass that released a write quarantine held the read-write Brokers
+	// at zero until the release was written. It is written now, so they are
+	// started in this pass rather than the next one (#1003). The Broker tier
+	// still keeps them at zero for a quarantine in force or stored since, and
+	// the next pass, due a second later (quarantineRetry), reports them.
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok && report.(*reconcileReport).releaseWritten {
+		if _, err := r.reconcileBrokerTier(ctx, cluster, r.imageToRun(cluster, sts)); err != nil {
+			logf.FromContext(ctx).Info("Left the start of the read-write Brokers after the release to the next pass",
+				"error", err.Error())
+		}
 	}
 	if steps.err != nil {
 		return ctrl.Result{}, steps.err

@@ -200,7 +200,8 @@ var readOnlyRefusal = regexp.MustCompile(`ERROR CODE = -581\b`)
 // server refused with -581. Any other failure, such as a command that could
 // not be run or the pair of SessionLost, says nothing about what the server
 // would have done with the statement, so it is not a refusal, and neither is
-// a -581 beside that pair.
+// a -581 beside that pair. RunRefusal accepts a -581 followed by the pair only
+// with an unchanged server identity.
 func RefusedAsReadOnly(err error) bool {
 	var statement *StatementError
 	return errors.As(err, &statement) && readOnlyRefusal.MatchString(statement.out) && !SessionLost(statement.out)

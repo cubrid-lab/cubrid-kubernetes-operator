@@ -644,13 +644,15 @@ func (r *haRun) s03(spec context.Context, variant string) {
 
 	By("applying the data rules to every member and to both Services")
 	report := r.passingDataCheck("S03/"+variant, 3*time.Minute)
+	storeEvidence := r.evidenceOnce("S03/"+variant, report)
+	defer storeEvidence()
 	for _, slave := range nowSlaves {
 		count, err := r.failCount(context.Background(), slave, newMaster)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}
 
-	files := r.evidenceFiles("S03/"+variant, report)
+	files := storeEvidence()
 	if timeline != "" {
 		files = append(files, timeline)
 	}
