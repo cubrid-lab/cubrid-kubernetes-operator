@@ -959,8 +959,10 @@ spec:
                   a later claim of the same member replaced it: a claim and a volume
                   that once held the database. Such a volume may hold the only copy of
                   writes no other member has, for example the storage of a primary that
-                  was lost and rebuilt, so a claim or volume listed here is never offered
-                  or accepted as a replacement, for any member. Nothing is ever removed
+                  was lost and rebuilt, so a claim UID or PersistentVolume name listed
+                  here is never offered or accepted as a replacement, for any member; the
+                  same disk under another PersistentVolume name is not recognised. The
+                  list lives only in this status. Nothing is ever removed
                   from this list. It holds at most 64 records; once it is full, a
                   member's later claim is not recorded, its earlier record stays in
                   memberDataClaims, and no rebuild is offered or accepted any more.

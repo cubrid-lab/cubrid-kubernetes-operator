@@ -206,7 +206,7 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	case !slices.Contains(in.Members, member):
 		return fmt.Sprintf("%s is not a promotable member of this cluster", member)
 	case in.Unknown:
-		return "the members' Pods or data claims could not be read, or the write quarantine could not be decided, " +
+		return "the members' Pods or data claims could not be read, or the write quarantine step failed, " +
 			"in this observation"
 	case !in.BootstrapDone:
 		return "the HA bootstrap has not copied the database to every member yet; it seeds a member that does " +
@@ -222,8 +222,8 @@ func rebuildRefusal(in rebuildInput, member string) string {
 		return fmt.Sprintf("the rebuild of %s (operation %s) is in progress; one member is rebuilt at a time",
 			in.Active.Member, in.Active.OperationID)
 	case len(in.FormerDataClaims) >= maxFormerDataClaims:
-		return fmt.Sprintf("status.formerDataClaims holds %d former records, as many as it can; a later claim "+
-			"could not be recorded, so no replacement can be shown expendable", len(in.FormerDataClaims))
+		return fmt.Sprintf("status.formerDataClaims holds %d records and the list is full; a later claim cannot be "+
+			"recorded, so no replacement can be shown expendable", len(in.FormerDataClaims))
 	case member == in.CurrentPrimary || isMasterAnswer(in.Observations[member], in.Now):
 		return fmt.Sprintf("%s is the current primary or reports itself master; its data is never discarded", member)
 	}
@@ -362,20 +362,26 @@ func rebuildOffers(in rebuildInput) ([]databasev1alpha1.MemberRebuildOffer, erro
 // quarantine is in force, the member answers as a master, its Pod, claim or
 // volume changed, it became the last resolved primary although the request
 // did not name the source, it could no longer be offered a rebuild
-// (rebuildRefusal), or the primary or the primary's Pod changed. A pass that could not read
-// the Pods or claims keeps it, and so does one that observed no healthy
-// primary among the other members while nothing else refuses it.
+// (rebuildRefusal), or the primary or the primary's Pod changed. A
+// quarantine in the status withdraws it even in a pass that could not be
+// read. Otherwise such a pass keeps it, and so does one that observed no
+// healthy primary among the other members while nothing else refuses it.
 func rebuildWithdrawal(in rebuildInput) string {
 	a := in.Active
-	if a == nil || in.Unknown {
+	switch {
+	case a == nil:
+		return ""
+	// A quarantine in the status withdraws even in a pass that could not be
+	// read: it may be stale, but withdrawing restores nothing.
+	case in.Quarantine != nil:
+		return fmt.Sprintf("a write quarantine (%s) is in force", in.Quarantine.Reason)
+	case in.Unknown:
 		return ""
 	}
 	in.Active = nil
 	claim := in.Claims[a.Member]
 	source, _ := rebuildSource(in, a.Member)
 	switch {
-	case in.Quarantine != nil:
-		return fmt.Sprintf("a write quarantine (%s) is in force", in.Quarantine.Reason)
 	case isMasterAnswer(in.Observations[a.Member], in.Now):
 		return fmt.Sprintf("%s reports itself master", a.Member)
 	case in.Identities[a.Member].PodUID != a.PodUID:

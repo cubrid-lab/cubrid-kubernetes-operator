@@ -32,7 +32,7 @@ import (
 // tests look for.
 const (
 	rbM0, rbM1, rbM2                        = "r-0", "r-1", "r-2"
-	rbPod0, rbPod2, rbPod2b                 = "pod-0", "pod-2", "pod-2b"
+	rbPod0, rbPod0b, rbPod2, rbPod2b        = "pod-0", "pod-0b", "pod-2", "pod-2b"
 	rbClaim0, rbClaim1, rbClaim1New         = "claim-0", "claim-1", "claim-1-new"
 	rbClaim2New, rbClaim2Old, rbClaim2Newer = "claim-2-new", "claim-2-old", "claim-2-newer"
 	rbWantCurrentPrimary                    = "current primary"
@@ -356,7 +356,7 @@ func TestRebuildOffers(t *testing.T) {
 			in.Observations[rbM1] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: now}
 		},
 		"source Pod": func(in *rebuildInput) {
-			in.Identities[rbM0] = memberIdentity{PodUID: "pod-0b", Created: now.Add(-time.Hour)}
+			in.Identities[rbM0] = memberIdentity{PodUID: rbPod0b, Created: now.Add(-time.Hour)}
 		},
 	}
 	for name, mutate := range changes {
@@ -509,6 +509,14 @@ func TestDecideRebuildRequest(t *testing.T) {
 			mutate:  formerPrimaryLost,
 			stored:  func() *databasev1alpha1.CubridCluster { return storedRebuild("r-2:"+token+":r-0", offers) },
 			verdict: rebuildInert, msg: rbWantStale},
+		// The source's Pod changed between publishing and accepting, with no
+		// quarantine in force: the token bound the Pod the administrator saw.
+		{name: "former primary with the source named after the source's Pod changed", mutate: func(in *rebuildInput) {
+			asFormer(in)
+			in.Identities[rbM0] = memberIdentity{PodUID: rbPod0b, Created: now.Add(-time.Minute)}
+		}, stored: func() *databasev1alpha1.CubridCluster {
+			return storedRebuild("r-2:"+formerToken+":r-0", formerOffers)
+		}, verdict: rebuildInert, msg: rbWantStale},
 		{name: "former primary with the source named", mutate: asFormer,
 			stored: func() *databasev1alpha1.CubridCluster {
 				return storedRebuild("r-2:"+formerToken+":r-0", formerOffers)
@@ -629,6 +637,13 @@ func TestRebuildWithdrawal(t *testing.T) {
 			in.Observations[rbM0] = RoleObservation{}
 		}},
 		{name: "Pods unreadable", mutate: func(in *rebuildInput) { in.Unknown = true; in.Identities = nil }},
+		// A quarantine in the status was decided, but its enforcement or a
+		// Node read failed: withdrawing on it is safe even if it is stale.
+		{name: "write quarantine in a pass that could not be read", mutate: func(in *rebuildInput) {
+			in.Unknown = true
+			in.Quarantine = &databasev1alpha1.WriteQuarantine{Reason: databasev1alpha1.WriteQuarantinedMemberUnverified,
+				Members: []databasev1alpha1.WriteQuarantineMember{{Name: rbM2}}}
+		}, want: rbWantQuarantine},
 		{name: "member Pod", mutate: func(in *rebuildInput) {
 			in.Identities[rbM2] = memberIdentity{PodUID: rbPod2b}
 		}, want: "Pod"},
@@ -640,7 +655,7 @@ func TestRebuildWithdrawal(t *testing.T) {
 			in.Observations[rbM1] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: now}
 		}, want: "the primary"},
 		{name: "source Pod", mutate: func(in *rebuildInput) {
-			in.Identities[rbM0] = memberIdentity{PodUID: "pod-0b"}
+			in.Identities[rbM0] = memberIdentity{PodUID: rbPod0b}
 		}, want: "the primary"},
 		{name: "member volume", mutate: func(in *rebuildInput) {
 			in.Claims[rbM2] = claimIdentity{UID: rbClaim2New, Created: now.Add(-2 * time.Minute), VolumeName: "pv-other"}

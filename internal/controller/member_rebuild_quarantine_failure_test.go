@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,9 @@ func TestRebuildTreatsAFailedQuarantineStepAsUnreadable(t *testing.T) {
 				HAConfigured: true, SeededMembers: []string{m1, m2}}},
 			MemberDataClaims: []databasev1alpha1.MemberDataClaim{
 				{Name: m0, ClaimUID: "claim-" + m0, VolumeName: "pv-" + m0},
-				{Name: m1, ClaimUID: "claim-" + m1, VolumeName: "pv-" + m1},
+				// m1 answers as a slave on a claim not yet recorded, which a
+				// readable pass records, moving this record to the former ones.
+				{Name: m1, ClaimUID: "claim-" + m1 + "-earlier", VolumeName: "pv-" + m1 + "-earlier"},
 				{Name: m2, ClaimUID: "claim-" + m2 + "-lost", VolumeName: "pv-" + m2 + "-lost"}},
 			MemberRebuildOffers: []databasev1alpha1.MemberRebuildOffer{offer},
 		},
@@ -109,16 +112,25 @@ func TestRebuildTreatsAFailedQuarantineStepAsUnreadable(t *testing.T) {
 	if got.Status.MemberRebuild != nil {
 		t.Fatalf("a pass whose quarantine step failed accepts nothing, got %+v", got.Status.MemberRebuild)
 	}
+	if !reflect.DeepEqual(got.Status.MemberDataClaims, cluster.Status.MemberDataClaims) ||
+		len(got.Status.FormerDataClaims) != 0 {
+		t.Fatalf("a pass whose quarantine step failed records no claim, got %+v and former %+v",
+			got.Status.MemberDataClaims, got.Status.FormerDataClaims)
+	}
 	if len(got.Status.MemberRebuildOffers) != 1 || got.Status.MemberRebuildOffers[0] != offer {
 		t.Fatalf("the offer and its token are kept, got %+v", got.Status.MemberRebuildOffers)
 	}
 	if len(events) != 1 || !strings.Contains(events[0], reasonMemberRebuildRefused) ||
-		!strings.Contains(events[0], "write quarantine could not be decided") {
-		t.Fatalf("expected one refusal saying the quarantine could not be decided, got %q", events)
+		!strings.Contains(events[0], "write quarantine step failed") {
+		t.Fatalf("expected one refusal saying the quarantine step failed, got %q", events)
 	}
 
 	got, _ = pass(nil)
 	if got.Status.MemberRebuild == nil || got.Status.MemberRebuild.Token != offer.Token {
 		t.Fatalf("a pass whose quarantine step worked accepts the request, got %+v", got.Status.MemberRebuild)
+	}
+	if len(got.Status.FormerDataClaims) != 1 || got.Status.FormerDataClaims[0] != cluster.Status.MemberDataClaims[1] {
+		t.Fatalf("a readable pass records the new claim and keeps the earlier record, got former %+v",
+			got.Status.FormerDataClaims)
 	}
 }
