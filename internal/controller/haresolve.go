@@ -35,6 +35,10 @@ import (
 
 const conditionPrimaryResolved = "PrimaryResolved"
 
+// reasonPodHasNoIP is the reason of a member that is not asked because its
+// Pod has no IP yet.
+const reasonPodHasNoIP = "the Pod has no IP yet"
+
 // roleObservationTTL bounds how old a role observation may be and still count
 // (ADR-0005 "observation older than TTL -> unknown"). Each reconcile polls
 // every member afresh with a 5s timeout, so a valid snapshot is never older
@@ -69,15 +73,22 @@ func memberNames(cluster *databasev1alpha1.CubridCluster, count int32) []string 
 // PrimaryResolved / HAReady conditions. It returns the resolution so callers
 // (e.g. the broker tier's RoutingReady) can reuse it.
 func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) PrimaryResolution {
-	res, _, _ := r.observeHAStatus(ctx, cluster, count)
+	res, _, _ := r.observeHAStatus(ctx, cluster, count, nil)
 	return res
 }
 
 // observeHAStatus is reconcileHAStatus, and returns the observations and the
 // time of the pass as well. A pass that resolves the primary records it as
 // status.lastResolvedPrimary, which is never cleared.
+//
+// pods are the members' Pods read before the probes, or nil when they were
+// not read. A member whose Pod has no IP yet, as a Pod recreated after a node
+// fence that stays Pending (#1003), is not asked: nothing could answer for
+// it, and the probe would only wait out its timeout. It is recorded at once
+// as a member that did not answer, with reasonPodHasNoIP, which is no
+// evidence of its role (ADR-0005). Every other member is asked.
 func (r *CubridClusterReconciler) observeHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	count int32) (PrimaryResolution, map[string]RoleObservation, time.Time) {
+	count int32, pods map[string]memberIdentity) (PrimaryResolution, map[string]RoleObservation, time.Time) {
 	members := memberNames(cluster, count)
 
 	obs := make(map[string]RoleObservation, len(members))
@@ -87,7 +98,12 @@ func (r *CubridClusterReconciler) observeHAStatus(ctx context.Context, cluster *
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			o := r.Prober.ProbeRole(ctx, name, cluster.Namespace)
+			var o RoleObservation
+			if id := pods[name]; id.PodUID != "" && id.NoPodIP {
+				o = RoleObservation{Reachable: false, ObservedAt: r.now(), Reason: reasonPodHasNoIP}
+			} else {
+				o = r.Prober.ProbeRole(ctx, name, cluster.Namespace)
+			}
 			mu.Lock()
 			obs[name] = o
 			mu.Unlock()

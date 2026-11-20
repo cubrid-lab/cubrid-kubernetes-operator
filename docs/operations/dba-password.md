@@ -270,6 +270,12 @@ The reference cannot change, and a changed value in the Secret is never
 applied. The running server keeps the password the database has; the kubelet
 updates the mounted file, but nothing sets it as the password.
 
+In v0.1 there is no supported way to change the DBA password of a running
+cluster, including after a suspected compromise of the current one. A
+restore keeps the password of the database the backup was taken from. The
+maintainers decided on 2026-11-20 that changing the password of an initialized
+cluster is not part of v0.1; it is tracked as backlog work in #1012.
+
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
 ([HA clusters](#ha-clusters)), the Operator asks that member's Instance

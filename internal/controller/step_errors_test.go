@@ -214,6 +214,9 @@ var _ = Describe("Errors of the Broker tier and rolling update writes (#799)", f
 			}
 			Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 			DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pod))).To(Succeed()) })
+			// A started Pod has an IP; one without is not asked its role.
+			pod.Status.PodIP = memberTestPodIP
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 		}
 		sts := &appsv1.StatefulSet{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), sts)).To(Succeed())

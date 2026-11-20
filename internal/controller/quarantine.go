@@ -61,6 +61,12 @@ type memberIdentity struct {
 	TerminatedAt, DeletionRequested time.Time
 	// NodeName is the node the Pod is scheduled on; empty while it is not.
 	NodeName string
+	// NoPodIP is set when the Pod has no status.podIP, as a Pod not
+	// scheduled or not started yet. Such a member is not asked its role
+	// (observeHAStatus). A Pod that gets its IP between the reads before and
+	// after the probes differs between them and verifies nothing in that
+	// pass, which it could not have done anyway without being asked.
+	NoPodIP bool
 }
 
 // terminationSkew is how much earlier than the deletion request the kubelet
@@ -1345,14 +1351,14 @@ const reasonWriteQuarantineOtherCluster = "WriteQuarantineClusterUIDMismatch"
 // writesHeld reports whether the read-write Brokers are kept at zero in this
 // pass: while a quarantine is in force; while this reconciler holds one it
 // decided and has not seen released (quarantineHolds), whatever the status
-// read says; on the pass that releases one, whose release is written to the
-// status before the Brokers are started again.
+// read says; on the pass that releases one, until its release is written to
+// the status (reconcileReport.releaseWritten).
 func (r *CubridClusterReconciler) writesHeld(cluster *databasev1alpha1.CubridCluster) bool {
 	if cluster.Status.WriteQuarantine != nil || r.heldQuarantine(cluster) != nil {
 		return true
 	}
 	report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster))
-	return ok && report.(*reconcileReport).before.WriteQuarantine != nil
+	return ok && report.(*reconcileReport).before.WriteQuarantine != nil && !report.(*reconcileReport).releaseWritten
 }
 
 // scaleUpHeld reports whether this pass keeps the read-write Brokers from
@@ -1608,7 +1614,8 @@ func (r *CubridClusterReconciler) memberIdentities(ctx context.Context, cluster 
 		}
 		id := memberIdentity{PodUID: string(pod.UID), Terminated: podTerminated(&pod), Created: pod.CreationTimestamp.Time,
 			Deleting: pod.DeletionTimestamp != nil, DeletionGrace: deletionGrace(&pod),
-			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod), NodeName: pod.Spec.NodeName}
+			TerminatedAt: terminatedAt(&pod), DeletionRequested: deletionRequested(&pod), NodeName: pod.Spec.NodeName,
+			NoPodIP: pod.Status.PodIP == ""}
 		for _, c := range pod.Status.ContainerStatuses {
 			if c.Name == appName {
 				id.RestartCount = c.RestartCount
@@ -1852,7 +1859,7 @@ func (h *quarantineHold) rememberEndedExemptions(before, after *databasev1alpha1
 
 // quarantineRetry is how soon the pass is retried for the write quarantine,
 // zero for the usual cadence: a second after a release, so that the next pass
-// starts the read-write Brokers; unverifiedResyncInterval while a quarantine
+// reports the read-write Brokers the releasing pass started; unverifiedResyncInterval while a quarantine
 // is in force or a member is unverified (watchful); releaseRetry after a
 // release annotation that could not be applied, but never later than a
 // watchful pass would be.

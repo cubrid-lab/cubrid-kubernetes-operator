@@ -163,3 +163,60 @@ func TestStartingPrimaryToleratesOnlyAnIncompleteObservation(t *testing.T) {
 		})
 	}
 }
+
+// TestAfterOverlapPrimaryRecordsAnIncompleteObservation checks the window
+// after the overlap of the S14 token steps (#438). There the contract requires
+// that the members refuse none of the operator's requests, and states no
+// PrimaryResolved window. A False with PrimaryObservationIncomplete, which the
+// Operator reports while it cannot read a member's role (ADR-0005), is
+// therefore recorded and read again instead of failing the step. Any other
+// reading, two primaries above all, and a failed read still end it at once.
+func TestAfterOverlapPrimaryRecordsAnIncompleteObservation(t *testing.T) {
+	type reading struct{ status, reason string }
+	resolved := reading{"True", "SinglePrimaryObserved"}
+	incomplete := reading{"False", "PrimaryObservationIncomplete"}
+	readErr := errors.New("kubectl get failed")
+	// reads answers each call with the next reading, and the last one after.
+	reads := func(seq ...any) func() (string, string, error) {
+		i := 0
+		return func() (string, string, error) {
+			next := seq[min(i, len(seq)-1)]
+			i++
+			if err, ok := next.(error); ok {
+				return "", "", err
+			}
+			r := next.(reading)
+			return r.status, r.reason, nil
+		}
+	}
+	for name, tc := range map[string]struct {
+		read           func() (string, string, error)
+		wantIncomplete int
+		wantErr        string
+	}{
+		"resolved throughout": {read: reads(resolved)},
+		"a transient incomplete observation": {read: reads(resolved, incomplete, incomplete, resolved),
+			wantIncomplete: 2},
+		"two primaries": {read: reads(resolved, reading{"False", "MultiplePrimariesObserved"}),
+			wantErr: "MultiplePrimariesObserved"},
+		"no primary": {read: reads(reading{"False", "NoPrimaryObserved"}), wantErr: "NoPrimaryObserved"},
+		"an ambiguous observation": {read: reads(reading{"False", "AmbiguousPrimaryObservation"}),
+			wantErr: "AmbiguousPrimaryObservation"},
+		"an unknown status": {read: reads(reading{"Unknown", "PrimaryObservationIncomplete"}),
+			wantErr: "Unknown"},
+		"a failed read":                         {read: reads(resolved, readErr), wantErr: "kubectl get failed"},
+		"a failed read after an incomplete one": {read: reads(incomplete, readErr), wantErr: "kubectl get failed"},
+		"two primaries after an incomplete one": {read: reads(incomplete, reading{"False", "MultiplePrimariesObserved"}),
+			wantErr: "MultiplePrimariesObserved"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := afterOverlapPrimary(tc.read, 50*time.Millisecond, 10*time.Millisecond)
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("error %v, want one containing %q", err, tc.wantErr)
+			}
+			if tc.wantErr == "" && len(got) != tc.wantIncomplete {
+				t.Errorf("incomplete readings %q, want %d", got, tc.wantIncomplete)
+			}
+		})
+	}
+}

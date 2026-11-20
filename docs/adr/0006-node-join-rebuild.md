@@ -219,10 +219,115 @@ Decided from **durable identity markers, not pod lifecycle**:
   operation marker owned by this rebuild op.
 - **Blocked** — marker missing but data exists; marker belongs to another
   cluster/member/DB; data unvalidatable; former primary + another primary
-  resolved.
+  resolved, with the former primary's data retained. A former primary whose
+  storage was replaced is rebuilt only under the rule in the next section.
 
 Ambiguity default: **quarantine + manual decision.** Never start ambiguous
 stale data as authoritative; never restore over unknown existing data.
+
+### Rebuilding a former primary whose storage was replaced (#117)
+
+*Proposed on 2026-11-20 UTC, pending maintainer review.* It amends the
+rebuild request that #963 added (`status.memberRebuildOffers` and the
+annotation `database.cubrid.io/rebuild-member`, described in
+docs/observability.md).
+
+**The gap.** The rebuild request refuses the member that
+`status.lastResolvedPrimary` names. That field moves only in a pass in which
+every member answers and exactly one is the master (ADR-0005, section 3). A
+member that lost its storage has no database and gives no role, so when the
+lost member was the primary, the field keeps naming it for as long as it is
+lost, and the member can never be rebuilt. Storage loss on the primary is the
+main case of the PVC-loss rebuild (scenario S10).
+
+**What must never happen.**
+
+- The Operator chooses whose data survives, or promotes a member (ADR-0005,
+  section 6).
+- Data that may hold the newest acknowledged writes is overwritten or
+  deleted without a person's explicit choice.
+- A rebuild request ends or bypasses a write quarantine or its manual
+  release.
+- `PrimaryResolved` or `lastResolvedPrimary` is derived from anything but a
+  complete, fresh observation of every member (ADR-0005, section 3).
+
+**Rule.** The member that `status.lastResolvedPrimary` names is offered a
+rebuild, and its request is accepted, only when all of these hold:
+
+1. **Every condition of an ordinary rebuild holds.** The HA bootstrap has
+   copied the database to every member, the member is recorded as holding
+   it, no rebuild is in progress, the member does not report itself master,
+   and its data claim is a replacement: a claim of the member is recorded
+   running the database (`status.memberDataClaims`), the current claim has
+   another UID, it was created before the member's Pod, and it is bound to a
+   volume that no member was recorded running the database on. The former
+   primary's old claim and volume are therefore never the restore target,
+   and the Operator never deletes a claim or a volume.
+2. **Exactly one other member is the active master, by fresh,
+   identity-matched observations.** In the same observation, one other member
+   answers as an active master (the master role, an active server and its
+   own line of the node list saying master), every remaining member answers
+   as a slave, every answer is fresh and consistent, and no member's Pod UID
+   changed between the reads before and after the probes. That member is the
+   source. It is the primary that `PrimaryResolved` would name if the lost
+   member answered as a slave; it is not recorded as resolved, and
+   `lastResolvedPrimary` does not move. The offer is bound to the source and
+   its Pod, and a request is accepted only while the stored offer still binds
+   them, so the same source Pod is seen as the only active master in at least
+   two passes: the one that published the token and the one that accepts it.
+3. **No write quarantine is in force.** While the lost former primary is
+   unverified beside one active master, ADR-0005, section 8, rule 2 closes
+   the managed write path. That quarantine ends only through its own release:
+   in this case the manual release, in which the administrator accepts that
+   writes only the lost member acknowledged may be lost, or the
+   out-of-service fence of option (b). The rebuild request never releases it,
+   is refused while it is in force, and an accepted rebuild is withdrawn when
+   one starts.
+4. **The administrator states which data the member gets.** The offer is
+   published with `formerPrimary: true`, and the request must name the source
+   as a third field: `"<member>:<token>:<source>"`. The value states that the
+   member's former data is gone and that the source's data becomes the
+   member's data, although the source may lack writes the former primary
+   acknowledged before it lost its storage. A request for such an offer
+   without the third field is refused, and one naming another member is
+   ignored. Every other member's request keeps the form `"<member>:<token>"`,
+   and a third field on it is ignored. The accepted rebuild records
+   `formerPrimary: true` in `status.memberRebuild`, and its Event names the
+   data that was accepted.
+
+An accepted rebuild that was requested without the acknowledgement is
+withdrawn when its member becomes the last resolved primary.
+
+**Why this picks no winner.** CUBRID chose the source by its own failover;
+the Operator only checks that exactly one member claims the active-master
+role, as it does for any rebuild source, and changes no role. The data
+decision is made by a person, twice and separately: the release of the write
+quarantine accepts that writes go to the source while the former primary is
+unverified, and the acknowledgement accepts the source's data as the former
+primary's. Without both, nothing is accepted for restore. The former primary's
+old storage is never written or deleted by the Operator, so if it is found
+again, writes only it held can still be recovered by hand.
+
+**Considered and not chosen.**
+
+- *Waiting until `lastResolvedPrimary` moves.* It never moves while the lost
+  member gives no role, and moving it on a partial observation would weaken
+  `PrimaryResolved`, which section 3 of ADR-0005 forbids.
+- *Allowing the rebuild after the source has been the only active master for
+  a fixed time, without an acknowledgement.* A time without an answer from
+  the former primary proves nothing about the writes it held, and the choice
+  to give up those writes would be made by the Operator.
+- *Letting the acknowledgement release the write quarantine.* The release
+  already has its own one-time token bound to the affected members; a second
+  path to it would make the rebuild a way around the release.
+
+**Not covered.** A former primary whose data is retained (its Pod recreated
+on the same claim, or a retained volume bound to a new claim) stays blocked
+as above. No rebuild is offered without exactly one other active master,
+including when no member is master. The restore itself must still refuse a
+target that holds a database and check the claim, the volume and the cluster
+UID again before writing (#117). The rule is checked by unit and envtest
+tests only; a storage loss on the primary on the VM lab is part of #118.
 
 ### Scale-down / member removal
 
@@ -283,6 +388,9 @@ blocked/catching-up members are excluded from read endpoints.
    catches up; no stray `createdb`.
 3. **Former primary rejoin** — old master returns → not auto-started;
    `FencingRequired`/`Blocked/FormerPrimaryBlocked`.
+   A former primary that lost its storage is rebuilt only after a released
+   write quarantine and a request that names the new master as its source
+   (rule above); without the source named it is refused.
 4. **Operator restart mid-rebuild** — resumes from status + PVC
    checkpoints; no duplicated unsafe actions.
 5. **Manager restart mid-restore** — resumes or blocks safely; no valid DB
