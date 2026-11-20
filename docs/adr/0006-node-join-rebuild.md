@@ -260,7 +260,10 @@ rebuild, and its request is accepted, only when all of these hold:
    and its data claim is a replacement: a claim of the member is recorded
    running the database (`status.memberDataClaims`), the current claim has
    another UID, it was created before the member's Pod, and it is bound to a
-   volume that no member was recorded running the database on. The former
+   volume that no member was recorded running the database on. A record that
+   a later claim of the same member replaced is kept
+   (`status.formerDataClaims`), so a volume a rebuilt member lost is never
+   taken for a replacement either. The former
    primary's old claim and volume are therefore never the restore target,
    and the Operator never deletes a claim or a volume.
 2. **Exactly one other member is the active master, by fresh,

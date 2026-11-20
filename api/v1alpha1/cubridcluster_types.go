@@ -874,6 +874,20 @@ type CubridClusterStatus struct {
 	// +optional
 	MemberDataClaims []MemberDataClaim `json:"memberDataClaims,omitempty"`
 
+	// formerDataClaims keeps every record that memberDataClaims held before
+	// a later claim of the same member replaced it: a claim and a volume
+	// that once held the database. Such a volume may hold the only copy of
+	// writes no other member has, for example the storage of a primary that
+	// was lost and rebuilt, so a claim or volume listed here is never offered
+	// or accepted as a replacement, for any member. Nothing is ever removed
+	// from this list. It holds at most 64 records; once it is full, a
+	// member's later claim is not recorded, its earlier record stays in
+	// memberDataClaims, and no rebuild is offered or accepted any more.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	FormerDataClaims []MemberDataClaim `json:"formerDataClaims,omitempty"`
+
 	// memberRebuildOffers lists the members whose replacement storage an
 	// administrator may ask to have rebuilt from the current primary now,
 	// each with the one-time token that asks for it. A token binds the

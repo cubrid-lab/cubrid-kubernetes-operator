@@ -114,7 +114,7 @@ func TestRecordDataClaims(t *testing.T) {
 	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
 	in := rebuildScenario(now)
 	in.DataClaims = nil
-	got := recordDataClaims(in)
+	got, _ := recordDataClaims(in)
 	if dataClaimOf(got, rbM0) != rbClaim0 || dataClaimOf(got, rbM1) != rbClaim1 {
 		t.Fatalf("the master's and the slave's claims are recorded, got %+v", got)
 	}
@@ -126,7 +126,7 @@ func TestRecordDataClaims(t *testing.T) {
 	}
 
 	in = rebuildScenario(now)
-	got = recordDataClaims(in)
+	got, _ = recordDataClaims(in)
 	if dataClaimOf(got, rbM2) != rbClaim2Old {
 		t.Fatalf("a member that gives no role keeps the claim it was seen running the database on, got %+v", got)
 	}
@@ -134,7 +134,8 @@ func TestRecordDataClaims(t *testing.T) {
 	record := func(mutate func(*rebuildInput)) []databasev1alpha1.MemberDataClaim {
 		in := rebuildScenario(now)
 		mutate(&in)
-		return recordDataClaims(in)
+		got, _ := recordDataClaims(in)
+		return got
 	}
 	got = record(func(in *rebuildInput) {
 		in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
@@ -301,7 +302,7 @@ func TestRebuildRefusal(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			in.DataClaims = recordDataClaims(in)
+			in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
 			got := rebuildRefusal(in, tc.member)
 			if tc.want == "" && got != "" {
 				t.Fatalf("expected no refusal, got %q", got)
@@ -678,7 +679,7 @@ func TestRebuildWithdrawal(t *testing.T) {
 		}, want: rbWantQuarantine},
 		{name: "claim recorded holding the database", mutate: func(in *rebuildInput) {
 			in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
-			in.DataClaims = recordDataClaims(*in)
+			in.DataClaims, in.FormerDataClaims = recordDataClaims(*in)
 		}, want: rbWantNotExpendable},
 	}
 	for _, tc := range cases {
@@ -696,5 +697,84 @@ func TestRebuildWithdrawal(t *testing.T) {
 				t.Fatalf("expected a withdrawal naming %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+// When a member is seen running the database on a later claim, its earlier
+// record is kept in the former records rather than forgotten: that claim and
+// volume held the database, and may hold the only copy of writes no other
+// member has, such as a lost primary's storage (#117, condition 1 of the
+// review of #1018). Nothing is ever removed from the former records; once
+// they are full, the later claim is not recorded and the earlier record
+// stays.
+func TestRecordDataClaimsKeepsFormerRecords(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	in := rebuildScenario(now)
+	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+	claims, former := recordDataClaims(in)
+	if dataClaimOf(claims, rbM2) != rbClaim2New {
+		t.Fatalf("the later claim is the member's record, got %+v", claims)
+	}
+	want := databasev1alpha1.MemberDataClaim{Name: rbM2, ClaimUID: rbClaim2Old, VolumeName: rbPV2Old}
+	if len(former) != 1 || former[0] != want {
+		t.Fatalf("the earlier record is kept as a former record, got %+v", former)
+	}
+
+	in.DataClaims, in.FormerDataClaims = claims, former
+	claims, former = recordDataClaims(in)
+	if len(former) != 1 || dataClaimOf(claims, rbM2) != rbClaim2New {
+		t.Fatalf("an unchanged record adds no former record, got %+v and %+v", claims, former)
+	}
+
+	in = rebuildScenario(now)
+	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+	for i := range maxFormerDataClaims {
+		in.FormerDataClaims = append(in.FormerDataClaims, databasev1alpha1.MemberDataClaim{Name: rbM1,
+			ClaimUID: fmt.Sprintf("claim-1-%d", i), VolumeName: fmt.Sprintf("pv-1-%d", i)})
+	}
+	claims, former = recordDataClaims(in)
+	if len(former) != maxFormerDataClaims || former[0].ClaimUID != "claim-1-0" {
+		t.Fatalf("full former records are kept as they are, got %d records", len(former))
+	}
+	if dataClaimOf(claims, rbM2) != rbClaim2Old {
+		t.Fatalf("with the former records full, the earlier record stays the member's record, got %+v", claims)
+	}
+}
+
+// A volume that an earlier record of any member held is never offered as
+// a replacement. The second member was rebuilt onto a new claim and volume
+// and runs on them; then the third member's storage is replaced, and the
+// volume the second member lost is bound to the third member's new claim.
+// The record of the second member names its new volume only, so without the
+// former records that volume would be offered as new (#117).
+func TestRebuildRefusesAVolumeAFormerRecordHeld(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	in := rebuildScenario(now)
+	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+	in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
+
+	in.Observations[rbM1] = RoleObservation{}
+	in.Identities[rbM1] = memberIdentity{PodUID: "pod-1b", Created: now.Add(-time.Minute)}
+	in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Minute), VolumeName: rbPV2Old}
+	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+	in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
+	if got := rebuildRefusal(in, rbM1); !strings.Contains(got, rbPV2Old) {
+		t.Fatalf("expected a refusal naming the volume %s an earlier record held, got %q", rbPV2Old, got)
+	}
+	if offers, err := rebuildOffers(in); err != nil || len(offers) != 0 {
+		t.Fatalf("expected no offer, got %+v, %v", offers, err)
+	}
+
+	in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Minute), VolumeName: "pv-1-new"}
+	if got := rebuildRefusal(in, rbM1); got != "" {
+		t.Fatalf("a volume no record held is offered, got %q", got)
+	}
+
+	for i := len(in.FormerDataClaims); i < maxFormerDataClaims; i++ {
+		in.FormerDataClaims = append(in.FormerDataClaims, databasev1alpha1.MemberDataClaim{Name: rbM0,
+			ClaimUID: fmt.Sprintf("claim-0-%d", i), VolumeName: fmt.Sprintf("pv-0-%d", i)})
+	}
+	if got := rebuildRefusal(in, rbM1); !strings.Contains(got, "former") {
+		t.Fatalf("expected a refusal once the former records are full, got %q", got)
 	}
 }
