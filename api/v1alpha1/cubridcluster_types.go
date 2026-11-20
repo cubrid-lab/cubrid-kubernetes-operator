@@ -1355,6 +1355,13 @@ type MemberRebuild struct {
 	// message says why the rebuild ended, when it did not complete.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// copy is this rebuild's copy of the database from the source to the
+	// member: the backup and restore operation IDs, the readings taken while
+	// it ran and the catch-up target. It is stored in the status so that an
+	// Operator restart finds the operations it already started and polls
+	// them instead of starting them again.
+	// +optional
+	Copy *DatabaseSeeding `json:"copy,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).
