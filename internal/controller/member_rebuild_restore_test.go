@@ -297,7 +297,7 @@ func TestRebuildCaughtUpCompletesAndIsNotWithdrawn(t *testing.T) {
 // (#1043).
 func TestRebuildQuarantineBeforeTheRestoreStartsNone(t *testing.T) {
 	f := newRebuildCopyFixture(t)
-	f.cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{Reason: "UnverifiedMember"}
+	f.cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{Reason: databasev1alpha1.WriteQuarantinedMemberUnverified}
 	f.seed.backups = map[string]seedBackup{cpBackupKey: {member: cpSource, req: instancemanager.BackupRequest{
 		Database: testDatabase}}}
 	f.cluster.Status.MemberRebuild.Copy = &databasev1alpha1.DatabaseSeeding{Member: cpTarget, Source: cpSource,
@@ -387,7 +387,7 @@ func TestRebuildQuarantineOrGapAfterTheRestoreFails(t *testing.T) {
 			f := newRebuildCopyFixture(t)
 			f.restoreRecorded(instancemanager.OpRestoring)
 			if what == "quarantine" {
-				f.cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{Reason: "UnverifiedMember"}
+				f.cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{Reason: databasev1alpha1.WriteQuarantinedMemberUnverified}
 			} else {
 				at := metav1.NewTime(f.now.Add(-time.Minute))
 				f.cluster.Status.MemberRebuild.Copy.LastVerifiedAt = &at

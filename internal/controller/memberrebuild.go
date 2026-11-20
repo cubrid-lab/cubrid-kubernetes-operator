@@ -254,8 +254,9 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	for _, c := range in.FormerDataClaims {
 		if c.ClaimUID == claim.UID || c.VolumeName != "" && c.VolumeName == claim.VolumeName {
 			return fmt.Sprintf("the data claim of %s is bound to the volume %s, which %s was seen running the "+
-				"database on before a later claim replaced it (status.formerDataClaims); it may hold the only copy "+
-				"of writes no other member has, and its data is not shown expendable", member, claim.VolumeName, c.Name)
+				"database on before a later claim replaced it, or which a failed rebuild of %s restored into "+
+				"(status.formerDataClaims); it may hold the only copy of writes no other member has, or what that "+
+				"restore wrote, and its data is not shown expendable", member, claim.VolumeName, c.Name, c.Name)
 		}
 	}
 	recorded := ""

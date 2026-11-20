@@ -106,17 +106,18 @@ func rebuildReading(in rebuildInput) map[string]RoleObservation {
 // was started. It was once its operation is recorded. A restore that was
 // started in a pass whose status was not written is found by its key on the
 // member, so that the rebuild is never taken for one that restored nothing:
-// the member is asked once the backup is recorded and no restore is. An error
+// the member is asked in every pass in which no restore is recorded, also
+// when nothing of the copy is, as every status write since the acceptance may
+// have been lost. A restore found with no copy recorded is judged from the
+// acceptance on, so the readings missing since then count as a gap. An error
 // says that this cannot be told now.
 func (r *CubridClusterReconciler) rebuildRestoreStarted(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	a *databasev1alpha1.MemberRebuild) (bool, error) {
 	switch {
-	case a == nil || a.Copy == nil:
+	case a == nil || r.Restore == nil:
 		return false, nil
-	case a.Copy.RestoreOperationID != "":
+	case a.Copy != nil && a.Copy.RestoreOperationID != "":
 		return true, nil
-	case a.Copy.BackupOperationID == "" || r.Restore == nil:
-		return false, nil
 	}
 	op, found, err := r.Restore.FindOperation(ctx, a.Member, cluster.Namespace, instancemanager.OpRestore,
 		rebuildRestoreKey(a))
@@ -125,6 +126,10 @@ func (r *CubridClusterReconciler) rebuildRestoreStarted(ctx context.Context, clu
 			a.OperationID, err)
 	}
 	if found {
+		if a.Copy == nil {
+			since := a.AcceptedTime
+			a.Copy = &databasev1alpha1.DatabaseSeeding{Member: a.Member, Source: a.Source, ActiveMasterSince: &since}
+		}
 		a.Copy.RestoreOperationID = op.ID
 	}
 	return found, nil
@@ -150,10 +155,27 @@ func (r *CubridClusterReconciler) endRebuild(cluster *databasev1alpha1.CubridClu
 		r.statusEvent(cluster, corev1.EventTypeNormal, reasonMemberRebuildCompleted, fmt.Sprintf(
 			"rebuilt %s from %s (operation %s): %s", ended.Member, ended.Source, ended.OperationID, why))
 	case databasev1alpha1.MemberRebuildFailed:
+		if ended.Copy == nil || ended.Copy.RestoreOperationID == "" {
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberRebuildFailed, fmt.Sprintf(
+				"the rebuild of %s from %s (operation %s) failed before a restore was started on it: %s. Nothing was "+
+					"restored or deleted", ended.Member, ended.Source, ended.OperationID, why))
+			return
+		}
+		// The claim may hold what the restore wrote, or a restore still in
+		// progress: it is never offered again, so no later request makes the
+		// Instance Manager take it over or remove it.
+		record := databasev1alpha1.MemberDataClaim{Name: ended.Member, ClaimUID: ended.ClaimUID,
+			VolumeName: ended.VolumeName}
+		if !slices.Contains(in.FormerDataClaims, record) && len(in.FormerDataClaims) < maxFormerDataClaims {
+			in.FormerDataClaims = append(slices.Clone(in.FormerDataClaims), record)
+			cluster.Status.FormerDataClaims = in.FormerDataClaims
+		}
 		r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberRebuildFailed, fmt.Sprintf(
-			"the rebuild of %s from %s (operation %s) failed: %s. Nothing was deleted. %s's data claim may hold a "+
-				"partial copy, which is not taken over under another request: a new request needs a new empty claim",
-			ended.Member, ended.Source, ended.OperationID, why, ended.Member))
+			"the rebuild of %s from %s (operation %s) failed: %s. Nothing was deleted, and nothing was stopped: a "+
+				"restore on %s may still be running, and the member may join with what it restored, which is not "+
+				"trusted. Its data claim %s and volume %s are never offered for a rebuild again "+
+				"(status.formerDataClaims); a new request needs a new empty claim",
+			ended.Member, ended.Source, ended.OperationID, why, ended.Member, ended.ClaimUID, ended.VolumeName))
 	}
 }
 
@@ -164,8 +186,11 @@ func (r *CubridClusterReconciler) endRebuild(cluster *databasev1alpha1.CubridClu
 //
 // A write quarantine in the status, a change of the member's claim or volume
 // or of the source's Pod, a failed or unrelated restore, a change of master
-// or a gap in the readings ends the rebuild Failed: something was restored,
-// so it is not Withdrawn, and nothing is deleted. Otherwise it is Completed
+// or a gap in the readings ends the rebuild Failed: something may have been
+// restored, so it is not Withdrawn, nothing is deleted or stopped, and the
+// member's claim and volume are never offered again (endRebuild). A restore
+// the member refused because its source was not confirmed as the active
+// master wrote nothing, and ends the rebuild Withdrawn. Otherwise it is Completed
 // only when the restore completed and the member answers as a slave that
 // caught up with its source (seedVerdict, #768): a restore that finished does
 // not make the member healthy. A pass whose Pods or claims could not be read
@@ -232,6 +257,15 @@ func (r *CubridClusterReconciler) judgeRebuildRestore(ctx context.Context, clust
 	obs := rebuildReading(*in)
 	gap := recordSeedReading(cp, rebuildHolders(*in, a.Member), obs, in.Now, true, completed)
 	if err == nil && restore.State == instancemanager.OpFailed {
+		if restore.FailureCode == instancemanager.FailureRebuildSourceUnconfirmed ||
+			restore.FailureCode == instancemanager.FailureRebuildSourceNotMaster {
+			// The Instance Manager asks the source before it touches the
+			// target or stages anything (#1047), so nothing was restored.
+			r.endRebuild(cluster, in, databasev1alpha1.MemberRebuildWithdrawn, fmt.Sprintf(
+				"%s refused the restore before writing anything, because %s was not confirmed as the active master "+
+					"(%s: %s)", a.Member, a.Source, restore.FailureCode, restore.FailureReason))
+			return
+		}
 		why := restore.FailureReason
 		if restore.FailureCode != "" {
 			why = restore.FailureCode + ": " + why
@@ -396,6 +430,13 @@ func (r *CubridClusterReconciler) rebuildRestoreRecheck(ctx context.Context, clu
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
+	}
+	var stored databasev1alpha1.CubridCluster
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(cluster), &stored); err != nil {
+		return fmt.Sprintf("the stored cluster could not be read: %v", err)
+	}
+	if q := stored.Status.WriteQuarantine; q != nil {
+		return fmt.Sprintf("the stored status holds a write quarantine (%s)", q.Reason)
 	}
 	var pod corev1.Pod
 	err := reader.Get(ctx, client.ObjectKey{Name: a.Source, Namespace: cluster.Namespace}, &pod)

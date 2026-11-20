@@ -1358,7 +1358,9 @@ example after its rebuild, its earlier record moves to
 `status.formerDataClaims` and is never removed: the volume it names may hold
 the only copy of writes no other member has, such as a lost primary's
 storage, and is never taken for a replacement of any member if it is bound to
-a new claim. That list holds at most 64 records. Once it is full, a later
+a new claim. The claim and volume of a rebuild that ended `Failed` after its
+restore was started are added there too, as they may hold what that restore
+wrote, and are never offered for a rebuild again. That list holds at most 64 records. Once it is full, a later
 claim is not recorded, the member's earlier record stays in
 `status.memberDataClaims`, and no rebuild is offered or accepted for any
 member of the cluster: every request is refused with "the list is full". The
@@ -1546,8 +1548,16 @@ the copy in `status.memberRebuild.copy`:
   active master, and refuses a target that already holds a database.
 - Every operation is recorded once started and only polled from then on. An
   Operator restart keeps the operation ID and the keys and polls the
-  recorded operations; a restore started in a pass whose status was not
-  written is found by its key.
+  recorded operations. While no restore is recorded, the member is asked in
+  every observation for a restore under the rebuild's key, so a restore
+  started in passes whose status writes were lost is found and judged as
+  below; with no copy recorded at all, it is judged from the acceptance on,
+  which counts as a gap in the readings. While the member cannot be asked,
+  the rebuild is neither copied nor withdrawn, and the reconcile error says
+  so.
+- The backups under `rebuild-<operationID>/` in object storage are not
+  removed by the Operator, whatever the outcome; remove them by hand once
+  they are not needed.
 
 Until the restore is started, the rebuild can be withdrawn as above. A change
 of master or more than 30 seconds without a reading that confirms the source
@@ -1570,9 +1580,18 @@ decided first, by the same rule as a member seeded by the HA bootstrap
   the source's Pod changed, the restore failed or restored another backup,
   another member (or the member itself) reported itself master or the source
   reported itself a slave, or no reading confirmed the source as the only
-  master for more than 30 seconds. Nothing is deleted. The member's claim
-  may hold a partial copy, which the Instance Manager does not take over
-  under another request: a new request needs a new empty claim.
+  master for more than 30 seconds. An Operator that is unavailable for more
+  than 30 seconds while a restore runs therefore fails the rebuild. Nothing
+  is deleted, and nothing is stopped: the restore on the member may still be
+  running, and the member may join the group with what it restored, which
+  is not trusted. The member's claim and volume are added to
+  `status.formerDataClaims` and never offered for a rebuild again, so no
+  later request makes the Instance Manager take over or remove what the
+  failed restore left: a new request needs a new empty claim.
+- It is `Withdrawn` when the member's Instance Manager refused the restore
+  with `RebuildSourceUnconfirmed` or `RebuildSourceNotMaster`: it asks the
+  source before it touches the target, so nothing was restored, and the
+  claim can be offered again.
 
 An accepted request has no other way out: removing the annotation does not
 cancel it.
