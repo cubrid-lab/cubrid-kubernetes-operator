@@ -250,7 +250,7 @@ func observe(ctx context.Context, limit, stop time.Duration, fn func(context.Con
 	}()
 	select {
 	case r := <-result:
-		return r.done, r.err
+		return settle(ctx, r)
 	case <-ctx.Done():
 	}
 	select {
@@ -259,6 +259,17 @@ func observe(ctx context.Context, limit, stop time.Duration, fn func(context.Con
 	case <-time.After(stop):
 		return false, errStepStillRunning
 	}
+}
+
+// settle returns what fn returned. When the limit passes while fn runs, fn can
+// return the context error at the moment ctx.Done() becomes ready, and
+// observe's select picks either case at random; a context error returned
+// after the limit is the limit passing, not an expectation that broke.
+func settle(ctx context.Context, r observed) (bool, error) {
+	if r.err != nil && ctx.Err() != nil && errors.Is(r.err, ctx.Err()) {
+		return false, errStepTimeout
+	}
+	return r.done, r.err
 }
 
 // bounded is observe for a step that only succeeds or fails.
