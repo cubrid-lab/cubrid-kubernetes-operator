@@ -28,11 +28,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1699,9 +1701,18 @@ const maxSourceRoleAnswer = 1 << 20
 
 // defaultSourceRoleURL is the role endpoint of member's Instance Manager in
 // namespace: the member's per-member Service (ADR-0004), named as the
-// Operator names it, <member>.<namespace>.svc, on the manager's port.
-func defaultSourceRoleURL(member, namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc:%d/v1/role", member, namespace, DefaultPort)
+// Operator names it, <member>.<namespace>.svc, on the manager's port. Both
+// names must be DNS labels; anything else could name another host, a user
+// or a port, and is refused before an address is built from it.
+func defaultSourceRoleURL(member, namespace string) (string, error) {
+	if !hostLabelPattern.MatchString(member) {
+		return "", fmt.Errorf("the source %q is not a member name (a DNS label)", member)
+	}
+	if !hostLabelPattern.MatchString(namespace) {
+		return "", fmt.Errorf("this manager's namespace %q (POD_NAMESPACE) is not a DNS label", namespace)
+	}
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(member+"."+namespace+".svc", strconv.Itoa(DefaultPort)), Path: "/v1/role"}
+	return u.String(), nil
 }
 
 // confirmRebuildSource asks the Instance Manager of source, with this
@@ -1726,10 +1737,13 @@ func (s *Server) confirmRebuildSource(ctx context.Context, source string) (strin
 	switch {
 	case s.sourceRoleURL != nil:
 		address = s.sourceRoleURL(source)
-	case hostLabelPattern.MatchString(s.namespace):
-		address = defaultSourceRoleURL(source, s.namespace)
-	default:
+	case s.namespace == "":
 		return unconfirmed("this manager does not know its namespace (POD_NAMESPACE), which qualifies the source's address")
+	default:
+		var err error
+		if address, err = defaultSourceRoleURL(source, s.namespace); err != nil {
+			return unconfirmed(err.Error())
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {

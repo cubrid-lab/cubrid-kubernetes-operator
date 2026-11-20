@@ -394,8 +394,61 @@ func TestServer_RestoreWithoutRebuild_KeepsTheBootstrapSeedBehaviour(t *testing.
 // would be completed by the DNS search list, and the token could go to
 // whatever host that list makes of it.
 func TestSourceRoleURL_IsTheMemberServiceInTheNamespace(t *testing.T) {
-	if got, want := defaultSourceRoleURL("demo-0", "shop"), "http://demo-0.shop.svc:9090/v1/role"; got != want {
-		t.Errorf("defaultSourceRoleURL = %q, want %q", got, want)
+	got, err := defaultSourceRoleURL("demo-0", "shop")
+	if want := "http://demo-0.shop.svc:9090/v1/role"; err != nil || got != want {
+		t.Errorf("defaultSourceRoleURL = %q, %v; want %q", got, err, want)
+	}
+}
+
+// names that are no DNS label: each could name another host, a user, a port
+// or a path in an address.
+var notMemberNames = []string{"demo-0.evil.example", "demo-0/x", "user@demo-0", "demo-0:80", "Demo-0",
+	strings.Repeat("a", 64), "", "-demo", "demo-"}
+
+// No address is built from a source or a namespace that is not a DNS label.
+func TestSourceRoleURL_RefusesNamesThatAreNoDNSLabel(t *testing.T) {
+	for _, name := range notMemberNames {
+		if got, err := defaultSourceRoleURL(name, "shop"); err == nil {
+			t.Errorf("defaultSourceRoleURL(source %q) = %q, want a refusal", name, got)
+		}
+		if got, err := defaultSourceRoleURL("demo-0", name); err == nil {
+			t.Errorf("defaultSourceRoleURL(namespace %q) = %q, want a refusal", name, got)
+		}
+	}
+}
+
+// A rebuild restore whose source is not a member name is answered 400 before
+// it is recorded, so no request is ever sent to an address built from it.
+func TestServer_RebuildRestore_RefusesASourceThatIsNoMemberName(t *testing.T) {
+	for _, name := range notMemberNames {
+		t.Run(name, func(t *testing.T) {
+			fake, bucket, prefix := stageUploadedArtifact(t)
+			objects := &countingStore{fakeObjectStore: fake}
+			req := baseRestoreRequest(t, bucket, prefix)
+			req.SeedFromMaster, req.ExpectedMember = name, namedMember
+			b := testRebuild
+			req.Rebuild = &b
+			rr, cli, storeDir, _ := postRestore(t, namedMember, req, objects)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("rebuild restore from %q = %d (%s), want 400", name, rr.Code, strings.TrimSpace(rr.Body.String()))
+			}
+			if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 {
+				t.Errorf("refused request ran %q and read the artifact %d times", calls, objects.gets)
+			}
+			if entries, err := os.ReadDir(storeDir); err != nil || len(entries) != 0 {
+				t.Errorf("refused request changed the operation store: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+// A manager whose POD_NAMESPACE is not a DNS label asks nobody either.
+func TestServer_RebuildRestore_WithAnInvalidNamespaceAsksNobody(t *testing.T) {
+	srv := NewServer(&stepCLI{}, "tok").WithNamespace("shop.evil.example")
+	code, err := srv.confirmRebuildSource(t.Context(), seedMaster)
+	if code != FailureRebuildSourceUnconfirmed || err == nil || !strings.Contains(err.Error(), "POD_NAMESPACE") {
+		t.Errorf("confirmRebuildSource with an invalid namespace = %q, %v; want %q naming POD_NAMESPACE",
+			code, err, FailureRebuildSourceUnconfirmed)
 	}
 }
 
