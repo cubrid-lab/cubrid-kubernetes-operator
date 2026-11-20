@@ -213,12 +213,14 @@ type s15Record struct {
 	// RejoinedAt is when, after the node was uncordoned, the member ran on
 	// it again and the cluster converged; FinalMaster the master then.
 	RejoinedAt *time.Time `json:"rejoinedAt,omitempty"`
-	// TwoMasters names two members that reported themselves active masters
-	// in two consecutive sweeps while the member was missing; dualMasters
-	// counts the consecutive sweeps. OthersChanged names a member other than
-	// the drained one whose Pod or container changed by the end.
+	// TwoMasters names the members that reported themselves active masters
+	// in two consecutive sweeps, while the member was missing or after it
+	// came back; lastMasters are the active masters of the last sweep.
+	// OthersChanged names a member other than the drained one whose Pod was
+	// replaced or whose database container restarted, as soon as it is seen
+	// while the member is missing, or by the end.
 	TwoMasters    []string `json:"twoActiveMasters,omitempty"`
-	dualMasters   int
+	lastMasters   []string
 	OthersChanged []string `json:"otherMembersChanged,omitempty"`
 	FinalMaster   string   `json:"finalMaster,omitempty"`
 	// Observed are the run's observations in time order, in UTC.
@@ -557,10 +559,13 @@ func (h *haRun) settleUncordon(rec *s15Record, by string) {
 	rec.note("uncordoned", rec.TargetNode+" by "+by)
 }
 
-// s15EndUncordonBound bounds the uncordon at the run's end. The lab's
-// launcher kills the run 2 seconds after its SIGTERM, so it must not wait
-// for a step still running.
-var s15EndUncordonBound = 10 * time.Second
+// s15EndUncordonBound bounds the uncordon that starts when the run's context
+// ends. The lab's launcher sends SIGKILL 2 seconds after its SIGTERM on a
+// lost Lease, so the attempt ends before that and writes cordon.json either
+// way: a node it could not uncordon in time is recorded (uncordonError)
+// before the kill. A run that is not killed tries again at the scenario's
+// end (endDrainCordon) for s15CleanupBound.
+var s15EndUncordonBound = 1500 * time.Millisecond
 
 // s15LateCordonWait is how long the uncordon waits to read the node again
 // when the run asked to cordon it, never saw the cordon confirmed, and finds
@@ -991,6 +996,9 @@ func (h *haRun) whileDrained(ctx context.Context, rec *s15Record) (bool, error) 
 	if err != nil {
 		return false, err
 	}
+	if err := h.observeOthers(ctx, rec); err != nil {
+		return false, err
+	}
 	if rec.SecondMember != "" && (rec.SecondEviction == "" || rec.SecondEviction == evictionThrottled) {
 		if err := h.secondEviction(ctx, rec); err != nil {
 			return false, err
@@ -1058,16 +1066,9 @@ func (h *haRun) observeDegraded(ctx context.Context, rec *s15Record, now time.Ti
 func (h *haRun) observeSurvivors(ctx context.Context, rec *s15Record, now time.Time) (bool, error) {
 	survivors := slices.DeleteFunc(slices.Clone(h.members), func(m string) bool { return m == rec.TargetPod.Pod })
 	masters, _, unmet := h.survivorRoles(ctx, survivors)
-	if unmet == "" && len(masters) > 1 {
-		// One sweep can catch a promotion under way; two in a row cannot.
-		if rec.dualMasters++; rec.dualMasters >= 2 {
-			rec.TwoMasters = masters
-			return false, fmt.Errorf("two members reported themselves active masters in two consecutive sweeps: %s",
-				strings.Join(masters, " and "))
-		}
-		return false, nil
+	if err := rec.sweepMasters(masters, unmet); err != nil || len(masters) > 1 {
+		return false, err
 	}
-	rec.dualMasters = 0
 	if unmet != "" || len(masters) != 1 {
 		return false, nil
 	}
@@ -1090,6 +1091,82 @@ func (h *haRun) observeSurvivors(ctx context.Context, rec *s15Record, now time.T
 		return false, fmt.Errorf("the master changed a second time, from %s to %s", rec.NewMaster, masters[0])
 	}
 	return true, nil
+}
+
+// sweepMasters judges the active masters of one sweep of the members, while
+// the drained member is missing and after it came back, as the contract's
+// S03 never-event does (faults.CheckOneMaster): two members that report
+// themselves active masters in two consecutive sweeps are recorded
+// (TwoMasters) and returned as an error. A single sweep that shows two is
+// recorded as an observation, as one sweep can catch a handover between its
+// reads; a sweep whose roles were not all read breaks the sequence.
+func (rec *s15Record) sweepMasters(masters []string, unmet string) error {
+	if unmet != "" {
+		rec.lastMasters = nil
+		return nil
+	}
+	last := rec.lastMasters
+	rec.lastMasters = masters
+	if len(masters) > 1 {
+		rec.note("two_active_masters_in_one_sweep", strings.Join(masters, " and "))
+	}
+	err := faults.CheckOneMaster(last, masters)
+	if err != nil {
+		rec.TwoMasters = slices.DeleteFunc(slices.Clone(masters), func(m string) bool {
+			return !slices.Contains(last, m)
+		})
+	}
+	return err
+}
+
+// observeOthers records each member other than the drained one whose Pod is
+// gone or replaced, or whose database container restarted, since before the
+// drain, and returns them as an error: S03 graceful lets only the deleted
+// member change. A Pod that cannot be read is read again on the next poll.
+func (h *haRun) observeOthers(ctx context.Context, rec *s15Record) error {
+	var changed []string
+	for _, was := range rec.MembersBefore {
+		if was.Pod == rec.TargetPod.Pod {
+			continue
+		}
+		pod := &corev1.Pod{}
+		err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: was.Pod}, pod)
+		if err != nil && !apierrors.IsNotFound(err) {
+			continue
+		}
+		if change := memberChange(was, pod, err != nil); change != "" {
+			changed = append(changed, change)
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	rec.OthersChanged = changed
+	rec.note("other_members_changed", strings.Join(changed, "; "))
+	return fmt.Errorf("a member other than %s was replaced or restarted while it was missing: %s", rec.TargetPod.Pod,
+		strings.Join(changed, "; "))
+}
+
+// memberChange says how pod is no longer the member was, or "".
+func memberChange(was imageIdentity, pod *corev1.Pod, gone bool) string {
+	if gone || pod.DeletionTimestamp != nil {
+		return fmt.Sprintf("%s, Pod UID %s, is gone or being deleted", was.Pod, was.UID)
+	}
+	if string(pod.UID) != was.UID {
+		return fmt.Sprintf("%s has Pod UID %s, was %s", was.Pod, pod.UID, was.UID)
+	}
+	for _, s := range pod.Status.ContainerStatuses {
+		if s.Name != databaseContainer {
+			continue
+		}
+		if s.ContainerID != "" && s.ContainerID != was.ContainerID {
+			return fmt.Sprintf("%s has container %s, was %s", was.Pod, s.ContainerID, was.ContainerID)
+		}
+		if t := s.LastTerminationState.Terminated; t != nil && t.ContainerID == was.ContainerID {
+			return fmt.Sprintf("%s restarted its database container %s", was.Pod, was.ContainerID)
+		}
+	}
+	return ""
 }
 
 // newConnectionProbe writes one ledger row through a new connection to the
@@ -1131,6 +1208,9 @@ func (h *haRun) newConnectionProbe(ctx context.Context, rec *s15Record) {
 // master and the starting conditions True.
 func (h *haRun) waitRejoin(ctx context.Context, rec *s15Record) error {
 	deadline := time.Now().Add(s15RejoinBound)
+	// The sweeps after the uncordon read all three members, those before
+	// only the two that ran: they are not consecutive sweeps of the same set.
+	rec.lastMasters = nil
 	var last string
 	for {
 		h.observeEndpoints(ctx, rec)
@@ -1176,18 +1256,26 @@ func (h *haRun) rejoined(ctx context.Context, rec *s15Record) (bool, string, err
 				m.Node, rec.TargetNode)
 		}
 	}
-	roles, unmet, err := h.roles(ctx)
-	if err != nil || unmet != "" {
-		return false, unmet, err
+	// Two active masters in two consecutive sweeps are the never-event, not
+	// a cluster still converging (sweepMasters).
+	masters, slaves, unmet := h.survivorRoles(ctx, h.members)
+	if err := rec.sweepMasters(masters, unmet); err != nil {
+		return false, "", err
 	}
-	if cluster.Status.CurrentPrimary != roles.Master {
+	switch {
+	case unmet != "":
+		return false, unmet, nil
+	case len(masters) != 1 || len(slaves) != haMemberCount-1:
+		return false, fmt.Sprintf("CUBRID reports masters %v and slaves %v", masters, slaves), nil
+	}
+	if cluster.Status.CurrentPrimary != masters[0] {
 		return false, fmt.Sprintf("status.currentPrimary is %q and CUBRID reports %s as master",
-			cluster.Status.CurrentPrimary, roles.Master), nil
+			cluster.Status.CurrentPrimary, masters[0]), nil
 	}
 	if unmet, err := clusterReady(cluster); unmet != "" || err != nil {
 		return false, unmet, err
 	}
-	rec.MembersAfter, rec.FinalMaster = members, roles.Master
+	rec.MembersAfter, rec.FinalMaster = members, masters[0]
 	if rec.OthersChanged = changedMembers(rec.MembersBefore, members, rec.TargetPod.Pod); len(rec.OthersChanged) > 0 {
 		return false, "", fmt.Errorf("a member other than %s was replaced or restarted: %s", rec.TargetPod.Pod,
 			strings.Join(rec.OthersChanged, "; "))
