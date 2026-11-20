@@ -136,6 +136,97 @@ real network partition, which need the VM lab.
 
 ## Recorded runs
 
+### 2026-11-20, two-masters-child-write-denied, main at `6329316a`
+
+Manual runs on one disposable Kind node (Kubernetes v1.37.0). The manager
+and Instance Manager images were built from `6329316a` with `make
+docker-build` and `make docker-build-instance-manager`. The script was this
+directory's, committed on top (`05e1322e` for the first run, `fe2aad64` for
+the second). The raw evidence is kept outside the repository, in
+`~/lab-evidence/kind-quarantine-20261120T181100Z` (`run1`, `run2`, and
+`host` for the cluster's creation) on the machine that ran it. The host was
+shared and loaded (load average 15 to 25 on 6 CPUs), so the timings are not
+baselines. As on 2026-11-18, the Kind node boot wait and the kubeadm
+timeouts were raised, etcd ran on tmpfs, `fs.inotify.max_user_instances` was
+raised to 512 for the runs, and the helper images were imported with `ctr`.
+Each run formed its own cluster.
+
+**First run (`run1`): reported FAIL because of a bug in the script.** The
+script's release step returned the status of its loop's last test, which
+fails when no release refusal is reported, so it printed `FAIL the quarantine
+was not released by its token within 600s` 10 s after it set the annotation.
+The release had taken place: `status.lastWriteQuarantineRelease` showed
+method `Manual`, reason `WriteQuarantinedMasterChanged`, release time
+19:15:58 UTC and master `qc-0`, and the manager logged `Released the write
+quarantine` with method `Manual` at 19:15:58 UTC. The script was then fixed
+(`fe2aad64`). The first run's files were not changed. Its other results
+match the second run's: two active masters from the 19:15:01 sample to the
+heal at 19:15:43, the same sequence of quarantine reasons, and a new
+connection's write through `-rw` acknowledged at 19:16:32 UTC.
+
+**Second run (`run2`): PASS.** Times are UTC on 2026-11-20.
+
+- **Refused writes.** The admission policy refused the Operator's update of
+  the `qc-broker` NetworkPolicy once in every pass: 4 refusals before the cut,
+  27 in the whole check, the first at 19:58:28 and the last at 20:00:44. `Ready`
+  stayed `False` with reason `NetworkPolicyReconcileFailed` until the policy
+  was removed (20:00:53).
+- **Cut.** `qc-1` was the master and `qc-0` outranked it. The cut of `qc-0`
+  from `qc-1` and `qc-2` was in place at 19:58:45 and removed at 20:00:24; it
+  dropped 1,082 packets, in both directions with both members.
+- **Two active masters (heartbeat, sampled in each member).** `qc-0` went
+  `to-be-master` at 19:58:50 and master with a `registered_and_to_be_active`
+  server at 19:58:54. Its server was first sampled `registered_and_active` at
+  19:59:43. `qc-1` stayed master with an active server until its last such
+  sample at 20:00:26. So two members ran an active server as master for
+  about 41 s, until the heal.
+- **Quarantine.** `WriteQuarantinedMemberUnverified` started at 19:58:55,
+  with master `qc-1` and member `qc-0`, whose answer had no role (it was
+  promoting itself). At 19:59:52 the Operator revised it to
+  `WriteQuarantinedMasterChanged` (revision 2), with the Warning Event
+  `active masters now: qc-0, qc-1`. It was never
+  `WriteQuarantinedMultipleMasters`: a quarantine in force is revised to
+  `WriteQuarantinedMasterChanged` when another active master appears, and
+  the reason `WriteQuarantinedMultipleMasters` is only used for a quarantine
+  that starts with two active masters. Each of the three passes that started,
+  revised and released the quarantine (reconciles `c5f78328`, `607387a2` and
+  `45256462`) also logged the refused NetworkPolicy write.
+- **Enforcement.** The read-write Broker Deployment was at zero from the
+  19:58:55 sample, and `-rw` had no endpoint by 19:59:07. `RoutingReady`
+  showed the quarantine reason.
+- **Heal and release.** After the heal `qc-1` went to slave (20:00:27), its
+  server was restarted by heartbeat and was a standby at 20:00:38; `qc-0`
+  stayed the only active master. The rows were read on each member at 20:00:41,
+  then the release annotation was set to the current token; the quarantine
+  was released manually at 20:00:42, master `qc-0`. The read-write Brokers
+  were still at zero at 20:00:52, while the NetworkPolicy writes were still
+  refused.
+- **Write through the restored `-rw`.** After the policy was removed, `Ready`
+  was `ClusterReady` with 2/2 read-write Brokers, and `-rw` had both endpoints
+  at 20:01:17. A new connection started at 20:01:16.769 wrote row 3000001 and
+  was acknowledged on the first attempt.
+- **SQL session.** The open session's last acknowledged write was row 17 at
+  19:58:55.208. Every later write failed (`CAS did not answer CHECK_CAS`, then
+  `connection is closed`), and the client's own new connections failed with
+  `failed to connect to CUBRID broker` until it was stopped at 20:01:20. The
+  client did not hang this time.
+- **Rows on each member** (session table, primary key `id`, read on each
+  member's own server):
+  - At 20:00:41, after the heal and before the release: `qc-1` held rows 1
+    to 17, `qc-0` rows 1 to 15 and `qc-2` rows 1 to 11. Rows 16 and 17 were
+    acknowledged by `qc-1` after the cut. So the master that remained lacked
+    two acknowledged writes when the quarantine was released.
+  - At 20:01:26 and again at 20:03:26: all three members held rows 1 to 17,
+    with the same write times, and `qc-0` also held the new row 3000001, which
+    the two slaves did not have yet. How rows 16 and 17 reached `qc-0` after
+    the heal was not determined.
+
+**Not shown.** Kind runs every member on one node, and the cut is an iptables
+rule in one Pod: this is not evidence of a VM failure or of a real network
+partition. Two runs are not a rate. The quarantine reason
+`WriteQuarantinedMultipleMasters` was not reached, as explained above. Whether
+the Brokers could have reached `qc-0` during the overlap was not measured.
+
 ### 2026-11-18, main at `0fc966b6`
 
 These were manual runs on one disposable Kind node (Kubernetes v1.37.0), with
