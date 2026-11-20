@@ -378,6 +378,14 @@ func TestRebuildSourcePodChangeAfterTheRestoreFails(t *testing.T) {
 	if !slices.ContainsFunc(events, func(e string) bool { return strings.Contains(e, reasonMemberRebuildFailed) }) {
 		t.Fatalf("a Failed Event is recorded, got %q", events)
 	}
+	// The member is held and stopped, so the text must not say otherwise (#1056).
+	if !slices.ContainsFunc(events, func(e string) bool {
+		return strings.Contains(e, "held and stopped") && strings.Contains(e, "not trusted") &&
+			strings.Contains(e, "status.formerDataClaims") &&
+			!strings.Contains(e, "nothing was stopped") && !strings.Contains(e, "may join")
+	}) || !strings.Contains(last.Message, "held and stopped") {
+		t.Fatalf("the Event and message say the member is held and stopped, got %q and %q", events, last.Message)
+	}
 	var claims corev1.PersistentVolumeClaimList
 	if err := c.List(context.Background(), &claims); err != nil || len(claims.Items) != 3 {
 		t.Fatalf("no claim is deleted, got %d (%v)", len(claims.Items), err)

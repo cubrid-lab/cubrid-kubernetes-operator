@@ -1583,9 +1583,9 @@ decided first, by the same rule as a member seeded by the HA bootstrap
   reported itself a slave, or no reading confirmed the source as the only
   master for more than 30 seconds. An Operator that is unavailable for more
   than 30 seconds while a restore runs therefore fails the rebuild. Nothing
-  is deleted, and nothing is stopped: the restore on the member may still be
-  running, and the member may join the group with what it restored, which
-  is not trusted. The member's claim and volume are added to
+  is deleted. The member is held and stopped: the Operator asks its
+  Instance Manager to stop, which also ends a restore still running, and
+  what was restored on it is not trusted. The member's claim and volume are added to
   `status.formerDataClaims` and never offered for a rebuild again, so no
   later request makes the Instance Manager take over or remove what the
   failed restore left: a new request needs a new empty claim.
