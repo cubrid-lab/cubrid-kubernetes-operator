@@ -595,6 +595,10 @@ spec:
 		openTransactionStep(scenarios)
 		stuckStandbysStep(scenarios)
 		replicationStallStep(scenarios)
+		// The rebuild replaces a slave's Pod and claim and leaves the master
+		// where it was; the token variants after it verify the starting
+		// state it left.
+		memberRebuildStep(scenarios)
 		// The token variants of S14 replace every member's Pod, the master
 		// last, which moves the master; no step after them depends on which
 		// member it is.
