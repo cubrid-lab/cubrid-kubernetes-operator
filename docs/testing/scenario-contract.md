@@ -176,6 +176,16 @@ scenarios stays as it is too: only the check of a starting state listed above
 is given the rule. Reads that a loop retries are not given the rule:
 they already read again, and they do not pay for an identity read.
 
+**A slave's refusal of a write.** The HA bootstrap check that a slave
+refuses a write passes on the server's `-581` refusal. A `-581` followed by
+the pair, with no other error and whatever the exit status, also counts as
+that refusal, but only when the slave's server identity and HA mode, read
+before the write and after it as above, are unchanged; any other comparison
+fails the check. The write is never repeated, and the pair is recorded in
+`suite/csql-lost-sessions.jsonl` with what the comparison found. The pair
+before the `-581`, a second `-581`, another error, and the pair without a
+`-581` are not a refusal (#238).
+
 **What is counted.** Every pair in a `csql` call of the Kind suite, and in the
 held session, is counted for the whole run, also on reads a loop absorbs and on
 a run that passes. `suite/csql-lost-sessions.jsonl` has a line for each: its
