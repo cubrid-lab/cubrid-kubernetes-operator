@@ -321,6 +321,28 @@ func s07Base(control bool) *s07Record {
 
 var testS07Limits = s07Limits{Quarantine: time.Minute, Partition: time.Minute}
 
+// s07VMLabLimits are the VM-lab values of the scenario contract's time limits
+// table for S07.
+var s07VMLabLimits = s07Limits{Quarantine: 30 * time.Second, Partition: 2 * time.Minute}
+
+// s07StoppedAfter sets when new connections stopped to d after the trigger
+// window's start, the time quarantine_limit bounds.
+func s07StoppedAfter(d time.Duration) func(*s07Record) {
+	return func(r *s07Record) {
+		v := r.TriggerWindowStart.Add(d)
+		r.NewConnectionsStoppedAt = &v
+	}
+}
+
+// s07HeldFor sets the end of the hold to d after the cut's confirmation, the
+// time partition_duration bounds.
+func s07HeldFor(d time.Duration) func(*s07Record) {
+	return func(r *s07Record) {
+		v := r.FaultConfirmedAt.Add(d)
+		r.HoldEndedAt = &v
+	}
+}
+
 // controlQuarantine adds to a control record a WriteQuarantinedMemberUnverified
 // quarantine first seen while the member was cut off, naming only it: the
 // case that is a violation, then changed by change.
@@ -357,6 +379,17 @@ func TestJudgeS07(t *testing.T) {
 			Partition: time.Minute}, nil, evidence.Fail, "quarantine_limit exceeded"},
 		"a partition held shorter than partition_duration fails": {false, s07Limits{Quarantine: time.Minute,
 			Partition: 5 * time.Minute}, nil, evidence.Fail, "partition_duration not reached"},
+		// The contract's VM-lab values: new connections that stop exactly at
+		// quarantine_limit, and a cut held exactly partition_duration, pass;
+		// a nanosecond beyond either fails.
+		"new connections that stopped exactly at the VM-lab quarantine_limit pass": {false, s07VMLabLimits,
+			s07StoppedAfter(30 * time.Second), evidence.Pass, "quarantine"},
+		"new connections that stopped just after the VM-lab quarantine_limit fail": {false, s07VMLabLimits,
+			s07StoppedAfter(30*time.Second + time.Nanosecond), evidence.Fail, "quarantine_limit exceeded"},
+		"a partition held exactly the VM-lab partition_duration passes": {true, s07VMLabLimits,
+			s07HeldFor(2 * time.Minute), evidence.Pass, "no quarantine started"},
+		"a partition held just short of the VM-lab partition_duration fails": {true, s07VMLabLimits,
+			s07HeldFor(2*time.Minute - time.Nanosecond), evidence.Fail, "partition_duration not reached"},
 		"no quarantine where one is required": {false, testS07Limits, func(r *s07Record) {
 			r.QuarantineSeenAt, r.Revisions = nil, nil
 		}, evidence.Fail, "no write quarantine was recorded"},
