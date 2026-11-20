@@ -503,9 +503,7 @@ spec:
 
 		It("holds what a recorded workload was told, on both Services", Label(haSetup), func() {
 			By("building and loading the workload client image")
-			_, err := utils.Run(exec.Command("make", "docker-build-workload",
-				fmt.Sprintf("WORKLOAD_IMG=%s", workloadImage)))
-			Expect(err).NotTo(HaveOccurred(), "Failed to build the workload client image")
+			Expect(buildWorkloadImage()).To(Succeed(), "Failed to build the workload client image")
 			Expect(utils.LoadImageToKindClusterWithName(workloadImage)).To(Succeed())
 
 			By("running the workload through the read-write Service")
