@@ -351,11 +351,11 @@ func rebuildWithdrawal(in rebuildInput) string {
 		return fmt.Sprintf("the data claim of %s changed since the request was accepted", a.Member)
 	case claim.VolumeName != a.VolumeName:
 		return fmt.Sprintf("the volume of the data claim of %s changed since the request was accepted", a.Member)
-	case source == "":
-		return ""
 	case a.Member == in.LastResolvedPrimary && !a.FormerPrimary:
 		return fmt.Sprintf("%s became the last resolved primary; it may hold writes no other member has, and the "+
 			"request did not name the source whose data it would get", a.Member)
+	case source == "":
+		return ""
 	}
 	if why := rebuildRefusal(in, a.Member); why != "" {
 		return why

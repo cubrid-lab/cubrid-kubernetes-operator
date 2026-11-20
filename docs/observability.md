@@ -1483,7 +1483,9 @@ did not name the source. It then moves to
 `status.lastMemberRebuild` with the state `Withdrawn` and a message, with a
 Warning Event `MemberRebuildWithdrawn`, and a new token is published once the
 member can be rebuilt again. An observation that sees no healthy primary
-among the other members keeps it, unless a write quarantine is in force.
+among the other members keeps it, unless a write quarantine is in force or
+the member became the last resolved primary while its request did not name
+the source.
 
 Whether this build restores the database on the member for an accepted
 request is recorded in [ROADMAP.md](../ROADMAP.md). An accepted request has

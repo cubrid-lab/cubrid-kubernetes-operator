@@ -658,6 +658,15 @@ func TestRebuildWithdrawal(t *testing.T) {
 		{name: "member becomes the last resolved primary", mutate: func(in *rebuildInput) {
 			in.LastResolvedPrimary = rbM2
 		}, want: rbWantLastResolved},
+		// The request named no source, so the member's data was never given
+		// up; that it became the last resolved primary withdraws the rebuild
+		// even in a pass that sees no other member as the active master
+		// (ADR-0006).
+		{name: "member becomes the last resolved primary while no other member is master",
+			mutate: func(in *rebuildInput) {
+				in.CurrentPrimary, in.LastResolvedPrimary = "", rbM2
+				in.Observations[rbM0] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+			}, want: rbWantLastResolved},
 		{name: "former primary's rebuild while it stays the last resolved primary", mutate: func(in *rebuildInput) {
 			formerPrimaryLost(in)
 			in.Active.FormerPrimary = true
