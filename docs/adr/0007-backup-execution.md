@@ -347,7 +347,9 @@ The HA seed exception below uses explicit `upload.seed: true`, supplied by the
 bootstrap controller. A seed upload is accepted only with master source
 metadata and the clean suffix `<cluster-uid>/seed[-<artifact>]/<database>`;
 ordinary `CubridBackup` destinations end in their backup UID and cannot use
-that mode. This is authenticated request metadata, not independent proof of
+that mode. The seed backup of an accepted member rebuild (`upload.rebuild`)
+goes only to `<cluster-uid>/rebuild-<operationID>/<database>`, never to the
+bootstrap's seed location (ADR-0003). This is authenticated request metadata, not independent proof of
 the caller's identity as a controller or the engine's actual role. The stable
 seed prefix and restore request body remain unchanged, preserving restore
 takeover/idempotency. An older recorded seed backup request without the field
@@ -375,7 +377,9 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   backup whose manifest declares that master as `sourceInstance` and
   `master` as `sourceRole`, and, when the request carries
   `expectedClusterUID` (the operator always sends it for a seed), whose
-  `clusterUID` is that cluster's. A restore into a new cluster takes
+  `clusterUID` is that cluster's. A restore for an accepted member rebuild
+  (`rebuild`) also takes only a backup whose manifest carries the same
+  rebuild operation ID and token (ADR-0003). A restore into a new cluster takes
   another cluster's full backup from a standby or the master. The engine
   version is compared by series (ADR-0011): the manifest's `cubridVersion`
   is the full version the backup's member read from `cubrid_rel`, a backup

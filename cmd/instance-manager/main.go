@@ -201,6 +201,11 @@ func run(logger *slog.Logger) error {
 			Member: member,
 		})
 
+	// The Pod's namespace qualifies another member's address, which a
+	// restore for a member rebuild asks; without it such a restore is
+	// refused.
+	server = server.WithNamespace(os.Getenv("POD_NAMESPACE"))
+
 	// A standalone member has no HA role; its readiness is its server's
 	// status. The operator sets CUBRID_COMPONENTS=SERVER for one member.
 	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {

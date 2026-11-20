@@ -20,9 +20,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -108,8 +110,40 @@ type BackupManifest struct {
 	// its record names the staging directory the objects were read from.
 	// Consumers do not check it; it is empty in manifests written before it.
 	OperationID string `json:"operationID,omitempty"`
+	// Rebuild is the accepted member rebuild a seed backup was taken for, as
+	// the backup request named it (BackupUpload.Rebuild). A restore for a
+	// rebuild takes only an artifact of that same rebuild. Absent for every
+	// other backup.
+	Rebuild *RebuildBinding `json:"rebuild,omitempty"`
 	// Objects lists every backup object with its checksum for validation.
 	Objects []ManifestObject `json:"objects"`
+}
+
+// RebuildBinding names one accepted member rebuild: the operation ID the
+// Operator chose when it accepted the request, and the one-time token the
+// request consumed (status.memberRebuild). A seed backup and the restore of
+// that rebuild carry the same binding, so the restore cannot take a copy made
+// for another request, and a later request needs a copy of its own.
+type RebuildBinding struct {
+	OperationID string `json:"operationID"`
+	Token       string `json:"token"`
+}
+
+// rebuildFieldPattern is the form of a rebuild's operation ID and token: the
+// Operator writes both as random hex, and neither may carry a separator or
+// white space.
+var rebuildFieldPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// validate checks that both fields are present and of rebuildFieldPattern.
+// The message never quotes the token.
+func (b RebuildBinding) validate() error {
+	if !rebuildFieldPattern.MatchString(b.OperationID) {
+		return fmt.Errorf("rebuild operationID %q is not a plain identifier of at most 128 characters", b.OperationID)
+	}
+	if !rebuildFieldPattern.MatchString(b.Token) {
+		return errors.New("rebuild token is not a plain identifier of at most 128 characters")
+	}
+	return nil
 }
 
 // ManifestObject is one uploaded backup object with its integrity metadata.
@@ -228,6 +262,9 @@ type ManifestExpectation struct {
 	SourceInstance string
 	// ClusterUID, when set, must equal the cluster the backup was taken in.
 	ClusterUID string
+	// Rebuild, when set, must equal the manifest's rebuild: the artifact was
+	// taken for that member rebuild, under that token.
+	Rebuild *RebuildBinding
 }
 
 // Verify rejects a manifest whose identity does not match the intended
@@ -261,6 +298,9 @@ func (m BackupManifest) Verify(exp ManifestExpectation) error {
 	}
 	if exp.ClusterUID != "" && m.ClusterUID != exp.ClusterUID {
 		return fmt.Errorf("manifest clusterUID %q does not match expected %q", m.ClusterUID, exp.ClusterUID)
+	}
+	if exp.Rebuild != nil && (m.Rebuild == nil || *m.Rebuild != *exp.Rebuild) {
+		return fmt.Errorf("manifest was not taken for member rebuild %q under its token", exp.Rebuild.OperationID)
 	}
 	if len(m.Objects) == 0 {
 		return fmt.Errorf("manifest lists no backup objects")
