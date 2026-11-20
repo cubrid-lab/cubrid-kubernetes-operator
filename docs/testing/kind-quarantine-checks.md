@@ -1,19 +1,22 @@
 # Write-quarantine checks on Kind
 
-`test/kindquarantine/run.sh` runs two manual checks of the write quarantine
-(ADR-0005, section 8, rule 2: one active master and a silent member that
-outranks it) on a disposable Kind cluster, with real CUBRID Pods, Services,
-Brokers and an SQL session. The unit and envtest suites cover the same
-decisions with fake members; these checks show them with the installed
-manager.
+`test/kindquarantine/run.sh` runs manual checks of the write quarantine
+(ADR-0005, section 8) on a disposable Kind cluster, with real CUBRID Pods,
+Services, Brokers and an SQL session. Two of them use rule 2 (one active
+master and a silent member that outranks it); the third makes CUBRID run a
+second active master. The unit and envtest suites cover the same decisions
+with fake members; these checks show them with the installed manager.
 
 | Check | Issue | What it shows |
 |---|---|---|
 | `child-write-denied` | #949 | While an admission policy refuses every NetworkPolicy write of the Operator, a silent member that outranks the master still starts the `WriteQuarantinedMemberUnverified` quarantine: the read-write Brokers go to zero and the `-rw` Service loses its endpoints, and the refused write is still reported (`Ready` reason `NetworkPolicyReconcileFailed`). An SQL session opened through `-rw` before the quarantine writes a row a second and is recorded throughout. |
 | `node-read-forbidden` | #948 | With the manager bound by a RoleBinding in the cluster's namespace and `--watch-namespace` set ([watch namespace](../operations/watch-namespace.md)), every Node read is Forbidden. The same silent member still starts the quarantine, and the manager logs the refused Node read. |
+| `two-masters-child-write-denied` | #949 | While the NetworkPolicy writes are refused as in `child-write-denied`, the member that outranks the master is cut off from the other members only. CUBRID promotes it and the old master stays active, so two members run an active server as master. The quarantine must start during the failing passes and the Operator must report both active masters. After the heal and one active master, the quarantine is released by hand with its token, and a new connection through the restored `-rw` Service must have a write acknowledged. The rows on each member are read before the release and after the write. |
 
-Both checks then remove the fault and wait for the automatic release and for
-the read-write Brokers to serve again.
+The first two checks then remove the fault and wait for the automatic release
+and for the read-write Brokers to serve again. The third is not in the
+default `CHECKS`: it uses a manual release, which accepts that writes may be
+lost (below).
 
 ## How the cluster is prepared
 
@@ -39,6 +42,41 @@ members is cut, so CUBRID's heartbeat and replication go on and no second
 master is expected; only the Operator loses its answers. Removing the rule
 heals it.
 
+## How two active masters are made
+
+`two-masters-child-write-denied` uses the same container in `qc-0`, which
+outranks the master. Its rules drop every packet `qc-0` receives from the
+other two members and every packet it sends to them. The Operator, the
+Brokers and the SQL client are not cut, so the Operator keeps reading every
+member. This is the shape of POC-51 (`docs/poc/RESULTS.md`, the `all` cut)
+and of the higher-rank-isolated partition of the installed harness: CUBRID
+promotes `qc-0`, and the old master, which still hears the third member,
+stays master. Cutting the master instead does not give two active servers:
+in POC-40 on the VM lab the promoted slave stayed `registered_and_to_be_active`.
+Whether `qc-0`'s server goes active depends on how much copied log it still
+has to apply (POC-51, POC-66); when no second active server appears within
+`TWO_MASTERS_LIMIT` (240 s), the check is `BLOCKED`, not passed.
+
+The roles are read in each member with `cubrid heartbeat status`, about every
+2 to 4 s per member, into `<check>-heartbeat.txt`. A member counts as an
+active master when it is `master` and its server is
+`registered_and_active`. The Operator counts as having seen both when the
+quarantine reason is `WriteQuarantinedMultipleMasters`, or when one of its
+Warning Events lists more than one active master in the pass (`active masters
+now: ...`).
+
+After the heal the script waits for exactly one active master, records the
+rows on each member, and sets `database.cubrid.io/release-write-quarantine` to
+the quarantine's current `releaseToken`, as
+[manual release](../observability.md#manual-release) describes, until the
+quarantine is released. The token is never printed, and the snapshots
+redact it. The manual release is the documented risk acceptance: on this
+disposable cluster it accepts the loss of writes the remaining master lacks,
+and the rows read before and after show what was lost. The write through
+`-rw` after the release opens a new connection from the client's Pod and is
+bounded to 30 s in the Pod and 45 s outside, so that a hung connection
+attempt is recorded as a failure; up to 12 attempts are made, 10 s apart.
+
 ## Running it
 
 ```sh
@@ -59,10 +97,12 @@ kind delete cluster --name quarantine-checks
 
 The script refuses an `EVIDENCE_DIR` that is not empty, and a kubectl
 context whose name does not start with `kind-` or that has a node whose
-`providerID` does not start with `kind://`. `CHECKS` selects the checks (both
-by default, `child-write-denied` first). When the script exits, for whatever
-reason, it removes whatever is still in place: the drop, the admission
-policy and the extra Broker client. It also restores the cluster-wide manager
+`providerID` does not start with `kind://`. `CHECKS` selects the checks
+(`child-write-denied` and `node-read-forbidden` by default, in that order;
+`CHECKS=two-masters-child-write-denied` runs the third). When the script
+exits, for whatever reason, it removes whatever is still in place: the drop,
+the cut between the members, the admission policy and the extra Broker
+client. It also restores the cluster-wide manager
 that `node-read-forbidden` scoped to the namespace. It needs the images above on the Kind node; the
 SQL client installs `pycubrid` from PyPI. With Docker's containerd image
 store, `kind load` can fail for the multi-platform helper images with
