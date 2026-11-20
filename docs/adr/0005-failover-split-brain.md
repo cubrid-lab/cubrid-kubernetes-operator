@@ -28,13 +28,15 @@ in Kubernetes; that path needs separate evidence (#115).
 The managed-path records so far show the hazard in a sequential form. In
 Kind runs with the Operator and Brokers (POC-51, and the 2026-11-08 record on
 #702) and in five VM-lab runs that cut off a member ranked above the master
-(2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18), writes
-through `-rw` were acknowledged by one master at a time. The VM-lab runs saw
-no overlapping writable servers in 959 role sweeps. Even so, the old master's
-last acknowledged writes never reached the member CUBRID made master after
-the heal. Docker trials with clients inside each member and no Broker
-(POC-50, also POC-52 and POC-58) remain the only records of two servers
-acknowledging writes at once. These are observations of one engine series
+(2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18), the
+observed row histories and role sweeps are consistent with sequential
+acknowledgements: no overlapping writable servers were observed in the 959
+sampled role sweeps, but the member that served each write was not recorded.
+What the runs did verify is that 13 to 73 acknowledged writes per run, the
+old master's last ones, were missing after the heal: they never reached the
+member CUBRID made master. Docker trials with clients inside each member and
+no Broker (POC-50, also POC-52 and POC-58) remain the only records of two
+servers acknowledging writes at once. These are observations of one engine series
 in small numbers of runs, not a general statement of CUBRID behavior.
 
 ## Constraints
