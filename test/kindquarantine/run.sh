@@ -809,6 +809,9 @@ release_by_token() {
 		refusal=$(field '{.status.writeQuarantine.releaseRefusal}')
 		[ -n "$refusal" ] && note "$c: release refused: $refusal"
 	done
+	# Without it, the loop's status would be the last test above, which fails
+	# when no refusal was reported.
+	return 0
 }
 
 # fresh_write opens a new connection through -rw from the SQL client's Pod and
@@ -841,7 +844,7 @@ member_rows() {
 	for m in 0 1 2; do
 		echo "== ${CLUSTER}-$m $(utc)"
 		timeout 90 kubectl -n "$NS" exec "${CLUSTER}-$m" -c cubrid -- bash -c \
-			"PATH=\"\${CUBRID}/bin:\${PATH}\" csql -u dba -c \"select via, count(*), min(id), max(id) from $table group by via order by via; select id, via from $table order by id\" $DATABASE@localhost" 2>&1
+			"PATH=\"\${CUBRID}/bin:\${PATH}\" csql -u dba -c \"select via, count(*), min(id), max(id) from $table group by via order by via; select id, via, written from $table order by id\" $DATABASE@localhost" 2>&1
 	done >"$EVIDENCE_DIR/$c/rows-$when.txt"
 	result "$c: rows $when on each member (kind count min max): $(awk '/^== / {printf "%s%s:", (n++ ? "; " : ""), $2}
 		$1 ~ /^'"'"'/ && NF == 4 {printf " %s %s %s %s", $1, $2, $3, $4}' "$EVIDENCE_DIR/$c/rows-$when.txt")"
@@ -886,7 +889,8 @@ check_two_masters_child_write_denied() {
 	watch_quarantine "$c"
 	watch_roles "$c"
 	sleep 5
-	result "$c: master $(field '{.status.currentPrimary}'); active masters in heartbeat before the cut: $(active_masters "$c")"
+	result "$c: last resolved primary $(field '{.status.lastResolvedPrimary}'); active masters in heartbeat before the cut:" \
+		"$(active_masters "$c")"
 	cut_peers "$c" || {
 		result "$c: BLOCKED could not cut $SILENT off from the other members"
 		stop_two_masters
