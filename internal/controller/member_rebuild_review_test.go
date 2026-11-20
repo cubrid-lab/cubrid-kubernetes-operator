@@ -67,8 +67,8 @@ func TestRebuildFailedAfterTheRestoreNeverOffersItsClaimAgain(t *testing.T) {
 	if o := offerFor(got.Status.MemberRebuildOffers, cpTarget); o != nil {
 		t.Fatalf("the claim of a failed rebuild is not offered, got %+v", o)
 	}
-	if !slices.ContainsFunc(events, func(e string) bool { return strings.Contains(e, "may still be running") }) {
-		t.Fatalf("the Failed Event says the restore may still be running, got %q", events)
+	if !slices.ContainsFunc(events, func(e string) bool { return strings.Contains(e, "held and stopped") }) {
+		t.Fatalf("the Failed Event says the member is held and stopped, got %q", events)
 	}
 
 	// A later pass, with the restore still running, offers nothing either.
