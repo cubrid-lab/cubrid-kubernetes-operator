@@ -136,7 +136,15 @@ for that other reason or proceeds. With an Instance Manager that never
 reports the log end, a `PreferStandby` backup therefore runs on the master
 after that delay. A slave excluded for another reason as well does not hold
 the selection. Eligible slaves are ordered by the log pages waiting to be
-applied (`delayedPages`), then by ordinal. Missing evidence never counts as
+applied (`delayedPages`), then by ordinal.
+Standbys are not also ranked by the log pages still to be copied
+(`copyDelayedPages`, the copy gap), as decided on
+[#291 on 2026-11-17](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/291#issuecomment-6935713406).
+Whether `delayedPages` overlaps the copy gap has not been observed on an
+engine, so a ranking built on the gap would choose standbys by an unqualified
+signal. A standby whose copier receives nothing is already left out by the 60 s
+`notReceivingSince` rule. To revisit this, add a POC under `docs/poc/` that
+shows what a comparative signal measures. Missing evidence never counts as
 caught up: a slave whose applier or copy's end could not be read is not
 eligible, and no slave is eligible while the primary is not resolved, so
 `StandbyOnly` waits (`NoHealthyStandby`) and `PreferStandby` falls back to
