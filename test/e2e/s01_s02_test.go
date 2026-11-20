@@ -53,11 +53,15 @@ type haRun struct {
 	database        string
 	members         []string
 
-	// mu guards history, running and markers: the gate's checks run in
-	// a goroutine of their own.
+	// mu guards history, failovers, running and markers: the gate's checks
+	// run in a goroutine of their own.
 	mu sync.Mutex
 	// history is everything the workload client recorded so far.
 	history string
+	// failovers are the windows in which a step lost the master, from the
+	// fault to the recovery it observed; the data check accepts the stale
+	// read of the read-write Service only inside one of them.
+	failovers []workload.FailoverWindow
 	// running holds the clients started and not stopped yet.
 	running map[string]bool
 	// markers counts the marker writes of the gate's checks.
@@ -170,6 +174,26 @@ func (r *haRun) historyText() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.history
+}
+
+// addFailover records that a step lost the master from the moment it issued
+// the fault until the moment it observed the recovery. A window without
+// either end is not recorded: the data check then accepts no stale read in
+// it.
+func (r *haRun) addFailover(from, to time.Time) {
+	if from.IsZero() || to.IsZero() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failovers = append(r.failovers, workload.FailoverWindow{From: from, To: to})
+}
+
+// failoverWindows returns the windows addFailover recorded so far.
+func (r *haRun) failoverWindows() []workload.FailoverWindow {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.failovers)
 }
 
 // observedLoss returns the observed data loss window of a fault issued at
@@ -295,7 +319,7 @@ func (r *haRun) dataCheck(ctx context.Context) (workload.Report, error) {
 			return workload.Report{}, fmt.Errorf("-%s: %w\n%s", name, err, out)
 		}
 	}
-	return workload.Check(history, rows), nil
+	return workload.CheckDuringFailovers(history, rows, r.failoverWindows()), nil
 }
 
 // failCount is the fail count of a slave's applier for the master's log.

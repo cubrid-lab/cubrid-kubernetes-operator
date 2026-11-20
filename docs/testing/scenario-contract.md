@@ -845,7 +845,36 @@ consistent, and through each endpoint:
 | No row exists whose `op_id` is not in the history. | **Unexpected row.** |
 | A row that is present has the values that were sent, also for an `unknown` operation. | **Wrong values.** |
 | All members expected to be consistent return the same set of rows. | **Members diverge.** |
-| No read found the row it reads back missing or different (`read mismatch:`). | **Read mismatch.** |
+| No read found the row it reads back missing or different (`read mismatch:`), except the stale read of the read-write Service during a failover described below. | **Read mismatch.** |
+
+**Stale read of the read-write Service during a failover.** From the moment
+the master is lost until the new master is active, the read-write Broker can
+connect to a standby. A read there can miss the client's own acknowledged
+write, and a write there fails with `-581`
+([failure-recovery.md](../architecture/failure-recovery.md), "Limits and
+assumptions"; POC-60 in [RESULTS.md](../poc/RESULTS.md)). The data check
+reports such a read in `explainedReadMismatches` of `data-check.json`
+instead of `readMismatches`, and it does not fail the scenario, only when all
+of these hold:
+
+- the read did not find the row (`read mismatch: <op_id> not found`); a read
+  that found the row with other values is never explained;
+- the read was attempted and answered inside a failover window that the
+  scenario recorded: from the moment it issued the deletion of the master's
+  Pod to the moment its recovery check held, with a new master that had
+  acknowledged the client's last write;
+- the client's next write was answered inside the same window and failed with
+  `-581` (updates disabled), which shows that its connection was on a
+  standby;
+- the row is an acknowledged insert, and every member and both Services hold
+  it with the values sent.
+
+On Kind, S03 and the `absent-during-failover` variant of S06 record such a
+window; no other scenario does, and the installed harness records none, so
+any read mismatch there fails. A read mismatch that misses any of these
+conditions stays in `readMismatches` and fails the scenario. The rules on
+missing acknowledged writes and on divergence are unchanged by it: an
+explained read never excuses a row that is missing or different on a member.
 
 An `unknown` operation may be present or absent; both are correct. It is
 reported in its own count and is never counted as missing data. If it is

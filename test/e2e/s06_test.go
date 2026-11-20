@@ -512,6 +512,9 @@ func (r *haRun) s06Absent() {
 		},
 	})
 	faultEnded = outcome.CleanupSucceeded
+	// The master's Pod was deleted at masterDeletedAt, and at OutcomeAt a
+	// new master had acknowledged the client's last write.
+	r.addFailover(masterDeletedAt, outcome.OutcomeAt)
 	timeline := writeTimeline("S06/"+s06Absent+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
