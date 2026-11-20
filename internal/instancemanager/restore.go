@@ -67,6 +67,14 @@ type RestoreRequest struct {
 	// another one, or when it does not know its own: a restore reached a
 	// member it was not meant for.
 	ExpectedMember string `json:"expectedMember,omitempty"`
+	// Rebuild, when set, binds the restore to an accepted member rebuild. It
+	// requires SeedFromMaster, the rebuild's source, and ExpectedMember, the
+	// member being rebuilt. Before it touches the target or reads the artifact
+	// the manager asks the source's Instance Manager for its role, and goes
+	// on only on a fresh answer that the source is the active master; the
+	// artifact's manifest must then carry the same rebuild. Empty for any
+	// other restore, which works as it does without the field.
+	Rebuild *RebuildBinding `json:"rebuild,omitempty"`
 }
 
 // restoreExpectation is what the artifact of req must say about itself
@@ -90,6 +98,7 @@ func restoreExpectation(req RestoreRequest, engine string) ManifestExpectation {
 		exp.SourceInstance = req.SeedFromMaster
 		exp.ClusterUID = req.ExpectedClusterUID
 	}
+	exp.Rebuild = req.Rebuild
 	return exp
 }
 
@@ -318,6 +327,19 @@ func validateRestoreRequest(req RestoreRequest) error {
 	}
 	if req.ExpectedMember != "" && !hostLabelPattern.MatchString(req.ExpectedMember) {
 		return fmt.Errorf("expectedMember %q is not a host name (a DNS label)", req.ExpectedMember)
+	}
+	// A rebuild restore is a seed restore from the rebuild's source into the
+	// member being rebuilt, which are two different members.
+	if r := req.Rebuild; r != nil {
+		if err := r.validate(); err != nil {
+			return err
+		}
+		if req.SeedFromMaster == "" || req.ExpectedMember == "" {
+			return errors.New("rebuild needs seedFromMaster, the rebuild's source, and expectedMember, the member being rebuilt")
+		}
+		if req.SeedFromMaster == req.ExpectedMember {
+			return fmt.Errorf("rebuild names %q both as its source and as the member being rebuilt", req.ExpectedMember)
+		}
 	}
 	for name, dir := range map[string]string{"targetDir": req.TargetDir, "stagingDir": req.StagingDir} {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == string(filepath.Separator) {

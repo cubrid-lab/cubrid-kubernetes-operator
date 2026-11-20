@@ -96,12 +96,20 @@ const (
 	// before anything is recorded or staged when it names another member
 	// than this one.
 	CapabilityExpectedMember = "expected-member"
+	// CapabilityRebuildRestore: a restore with rebuild asks the source named
+	// by seedFromMaster for its role before it touches the target or reads
+	// the artifact, and is refused unless that source answers as the active
+	// master; it then takes only an artifact whose manifest carries the same
+	// rebuild. A seed backup with upload.rebuild records the rebuild in its
+	// manifest and is uploaded only to that rebuild's location
+	// (RebuildSeedDir).
+	CapabilityRebuildRestore = "rebuild-restore"
 )
 
 // Capabilities returns every check this manager enforces, for GET /v1/role.
 func Capabilities() []string {
 	return []string{CapabilityExpectedClusterUID, CapabilitySeedFromMaster, CapabilitySeedUpload, CapabilityBackupSourceRole,
-		CapabilityExpectedMember}
+		CapabilityExpectedMember, CapabilityRebuildRestore}
 }
 
 // ApplierProcess is one "Applylogdb" line of `cubrid heartbeat status`.

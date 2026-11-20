@@ -37,8 +37,9 @@ Collect the exact **context, namespace, cluster name, manager and Instance
 Manager image digests, source commit, CUBRID engine build, Kubernetes version,
 storage driver/StorageClass and available evidence destination**. Check
 [compatibility](../compatibility.md) for the narrow intended v0.1 target.
-A local-path volume is node-bound and **not CSI**; the historical VM
-inventory does not qualify it as the target reference configuration.
+A local-path volume is node-bound and **not CSI**. It is the storage of the
+experimental v0.1 reference environment (the three-VM k3s lab); CSI behavior
+is untested.
 Choose `spec.storage.data.size` before creating the cluster; it cannot be
 changed afterwards. [Sizing a member's data volume](data-volume-sizing.md)
 gives the rule and the measured log growth it is based on.

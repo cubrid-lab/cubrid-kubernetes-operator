@@ -125,6 +125,9 @@ type CubridClusterReconciler struct {
 	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
 	// (BootstrapReady=False/RestoreClientNotConfigured).
 	Restore RestoreClient
+	// RebuildMember is nil-safe: nil leaves the member of a member rebuild
+	// held after its restore, and a failed rebuild's member unstopped.
+	RebuildMember RebuildMemberClient
 	// HABootstrap is nil-safe: nil leaves the first database of an HA cluster
 	// uncreated.
 	HABootstrap HABootstrapClient
@@ -195,6 +198,9 @@ type CubridClusterReconciler struct {
 	// rebuildReported holds, per cluster key, the rebuild annotation's value
 	// and outcome last reported with a Warning Event (reconcileMemberRebuild).
 	rebuildReported sync.Map
+	// rebuildStops holds, per cluster key and Pod UID, the members of a
+	// failed member rebuild that accepted a stop (holdFailedRebuild).
+	rebuildStops sync.Map
 	// podTerminations holds, per Pod UID, a database Pod the kubelet
 	// reported terminated while it was being deleted, as the Pod watch saw
 	// it (notePodTermination).
@@ -432,6 +438,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if apierrors.IsNotFound(err) {
 			r.forgetQuarantines(req.NamespacedName)
 			r.rebuildReported.Delete(req.NamespacedName)
+			r.forgetRebuildStops(req.String()+"/", "")
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
 		}
@@ -1068,6 +1075,11 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 		// Where the entrypoint and the manager find cubrid_ha.conf. The file is
 		// there only for an HA cluster.
 		{Name: "CUBRID_HA_CONF", Value: haConfMountPath + "/" + haConfFileName},
+		// The manager addresses the source of a member rebuild by its
+		// namespace-qualified Service name, and refuses a rebuild restore
+		// without its own namespace (ADR-0003).
+		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{
+			APIVersion: "v1", FieldPath: "metadata.namespace"}}},
 	}, objectStorageEnv(cluster.Spec.ObjectStorage)...)
 }
 
@@ -1290,7 +1302,7 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 	res, quarantine, seen := r.observeAndQuarantine(ctx, cluster)
 	// A rebuild request is decided from the same observation (#117).
 	rebuild := r.reconcileMemberRebuild(ctx, cluster, seen.members, seen.obs, seen.observedAt, seen.lastResolved,
-		seen.podsBefore, seen.podsErr)
+		seen.podsBefore, seen.podsErr, quarantine.err)
 	// Reconcile the broker tier and set routing conditions from the same
 	// safety-first primary resolution (ADR-0002/0005).
 	// A conflicting write leaves the broker conditions as they are; the

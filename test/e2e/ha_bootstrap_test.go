@@ -395,7 +395,16 @@ spec:
 			}, 15*time.Minute, 3*time.Second).Should(Succeed())
 
 			By("asking CUBRID on every member for the roles")
-			Eventually(func(g Gomega) {
+			// When the roles are not seen in time, the members' logs and
+			// connections are kept before the spec fails with the unchanged
+			// message (#1051). A passing check waits for nothing.
+			rowCaptureFailure(func(string) {
+				for member, text := range captureActiveWait(context.Background(), haNamespace, database,
+					append([]string{first}, peers...)) {
+					_, _ = fmt.Fprintf(GinkgoWriter, "%s\n", text)
+					writeScenarioFile("ha-bootstrap/master-not-active-"+member+".txt", []byte(text))
+				}
+			}).Eventually(func(g Gomega) {
 				out, err := heartbeatStatus(first)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(ContainSubstring("current " + first + ", state master"))
@@ -494,9 +503,7 @@ spec:
 
 		It("holds what a recorded workload was told, on both Services", Label(haSetup), func() {
 			By("building and loading the workload client image")
-			_, err := utils.Run(exec.Command("make", "docker-build-workload",
-				fmt.Sprintf("WORKLOAD_IMG=%s", workloadImage)))
-			Expect(err).NotTo(HaveOccurred(), "Failed to build the workload client image")
+			Expect(buildWorkloadImage()).To(Succeed(), "Failed to build the workload client image")
 			Expect(utils.LoadImageToKindClusterWithName(workloadImage)).To(Succeed())
 
 			By("running the workload through the read-write Service")
@@ -586,7 +593,12 @@ spec:
 		s03Step(scenarios, s03Abrupt)
 		s03Step(scenarios, s03Graceful)
 		openTransactionStep(scenarios)
+		stuckStandbysStep(scenarios)
 		replicationStallStep(scenarios)
+		// The rebuild replaces a slave's Pod and claim and leaves the master
+		// where it was; the token variants after it verify the starting
+		// state it left.
+		memberRebuildStep(scenarios)
 		// The token variants of S14 replace every member's Pod, the master
 		// last, which moves the master; no step after them depends on which
 		// member it is.

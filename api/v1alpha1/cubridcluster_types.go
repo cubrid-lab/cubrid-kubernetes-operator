@@ -874,6 +874,25 @@ type CubridClusterStatus struct {
 	// +optional
 	MemberDataClaims []MemberDataClaim `json:"memberDataClaims,omitempty"`
 
+	// formerDataClaims keeps every record that memberDataClaims held before
+	// a later claim of the same member replaced it: a claim and a volume
+	// that once held the database. It also keeps the claim and volume of a
+	// member rebuild that ended Failed after its restore was started: they
+	// may hold what that restore wrote, or a restore still running. Such a
+	// volume may hold the only copy of
+	// writes no other member has, for example the storage of a primary that
+	// was lost and rebuilt, so a claim UID or PersistentVolume name listed
+	// here is never offered or accepted as a replacement, for any member; the
+	// same disk under another PersistentVolume name is not recognised. The
+	// list lives only in this status. Nothing is ever removed
+	// from this list. It holds at most 64 records; once it is full, a
+	// member's later claim is not recorded, its earlier record stays in
+	// memberDataClaims, and no rebuild is offered or accepted any more.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	FormerDataClaims []MemberDataClaim `json:"formerDataClaims,omitempty"`
+
 	// memberRebuildOffers lists the members whose replacement storage an
 	// administrator may ask to have rebuilt from the current primary now,
 	// each with the one-time token that asks for it. A token binds the
@@ -1270,8 +1289,15 @@ type MemberRebuildOffer struct {
 	// sourcePodUID is the UID of the source's Pod.
 	SourcePodUID string `json:"sourcePodUID"`
 	// token is the one-time token that requests this rebuild: the annotation
-	// database.cubrid.io/rebuild-member set to "<member>:<token>".
+	// database.cubrid.io/rebuild-member set to "<member>:<token>", or to
+	// "<member>:<token>:<source>" when formerPrimary is true.
 	Token string `json:"token"`
+	// formerPrimary says that the member is status.lastResolvedPrimary: it
+	// may have acknowledged writes the source lacks. Its request must name
+	// the source as a third field, stating that the source's data becomes the
+	// member's data (ADR-0006).
+	// +optional
+	FormerPrimary bool `json:"formerPrimary,omitempty"`
 }
 
 // MemberRebuildState is what became of a requested rebuild.
@@ -1314,6 +1340,11 @@ type MemberRebuild struct {
 	SourcePodUID string `json:"sourcePodUID"`
 	// token is the one-time token the request consumed.
 	Token string `json:"token"`
+	// formerPrimary says that the member was status.lastResolvedPrimary and
+	// the request named the source, accepting the source's data as the
+	// member's data (ADR-0006).
+	// +optional
+	FormerPrimary bool `json:"formerPrimary,omitempty"`
 	// operationID identifies this rebuild's operations on the Instance
 	// Managers. It is chosen when the request is accepted and never changes.
 	OperationID string `json:"operationID"`
@@ -1327,6 +1358,13 @@ type MemberRebuild struct {
 	// message says why the rebuild ended, when it did not complete.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// copy is this rebuild's copy of the database from the source to the
+	// member: the backup and restore operation IDs, the readings taken while
+	// it ran and the catch-up target. It is stored in the status so that an
+	// Operator restart finds the operations it already started and polls
+	// them instead of starting them again.
+	// +optional
+	Copy *DatabaseSeeding `json:"copy,omitempty"`
 }
 
 // UpdateStatus reports database-aware rolling-update progress (ADR-0009).

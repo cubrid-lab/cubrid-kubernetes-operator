@@ -122,6 +122,9 @@ Operator endpoints (bearer-token authenticated, `/v1/`):
   `GET /v1/config` of the first version of this ADR is not provided)
 - `POST /v1/ha/bootstrap`, `POST /v1/shutdown`, `POST /v1/backup`,
   `POST /v1/restore/prepare`
+- `POST /v1/rebuild/release`: releases a database held by a completed
+  restore for a member rebuild (see "The restore for an accepted member
+  rebuild" below)
 - `GET /v1/operations/{operationID}`
 - `GET /v1/dba-password`: whether the value of the DBA password file is the
   running standalone database's DBA password, as
@@ -526,6 +529,82 @@ operation rather than starting a second one. Restore requests are unchanged.
 See [ADR-0007](0007-backup-execution.md#artifact-and-upload-model) for retention,
 compatibility and the distinction between requested prefix and returned URI.
 
+### Restore for an accepted member rebuild
+
+A seed backup and a restore can name the accepted member rebuild they run
+for, as `rebuild: {"operationID": "...", "token": "..."}` (`upload.rebuild`
+on the backup, `rebuild` on the restore): the rebuild's operation ID and the
+one-time token its request consumed (`status.memberRebuild`). Both are plain
+identifiers of at most 128 characters. Without the field a backup or restore
+works as it does for the HA bootstrap seed and a recovery restore.
+
+- `upload.rebuild` needs `upload.seed` and the location
+  `<clusterUID>/rebuild-<operationID>/<database>` of that rebuild; the
+  manifest records it as `rebuild`. The HA bootstrap's seed locations
+  (`seed`, `seed-<artifact>`) and another rebuild's location are refused, at
+  the request and again at the upload, so a rebuild's backup never replaces
+  the bootstrap's seed.
+- `rebuild` on a restore needs `seedFromMaster`, the rebuild's source, and
+  `expectedMember`, the member being rebuilt, and the two must differ;
+  otherwise the request is answered 400 before it is recorded.
+- Before the restore touches the target or reads the artifact (before it
+  takes over or removes what an earlier restore left), the manager asks the
+  source's Instance Manager for `GET /v1/role`, at
+  `http://<seedFromMaster>.<namespace>.svc:9090/v1/role`, the source's
+  per-member Service (ADR-0004) in the namespace `POD_NAMESPACE` names. A
+  name qualified this way is not completed by the DNS search list into
+  another host. A manager without `POD_NAMESPACE` asks nobody and refuses
+  the restore with `RebuildSourceUnconfirmed`. It asks with its own
+  bearer token, the cluster's token, within 5 seconds and without following
+  a redirect. It goes on only when the answer names that member as current,
+  with role `master` and an active server. Any other answer ends the
+  operation `Failed` with `failureCode: RebuildSourceNotMaster`; no answer,
+  an error status, an unreadable answer or a timeout ends it with
+  `RebuildSourceUnconfirmed`. Either leaves nothing staged, no ownership
+  marker, no `databases.txt` entry, and what an earlier failed restore left
+  in the target as it was. The question reaches the source
+  only where the NetworkPolicy admits the cluster's member Pods to the
+  manager port; where it does not, the restore is refused with
+  `RebuildSourceUnconfirmed`.
+- The artifact's manifest must then carry the same operation ID and token,
+  or the restore fails before any object is staged, so a restore for one
+  request cannot take the copy of another.
+- The wrong-target guard (ADR-0008) runs after the source check, as for
+  every restore: a target that holds the database, or files of it the
+  Operator has no record of, is refused with `TargetHoldsDatabase` and left
+  untouched.
+
+The source is asked when the restore starts and again right before the
+restored member is started (`cubrid heartbeat start`), also when a retry
+of the same request takes over data an earlier attempt restored. A source
+that no longer answers as the active master then ends the operation
+`Failed` with the same codes, after restoredb: the restored data and the
+ownership marker are kept, and nothing is started. A member that
+restoreslave copied across a change of master can lack acknowledged writes
+without showing it (docs/poc/RESULTS.md, POC-57). A change of master
+between that second question and the start is not detected here, and
+neither is a change from the source to another member and back during the
+copy: both questions then find the source the active master. From
+`heartbeat start` on, the member runs as a slave that CUBRID can promote,
+until the Operator's verdict on the rebuild; the Operator detects such a
+change from its own readings and stops the member, but a master failure
+inside that window can promote a member that lacks acknowledged rows. The write
+quarantine is not checked here either: re-checking it and the source
+immediately before the restore is sent is the Operator's part (#117).
+
+The operation record keeps the rebuild's operation ID and the SHA-256
+digest of its token (`rebuild`), never the token. A completed restore for a
+member rebuild keeps its ownership marker, so neither the entrypoint nor
+`ResumeCompletedRestores` starts the member again after a restart, until
+the Operator releases it with `POST /v1/rebuild/release`
+(`{"database": ..., "rebuild": {"operationID": ..., "token": ...}}`). The
+Operator asks for the release only once it judged the member caught up with
+its source (ADR-0006). The release clears the marker only when it names a
+completed restore of that rebuild under that token, and is answered 409
+otherwise, 503 once the member is stopping, and 200 for a database without
+the marker. The manager reports this behaviour as the `rebuild-restore`
+capability (ADR-0013).
+
 ## Revisit When
 
 - mTLS/cert rotation infrastructure exists → upgrade `/v1/*` auth.
@@ -557,6 +636,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `CUBRID_LOG_VOLUME_SIZE` | a 32nd of `spec.storage.data.size` in whole MiB, between `20M` and `512M`: the `--log-volume-size` of the database the entrypoint (one member) or the HA bootstrap (the first HA member) creates. Unset leaves the image's `log_volume_size` (512M). It counts only when a database is created (DESIGN.md, "Log Volume Size"; #666) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| `POD_NAMESPACE` | the namespace of the member's Pod, set by the Operator through the downward API (`metadata.namespace`); it qualifies the address of the source's Instance Manager that a restore for a member rebuild asks. Without it such a restore is refused |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |

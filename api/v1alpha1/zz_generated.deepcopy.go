@@ -442,6 +442,11 @@ func (in *CubridClusterStatus) DeepCopyInto(out *CubridClusterStatus) {
 		*out = make([]MemberDataClaim, len(*in))
 		copy(*out, *in)
 	}
+	if in.FormerDataClaims != nil {
+		in, out := &in.FormerDataClaims, &out.FormerDataClaims
+		*out = make([]MemberDataClaim, len(*in))
+		copy(*out, *in)
+	}
 	if in.MemberRebuildOffers != nil {
 		in, out := &in.MemberRebuildOffers, &out.MemberRebuildOffers
 		*out = make([]MemberRebuildOffer, len(*in))
@@ -869,6 +874,11 @@ func (in *MemberRebuild) DeepCopyInto(out *MemberRebuild) {
 	if in.EndTime != nil {
 		in, out := &in.EndTime, &out.EndTime
 		*out = (*in).DeepCopy()
+	}
+	if in.Copy != nil {
+		in, out := &in.Copy, &out.Copy
+		*out = new(DatabaseSeeding)
+		(*in).DeepCopyInto(*out)
 	}
 }
 

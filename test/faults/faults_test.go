@@ -19,6 +19,7 @@ package faults
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -413,6 +414,34 @@ func TestRun_ReportsAStepThatDoesNotStop(t *testing.T) {
 		if removal != 1 {
 			t.Errorf("hang in %s: the removal of the fault ran %d times, want once: %+v", step, removal, o.Timeline)
 		}
+	}
+}
+
+// A check that returns the context error after the outcome limit passed has
+// hit the time limit; it has not broken an expectation. The runner can see the
+// check's return and the limit together and picks between them at random, so
+// the choice of the return must give the same answer as the limit.
+func TestSettle_ContextErrorAfterTheLimitIsATimeout(t *testing.T) {
+	expired, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-expired.Done()
+	if done, err := settle(expired, observed{err: expired.Err()}); done || !errors.Is(err, errStepTimeout) {
+		t.Errorf("context error after the limit = %t, %v; want a timeout", done, err)
+	}
+	wrapped := observed{err: fmt.Errorf("probe: %w", expired.Err())}
+	if done, err := settle(expired, wrapped); done || !errors.Is(err, errStepTimeout) {
+		t.Errorf("wrapped context error after the limit = %t, %v; want a timeout", done, err)
+	}
+	broken := errors.New("an acknowledged row is missing")
+	if _, err := settle(expired, observed{err: broken}); !errors.Is(err, broken) {
+		t.Errorf("a real failure was hidden by the limit: %v", err)
+	}
+	live := context.Background()
+	if _, err := settle(live, observed{err: context.DeadlineExceeded}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a context error before the limit was rewritten: %v", err)
+	}
+	if done, err := settle(live, observed{done: true}); !done || err != nil {
+		t.Errorf("success = %t, %v", done, err)
 	}
 }
 

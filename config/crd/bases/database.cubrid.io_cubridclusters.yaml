@@ -953,6 +953,45 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              formerDataClaims:
+                description: |-
+                  formerDataClaims keeps every record that memberDataClaims held before
+                  a later claim of the same member replaced it: a claim and a volume
+                  that once held the database. It also keeps the claim and volume of a
+                  member rebuild that ended Failed after its restore was started: they
+                  may hold what that restore wrote, or a restore still running. Such a
+                  volume may hold the only copy of
+                  writes no other member has, for example the storage of a primary that
+                  was lost and rebuilt, so a claim UID or PersistentVolume name listed
+                  here is never offered or accepted as a replacement, for any member; the
+                  same disk under another PersistentVolume name is not recognised. The
+                  list lives only in this status. Nothing is ever removed
+                  from this list. It holds at most 64 records; once it is full, a
+                  member's later claim is not recorded, its earlier record stays in
+                  memberDataClaims, and no rebuild is offered or accepted any more.
+                items:
+                  description: |-
+                    MemberDataClaim is the data claim a member was last seen running the
+                    database on.
+                  properties:
+                    claimUID:
+                      description: claimUID is the UID of the member's data PersistentVolumeClaim.
+                      type: string
+                    name:
+                      description: name is the member.
+                      type: string
+                    volumeName:
+                      description: |-
+                        volumeName is the PersistentVolume the claim was bound to; empty when
+                        it was not bound.
+                      type: string
+                  required:
+                  - claimUID
+                  - name
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
               instances:
                 description: instances reports per-instance observed state.
                 items:
@@ -1144,10 +1183,145 @@ spec:
                       claimUID is the UID of the member's data claim when the request was
                       accepted.
                     type: string
+                  copy:
+                    description: |-
+                      copy is this rebuild's copy of the database from the source to the
+                      member: the backup and restore operation IDs, the readings taken while
+                      it ran and the catch-up target. It is stored in the status so that an
+                      Operator restart finds the operations it already started and polls
+                      them instead of starting them again.
+                    properties:
+                      activeMasterSince:
+                        description: |-
+                          activeMasterSince is the time of the first reading during this copy in
+                          which a member that holds the database, or the member being seeded,
+                          answered as a master whose server is active; for a copy begun after
+                          seedActiveMasterSince was set, the time the copy began. From then on the member is recorded as seeded only
+                          once it is shown to have caught up with the source (catchUpTarget), a
+                          change of master is recorded, and a gap of more than 30 seconds
+                          without a verified reading stops the bootstrap (ADR-0010).
+                        format: date-time
+                        type: string
+                      backupOperationID:
+                        description: |-
+                          backupOperationID is the seed backup on the source for this copy and
+                          round, once it was started. From then on it is only polled, never
+                          started again.
+                        type: string
+                      catchUpSince:
+                        description: |-
+                          catchUpSince is when the copy's restore was first found completed while
+                          the member was not yet shown caught up with its source. After ten
+                          minutes a Warning event is emitted; the copy keeps waiting.
+                        format: date-time
+                        type: string
+                      catchUpTarget:
+                        description: |-
+                          catchUpTarget is the end of the source's own log, read in the first
+                          reading after the restore reported Completed. A member whose source was
+                          observed active is recorded as seeded only once its copy of the source's
+                          log has reached it.
+                        properties:
+                          offset:
+                            description: offset is the byte offset in the page.
+                            format: int64
+                            type: integer
+                          page:
+                            description: page is the log page.
+                            format: int64
+                            type: integer
+                        required:
+                        - offset
+                        - page
+                        type: object
+                      catchUpWarnedAt:
+                        description: |-
+                          catchUpWarnedAt is when the Warning event of a catch-up that waited
+                          longer than ten minutes was emitted, so that it is emitted once.
+                        format: date-time
+                        type: string
+                      lastVerifiedAt:
+                        description: |-
+                          lastVerifiedAt is the time of the last reading during this copy in
+                          which every member that holds the database answered and the source was
+                          the only master among them.
+                        format: date-time
+                        type: string
+                      masterChange:
+                        description: |-
+                          masterChange is the first reading during this copy, once an active
+                          master was seen, that showed another master than the source: another
+                          member, or the member being seeded once its restore was started,
+                          reporting itself master, or the source reporting itself a slave. It is
+                          never cleared, and the member is then not recorded as seeded.
+                        properties:
+                          member:
+                            description: |-
+                              member is the member whose answer showed the change: the member that
+                              reported itself master, or the source when it reported itself a slave.
+                            type: string
+                          observedAt:
+                            description: observedAt is when the answer was received.
+                            format: date-time
+                            type: string
+                          role:
+                            description: role is the role that member reported.
+                            enum:
+                            - master
+                            - slave
+                            - replica
+                            - unknown
+                            type: string
+                        required:
+                        - member
+                        - observedAt
+                        - role
+                        type: object
+                      member:
+                        description: member is the member the database is copied to.
+                        type: string
+                      operationMissingSince:
+                        description: |-
+                          operationMissingSince is when the member first answered that it holds
+                          no record of the recorded operation of this copy. Only a read of the
+                          operation clears it.
+                        format: date-time
+                        type: string
+                      restoreOperationID:
+                        description: |-
+                          restoreOperationID is the restore on the member, once it was started.
+                          From then on the source is kept, the restore is only polled, and no
+                          seed backup is asked for again.
+                        type: string
+                      round:
+                        description: |-
+                          round counts how often the copy was begun again before the restore was
+                          started: when the source changed, or when a change of master or a gap
+                          without a verified reading was seen while the source stayed the same.
+                          Every round has a backup of its own.
+                        format: int32
+                        type: integer
+                      source:
+                        description: |-
+                          source is the member it is copied from. For the first peer it is the
+                          member that holds the database; for every later member it is the
+                          member that was last observed as the master among the members that
+                          hold the database.
+                        type: string
+                    required:
+                    - member
+                    - source
+                    type: object
                   endTime:
                     description: endTime is when the rebuild ended.
                     format: date-time
                     type: string
+                  formerPrimary:
+                    description: |-
+                      formerPrimary says that the member was status.lastResolvedPrimary and
+                      the request named the source, accepting the source's data as the
+                      member's data (ADR-0006).
+                    type: boolean
                   member:
                     description: member is the member whose storage is rebuilt.
                     type: string
@@ -1555,10 +1729,145 @@ spec:
                       claimUID is the UID of the member's data claim when the request was
                       accepted.
                     type: string
+                  copy:
+                    description: |-
+                      copy is this rebuild's copy of the database from the source to the
+                      member: the backup and restore operation IDs, the readings taken while
+                      it ran and the catch-up target. It is stored in the status so that an
+                      Operator restart finds the operations it already started and polls
+                      them instead of starting them again.
+                    properties:
+                      activeMasterSince:
+                        description: |-
+                          activeMasterSince is the time of the first reading during this copy in
+                          which a member that holds the database, or the member being seeded,
+                          answered as a master whose server is active; for a copy begun after
+                          seedActiveMasterSince was set, the time the copy began. From then on the member is recorded as seeded only
+                          once it is shown to have caught up with the source (catchUpTarget), a
+                          change of master is recorded, and a gap of more than 30 seconds
+                          without a verified reading stops the bootstrap (ADR-0010).
+                        format: date-time
+                        type: string
+                      backupOperationID:
+                        description: |-
+                          backupOperationID is the seed backup on the source for this copy and
+                          round, once it was started. From then on it is only polled, never
+                          started again.
+                        type: string
+                      catchUpSince:
+                        description: |-
+                          catchUpSince is when the copy's restore was first found completed while
+                          the member was not yet shown caught up with its source. After ten
+                          minutes a Warning event is emitted; the copy keeps waiting.
+                        format: date-time
+                        type: string
+                      catchUpTarget:
+                        description: |-
+                          catchUpTarget is the end of the source's own log, read in the first
+                          reading after the restore reported Completed. A member whose source was
+                          observed active is recorded as seeded only once its copy of the source's
+                          log has reached it.
+                        properties:
+                          offset:
+                            description: offset is the byte offset in the page.
+                            format: int64
+                            type: integer
+                          page:
+                            description: page is the log page.
+                            format: int64
+                            type: integer
+                        required:
+                        - offset
+                        - page
+                        type: object
+                      catchUpWarnedAt:
+                        description: |-
+                          catchUpWarnedAt is when the Warning event of a catch-up that waited
+                          longer than ten minutes was emitted, so that it is emitted once.
+                        format: date-time
+                        type: string
+                      lastVerifiedAt:
+                        description: |-
+                          lastVerifiedAt is the time of the last reading during this copy in
+                          which every member that holds the database answered and the source was
+                          the only master among them.
+                        format: date-time
+                        type: string
+                      masterChange:
+                        description: |-
+                          masterChange is the first reading during this copy, once an active
+                          master was seen, that showed another master than the source: another
+                          member, or the member being seeded once its restore was started,
+                          reporting itself master, or the source reporting itself a slave. It is
+                          never cleared, and the member is then not recorded as seeded.
+                        properties:
+                          member:
+                            description: |-
+                              member is the member whose answer showed the change: the member that
+                              reported itself master, or the source when it reported itself a slave.
+                            type: string
+                          observedAt:
+                            description: observedAt is when the answer was received.
+                            format: date-time
+                            type: string
+                          role:
+                            description: role is the role that member reported.
+                            enum:
+                            - master
+                            - slave
+                            - replica
+                            - unknown
+                            type: string
+                        required:
+                        - member
+                        - observedAt
+                        - role
+                        type: object
+                      member:
+                        description: member is the member the database is copied to.
+                        type: string
+                      operationMissingSince:
+                        description: |-
+                          operationMissingSince is when the member first answered that it holds
+                          no record of the recorded operation of this copy. Only a read of the
+                          operation clears it.
+                        format: date-time
+                        type: string
+                      restoreOperationID:
+                        description: |-
+                          restoreOperationID is the restore on the member, once it was started.
+                          From then on the source is kept, the restore is only polled, and no
+                          seed backup is asked for again.
+                        type: string
+                      round:
+                        description: |-
+                          round counts how often the copy was begun again before the restore was
+                          started: when the source changed, or when a change of master or a gap
+                          without a verified reading was seen while the source stayed the same.
+                          Every round has a backup of its own.
+                        format: int32
+                        type: integer
+                      source:
+                        description: |-
+                          source is the member it is copied from. For the first peer it is the
+                          member that holds the database; for every later member it is the
+                          member that was last observed as the master among the members that
+                          hold the database.
+                        type: string
+                    required:
+                    - member
+                    - source
+                    type: object
                   endTime:
                     description: endTime is when the rebuild ended.
                     format: date-time
                     type: string
+                  formerPrimary:
+                    description: |-
+                      formerPrimary says that the member was status.lastResolvedPrimary and
+                      the request named the source, accepting the source's data as the
+                      member's data (ADR-0006).
+                    type: boolean
                   member:
                     description: member is the member whose storage is rebuilt.
                     type: string
@@ -1634,6 +1943,13 @@ spec:
                         claimUID is the UID of the member's data PersistentVolumeClaim: the
                         replacement claim the rebuild would restore into.
                       type: string
+                    formerPrimary:
+                      description: |-
+                        formerPrimary says that the member is status.lastResolvedPrimary: it
+                        may have acknowledged writes the source lacks. Its request must name
+                        the source as a third field, stating that the source's data becomes the
+                        member's data (ADR-0006).
+                      type: boolean
                     member:
                       description: member is the member whose storage would be rebuilt.
                       type: string
@@ -1651,7 +1967,8 @@ spec:
                     token:
                       description: |-
                         token is the one-time token that requests this rebuild: the annotation
-                        database.cubrid.io/rebuild-member set to "<member>:<token>".
+                        database.cubrid.io/rebuild-member set to "<member>:<token>", or to
+                        "<member>:<token>:<source>" when formerPrimary is true.
                       type: string
                     volumeName:
                       description: volumeName is the PersistentVolume that claim is

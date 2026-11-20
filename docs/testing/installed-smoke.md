@@ -270,6 +270,17 @@ image IDs, node placement, StorageClass/provisioner and SQL output. It also
 records the engine and Kubernetes server versions, with unobserved environment
 values left `unknown`.
 
+When a csql statement fails or prints the `-199`/`-111` pair (#238), the
+record also holds `sqlFailureState`, read before cleanup: the database
+container's restart count and container ID at the start and again, the
+member's time, uptime and `cub_server` identity (the same scripts as the Kind
+E2E suite), and the last 40 lines of the newest server error log, each line cut
+at 400 characters and redacted like the rest of the evidence. A server age
+below the time since the failed statement means the server restarted. The
+reads take at most 18 s, change no verdict, retry or cleanup, and a failed read
+is only recorded in `readError`. This is evidence for telling a restart from a
+client-side hang-up, not a finding on the cause.
+
 Expected image selection and observed runtime IDs are separate facts.
 Kubernetes allows the runtime's `imageID` to differ from the PodSpec image
 identity; locally imported containerd images can report a configuration ID

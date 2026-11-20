@@ -136,7 +136,15 @@ for that other reason or proceeds. With an Instance Manager that never
 reports the log end, a `PreferStandby` backup therefore runs on the master
 after that delay. A slave excluded for another reason as well does not hold
 the selection. Eligible slaves are ordered by the log pages waiting to be
-applied (`delayedPages`), then by ordinal. Missing evidence never counts as
+applied (`delayedPages`), then by ordinal.
+Standbys are not also ranked by the log pages still to be copied
+(`copyDelayedPages`, the copy gap), as decided on
+[#291 on 2026-11-17](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/291#issuecomment-6935713406).
+Whether `delayedPages` overlaps the copy gap has not been observed on an
+engine, so a ranking built on the gap would choose standbys by an unqualified
+signal. A standby whose copier receives nothing is already left out by the 60 s
+`notReceivingSince` rule. To revisit this, add a POC under `docs/poc/` that
+shows what a comparative signal measures. Missing evidence never counts as
 caught up: a slave whose applier or copy's end could not be read is not
 eligible, and no slave is eligible while the primary is not resolved, so
 `StandbyOnly` waits (`NoHealthyStandby`) and `PreferStandby` falls back to
@@ -339,7 +347,9 @@ The HA seed exception below uses explicit `upload.seed: true`, supplied by the
 bootstrap controller. A seed upload is accepted only with master source
 metadata and the clean suffix `<cluster-uid>/seed[-<artifact>]/<database>`;
 ordinary `CubridBackup` destinations end in their backup UID and cannot use
-that mode. This is authenticated request metadata, not independent proof of
+that mode. The seed backup of an accepted member rebuild (`upload.rebuild`)
+goes only to `<cluster-uid>/rebuild-<operationID>/<database>`, never to the
+bootstrap's seed location (ADR-0003). This is authenticated request metadata, not independent proof of
 the caller's identity as a controller or the engine's actual role. The stable
 seed prefix and restore request body remain unchanged, preserving restore
 takeover/idempotency. An older recorded seed backup request without the field
@@ -367,7 +377,9 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   backup whose manifest declares that master as `sourceInstance` and
   `master` as `sourceRole`, and, when the request carries
   `expectedClusterUID` (the operator always sends it for a seed), whose
-  `clusterUID` is that cluster's. A restore into a new cluster takes
+  `clusterUID` is that cluster's. A restore for an accepted member rebuild
+  (`rebuild`) also takes only a backup whose manifest carries the same
+  rebuild operation ID and token (ADR-0003). A restore into a new cluster takes
   another cluster's full backup from a standby or the master. The engine
   version is compared by series (ADR-0011): the manifest's `cubridVersion`
   is the full version the backup's member read from `cubrid_rel`, a backup

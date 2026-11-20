@@ -193,6 +193,8 @@ func selectBackupTarget(
 // whose Instance Manager reports no position is judged by its counters, and a
 // long transaction can still exclude it; that only moves the backup to
 // another standby or to the master fallback.
+//
+// The copy gap (CopyDelayedPages) does not rank standbys: ADR-0007 records why.
 func eligibleStandbys(members []string, obs map[string]RoleObservation,
 	history map[string]*databasev1alpha1.InstanceReplication, positions map[string]applierReading, admitted func(string) bool,
 	res PrimaryResolution, now time.Time) (standbys []string, logEndUnread bool) {

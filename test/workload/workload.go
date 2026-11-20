@@ -90,6 +90,11 @@ type Operation struct {
 	// AcknowledgedAt is when the client recorded the acknowledgement, for an
 	// acknowledged operation.
 	AcknowledgedAt time.Time
+	// AttemptedAt is when the client recorded the attempt, and AnsweredAt
+	// when it recorded the outcome; AnsweredAt is zero when none was
+	// recorded.
+	AttemptedAt time.Time
+	AnsweredAt  time.Time
 	// Error is what the client recorded with the outcome; it is empty for an
 	// acknowledged one.
 	Error string
@@ -123,8 +128,21 @@ type Report struct {
 	Members             map[string]MemberCheck `json:"members"`
 	Diverged            []Violation            `json:"diverged"`
 	// ReadMismatches are the client's reads that found the row they read back
-	// missing or different during the run.
+	// missing or different during the run, other than those in
+	// ExplainedReadMismatches. Each one fails the check.
 	ReadMismatches []Violation `json:"readMismatches"`
+	// ExplainedReadMismatches are the reads that did not find the row they
+	// read back while the read-write Broker served the client from a standby
+	// during a failover (see CheckDuringFailovers). They are reported and do
+	// not fail the check.
+	ExplainedReadMismatches []Violation `json:"explainedReadMismatches"`
+}
+
+// FailoverWindow is the time from the moment a scenario issued a fault that
+// loses the master until the moment it first saw a new master active.
+type FailoverWindow struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
 }
 
 // FirstViolation returns the first violation of the report whose operation
@@ -229,7 +247,7 @@ func ReadHistory(r io.Reader) (History, error) {
 			}
 			sequences[key] = e.OpID
 			h.Operations[e.OpID] = Operation{OpID: e.OpID, Client: e.Client, Seq: e.Seq, Op: e.Op,
-				Amount: e.Amount, Note: e.Note, Target: e.Target, Outcome: Unknown}
+				Amount: e.Amount, Note: e.Note, Target: e.Target, Outcome: Unknown, AttemptedAt: e.T}
 		case Acknowledged, Failed, Unknown:
 			op, seen := h.Operations[e.OpID]
 			if !seen {
@@ -242,6 +260,7 @@ func ReadHistory(r io.Reader) (History, error) {
 			answered[e.OpID] = true
 			op.Outcome = e.Event
 			op.Error = e.Error
+			op.AnsweredAt = e.T
 			if e.Event == Acknowledged {
 				op.AcknowledgedAt = e.T
 			}
@@ -290,9 +309,33 @@ func CheckReadOnlyRefusal(h History) error {
 
 // Check applies the data rules to the ledger rows read from each member or
 // endpoint. An operation with an unknown outcome may be present or absent;
-// it is counted and is never reported as missing.
+// it is counted and is never reported as missing. Every read mismatch fails
+// it.
 func Check(h History, members map[string][]Row) Report {
-	report := Report{Members: map[string]MemberCheck{}, Diverged: []Violation{}, ReadMismatches: readMismatches(h)}
+	return CheckDuringFailovers(h, members, nil)
+}
+
+// CheckDuringFailovers is Check for a run whose scenarios lost the master in
+// the given windows. From the moment the master is lost until the new master
+// is active, the read-write Broker can connect to a standby, where a read can
+// miss the client's own acknowledged write and a write fails with -581
+// (docs/architecture/failure-recovery.md, POC-60 in docs/poc/RESULTS.md). A
+// read mismatch is explained by that, and moved to ExplainedReadMismatches,
+// only when all of these hold:
+//   - the read did not find the row: a standby that lags can miss a row, not
+//     hold it with other values;
+//   - the read was attempted and answered inside one window;
+//   - the same client's next write was answered inside the same window and
+//     failed with ReadOnlyRefusal. That proves the write's connection was on
+//     a standby; that the read ran on the same connection is inferred from
+//     the Broker keeping the client on one CAS (POC-60), not proven;
+//   - the row is an insert of the same client, acknowledged no later than
+//     the read was attempted, and every member and endpoint checked holds it
+//     with the values sent.
+//
+// Any other read mismatch fails the check as in Check.
+func CheckDuringFailovers(h History, members map[string][]Row, failovers []FailoverWindow) Report {
+	report := Report{Members: map[string]MemberCheck{}, Diverged: []Violation{}, ExplainedReadMismatches: []Violation{}}
 	missing := map[string]bool{}
 	present := map[string]map[string]Row{}
 	for name, rows := range members {
@@ -307,6 +350,15 @@ func Check(h History, members map[string][]Row) Report {
 	}
 	report.AcknowledgedMissing = len(missing)
 	report.Diverged = diverged(present)
+	report.ReadMismatches = []Violation{}
+	for _, v := range readMismatches(h) {
+		if why := staleReadDuringFailover(h, h.Operations[v.OpID], present, failovers); why != "" {
+			v.Detail += "; " + why
+			report.ExplainedReadMismatches = append(report.ExplainedReadMismatches, v)
+		} else {
+			report.ReadMismatches = append(report.ReadMismatches, v)
+		}
+	}
 
 	report.OK = len(members) > 0 && len(report.Diverged) == 0 && len(report.ReadMismatches) == 0
 	for _, check := range report.Members {
@@ -385,6 +437,51 @@ func readMismatches(h History) []Violation {
 		}
 	}
 	return out
+}
+
+// staleReadDuringFailover returns why the failed read is the stale read of a
+// standby during a failover, by the rules of CheckDuringFailovers, or "" when
+// it is not.
+func staleReadDuringFailover(h History, read Operation, present map[string]map[string]Row,
+	failovers []FailoverWindow) string {
+	if read.Error != ReadMismatch+" "+read.Target+" not found" || len(present) == 0 {
+		return ""
+	}
+	target, known := h.Operations[read.Target]
+	if !known || target.Op != OpInsert || target.Outcome != Acknowledged || target.Client != read.Client ||
+		target.AcknowledgedAt.IsZero() || target.AcknowledgedAt.After(read.AttemptedAt) {
+		return ""
+	}
+	sent := Row{OpID: target.OpID, Client: target.Client, Seq: target.Seq, Amount: target.Amount, Note: target.Note}
+	for _, rows := range present {
+		if row, here := rows[target.OpID]; !here || row != sent {
+			return ""
+		}
+	}
+	var next *Operation
+	for _, op := range h.Operations {
+		if op.Client == read.Client && op.Seq > read.Seq && (op.Op == OpInsert || op.Op == OpRollback) &&
+			(next == nil || op.Seq < next.Seq) {
+			next = &op
+		}
+	}
+	if next == nil || next.Outcome != Failed || !strings.HasPrefix(next.Error, ReadOnlyRefusal) {
+		return ""
+	}
+	inside := func(w FailoverWindow, t time.Time) bool {
+		return !t.IsZero() && !t.Before(w.From) && !t.After(w.To)
+	}
+	for _, w := range failovers {
+		if w.From.IsZero() || w.To.IsZero() {
+			continue
+		}
+		if inside(w, read.AttemptedAt) && inside(w, read.AnsweredAt) && inside(w, next.AnsweredAt) {
+			return fmt.Sprintf("read during the failover from %s to %s; the next write %s was refused with %s;"+
+				" %s is on every member and endpoint", w.From.Format(time.RFC3339Nano), w.To.Format(time.RFC3339Nano),
+				next.OpID, strings.TrimSuffix(ReadOnlyRefusal, ":"), target.OpID)
+		}
+	}
+	return ""
 }
 
 // diverged lists the operations whose row is not the same on every member.

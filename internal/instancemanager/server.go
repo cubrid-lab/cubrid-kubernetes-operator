@@ -28,11 +28,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -160,6 +162,16 @@ type Server struct {
 	// start needs (observeStartable).
 	heartbeatProcesses func() (map[string]bool, error)
 	heartbeatSettle    time.Duration
+	// namespace is the Kubernetes namespace of this member's Pod, which
+	// qualifies the address of another member's Instance Manager; empty when
+	// the manager was not told it (WithNamespace).
+	namespace string
+	// sourceRoleURL is where a restore for a member rebuild asks the
+	// source's Instance Manager for its role; nil is defaultSourceRoleURL in
+	// namespace.
+	// sourceRoleTimeout bounds that question; zero is sourceRoleBudget.
+	sourceRoleURL     func(member string) string
+	sourceRoleTimeout time.Duration
 }
 
 func NewServer(cli CLI, token string) *Server {
@@ -256,6 +268,15 @@ func (s *Server) WithObjectStore(objects ObjectStore) *Server {
 
 // WithRestoreRoots sets the directories a restore may touch; a request naming a
 // path outside them is rejected. Returns the server for chaining.
+// WithNamespace sets the namespace of this member's Pod (POD_NAMESPACE). A
+// restore for a member rebuild asks the source's Instance Manager at its
+// name qualified with it, so the token is sent to no host a DNS search list
+// completes. Returns the server for chaining.
+func (s *Server) WithNamespace(namespace string) *Server {
+	s.namespace = namespace
+	return s
+}
+
 func (s *Server) WithRestoreRoots(roots RestoreRoots) *Server {
 	s.restoreRoots = roots
 	return s
@@ -300,6 +321,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/operations", s.auth(s.findOperations))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
+	mux.HandleFunc("POST /v1/rebuild/release", s.auth(s.rebuildRelease))
 	mux.HandleFunc("GET /v1/dba-password", s.auth(s.dbaPassword))
 	return s.logRequests(mux)
 }
@@ -829,6 +851,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 				SourceRole:     string(role),
 				CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 				OperationID:    id,
+				Rebuild:        req.Upload.Rebuild,
 			},
 		})
 		if err != nil {
@@ -1041,13 +1064,17 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		defer s.endDisruptive()
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Restore)
 		defer cancel()
-		fail := func(reason string) {
+		// failWith ends the restore Failed with reason and, when it is not
+		// empty, code.
+		failWith := func(reason, code string) {
 			reason = s.stoppingReason(reason)
 			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
+				op.FailureCode = code
 			})
 		}
+		fail := func(reason string) { failWith(reason, "") }
 
 		// An HA member registers the restored database under the member list,
 		// as createdb does on the first member. A member that is not
@@ -1065,7 +1092,10 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			}
 			roots.Host = hosts
 		}
-		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
+		if _, err := s.store.Update(id, func(op *Operation) {
+			op.State = OpDownloading
+			op.Rebuild = operationRebuild(req.Rebuild)
+		}); err != nil {
 			fail(notRecorded(OpDownloading, err))
 			return
 		}
@@ -1083,6 +1113,22 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			var err error
 			if password, err = ReadDBAPassword(s.ha.DBAPasswordFile); err != nil {
 				fail("restore refused: " + err.Error())
+				return
+			}
+		}
+		// A restore for a member rebuild goes on only while its source is
+		// the active master, as its source's own Instance Manager answers
+		// now. The question is asked before anything is taken over, removed,
+		// read from the artifact or written: a refusal leaves the target as
+		// it was. The target-holds-database guard still runs afterwards.
+		if req.Rebuild != nil {
+			if code, err := s.confirmRebuildSource(ctx, req.SeedFromMaster); err != nil {
+				reason := s.stoppingReason("restore refused: " + err.Error())
+				_ = s.store.Settle(id, func(op *Operation) {
+					op.State = OpFailed
+					op.FailureReason = reason
+					op.FailureCode = code
+				})
 				return
 			}
 		}
@@ -1176,11 +1222,20 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		}
 		// The restored data is kept when the start fails.
 		storeFailed := false
+		sourceCode := ""
 		err = s.startRestoredDatabase(ctx, req.Database, haMember, func() error {
 			if adopted && password != "" {
 				if err := s.confirmBeforeStart(ctx, req.Database, password); err != nil {
 					return err
 				}
+			}
+			// The source of a rebuild is asked again right before the
+			// member is started: a member that restoreslave copied across a
+			// change of master may lack acknowledged writes without showing
+			// it (docs/poc/RESULTS.md, POC-57), and is never started then.
+			if code, err := s.reconfirmRebuildSource(ctx, req); err != nil {
+				sourceCode = code
+				return err
 			}
 			_, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting })
 			storeFailed = err != nil
@@ -1190,7 +1245,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			if storeFailed {
 				err = errors.New(notRecorded(OpStarting, err))
 			}
-			fail(err.Error())
+			failWith(err.Error(), sourceCode)
 			return
 		}
 		// A Completed that cannot be written leaves the ownership marker:
@@ -1201,14 +1256,26 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		}); err != nil {
 			return
 		}
-		// A marker left by a failure here belongs to a Completed operation:
-		// ResumeCompletedRestores or the next operation on this database
-		// clears it.
-		if err := clearOwned(s.restoreRoots.Target, req.Database); err != nil {
-			s.log().Warn("Could not clear the ownership marker of a completed restore",
-				"operationID", id, "database", req.Database, "err", err)
-		}
+		s.completedRestoreMarker(id, req)
 	}()
+}
+
+// completedRestoreMarker clears the ownership marker of the completed restore
+// id of req. A marker left by a failure here belongs to a Completed
+// operation: ResumeCompletedRestores or the next operation on this database
+// clears it. A restore for a member rebuild keeps its marker until the
+// Operator judged the member caught up and released it (releaseRebuild), so
+// that a restart before then starts nothing (ADR-0006).
+func (s *Server) completedRestoreMarker(id string, req RestoreRequest) {
+	if req.Rebuild != nil {
+		s.log().Info("Holding the database of a member rebuild until the Operator releases it",
+			"operationID", id, "database", req.Database, "rebuildOperationID", req.Rebuild.OperationID)
+		return
+	}
+	if err := clearOwned(s.restoreRoots.Target, req.Database); err != nil {
+		s.log().Warn("Could not clear the ownership marker of a completed restore",
+			"operationID", id, "database", req.Database, "err", err)
+	}
 }
 
 // startRestoredDatabase starts a restored database, which the entrypoint left
@@ -1343,6 +1410,13 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 		}
 		op, err := s.store.Get(strings.TrimSpace(string(data)))
 		if err != nil || op.Kind != OpRestore || op.State != OpCompleted || op.Restored == nil || op.Database != database {
+			continue
+		}
+		if op.Rebuild != nil {
+			// A member rebuild that the Operator has not released: the
+			// member has not been judged caught up, and is not started.
+			s.log().Warn("Not starting the database of a member rebuild that was not released",
+				"operationID", op.ID, "database", database, "rebuildOperationID", op.Rebuild.OperationID)
 			continue
 		}
 		if haErr != nil {
@@ -1498,8 +1572,16 @@ func validateBackupRequest(req BackupRequest) error {
 	if !hostLabelPattern.MatchString(up.SourceInstance) {
 		return fmt.Errorf("upload sourceInstance %q is not a host name (a DNS label)", up.SourceInstance)
 	}
+	if up.Rebuild != nil {
+		if !up.Seed {
+			return errors.New("upload rebuild needs a seed upload (upload.seed): a rebuild copies from its source as master")
+		}
+		if err := up.Rebuild.validate(); err != nil {
+			return fmt.Errorf("upload %w", err)
+		}
+	}
 	if up.Seed {
-		if err := validateSeedUpload(up.Prefix, up.ClusterUID, req.Database, up.SourceRole); err != nil {
+		if err := validateSeedUpload(up.Prefix, up.ClusterUID, req.Database, up.SourceRole, up.Rebuild); err != nil {
 			return err
 		}
 	}
@@ -1644,4 +1726,93 @@ func (s *Server) removeBackupStaging(destination string) {
 	if parent := filepath.Dir(rel); parent != "." {
 		_ = root.Remove(parent)
 	}
+}
+
+// sourceRoleBudget bounds the question a restore for a member rebuild asks
+// the source's Instance Manager; it is the Operator's bound on GET /v1/role.
+const sourceRoleBudget = 5 * time.Second
+
+// maxSourceRoleAnswer is the largest answer to that question that is read.
+const maxSourceRoleAnswer = 1 << 20
+
+// defaultSourceRoleURL is the role endpoint of member's Instance Manager in
+// namespace: the member's per-member Service (ADR-0004), named as the
+// Operator names it, <member>.<namespace>.svc, on the manager's port. Both
+// names must be DNS labels; anything else could name another host, a user
+// or a port, and is refused before an address is built from it.
+func defaultSourceRoleURL(member, namespace string) (string, error) {
+	if !hostLabelPattern.MatchString(member) {
+		return "", fmt.Errorf("the source %q is not a member name (a DNS label)", member)
+	}
+	if !hostLabelPattern.MatchString(namespace) {
+		return "", fmt.Errorf("this manager's namespace %q (POD_NAMESPACE) is not a DNS label", namespace)
+	}
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(member+"."+namespace+".svc", strconv.Itoa(DefaultPort)), Path: "/v1/role"}
+	return u.String(), nil
+}
+
+// reconfirmRebuildSource asks the source of the rebuild of req again, right
+// before the restored member is started; nil for a restore of no rebuild.
+func (s *Server) reconfirmRebuildSource(ctx context.Context, req RestoreRequest) (string, error) {
+	if req.Rebuild == nil {
+		return "", nil
+	}
+	return s.confirmRebuildSource(ctx, req.SeedFromMaster)
+}
+
+// confirmRebuildSource asks the Instance Manager of source, with this
+// manager's token, for its role now, and returns nil only for an answer
+// that source is the active master: the master role, a
+// registered_and_active server and source's own name as the current node.
+// Otherwise it returns the failure code and why: FailureRebuildSourceNotMaster
+// for an answer that shows anything else, FailureRebuildSourceUnconfirmed for
+// no readable answer within sourceRoleBudget.
+func (s *Server) confirmRebuildSource(ctx context.Context, source string) (string, error) {
+	budget := s.sourceRoleTimeout
+	if budget <= 0 {
+		budget = sourceRoleBudget
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	unconfirmed := func(why string) (string, error) {
+		return FailureRebuildSourceUnconfirmed, fmt.Errorf("the Instance Manager of the rebuild source %s could not be "+
+			"asked for its role (%s), so it is not shown to be the active master", source, why)
+	}
+	var address string
+	switch {
+	case s.sourceRoleURL != nil:
+		address = s.sourceRoleURL(source)
+	case s.namespace == "":
+		return unconfirmed("this manager does not know its namespace (POD_NAMESPACE), which qualifies the source's address")
+	default:
+		var err error
+		if address, err = defaultSourceRoleURL(source, s.namespace); err != nil {
+			return unconfirmed(err.Error())
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return unconfirmed(err.Error())
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	// A redirect is not followed: the answer must come from the source.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		// The error names the address, which carries no token.
+		return unconfirmed(err.Error())
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return unconfirmed(fmt.Sprintf("status %d", resp.StatusCode))
+	}
+	var st HAStatus
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxSourceRoleAnswer)).Decode(&st); err != nil {
+		return unconfirmed("unreadable answer")
+	}
+	if st.Current != source || st.Role != RoleMaster || !st.ServerActive {
+		return FailureRebuildSourceNotMaster, fmt.Errorf("the rebuild source %s is not the active master: its Instance "+
+			"Manager answered for member %q with role %q and an active server %t", source, st.Current, st.Role, st.ServerActive)
+	}
+	return "", nil
 }

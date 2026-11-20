@@ -45,9 +45,22 @@ jobs:
           go-version-file: go.mod
 
       # The kind version and its node image are pinned in the Makefile.
+      # `make kind` downloads kind's modules from the Go proxy; a passing
+      # network error there failed whole runs, so it is tried up to three
+      # times, 15 s apart.
       - name: Install the pinned version of kind
         run: |
-          make kind
+          for attempt in 1 2 3; do
+            if make kind; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::make kind failed 3 times"
+              exit 1
+            fi
+            echo "make kind failed (attempt $attempt of 3); trying again in 15 s"
+            sleep 15
+          done
           bin/kind version
 
       # Outside the run's own deadlines in the Makefile (E2E_GO_TIMEOUT 73m),

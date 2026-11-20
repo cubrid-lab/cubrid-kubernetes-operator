@@ -25,6 +25,20 @@ HA failure cases (#702/#703). Those Docker observations do not by themselves
 prove two writable masters were exposed through the Operator-managed RW Broker
 in Kubernetes; that path needs separate evidence (#115).
 
+The managed-path records so far show the hazard in a sequential form. In
+Kind runs with the Operator and Brokers (POC-51, and the 2026-11-08 record on
+#702) and in five VM-lab runs that cut off a member ranked above the master
+(2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18), the
+observed row histories and role sweeps are consistent with sequential
+acknowledgements: no overlapping writable servers were observed in the 959
+sampled role sweeps, but the member that served each write was not recorded.
+What the runs did verify is that 13 to 73 acknowledged writes per run, the
+old master's last ones, were missing after the heal: they never reached the
+member CUBRID made master. Docker trials with clients inside each member and
+no Broker (POC-50, also POC-52 and POC-58) remain the only records of two
+servers acknowledging writes at once. These are observations of one engine series
+in small numbers of runs, not a general statement of CUBRID behavior.
+
 ## Constraints
 
 Grounded in CUBRID 11.4 + prior ADRs:
@@ -243,8 +257,8 @@ case is reduced availability, not operator-induced split-brain.
 tag on Kind), from small trial counts, and none of it is a CUBRID guarantee.
 The records are in `docs/poc/RESULTS.md`.
 
-- **Two active servers appear when a member is cut off from its peers,
-  whatever its rank.**
+- **In Docker, two active servers appeared when a member was cut off from
+  its peers, whatever its rank.**
   - When the cut-off member ranked above the active master, it promoted
     itself, and both acknowledged writes in 4 of 26 trials, for up to
     40.6 s (POC-50).
@@ -254,13 +268,35 @@ The records are in `docs/poc/RESULTS.md`.
   - With the highest-ranked member as master and a lower one cut off, no
     second server accepted a write in 85 trials, including a 600 s hold
     (POC-50).
+- **On the VM lab, with the Operator and Brokers, no two active servers
+  were seen.** A member ranked above the master was cut off in five runs
+  (2026-11-17 and 2026-11-18 UTC, #115; traced on #702 on 2026-11-18).
+  - It became heartbeat master during the cut, but its server stayed
+    `registered_and_to_be_active`. No sweep of 959 saw more than one
+    active server.
+  - In the two runs with server logs, its server was never active from the
+    master move to the end of observation. The other three runs did not
+    observe its server from the master move to the first sweep (63 to
+    81 s, apart from one check just before the cut) or from the last sweep
+    in the cut to the heal (48 to 51 s).
 - **Writes acknowledged on one side during a cut were lost when it
   healed.** Where both sides took writes, one side's acknowledged writes
   were missing from the final master:
   - In Kind runs with the Operator and Brokers (data on #702, 2026-11-08),
     the higher-ranked member was cut off. It was master again after the
     heal in 19 of 19 trials, and the writes the lower member had
-    acknowledged through `-rw` during the cut were not on it.
+    acknowledged through `-rw` during the cut were not on it. Within each
+    trial the two members' acknowledgement spans did not overlap.
+  - In the five VM-lab runs above, only the old master took writes. Every
+    write it acknowledged from about 2 s after the cut was issued until the
+    quarantine closed the path, 6 to 17 s after the cut was issued, reached
+    it and the other slave but never the cut-off member: 13 to 73 writes
+    per run. CUBRID left the cut-off member as heartbeat master after the
+    heal in all five runs, and in one it became the active master while
+    lacking all 73. No row was found only on the cut-off member. That
+    writes went to one master at a time is inferred from the rows, the role
+    sweeps and the times; no Broker or CAS record ties a write to a
+    server.
   - In POC-52, 922 acknowledged writes in 23 of 78 trials were not on the
     final master.
   - In POC-58's control trials, the higher-ranked member was cut off and
@@ -276,12 +312,19 @@ The records are in `docs/poc/RESULTS.md`.
   recreated at once and the former master rejoined as a slave in all 8 runs.
   The required limit for that recovery is 30 s
   (`docs/testing/scenario-contract.md`, `failover_limit`).
-- **Neither ping parameter is a substitute** (POC-52).
-  - `ha_ping_hosts` held the promotion only with every packet cut and no
-    `cubrid heartbeat status` call on the member, and the Instance
-    Manager's readiness check makes that call every 5 s.
-  - `ha_tcp_ping_hosts` held it in every full cut, but caused failovers
-    with no member failed when its target was down.
+- **Neither ping parameter is a substitute** (POC-52, in Docker with a
+  stand-in target and no Pod; a plain status call every 5 s stood in for the
+  Instance Manager's calls).
+  - `ha_ping_hosts` held the promotion only with every packet cut, the
+    target included, and no `cubrid heartbeat status` call on the member
+    that returned before the heartbeat pass that counted it isolated. The
+    Instance Manager's readiness check makes that call every 5 s, and its
+    `/v1/role` answer makes it too.
+  - `ha_tcp_ping_hosts` held it in every full cut, but with its target down
+    and a status call every 5 s it caused failovers with no member failed.
+  - On the VM lab, `ha_ping_hosts` set by hand did not make a cut-off master
+    that no member replaced demote (POC-40). POC-52 reads that result as
+    depending on the status calls as well.
   - The Operator renders neither.
 
 **Definitions.** Each is read from the current pass's observations.
@@ -418,7 +461,7 @@ order on every pass:
    - The second is a cut-off former master, of any rank, that may go on
      accepting writes from Brokers or open sessions that still reach it
      (POC-52, POC-58).
-   - *Proposed by #931, pending maintainer review:* when no quarantine is in
+   - *Accepted with #932 (merged 2026-11-18 UTC), from #931:* when no quarantine is in
      force and every member this rule names is *pending*, the quarantine
      does not start in this pass. A pending member gave a fresh,
      authenticated, non-master answer in this pass and lacks only an answer
@@ -471,6 +514,73 @@ order on every pass:
      first member, a slave beside master `ha-1`, had only one answer
      (#931). That contradicts "a missing Operator observation is not, on its
      own, a reason to quarantine" under *Negative* below.
+   - *Accepted by the maintainer on 2026-11-20 UTC (#1019), from #938:* **one probe that gives no
+     role is enough.** A member that outranks M, or is the last resolved
+     primary, and gives no usable answer in a pass starts the quarantine in
+     that pass. This holds when the member was just restarted after a
+     confirmed termination and its previous answer was a slave. No grace
+     period, second probe or deferral applies to it. The #931 deferral above
+     covers only a member that answered as no active master in the pass.
+     - **What happened on Kind** (run 44007242998, 2026-11-17 UTC, scenario
+       S03 graceful). The master Pod of the first member `hab-0` was
+       deleted at 03:36:05.904, and CUBRID promoted `hab-1`. The new Pod of
+       `hab-0` answered `slave` once at 03:36:30.584. Its next
+       `cubrid heartbeat status` hung and was killed after 4 s, at
+       03:36:35.667, and the quarantine started from that probe alone.
+       At 03:36:36.514, `hab-0`'s own heartbeat reported that it had stopped
+       receiving `hab-1`'s heartbeats (`[Failover] [Diagnosis]`). At
+       03:36:37.008, it listed itself as `to-be-master` and cancelled the
+       failover because it had found the new master. It answered `slave` again at
+       03:36:41.452. The quarantine was released automatically at
+       03:36:56.826, and writes through `-rw` resumed at 03:37:05.035:
+       28.4 s of refused writes after CUBRID's own failover of 1.95 s. No
+       acknowledged write was lost.
+     - **Why the missed probe is not ignored.** The probe failed while the
+       member's `cub_master` was not answering. In the same second, that
+       `cub_master` judged the master lost and started its own failover.
+       The missed probe was a symptom of the condition rule 2 guards
+       against, not unrelated noise. CUBRID cancelled the failover in this
+       run. A cut-off member that outranks the master did not always cancel
+       it: both members acknowledged writes in 4 of 26 POC-50 trials. The
+       higher-ranked member was master again after the heal in 19 of 19 Kind
+       trials (#702), so the writes M acknowledges in that window are the
+       ones lost. While the member's `cub_master` does not answer, rule 1
+       cannot see it claim an active master either.
+     - **Narrower options considered and rejected.**
+       - *Wait for a second missed probe, only for a member just restarted
+         whose last readable answer was a slave, not a master or
+         `to-be-master`.* The recorded case meets every one of those
+         conditions: its last readable answer, at 03:36:30.584, was
+         `slave`, and `to-be-master` appeared only after the missed probe.
+         So this option would have deferred in the one recorded case where
+         the member was on its way to master. The `-rw` path would have
+         stayed open for up to one more pass, that is 3 s plus a 5 s probe
+         timeout.
+       - *Extend the confirmed-termination cover past the new Pod's first
+         answer.* This has the same effect as the previous option for the
+         same member.
+       - *Keep the quarantine, but release it sooner.* Nothing measured
+         supports a release interval shorter than 10 s. The time after the
+         release goes to recreating the read-write Brokers, which #1007
+         and #1011 address without changing these rules.
+     - **What it costs.** The S03 graceful variant was compared over 21
+       runs. One of them, the only one that deleted the first member's
+       master Pod, refused writes for this reason. Token-migration run
+       43624901780 also refused writes for this reason (2026-11-14
+       19:01:01 UTC, #438). Of the three such hangs whose engine logs were
+       read (#938 and runs 43624901780 and 44023079925), only #938 showed
+       the failover diagnosis. Why `cubrid heartbeat status` hangs for 4 s
+       after a master Pod replacement is not known (#438). How S03 graceful
+       counts a quarantine started this way against `failover_limit` is a
+       scenario-contract decision on #938, not a change to this rule.
+     - **Revisit when** the cause of that hang is known, or when a POC shows
+       that the active master's own `cubrid heartbeat status` reliably
+       reports a member whose `cub_master` does not answer. Such a POC would
+       give the Operator a second, independent reading. `TestQuarantineMissedProbe*`,
+       `TestQuarantineAfterAMissedProbe` and
+       `TestQuarantineOneMissedProbeBoundary` in
+       `internal/controller/quarantine_missed_probe_test.go` replay this run
+       and pin the rule.
 3. **Otherwise no quarantine starts.** That leaves the state reported, as
    today, through `PrimaryResolved`, `RoutingReady`, and `Ready` after
    60 s. It covers two cases:
@@ -691,7 +801,10 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
     the deletion until it answers without the master role. Whether this
     stays within the 30 s `failover_limit` is not known: the Instance
     Manager's answers during a rejoin have not been sampled pass by pass.
-    #113 measures S03 before any claim.
+    #113 measures S03 before any claim. After a graceful deletion, a new
+    Pod that misses one probe after its first answer starts the quarantine
+    when it outranks the new master. That refused writes for 28.4 s in one
+    Kind run (#938, rule 2 above).
   - **Master VM power-off (S04):** an authorized actor confirms that the
     worker VM is actually stopped, records that proof, then adds
     `node.kubernetes.io/out-of-service:NoExecute`. Kubernetes then

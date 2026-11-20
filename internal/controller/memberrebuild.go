@@ -38,8 +38,14 @@ import (
 // rebuildMemberAnnotation on a CubridCluster asks for the rebuild of one
 // member's replacement storage from the current primary (#117). Its value is
 // "<member>:<token>", where token is the member's current token in
-// status.memberRebuildOffers.
+// status.memberRebuildOffers. For the offer of the last resolved primary
+// (formerPrimary) it is "<member>:<token>:<source>": naming the source
+// states that the source's data becomes the member's data (ADR-0006).
 const rebuildMemberAnnotation = "database.cubrid.io/rebuild-member"
+
+// maxFormerDataClaims is how many records status.formerDataClaims holds at
+// most, as its CRD schema allows.
+const maxFormerDataClaims = 64
 
 // The Events of a rebuild request.
 const (
@@ -47,6 +53,8 @@ const (
 	reasonMemberRebuildIgnored   = "MemberRebuildIgnored"
 	reasonMemberRebuildRefused   = "MemberRebuildRefused"
 	reasonMemberRebuildWithdrawn = "MemberRebuildWithdrawn"
+	reasonMemberRebuildCompleted = "MemberRebuildCompleted"
+	reasonMemberRebuildFailed    = "MemberRebuildFailed"
 )
 
 // claimIdentity is a member's data PersistentVolumeClaim as one pass read
@@ -89,13 +97,17 @@ type rebuildInput struct {
 	Unstable map[string]bool
 	// Claims are the members' data claims in this pass.
 	Claims map[string]claimIdentity
-	// Unknown says that the members' Pods or claims could not be read.
+	// Unknown says that the members' Pods or claims could not be read, or
+	// that the write quarantine step of this pass failed.
 	Unknown bool
 	// Observations are this pass's role answers.
 	Observations map[string]RoleObservation
 	// DataClaims are the claims the members were seen running the database
 	// on.
 	DataClaims []databasev1alpha1.MemberDataClaim
+	// FormerDataClaims are the records DataClaims held before a later claim
+	// of the same member replaced them (status.formerDataClaims).
+	FormerDataClaims []databasev1alpha1.MemberDataClaim
 	// Offers are the offers in the status this pass started from.
 	Offers []databasev1alpha1.MemberRebuildOffer
 	// Active is the accepted rebuild, nil for none.
@@ -147,10 +159,18 @@ func (in rebuildInput) answer(m string) RoleObservation {
 // the claim of its name that existed when the Pod was created. Nothing is
 // recorded when the Pods or claims could not be read, nor from a member whose
 // Pod changed during the observation.
-func recordDataClaims(in rebuildInput) []databasev1alpha1.MemberDataClaim {
+//
+// A member's earlier record that a later claim replaces is appended to
+// former, in.FormerDataClaims, and never removed from it: that claim and
+// volume held the database, and may hold the only copy of writes no other
+// member has (ADR-0006). Once former holds maxFormerDataClaims records, a
+// later claim is not recorded and the earlier record stays; no rebuild is
+// offered then (rebuildRefusal).
+func recordDataClaims(in rebuildInput) (claims, former []databasev1alpha1.MemberDataClaim) {
 	out := slices.Clone(in.DataClaims)
+	former = slices.Clone(in.FormerDataClaims)
 	if in.Unknown {
-		return out
+		return out, former
 	}
 	for _, m := range in.Members {
 		id, claim := in.Identities[m], in.Claims[m]
@@ -159,28 +179,37 @@ func recordDataClaims(in rebuildInput) []databasev1alpha1.MemberDataClaim {
 			continue
 		}
 		record := databasev1alpha1.MemberDataClaim{Name: m, ClaimUID: claim.UID, VolumeName: claim.VolumeName}
-		if i := slices.IndexFunc(out, func(c databasev1alpha1.MemberDataClaim) bool { return c.Name == m }); i < 0 {
+		i := slices.IndexFunc(out, func(c databasev1alpha1.MemberDataClaim) bool { return c.Name == m })
+		switch {
+		case i < 0:
 			out = append(out, record)
-		} else {
+		case out[i] == record:
+		case len(former) < maxFormerDataClaims:
+			former = append(former, out[i])
 			out[i] = record
 		}
 	}
-	return out
+	return out, former
 }
 
 // rebuildRefusal says why member cannot be rebuilt in this pass, "" when it
 // can. A rebuild discards what the member's storage holds and copies the
 // database from the current primary, so it is refused while a write
-// quarantine is in force, for the current primary, for the last resolved
-// primary, and for a member whose claim and volume are not shown to be a
-// replacement that never held the database (ADR-0005). The Operator never
-// deletes a claim: an administrator provides the replacement.
+// quarantine is in force, for the current primary, without exactly one other
+// active master, and for a member whose claim and volume are not shown to be a
+// replacement that never held the database (ADR-0005): neither may be in a
+// member's current or former record, and once the former records are full
+// nothing is shown to be one. The Operator never
+// deletes a claim: an administrator provides the replacement. The last
+// resolved primary is not refused here; its request must name the source
+// (decideRebuildRequest, ADR-0006).
 func rebuildRefusal(in rebuildInput, member string) string {
 	switch {
 	case !slices.Contains(in.Members, member):
 		return fmt.Sprintf("%s is not a promotable member of this cluster", member)
 	case in.Unknown:
-		return "the members' Pods or data claims could not be read in this observation"
+		return "the members' Pods or data claims could not be read, or the write quarantine step failed, " +
+			"in this observation"
 	case !in.BootstrapDone:
 		return "the HA bootstrap has not copied the database to every member yet; it seeds a member that does " +
 			"not hold the database without a request"
@@ -194,6 +223,9 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	case in.Active != nil:
 		return fmt.Sprintf("the rebuild of %s (operation %s) is in progress; one member is rebuilt at a time",
 			in.Active.Member, in.Active.OperationID)
+	case len(in.FormerDataClaims) >= maxFormerDataClaims:
+		return fmt.Sprintf("status.formerDataClaims holds %d records and the list is full; a later claim cannot be "+
+			"recorded, so no replacement can be shown expendable", len(in.FormerDataClaims))
 	case member == in.CurrentPrimary || isMasterAnswer(in.Observations[member], in.Now):
 		return fmt.Sprintf("%s is the current primary or reports itself master; its data is never discarded", member)
 	}
@@ -202,9 +234,6 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	case source == "":
 		return "no healthy primary is observed among the other members (" + why + "); a rebuild copies the " +
 			"database from the current healthy primary only"
-	case member == in.LastResolvedPrimary:
-		return fmt.Sprintf("%s was the last resolved primary; it may hold writes no other member has, and "+
-			"this request does not rebuild a former primary", member)
 	case in.Identities[member].PodUID == "":
 		return fmt.Sprintf("%s has no Pod", member)
 	case in.Identities[source].PodUID == "":
@@ -221,6 +250,14 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	case claim.Created.After(in.Identities[member].Created):
 		return fmt.Sprintf("the data claim %s-%s of %s was created after its Pod, which does not run on it; "+
 			"the member's next Pod does", dataVolume, member, member)
+	}
+	for _, c := range in.FormerDataClaims {
+		if c.ClaimUID == claim.UID || c.VolumeName != "" && c.VolumeName == claim.VolumeName {
+			return fmt.Sprintf("the data claim of %s is bound to the volume %s, which %s was seen running the "+
+				"database on before a later claim replaced it, or which a failed rebuild of %s restored into "+
+				"(status.formerDataClaims); it may hold the only copy of writes no other member has, or what that "+
+				"restore wrote, and its data is not shown expendable", member, claim.VolumeName, c.Name, c.Name)
+		}
 	}
 	recorded := ""
 	for _, c := range in.DataClaims {
@@ -283,7 +320,7 @@ func rebuildOffer(in rebuildInput, member string) databasev1alpha1.MemberRebuild
 	source, _ := rebuildSource(in, member)
 	return databasev1alpha1.MemberRebuildOffer{Member: member, PodUID: in.Identities[member].PodUID,
 		ClaimUID: in.Claims[member].UID, VolumeName: in.Claims[member].VolumeName, Source: source,
-		SourcePodUID: in.Identities[source].PodUID}
+		SourcePodUID: in.Identities[source].PodUID, FormerPrimary: member == in.LastResolvedPrimary}
 }
 
 // sameBinding reports whether a and b offer the rebuild of the same member's
@@ -326,21 +363,28 @@ func rebuildOffers(in rebuildInput) ([]databasev1alpha1.MemberRebuildOffer, erro
 // rebuildWithdrawal says why the accepted rebuild in.Active no longer
 // describes what the administrator approved, "" while it does: a write
 // quarantine is in force, the member answers as a master, its Pod, claim or
-// volume changed, it could no longer be offered a rebuild (rebuildRefusal),
-// or the primary or the primary's Pod changed. A pass that could not read
-// the Pods or claims keeps it, and so does one that observed no healthy
-// primary among the other members while nothing else refuses it.
+// volume changed, it became the last resolved primary although the request
+// did not name the source, it could no longer be offered a rebuild
+// (rebuildRefusal), or the primary or the primary's Pod changed. A
+// quarantine in the status withdraws it even in a pass that could not be
+// read. Otherwise such a pass keeps it, and so does one that observed no
+// healthy primary among the other members while nothing else refuses it.
 func rebuildWithdrawal(in rebuildInput) string {
 	a := in.Active
-	if a == nil || in.Unknown {
+	switch {
+	case a == nil:
+		return ""
+	// A quarantine in the status withdraws even in a pass that could not be
+	// read: it may be stale, but withdrawing restores nothing.
+	case in.Quarantine != nil:
+		return fmt.Sprintf("a write quarantine (%s) is in force", in.Quarantine.Reason)
+	case in.Unknown:
 		return ""
 	}
 	in.Active = nil
 	claim := in.Claims[a.Member]
 	source, _ := rebuildSource(in, a.Member)
 	switch {
-	case in.Quarantine != nil:
-		return fmt.Sprintf("a write quarantine (%s) is in force", in.Quarantine.Reason)
 	case isMasterAnswer(in.Observations[a.Member], in.Now):
 		return fmt.Sprintf("%s reports itself master", a.Member)
 	case in.Identities[a.Member].PodUID != a.PodUID:
@@ -349,6 +393,9 @@ func rebuildWithdrawal(in rebuildInput) string {
 		return fmt.Sprintf("the data claim of %s changed since the request was accepted", a.Member)
 	case claim.VolumeName != a.VolumeName:
 		return fmt.Sprintf("the volume of the data claim of %s changed since the request was accepted", a.Member)
+	case a.Member == in.LastResolvedPrimary && !a.FormerPrimary:
+		return fmt.Sprintf("%s became the last resolved primary; it may hold writes no other member has, and the "+
+			"request did not name the source whose data it would get", a.Member)
 	case source == "":
 		return ""
 	}
@@ -373,8 +420,11 @@ func rebuildWithdrawal(in rebuildInput) string {
 // the last rebuild is consumed. A named member that cannot be rebuilt in this
 // pass is refused. A token that is not the stored offer's current token for
 // the named member, or whose offer no longer binds this pass's member Pod and
-// claim, volume, source and source Pod, is inert. A pass that decided from an older
-// offer than the stored one waits.
+// claim, volume, source and source Pod, is inert. The request for the offer of
+// the last resolved primary must name the offer's source as a third field and
+// is refused without it; a third field naming another member, or on any other
+// offer, is inert. A pass that decided from an older offer than the stored one
+// waits.
 func decideRebuildRequest(in rebuildInput, clusterUID string, stored *databasev1alpha1.CubridCluster,
 	offers []databasev1alpha1.MemberRebuildOffer) (rebuildVerdict, string, *databasev1alpha1.MemberRebuild, error) {
 	if stored == nil || string(stored.UID) != clusterUID {
@@ -384,10 +434,10 @@ func decideRebuildRequest(in rebuildInput, clusterUID string, stored *databasev1
 	if value == "" {
 		return rebuildNone, "", nil, nil
 	}
-	member, token, ok := strings.Cut(value, ":")
-	if !ok || member == "" || token == "" {
-		return rebuildInert, "the value must be <member>:<token>, with the member's token from " +
-			"status.memberRebuildOffers", nil, nil
+	member, token, source, named, ok := splitRebuildValue(value)
+	if !ok {
+		return rebuildInert, "the value must be <member>:<token>, or <member>:<token>:<source> for the last " +
+			"resolved primary, with the member's token from status.memberRebuildOffers", nil, nil
 	}
 	for _, done := range []*databasev1alpha1.MemberRebuild{stored.Status.MemberRebuild, stored.Status.LastMemberRebuild} {
 		if done != nil && done.Token == token {
@@ -412,6 +462,18 @@ func decideRebuildRequest(in rebuildInput, clusterUID string, stored *databasev1
 			"was published; the annotation is ignored, and a new token is published", member)
 		return rebuildInert, msg, nil, nil
 	}
+	switch {
+	case so.FormerPrimary && !named:
+		return rebuildRefused, fmt.Sprintf("%s is the last resolved primary and may have acknowledged writes %s "+
+			"lacks; name the source to accept that %s's data becomes %s's data: set the value to %s:<token>:%s",
+			member, so.Source, so.Source, member, member, so.Source), nil, nil
+	case so.FormerPrimary && source != so.Source:
+		return rebuildInert, fmt.Sprintf("the value names %q, not the source %s of the rebuild of %s",
+			source, so.Source, member), nil, nil
+	case !so.FormerPrimary && named:
+		return rebuildInert, fmt.Sprintf("a source is named only for the last resolved primary; the value for %s "+
+			"must be <member>:<token>", member), nil, nil
+	}
 	if !slices.Contains(offers, so) {
 		// Decided from a cache behind the stored status.
 		return rebuildWait, "", nil, nil
@@ -422,8 +484,23 @@ func decideRebuildRequest(in rebuildInput, clusterUID string, stored *databasev1
 	}
 	return rebuildAccepted, "", &databasev1alpha1.MemberRebuild{Member: member, PodUID: so.PodUID,
 		ClaimUID: so.ClaimUID, VolumeName: so.VolumeName, Source: so.Source, SourcePodUID: so.SourcePodUID, Token: token,
-		OperationID: operation, AcceptedTime: metav1.NewTime(in.Now.UTC()),
+		FormerPrimary: so.FormerPrimary, OperationID: operation, AcceptedTime: metav1.NewTime(in.Now.UTC()),
 		State: databasev1alpha1.MemberRebuildAccepted}, nil
+}
+
+// splitRebuildValue splits the value of the rebuild annotation into the
+// member, the token and, when named says a third field is present, the
+// source. ok is false when the member or the token is empty, or there are
+// more than three fields.
+func splitRebuildValue(value string) (member, token, source string, named, ok bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", "", false, false
+	}
+	if len(parts) == 3 {
+		source, named = parts[2], true
+	}
+	return parts[0], parts[1], source, named, true
 }
 
 // memberClaims reads the data claim of each member from the API server, past
@@ -474,23 +551,26 @@ func (r *CubridClusterReconciler) notedIdentities(ctx context.Context, cluster *
 }
 
 // reconcileMemberRebuild records the claims the members run the database on,
-// withdraws an accepted rebuild that no longer describes what was approved,
-// applies the rebuild annotation (decideRebuildRequest) and publishes the
+// judges an accepted rebuild whose restore was started (judgeRebuildRestore),
+// withdraws one whose restore was not started that no longer describes what
+// was approved or copies the database for it (copyForRebuild), applies the rebuild annotation (decideRebuildRequest) and publishes the
 // offers of this pass in the status. lastResolved is
 // status.lastResolvedPrimary before this pass; before are the members' Pods
 // read before the probes, or the error of that read. The Pods read after the
 // probes are the ones the write quarantine read in this pass
 // (noteIdentities), and the decision follows the quarantine in force after
-// it.
+// it. quarantineErr is the failure of that quarantine step: the status may
+// then still hold the quarantine of an earlier pass, so the pass counts as
+// one that could not be read, as a failed read of the Pods or claims does.
 //
 // An accepted request is recorded in status.memberRebuild with its operation
 // ID, and the annotation is removed by the next pass, which finds its token
 // consumed in the stored status. An inert or refused annotation is reported
 // with a Warning Event once per value and message, and left for the
-// administrator. Nothing is deleted, and nothing is restored on a member here.
+// administrator. Nothing is ever deleted.
 func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string, obs map[string]RoleObservation, now time.Time, lastResolved string,
-	before map[string]memberIdentity, beforeErr error) stepResult {
+	before map[string]memberIdentity, beforeErr, quarantineErr error) stepResult {
 	steps := stepResult{}
 	ids, idsErr := r.notedIdentities(ctx, cluster, members)
 	claims, claimsErr := r.memberClaims(ctx, cluster, members)
@@ -504,11 +584,12 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 			unstable[m] = true
 		}
 	}
+	// The failure of the quarantine step is returned by that step.
 	in := rebuildInput{Now: now, Members: members, CurrentPrimary: cluster.Status.CurrentPrimary,
 		LastResolvedPrimary: lastResolved, Quarantine: cluster.Status.WriteQuarantine, Identities: ids,
-		Unstable: unstable, Claims: claims, Unknown: unknown != nil, Observations: obs,
-		DataClaims: cluster.Status.MemberDataClaims, Offers: cluster.Status.MemberRebuildOffers,
-		Active: cluster.Status.MemberRebuild, Nonce: newQuarantineNonce}
+		Unstable: unstable, Claims: claims, Unknown: unknown != nil || quarantineErr != nil, Observations: obs,
+		DataClaims: cluster.Status.MemberDataClaims, FormerDataClaims: cluster.Status.FormerDataClaims,
+		Offers: cluster.Status.MemberRebuildOffers, Active: cluster.Status.MemberRebuild, Nonce: newQuarantineNonce}
 	if len(cluster.Spec.Databases) > 0 {
 		status := databaseStatus(cluster, cluster.Spec.Databases[0].Name)
 		in.BootstrapDone = status.HAConfigured
@@ -516,17 +597,30 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 			in.Holders = seedHolders(status, holder)
 		}
 	}
-	in.DataClaims = recordDataClaims(in)
-	cluster.Status.MemberDataClaims = in.DataClaims
+	in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
+	cluster.Status.MemberDataClaims, cluster.Status.FormerDataClaims = in.DataClaims, in.FormerDataClaims
 
-	if why := rebuildWithdrawal(in); why != "" {
-		ended := in.Active.DeepCopy()
-		end := metav1.NewTime(now.UTC())
-		ended.State, ended.EndTime, ended.Message = databasev1alpha1.MemberRebuildWithdrawn, &end, why
-		cluster.Status.MemberRebuild, cluster.Status.LastMemberRebuild, in.Active = nil, ended, nil
-		r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberRebuildWithdrawn, fmt.Sprintf(
-			"withdrew the rebuild of %s (operation %s) before anything was restored on it: %s; nothing was deleted, "+
-				"and a new token is published once %s can be rebuilt", ended.Member, ended.OperationID, why, ended.Member))
+	// A rebuild whose restore was started is judged by its outcome first: it
+	// is never withdrawn, as something was restored (#1043).
+	restoreStarted, lookupErr := r.rebuildRestoreStarted(ctx, cluster, in.Active)
+	switch {
+	case lookupErr != nil:
+		// Whether a restore was started cannot be told: the rebuild is
+		// neither withdrawn nor copied in this pass.
+		steps.err = errors.Join(steps.err, lookupErr)
+	case restoreStarted:
+		r.judgeRebuildRestore(ctx, cluster, &in)
+	default:
+		why := rebuildWithdrawal(in)
+		if why == "" && in.Active != nil && !in.Unknown {
+			why = r.copyForRebuild(ctx, cluster, &in)
+		}
+		if why != "" {
+			r.endRebuild(cluster, &in, databasev1alpha1.MemberRebuildWithdrawn, why)
+		}
+	}
+	if err := r.holdFailedRebuild(ctx, cluster, in); err != nil {
+		steps.err = errors.Join(steps.err, err)
 	}
 
 	offers, err := rebuildOffers(in)
@@ -560,7 +654,7 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 			return
 		}
 		r.rebuildReported.Store(client.ObjectKeyFromObject(cluster), key)
-		member, token, _ := strings.Cut(value, ":")
+		member, token, _, _, _ := splitRebuildValue(value)
 		r.event(cluster, corev1.EventTypeWarning, reason, fmt.Sprintf("did not rebuild %s on the annotation %s "+
 			"with the token %s: %s", member, rebuildMemberAnnotation, tokenPrefix(token), msg))
 	}
@@ -580,10 +674,16 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 	case rebuildAccepted:
 		cluster.Status.MemberRebuild = rebuild
 		offers = nil
+		accepted := ""
+		if rebuild.FormerPrimary {
+			accepted = fmt.Sprintf(". %s was the last resolved primary; the request accepted the data of %s as its "+
+				"data, and writes only %s's former storage held are not recovered", rebuild.Member, rebuild.Source,
+				rebuild.Member)
+		}
 		r.statusEvent(cluster, corev1.EventTypeNormal, reasonMemberRebuildAccepted, fmt.Sprintf(
 			"accepted the rebuild of %s from the primary %s as operation %s, with the token %s; %s's data claim %s "+
-				"was not seen holding the database. Nothing was deleted", rebuild.Member, rebuild.Source,
-			rebuild.OperationID, tokenPrefix(rebuild.Token), rebuild.Member, rebuild.ClaimUID))
+				"was not seen holding the database. Nothing was deleted%s", rebuild.Member, rebuild.Source,
+			rebuild.OperationID, tokenPrefix(rebuild.Token), rebuild.Member, rebuild.ClaimUID, accepted))
 	}
 	cluster.Status.MemberRebuildOffers = offers
 	return steps

@@ -57,9 +57,9 @@ not stop independent analysis or an owner's safe, scoped work.
 | **0 — Final-head CI** | #1004: Kind E2E cannot import its s3mock helper; #1002 merged without a passing E2E. | Restore a real applicable E2E pass and other required checks before the next code merge. A docs-only skip is not an E2E pass. |
 | **1a — VM failure (S04)** | #1000 harness fix merged (#1002). #1003/#110: 40.483 s from Node fence to first `-rw` write, above the 30 s limit. | Measure observations, release passes and Broker startup; fix without weakening ADR-0005, then pass an authorized pinned VM S04 rerun. |
 | **1b — HA data safety** | #702/#115: a partition/heal trial's promoted member missed 73 acknowledged writes. | Qualify S07–S08 against independent new/existing-session SQL and each member's dataset; keep failed evidence. |
-| **1c — Other safety regressions** | #938: S03 graceful exceeded 30 s; #949: possible observation gap on child-write failure. | Bounded reproduction, safe fix and relevant regressions under existing owners. |
-| **2 — Rejoin/rebuild** | #116–#118: S09–S10 implementation, permissioned PVC-loss rebuild and SQL comparisons incomplete. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
-| **3 — Other required gates** | #88/#89 backup/restore, #666 capacity, #20 API ownership and #94/#124 release controls. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
+| **1c — Other safety regressions** | #938: S03 graceful exceeded 30 s. #949: the quarantine started and changed on a second active master while child writes were refused, and `-rw` took a write after the release (Kind, 2026-11-20 UTC). | Bounded reproduction, safe fix and relevant regressions under existing owners. |
+| **2 — Rejoin/rebuild** | #116, #118: S09 rejoin incomplete; S10 rebuild passed on the VM lab; a master change during the copy stopped the copy safely, and its report is fixed (#1056); a master change after the restore, before catch-up, is unrun. | Complete the accepted paths and verify on a supported candidate without destroying unapproved data. |
+| **3 — Other required gates** | #88/#89 backup/restore, #666 capacity and #94/#124 release controls; the API group decision (#20) moved to v0.2 on 2026-11-20 UTC. | Obtain required real evidence and dry-run publication safely; do not waive failed variants. |
 | **4 — Release qualification** | #126 candidate repetitions/24-hour soak and #127 independent reproduction outstanding. | Freeze one exact candidate after required gates, run the full qualification, then decide Go/No-Go. |
 
 **Parallel work:** CI repair (0), read-only S04 latency analysis (1a),
@@ -91,10 +91,14 @@ narrowing of the release.
 ### Required
 
 The initial support claim is limited to one pinned CUBRID 11.4.x/amd64
-configuration, one Kubernetes distribution and one CSI/StorageClass in the
-three-VM lab (#80). Distribution/version/driver selection remains unverified
-until that issue records the inventory and run evidence. Three VMs do not
-establish physical-zone resilience.
+configuration on one reference environment, the three-VM lab of #80 as its
+[inventory](docs/testing/lab-inventory.md) records it: three k3s workers
+(`v1.36.5+k3s1`, measured 2026-10-15) with 2 vCPU and 8 GiB each, and the
+node-local `local-path` StorageClass, which is **not CSI**. Evidence from it
+establishes no CSI semantics (attach/detach, a volume following its Pod to
+another node, snapshots), no volume resizing and no zone resilience: the
+workers share one availability zone. Its reproduction by the other
+maintainer remains open in #80.
 
 | Capability | Completion evidence | Tracking issues |
 |---|---|---|
@@ -169,8 +173,8 @@ higher-ranked member became heartbeat master without 50 acknowledged writes on
 the VM lab (#702), and a graceful master deletion triggered an avoidable
 write-path interruption (#938). The #931 restart regression is now verified
 on the VM lab after #932, but #115's partition safety gates remain open.
-Rejoin and rebuild are
-`unit-envtest`. Backup and restore variants passed on the VM lab once or a few
+Rebuild after PVC loss passed on Kind and twice on the VM lab; rejoin
+is `unit-envtest`. Backup and restore variants passed on the VM lab once or a few
 times each; one S12 `exact` run failed (#416). Retention, authentication and
 voluntary disruption reach Kind or VM-lab with gaps. Conditions and metrics
 reach Kind.
@@ -196,10 +200,10 @@ The reproducible, reviewed release is not run.
 | Healthy RW path after Operator restart | VM-lab (1 post-fix run) | #115, #126 | [VM evidence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/931#issuecomment-6977472448): #932 fix on `ce1dadf`; 68–73 s observation gap, two RW paths open, 621/621 acknowledged writes, all 641 checked rows on each member. #931 closed; not partition or candidate acceptance. |
 | Write quarantine: VM-lab partition lane (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Network partition lane (#943, using the cut controls of #114). A cut lower-ranked slave and a master cut for 2 or 20 minutes triggered no quarantine. After the heal the slave's log copy did not resume (`LogCopyStalled`), seen again on [2026-11-18][part-20261118]. Not an S07/S08 pass |
 | Write quarantine: higher-ranked member cut (S07–S08) | VM-lab (blocked, no pass) | #115, #126, #702 | Cutting a member that outranks the master, 2 runs on 2026-11-17: `WriteQuarantinedMemberUnverified` closed `-rw` about 12 s after the cut, with no write acknowledged after it. One run then reproduced #702: the cut member became heartbeat master lacking 50 acknowledged writes. Both `blocked` |
-| Rejoin and rebuild (S09–S10) | unit-envtest | #87, #116, #117, #118, #126 | Explicit rebuild request (annotation with a one-time token, decided on #117 on 2026-11-17 UTC): implemented, unit-envtest only. The restore of an accepted request is not implemented ([rebuilding a member](docs/observability.md#rebuilding-a-member)). Rejoin and SQL checks require #112–#118 |
+| Rejoin and rebuild (S09–S10) | S10: Kind; VM-lab (2 runs). S09: unit-envtest | #87, #116, #118, #126 | Rebuild on a one-time-token request; the member is held until caught up ([docs](docs/observability.md#rebuilding-a-member)). VM 11/20 (#118): slave and former primary rebuilt, rows equal, no failback. Open: master change mid-copy, S09 (#116) |
 | Backup (S11): complete and failed uploads | VM-lab (1–5 passes each) | #88, #126 | `complete` 4 on 2026-10-25, 1 on 10-28 with engine check (#621); `missing-destination` 2026-10-28 (logs unchecked), 2026-11-11 (staging check, #636); `denied-credentials`, `signature-mismatch`, `interrupted-upload` 1 each on 2026-10-29 with the log search (#616; 2 on earlier harness `acba678`). Not baselines |
 | Backup (S11): restarts and stops | VM-lab (1–2 runs each) | #88, #126 | Passed on 2026-10-29: `operator-restart` (#617, 2 runs), `instance-manager-restart` (earlier harness; the current one not run on the VM lab), `overlapping`, `operation-store-loss` (#457, 2 runs), `graceful-stop` (#277, #468, #469; filler error POC-44). No restart during `backupdb` itself. Not baselines |
-| Backup safeguards in code | unit-envtest | #291, #369 | Standby choice (#291), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
+| Backup safeguards in code | unit-envtest; Kind (standby) | #291, #369 | Standby choice (#291; Kind: all slaves stuck, #1026), operation loss (#457), unverified artifacts (#841), starting role (#755), engine series (#276, #941, ADR-0011), store durability (#298, #299, #473), staging holders (#469), restart guard (#456; POC-14), fresh upload paths (#337, [MinIO record][minio-337]) |
 | Restore (S12): exact, tampered, wrong target | VM-lab (1–5 passes each) | #89, #126, #238, #416 | `exact` passed 5 of 7 on 2026-10-25; 2 blocked by lost `csql` sessions (#238, POC-36; read again since #575). `tampered` (1 pass) and `wrong-target` (3 passes) refused as required (#121, ADR-0008). One S12 `exact` failed on a seeded slave that applied nothing (#416) |
 | Restore (S12): restarts and stops | VM-lab (1–2 runs each) | #89, #126 | `operator-restart`: 2 passes. Instance Manager kills at `restoring`, `preparing`, `seeding` (#598) and, with `16dbbf8` (#670), `starting` (#682; equal records do not rule out a short second `restoredb`) and `seed-backup` passed. `graceful-stop`: 1 pass, earlier harness (#277; seeding placement #676 not run) |
 | Lab run resources | VM-lab (1 failed run) | none recorded | All three members placed on one memory-filled worker failed: the kernel killed `cub_server` and LAB01 never became Ready, since database Pods requested no memory (#596). The harness now refuses such a node (#672). Members now declare requests (#701); no lab run has used them yet |
@@ -275,9 +279,9 @@ retention of these artifacts is not guaranteed.
 ### Shared lab historical baseline
 
 The [lab inventory](docs/testing/lab-inventory.md) records the lab as measured
-on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it does
-not qualify that configuration for v0.1. One manual Pod deletion on
-2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
+on 2026-10-15 (k3s `v1.36.5+k3s1`, node-local `local-path`, not CSI); it is the
+experimental v0.1 reference environment, with CSI behavior untested. One
+manual Pod deletion on 2026-10-13 at `2c39873` made `ha-1` master after 13 s and `Ready` return after
 26 s, with `ha-0` a slave: a single run, not a scenario pass or VM-failure
 evidence, with no scenario artifact set or independent transaction-history
 oracle. The 2026-10-15 record did not establish VM stop/start or recovery,
@@ -292,4 +296,4 @@ hostname/DNS, failover/split-brain, join/rebuild, backup POC, restore,
 update/upgrade, Instance Manager) were accepted before the HA controller
 implementation started (including Accepted (POC-gated) decisions). This is
 not the release validation gate. The API group ownership decision (#20) is
-still open.
+still open and planned for v0.2.

@@ -778,9 +778,12 @@ and each of the three workers runs one member, so the evicted member has
 nowhere else to run. That is the contract's `no-spare-node` case, and the
 lane judges each variant by its expectations: the member's replacement stays
 `Pending`, the cluster reports that it is degraded, and SQL goes on through
-the remaining members. `drain-master-node` must also end as S03 `graceful`:
-CUBRID promotes a slave, and the master does not change a second time. The
-lane does not cover a spare node the member could move to.
+the remaining members. `drain-master-node` must also end as S03 `graceful`
+does, in what the lane checks: CUBRID promotes a slave, the master does not
+change a second time, no two members report themselves active masters in two
+consecutive sweeps, and no member other than the drained one is replaced or
+restarted.
+The lane does not cover a spare node the member could move to.
 
 The lane drains **only the run's own Pods**. It never runs `kubectl drain`,
 which would evict every namespace's Pods on the node:
@@ -813,10 +816,17 @@ which would evict every namespace's Pods on the node:
   from its own, and undoes it: do not cordon a node the lane is draining.
 - when the run's context ends (a signal, `-timeout`, or the lab launcher's
   `SIGTERM` after a lost Lease), the uncordon starts at once, without waiting
-  for a step of the drain that is still running, within 10 seconds of its
-  own. The launcher sends `SIGKILL` 2 seconds after `SIGTERM`; one patch
-  normally fits, but a slow API server can leave the node cordoned, and
-  `SIGKILL` itself allows no cleanup. Find a node a run left cordoned, and
+  for a step of the drain that is still running, and gives up after 1.5
+  seconds. The launcher sends `SIGKILL` 2 seconds after `SIGTERM`, so the
+  attempt ends first and writes `cordon.json` either way: `uncordoned: true`,
+  or an `uncordonError` that says the run left the node cordoned. A run that
+  is not killed then tries again for up to two minutes when S15 ends. What
+  remains: a slow API server can still leave the node cordoned; when the
+  answer to the cordon itself was lost and the node shows neither the
+  cordon nor the mark, the two-second second read does not fit, so a patch
+  applied after it stays; and `SIGKILL` itself, or a kill before the
+  `SIGTERM`, allows no cleanup. After every run that ended on a signal or a
+  lost Lease, check the target worker. Find a node a run left cordoned, and
   undo it, with:
 
   ```sh
@@ -889,8 +899,16 @@ select the same runs.
    - the two members that run must report one master: for
      `drain-slave-node` the same master as before, for `drain-master-node`
      a promoted one (`newMaster`) that does not change again. Two members
-     that report themselves active masters in two consecutive sweeps are a
-     never-event (`twoActiveMasters`) and fail S15;
+     that report themselves active masters in two consecutive sweeps are
+     the contract's never-event (`twoActiveMasters`) and fail S15, as in
+     S03. A single sweep that shows two is recorded in `observed`
+     (`two_active_masters_in_one_sweep`), since one sweep reads the members
+     one after another and can catch a handover;
+   - each member other than the drained one must still be the same Pod with
+     the same database container. One that is gone, replaced or restarted
+     (a new container ID, or the old one as its last terminated container)
+     is a never-event (`otherMembersChanged`) and fails S15 at once, also
+     when the run would end before the member rejoins;
    - the other slave's eviction is asked once (`secondEvictionOutcome`). The
      budget must refuse it with `429` and the `DisruptionBudget` cause
      (`pdb-blocked`). An eviction it allows is two members evicted at once,
@@ -907,9 +925,12 @@ select the same runs.
    it, with every member `Ready`, CUBRID reporting one master and two slaves,
    `status.currentPrimary` naming the master and the starting conditions
    `True`, within ten minutes. For `drain-slave-node` the master must still be
-   the one before the drain. Every member other than the drained one must
-   still be the same Pod with the same database container: one replaced or
-   restarted is a never-event (`otherMembersChanged`), as in S03.
+   the one before the drain. Two active masters in two consecutive sweeps of
+   the three members are the never-event (`twoActiveMasters`) here too, not
+   a cluster still converging, and fail S15 without waiting out the ten
+   minutes. Every member other than the drained one must still be the
+   same Pod with the same database container: one replaced or restarted is a
+   never-event (`otherMembersChanged`), as in S03.
 7. The clients go on for `-stable-period`, then stop. Each reconnecting client
    must be acknowledged again without interruption for at least the stable
    period. What happened to the connection `s15open` held is recorded, not
@@ -965,10 +986,15 @@ pick and check the node, and to cordon and uncordon it with the annotation),
 PersistentVolumeClaims, `create` on `pods/eviction` and `list` on
 PodDisruptionBudgets and EndpointSlices.
 
-The lane has not run on the lab yet. A pass would be the first real-node
-observation of the policy that ADR-0012 and the
-[voluntary-disruption page](../architecture/voluntary-disruption.md) expect;
-envtest covers only the API server's eviction rules for a written budget
+The lane ran on the VM lab six times on 2026-11-17, before its limits were
+set, and every run ended `blocked` with `time_limit_unset` (#614). On
+2026-11-20, after #1020, both variants ran once against the 1-minute
+`drain_limit` and `failover_limit` and passed, and each run removed its own
+cordon (results on #90). These are the first real-node observations of the
+policy that ADR-0012 and the
+[voluntary-disruption page](../architecture/voluntary-disruption.md) expect.
+The cordon removal on `SIGTERM` or a lost Lease has not been exercised on the
+lab. envtest covers only the API server's eviction rules for a written budget
 status.
 
 ## S07 network partition
@@ -1635,8 +1661,11 @@ What it judges, in this order:
 | `quarantine_limit` | `-quarantine-limit` (default `0`, unset) | `quarantineWithin`: from `triggerWindowStart` until the first write through a new connection that was not acknowledged and after which none was acknowledged before the release (`newConnectionsStoppedAt`); an upper bound. Not applied when no trigger was seen |
 | `partition_duration` | `-partition-duration` (default `0`, unset) | `partitionHeldFor`: from the cut's confirmation until the end of the hold; at least the limit |
 
-The contract records no value for either. A limit of `0` is unset and makes
-the run a baseline: `blocked` with `time_limit_unset`, never `pass`. A limit
+The contract records the VM-lab values for this lane, set from the lab runs
+in its [baselines](scenario-contract.md#baselines): `quarantine_limit` is 30
+seconds and `partition_duration` 2 minutes, so a judged run passes
+`-quarantine-limit 30s -partition-duration 2m`. A limit of `0` is unset and
+makes the run a baseline: `blocked` with `time_limit_unset`, never `pass`. A limit
 that is set but whose time was not measured blocks S07 with
 `measurement_missing`. `-partition-hold` is the run's own choice and must be
 at least `-partition-duration`.
@@ -1728,8 +1757,8 @@ on the lab runner, in `partition-slave-isolated-76ae5e2-20261117T062313` and
   of the master no second member became an active master: `ha-0` stayed the
   active master, and no acknowledged row was missing afterwards. Rules 1 and
   2 of the quarantine were therefore not exercised on this lab. The
-  `higher-rank-isolated` variant was added for that, with the reasons above;
-  it has not run on the lab yet.
+  `higher-rank-isolated` variant was added for that, with the reasons above.
+  It has run on the lab since 2026-11-17; its results are on #115 and #702.
 
 Beyond these runs, the unit tests use fake clients and a model of the
 members' network namespaces; they are no evidence of CUBRID's or the

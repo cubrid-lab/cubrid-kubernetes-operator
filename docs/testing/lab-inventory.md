@@ -250,8 +250,8 @@ control is not successful SQL recovery, a diagnosed cause or current authority
 to repeat a disruptive action; the October statement remains historical.
 
 This snapshot does not establish independent environment recreation, provider
-quota accounting, a complete workload/storage budget or the required CSI
-environment. New campaigns still need their named target, applicable fault
+quota accounting or a complete workload/storage budget. CSI behavior is
+untested here and is not part of the v0.1 claim. New campaigns still need their named target, applicable fault
 authority, reservation, continuously held Lease, observed capacity/placement,
 bounded cleanup and candidate-specific SQL evidence under #80/#122. No
 release or scenario acceptance is inferred from these read-only observations.

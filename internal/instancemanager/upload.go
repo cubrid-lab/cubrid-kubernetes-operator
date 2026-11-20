@@ -57,7 +57,17 @@ func BackupAttemptPrefix(prefix, attemptID string) string {
 	return path.Join(prefix, "attempt-"+attemptID)
 }
 
-func validateSeedUpload(prefix, clusterUID, database, sourceRole string) error {
+// RebuildSeedDir is the directory below the cluster's UID that holds the
+// seed backup of the member rebuild operationID. It never names an HA
+// bootstrap seed, whose directories are "seed" and "seed-<artifact>", so a
+// rebuild's backup cannot replace the bootstrap's.
+func RebuildSeedDir(operationID string) string { return "rebuild-" + operationID }
+
+// validateSeedUpload checks a seed upload's location and metadata: master
+// metadata and a <clusterUID>/<dir>/<database> suffix, where dir is "seed" or
+// "seed-<artifact>" for an HA bootstrap seed, and RebuildSeedDir of the
+// rebuild's operation ID, and nothing else, for a rebuild's seed.
+func validateSeedUpload(prefix, clusterUID, database, sourceRole string, rebuild *RebuildBinding) error {
 	parts := strings.Split(prefix, "/")
 	if clusterUID == "" || strings.ContainsAny(clusterUID, "/\\") ||
 		clusterUID == "." || clusterUID == ".." || !databaseNamePattern.MatchString(database) ||
@@ -66,6 +76,13 @@ func validateSeedUpload(prefix, clusterUID, database, sourceRole string) error {
 		return fmt.Errorf("seed upload needs master metadata and a clean <clusterUID>/seed[-artifact]/<database> suffix")
 	}
 	seed := parts[len(parts)-2]
+	if rebuild != nil {
+		if seed != RebuildSeedDir(rebuild.OperationID) {
+			return fmt.Errorf("a rebuild's seed upload must go to <clusterUID>/%s/<database>, not to %q",
+				RebuildSeedDir(rebuild.OperationID), seed)
+		}
+		return nil
+	}
 	if seed != "seed" && (!strings.HasPrefix(seed, "seed-") || len(seed) == len("seed-")) {
 		return fmt.Errorf("seed upload prefix does not name an HA seed")
 	}
@@ -89,7 +106,8 @@ type UploadResult struct {
 // so a partial upload can never be mistaken for a complete backup.
 func UploadBackup(ctx context.Context, store ObjectStore, spec UploadSpec) (UploadResult, error) {
 	if spec.Seed {
-		if err := validateSeedUpload(spec.Prefix, spec.Manifest.ClusterUID, spec.Manifest.Database, spec.Manifest.SourceRole); err != nil {
+		if err := validateSeedUpload(spec.Prefix, spec.Manifest.ClusterUID, spec.Manifest.Database, spec.Manifest.SourceRole,
+			spec.Manifest.Rebuild); err != nil {
 			return UploadResult{}, err
 		}
 	} else {
