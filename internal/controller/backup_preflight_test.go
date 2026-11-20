@@ -34,9 +34,14 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
+// memberTestPodIP is the IP a member Pod created in envtest is given, as a
+// started Pod has one: a member whose Pod has none is not asked its role.
+const memberTestPodIP = "10.0.0.1"
+
 // createMemberPod creates a member Pod as the StatefulSet would, with env as
-// the environment its container started with. There is no kubelet in
-// envtest, so the Pod only stands for what the API server holds.
+// the environment its container started with, and gives it an IP as a
+// started Pod has. There is no kubelet in envtest, so the Pod only stands for
+// what the API server holds.
 func createMemberPod(ctx context.Context, namespace, name string, env []corev1.EnvVar) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -46,6 +51,8 @@ func createMemberPod(ctx context.Context, namespace, name string, env []corev1.E
 	}
 	Expect(k8sClient.Create(ctx, pod)).To(Succeed())
 	DeferCleanup(func() { deleteMemberPod(ctx, namespace, name) })
+	pod.Status.PodIP = memberTestPodIP
+	Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 }
 
 // deleteMemberPod deletes a member Pod at once, as a restart would replace it.

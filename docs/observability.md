@@ -451,7 +451,9 @@ releasable passes more than 30 seconds apart (`releaseCheckLastTime`). A
 restart of the recorded master revises the quarantine. `Ready` stays `False`
 with `ReadWriteBrokersHeld` on the pass that releases it. The release is written to
 `status.lastWriteQuarantineRelease` with the time and the method `Automatic`
-before the read-write Brokers are scaled back in the next pass. Any other
+before the read-write Brokers are scaled back: once that status write
+succeeds, the same pass scales them back (#1003); if it fails, they stay at
+zero and the next pass decides again. Any other
 quarantine, and a `WriteQuarantinedMemberUnverified` or
 `WriteQuarantinedMemberReturning` one that does not clear, ends only by the
 manual release below.
@@ -703,9 +705,10 @@ The Operator acts on it in the next observation of the roles:
   counts, the `exemptMembers`, the `revision`, the one active master
   (`observedMaster`, `observedMasterPodUID`), the UTC `releaseTime` and a
   `warning` that acknowledged writes may be lost, and clears
-  `status.writeQuarantine`. The read-write Brokers stay at zero in that pass
-  (`Ready` is `False` with `ReadWriteBrokersHeld`) and are scaled back in the
-  next one, as after an automatic release. A Warning Event
+  `status.writeQuarantine`. The read-write Brokers stay at zero until that
+  status write succeeds (the status it writes has `Ready` `False` with
+  `ReadWriteBrokersHeld`), and are then scaled back in the same pass, as
+  after an automatic release. A Warning Event
   `WriteQuarantineReleasedManually` names the first 8 characters of the
   token, the members, the master and the warning.
 - After that status write, it removes the annotation with a patch that
@@ -910,6 +913,7 @@ The `reason` of `member_role_unobserved` is one of:
 |---|---|
 | the request's error, for example `Get "http://<member>.<namespace>.svc:9090/v1/role": dial tcp: ... no such host` | The role query could not be sent or got no answer |
 | the error that the member's token could not be read with | The member was not asked |
+| `the Pod has no IP yet` | The member was not asked: its Pod, read before the role queries, has no IP, as a Pod not yet scheduled after a node fence (#1003). It is recorded at once as a member that gave no answer, without waiting out the query's 5 s timeout |
 | `status <code>`, for example `status 401` | The Instance Manager answered with an error status; 401 refuses the token |
 | `unreadable answer` | The answer was not a role answer |
 | `the Instance Manager reported no role`, followed by `: ` and the reason it gave when it gave one, for example `current node state 'unknown' is not an authoritative role` | The member does not report an authoritative role |
