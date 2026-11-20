@@ -321,6 +321,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/operations", s.auth(s.findOperations))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
+	mux.HandleFunc("POST /v1/rebuild/release", s.auth(s.rebuildRelease))
 	mux.HandleFunc("GET /v1/dba-password", s.auth(s.dbaPassword))
 	return s.logRequests(mux)
 }
@@ -1063,13 +1064,17 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		defer s.endDisruptive()
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Restore)
 		defer cancel()
-		fail := func(reason string) {
+		// failWith ends the restore Failed with reason and, when it is not
+		// empty, code.
+		failWith := func(reason, code string) {
 			reason = s.stoppingReason(reason)
 			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
+				op.FailureCode = code
 			})
 		}
+		fail := func(reason string) { failWith(reason, "") }
 
 		// An HA member registers the restored database under the member list,
 		// as createdb does on the first member. A member that is not
@@ -1087,7 +1092,10 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			}
 			roots.Host = hosts
 		}
-		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
+		if _, err := s.store.Update(id, func(op *Operation) {
+			op.State = OpDownloading
+			op.Rebuild = operationRebuild(req.Rebuild)
+		}); err != nil {
 			fail(notRecorded(OpDownloading, err))
 			return
 		}
@@ -1214,11 +1222,20 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		}
 		// The restored data is kept when the start fails.
 		storeFailed := false
+		sourceCode := ""
 		err = s.startRestoredDatabase(ctx, req.Database, haMember, func() error {
 			if adopted && password != "" {
 				if err := s.confirmBeforeStart(ctx, req.Database, password); err != nil {
 					return err
 				}
+			}
+			// The source of a rebuild is asked again right before the
+			// member is started: a member that restoreslave copied across a
+			// change of master may lack acknowledged writes without showing
+			// it (docs/poc/RESULTS.md, POC-57), and is never started then.
+			if code, err := s.reconfirmRebuildSource(ctx, req); err != nil {
+				sourceCode = code
+				return err
 			}
 			_, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting })
 			storeFailed = err != nil
@@ -1228,7 +1245,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			if storeFailed {
 				err = errors.New(notRecorded(OpStarting, err))
 			}
-			fail(err.Error())
+			failWith(err.Error(), sourceCode)
 			return
 		}
 		// A Completed that cannot be written leaves the ownership marker:
@@ -1239,14 +1256,26 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		}); err != nil {
 			return
 		}
-		// A marker left by a failure here belongs to a Completed operation:
-		// ResumeCompletedRestores or the next operation on this database
-		// clears it.
-		if err := clearOwned(s.restoreRoots.Target, req.Database); err != nil {
-			s.log().Warn("Could not clear the ownership marker of a completed restore",
-				"operationID", id, "database", req.Database, "err", err)
-		}
+		s.completedRestoreMarker(id, req)
 	}()
+}
+
+// completedRestoreMarker clears the ownership marker of the completed restore
+// id of req. A marker left by a failure here belongs to a Completed
+// operation: ResumeCompletedRestores or the next operation on this database
+// clears it. A restore for a member rebuild keeps its marker until the
+// Operator judged the member caught up and released it (releaseRebuild), so
+// that a restart before then starts nothing (ADR-0006).
+func (s *Server) completedRestoreMarker(id string, req RestoreRequest) {
+	if req.Rebuild != nil {
+		s.log().Info("Holding the database of a member rebuild until the Operator releases it",
+			"operationID", id, "database", req.Database, "rebuildOperationID", req.Rebuild.OperationID)
+		return
+	}
+	if err := clearOwned(s.restoreRoots.Target, req.Database); err != nil {
+		s.log().Warn("Could not clear the ownership marker of a completed restore",
+			"operationID", id, "database", req.Database, "err", err)
+	}
 }
 
 // startRestoredDatabase starts a restored database, which the entrypoint left
@@ -1381,6 +1410,13 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 		}
 		op, err := s.store.Get(strings.TrimSpace(string(data)))
 		if err != nil || op.Kind != OpRestore || op.State != OpCompleted || op.Restored == nil || op.Database != database {
+			continue
+		}
+		if op.Rebuild != nil {
+			// A member rebuild that the Operator has not released: the
+			// member has not been judged caught up, and is not started.
+			s.log().Warn("Not starting the database of a member rebuild that was not released",
+				"operationID", op.ID, "database", database, "rebuildOperationID", op.Rebuild.OperationID)
 			continue
 		}
 		if haErr != nil {
@@ -1713,6 +1749,15 @@ func defaultSourceRoleURL(member, namespace string) (string, error) {
 	}
 	u := url.URL{Scheme: "http", Host: net.JoinHostPort(member+"."+namespace+".svc", strconv.Itoa(DefaultPort)), Path: "/v1/role"}
 	return u.String(), nil
+}
+
+// reconfirmRebuildSource asks the source of the rebuild of req again, right
+// before the restored member is started; nil for a restore of no rebuild.
+func (s *Server) reconfirmRebuildSource(ctx context.Context, req RestoreRequest) (string, error) {
+	if req.Rebuild == nil {
+		return "", nil
+	}
+	return s.confirmRebuildSource(ctx, req.SeedFromMaster)
 }
 
 // confirmRebuildSource asks the Instance Manager of source, with this

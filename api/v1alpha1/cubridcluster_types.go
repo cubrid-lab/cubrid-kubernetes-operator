@@ -876,7 +876,10 @@ type CubridClusterStatus struct {
 
 	// formerDataClaims keeps every record that memberDataClaims held before
 	// a later claim of the same member replaced it: a claim and a volume
-	// that once held the database. Such a volume may hold the only copy of
+	// that once held the database. It also keeps the claim and volume of a
+	// member rebuild that ended Failed after its restore was started: they
+	// may hold what that restore wrote, or a restore still running. Such a
+	// volume may hold the only copy of
 	// writes no other member has, for example the storage of a primary that
 	// was lost and rebuilt, so a claim UID or PersistentVolume name listed
 	// here is never offered or accepted as a replacement, for any member; the

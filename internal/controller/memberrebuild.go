@@ -53,6 +53,8 @@ const (
 	reasonMemberRebuildIgnored   = "MemberRebuildIgnored"
 	reasonMemberRebuildRefused   = "MemberRebuildRefused"
 	reasonMemberRebuildWithdrawn = "MemberRebuildWithdrawn"
+	reasonMemberRebuildCompleted = "MemberRebuildCompleted"
+	reasonMemberRebuildFailed    = "MemberRebuildFailed"
 )
 
 // claimIdentity is a member's data PersistentVolumeClaim as one pass read
@@ -252,8 +254,9 @@ func rebuildRefusal(in rebuildInput, member string) string {
 	for _, c := range in.FormerDataClaims {
 		if c.ClaimUID == claim.UID || c.VolumeName != "" && c.VolumeName == claim.VolumeName {
 			return fmt.Sprintf("the data claim of %s is bound to the volume %s, which %s was seen running the "+
-				"database on before a later claim replaced it (status.formerDataClaims); it may hold the only copy "+
-				"of writes no other member has, and its data is not shown expendable", member, claim.VolumeName, c.Name)
+				"database on before a later claim replaced it, or which a failed rebuild of %s restored into "+
+				"(status.formerDataClaims); it may hold the only copy of writes no other member has, or what that "+
+				"restore wrote, and its data is not shown expendable", member, claim.VolumeName, c.Name, c.Name)
 		}
 	}
 	recorded := ""
@@ -548,8 +551,9 @@ func (r *CubridClusterReconciler) notedIdentities(ctx context.Context, cluster *
 }
 
 // reconcileMemberRebuild records the claims the members run the database on,
-// withdraws an accepted rebuild that no longer describes what was approved,
-// applies the rebuild annotation (decideRebuildRequest) and publishes the
+// judges an accepted rebuild whose restore was started (judgeRebuildRestore),
+// withdraws one whose restore was not started that no longer describes what
+// was approved or copies the database for it (copyForRebuild), applies the rebuild annotation (decideRebuildRequest) and publishes the
 // offers of this pass in the status. lastResolved is
 // status.lastResolvedPrimary before this pass; before are the members' Pods
 // read before the probes, or the error of that read. The Pods read after the
@@ -563,7 +567,7 @@ func (r *CubridClusterReconciler) notedIdentities(ctx context.Context, cluster *
 // ID, and the annotation is removed by the next pass, which finds its token
 // consumed in the stored status. An inert or refused annotation is reported
 // with a Warning Event once per value and message, and left for the
-// administrator. Nothing is deleted, and nothing is restored on a member here.
+// administrator. Nothing is ever deleted.
 func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	members []string, obs map[string]RoleObservation, now time.Time, lastResolved string,
 	before map[string]memberIdentity, beforeErr, quarantineErr error) stepResult {
@@ -596,14 +600,27 @@ func (r *CubridClusterReconciler) reconcileMemberRebuild(ctx context.Context, cl
 	in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
 	cluster.Status.MemberDataClaims, cluster.Status.FormerDataClaims = in.DataClaims, in.FormerDataClaims
 
-	if why := rebuildWithdrawal(in); why != "" {
-		ended := in.Active.DeepCopy()
-		end := metav1.NewTime(now.UTC())
-		ended.State, ended.EndTime, ended.Message = databasev1alpha1.MemberRebuildWithdrawn, &end, why
-		cluster.Status.MemberRebuild, cluster.Status.LastMemberRebuild, in.Active = nil, ended, nil
-		r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberRebuildWithdrawn, fmt.Sprintf(
-			"withdrew the rebuild of %s (operation %s) before anything was restored on it: %s; nothing was deleted, "+
-				"and a new token is published once %s can be rebuilt", ended.Member, ended.OperationID, why, ended.Member))
+	// A rebuild whose restore was started is judged by its outcome first: it
+	// is never withdrawn, as something was restored (#1043).
+	restoreStarted, lookupErr := r.rebuildRestoreStarted(ctx, cluster, in.Active)
+	switch {
+	case lookupErr != nil:
+		// Whether a restore was started cannot be told: the rebuild is
+		// neither withdrawn nor copied in this pass.
+		steps.err = errors.Join(steps.err, lookupErr)
+	case restoreStarted:
+		r.judgeRebuildRestore(ctx, cluster, &in)
+	default:
+		why := rebuildWithdrawal(in)
+		if why == "" && in.Active != nil && !in.Unknown {
+			why = r.copyForRebuild(ctx, cluster, &in)
+		}
+		if why != "" {
+			r.endRebuild(cluster, &in, databasev1alpha1.MemberRebuildWithdrawn, why)
+		}
+	}
+	if err := r.holdFailedRebuild(ctx, cluster, in); err != nil {
+		steps.err = errors.Join(steps.err, err)
 	}
 
 	offers, err := rebuildOffers(in)

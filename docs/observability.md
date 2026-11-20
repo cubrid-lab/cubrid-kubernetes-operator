@@ -86,6 +86,7 @@ the fixed names below; free text belongs in `message`.
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available. This does not say that a write through `-rw` succeeds: a Broker is available while no single primary is resolved, which `RoutingReady` and, after 60 seconds, `Ready` report | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | HA: the primary is resolved and a read-write Broker is available (`PrimaryResolved`). Standalone: the member is ready, which means its server runs, and a read-write Broker is available (`StandaloneServerReady`); no primary is resolved for it | HA: the reason of a write quarantine in force, which comes first, also in a reconcile that did not observe the roles or the Brokers; the reason of `PrimaryResolved`; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed`. Standalone: `InstancesNotReady`, which comes first; `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped; `ObjectStorageNotApplied` while the seed source's Instance Manager runs without object storage (waits, uses up no attempt). A start a member refused keeps the cause it named (ADR-0003, error answers): `InstanceManagerTokenRefused`; `InstanceManagerOperationInProgress` or `InstanceManagerStagingInUse` while another operation holds the database or the staging destination (waits, uses up no attempt); `InstanceManagerRequestConflict` when the member holds an operation under the step's key for another request and that operation could not be found (a found one is followed instead); `InstanceManagerNotAnHAMember` while the member runs as a standalone server (waits, uses up no attempt); `InstanceManagerWrongMember` while a seed restore reaches a member other than the one it names, or one whose Instance Manager could not read its own member name, which refuses it before it records or restores anything (waits, uses up no attempt); `EngineVersionMismatch` while the member that would run the seed backup, a seed restore or the recovery restore was last observed running an engine of another series than `spec.version`, whose Instance Manager would refuse the step (ADR-0011; waits, uses up no attempt, and goes on once `spec.version` names the engine's series); `InstanceManagerCapabilityMissing` while the member that would run the seed backup or a seed restore answers `GET /v1/role` without one of the checks the step relies on (`seed-upload` and `backup-source-role` for the seed backup, `seed-from-master`, `expected-cluster-uid` and `expected-member` for a seed restore, which are also needed before the seed backup for that member is taken), as an Instance Manager of another build does: a replaced Pod starts the image the cluster already runs until another one is accepted (ADR-0009), so point `spec.image` at an image with the Instance Manager of the Operator's build if it names an older one, set `database.cubrid.io/accept-image` on the cluster to exactly that image (`spec.image`, or the Operator's default image when `spec.image` is unset), then replace the Pod of the member; after an Operator upgrade this holds a cluster whose HA bootstrap has not seeded every member; `InstanceManagerCapabilityUnverified` while that member's answer is older than 15 seconds or cannot be decoded, so it shows nothing; a member that cannot be asked keeps `InstanceManagerUnavailable` or `InstanceManagerTokenRefused`. The message names the member and the checks; the step waits, uses up no attempt and nothing is deleted (ADR-0013); `InstanceManagerConflict` for a conflict of no named cause; `InstanceManagerOperationRecordUnreadable` while the member holds an operation record it cannot read (waits, uses up no attempt; the message points at the runbook below); `InstanceManagerUnavailable` for any other failed call, or `RestoreStartFailed` at the start of a recovery restore. A start the member refuses as a request (400, 413 or 422, ADR-0003) is a failed attempt, reported by the step's failure reason (`RestoreFailed`, `DatabaseCreationFailed`, `SeedBackupFailed`, `SeedRestoreFailed`, with `Retrying` while attempts remain). `SeedRestoreSourceMismatch`: a followed or polled seed restore completed with another backup than the step's; the member is not recorded as seeded and is left for a person. `SeedSourceContradicted`: the copy to the first peer is recorded with another source than the member that holds the database. `RecordedOperationMismatch`: the operation read by the ID recorded for an HA bootstrap or seeding step is of another kind or on another database. Either ends the database `Failed` at once (ADR-0010, #534): no attempt is used and the step is not started again; check the member named in the message before relying on its data, then delete and create the cluster again. Do not clear the recorded operation or the seeding record in the status by hand: the step would be started again under the same key. `SeedCatchUpInProgress`: the seed restore of a member completed after a member that holds the database answered as an active master (`status.databases[].seeding.activeMasterSince`), and the member is not yet seen as a slave that applies its source's log with no failed change, no page waiting, and both its copy of that log and its applier's position in it at or past `status.databases[].seeding.catchUpTarget`, the source's log end read after the restore completed. It waits and uses up no attempt; the message says since when (`seeding.catchUpSince`) and which reading is missing (pages waiting, failed changes, the end of the copy, the applier position, or the source the member applies). 10 minutes after `seeding.catchUpSince` a Warning event `SeedCatchUpOverdue` is emitted once and the wait goes on, for a person to decide; that these readings show every change up to the target applied is not verified on the engine. `SeedSourceChangedDuringSeed`: once a member that holds the database was observed as an active master, another member that holds the database or the member being seeded during its restore reported itself master, or the source reported itself a slave, before the member was recorded as seeded (`status.databases[].seeding.masterChange`): for a member after the first peer only once its restore was started, since before that the copy begins again with a backup of its own; a member seeded across a change of master can lack what the new master committed without showing it (docs/poc/RESULTS.md, POC-57, #768). `SeedSourceUnverified`: no reading in which every member that holds the database answered and the source was the only master was taken for more than 30 seconds, counted from `seeding.lastVerifiedAt`, or from `seeding.activeMasterSince` when no reading was verified, with the same qualification; an Operator restart, a slow reconcile or an Operator that reaches the cluster less often than every 30 seconds counts too. Either of the last two ends the database `Failed` at once: the member is not recorded as seeded, the seeding record is kept, no attempt is used and nothing is started or deleted; the message names the masters and the time in UTC. Check the member's data before relying on it, then delete and create the cluster again. A copy in which no holder was ever observed as an active master, as in the bootstrap of a new group, is recorded as seeded when its restore completes (ADR-0010). `InvalidManifestURI`: `spec.bootstrap.recovery.manifestUri` is not of the form ADR-0008 accepts (a cluster stored by a release that admitted it), and either no restore was started for it, so none is, or the restore started for it reads another object than the one it names; the recovery is `Failed` and that restore is no longer polled, though a running one goes on to its end on the member. A started restore that reads the object the URI names is followed. `RecordedOperationMissing`: the member answers that it holds no record of a recorded operation: the recovery restore, the HA bootstrap, or a seed backup or seed restore. The step uses up no attempt and is never started again; it waits 30 minutes from `status.bootstrap.operationMissingSince`, `status.databases[].bootstrapOperationMissingSince` or `status.databases[].seeding.operationMissingSince`, which a read of the operation clears, and then ends `Failed` with `RecordedOperationLost` (ADR-0008, ADR-0010, #457, #534): the step may still run on that member or have left data there, and a seeded peer is not recorded as seeded. The way out is to check the member, then delete and create the cluster again; do not clear the recorded operation in the status by hand, which would start the step again under the same key. Once a recovery is `Failed` its reason stays: the member is not asked again |
+| `Degraded` | Set only while held: the member of a member rebuild that ended `Failed` after its restore was started still runs on the claim the rebuild restored into, and is stopped and kept out of service (`RebuildFailed`); see [rebuilding a member](#rebuilding-a-member). Removed once the member's claim is replaced | — |
 | `MemberPlacement` | HA only: each member runs on a node of its own (`MembersOnSeparateNodes`). A report only; the Operator moves, deletes or replaces no Pod or PVC because of it (#596) | `MembersShareNode`: two observed members have the same `spec.nodeName`; `SpreadBlockedByVolume`: under `memberSpread: Required`, the data PVCs of two members carry the same `volume.kubernetes.io/selected-node`, so only one of those members can run there (the data has to move by a backup and a restore into a new cluster, see [Member placement](operations/member-placement.md)); `MemberUnschedulable`: a `Pending` member has `PodScheduled=False` with reason `Unschedulable`, and the message carries the scheduler's. When several hold, the reason is the first of these and the message names each. `Unknown` with `MembersNotScheduled` while a member has no Pod or no node yet without being reported unschedulable, or `PlacementNotObserved` when a Pod or PVC could not be read. A standalone cluster has no such Condition |
 | `DBAPasswordSecretResolved` | Only on a cluster that sets `spec.dbaPasswordSecretRef`: the key it names exists in the Secret of that name in the cluster's namespace and holds a value the Instance Manager accepts (`DBAPasswordSecretResolved`). The DB container sets the password on a new database before its server first starts, and does not start the server when it cannot, so a ready member already has it; on an HA cluster the member that creates the database sets it before the others are seeded from it, and they only check it. Afterwards the Operator asks the ready member of a standalone cluster, or the resolved primary of an HA cluster once the HA bootstrap admitted every member, whether the value is still the database's DBA password ([DBA password](operations/dba-password.md)) | `DBAPasswordSecretNotFound`, `DBAPasswordKeyNotFound`, `DBAPasswordKeyEmpty` (empty, or a single line feed), `DBAPasswordValueInvalid` (longer than 31 bytes, CUBRID's own bound, or holds NUL, a carriage return, a non-trailing line feed, another ASCII C0 control byte or DEL), `DBAPasswordSecretReadFailed` (the Operator could not read the Secret, for example for lack of permission; retried with backoff), `DBAPasswordRotationUnsupported` (the value is usable, but the member's Instance Manager answered that a `dba` login with it through the running server was refused, so it is not the database's current DBA password: the Secret's value or the database's password was changed after the password was set. Nothing is changed or restarted; put the database's current password back in the Secret. The member is asked at most once every 5 minutes per cluster while it is ready (on an HA cluster, while it is the resolved primary), and at once after an Operator restart; an answer that cannot tell leaves the Condition as it is, and an accepted login sets it back to `True`). The message names the Secret and the key, never the value. While the StatefulSet does not exist, `Ready` and `Progressing` are `False` with the same reason and the StatefulSet is not created; an existing StatefulSet is left as it is |
 | `Updating` | A member is being replaced for a new image (`RollingUpdateInProgress`, or `MemberUpdateInProgress` when its Pod could not be deleted), or the rolling update waits: `WaitingForPrimaryResolved`, `WaitingForHealthyCluster`, `WaitingForCatchUp`, `UpdatePausedFencingRequired`, `WaitingForPDB` | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it. The manager is built with automatic replacement off (`AutomaticReplacement` is never set in `cmd/main.go`), so an outdated slave is reported as `AutomaticReplacementDisabled` and no Pod is deleted: `RollingUpdateInProgress` and `MemberUpdateInProgress` are not produced by the manager as built from `cmd/main.go`. No step of the Operator sets a `FencingRequired` Condition, and no PodDisruptionBudget is read, so `UpdatePausedFencingRequired` and `WaitingForPDB` are not produced either. `WaitingForCatchUp` is not produced: a member counts as caught up when it is ready (`internal/controller/update.go`), and any member that is not ready gives `WaitingForHealthyCluster` first (`internal/controller/rollingplan.go`) |
@@ -1358,7 +1359,9 @@ example after its rebuild, its earlier record moves to
 `status.formerDataClaims` and is never removed: the volume it names may hold
 the only copy of writes no other member has, such as a lost primary's
 storage, and is never taken for a replacement of any member if it is bound to
-a new claim. That list holds at most 64 records. Once it is full, a later
+a new claim. The claim and volume of a rebuild that ended `Failed` after its
+restore was started are added there too, as they may hold what that restore
+wrote, and are never offered for a rebuild again. That list holds at most 64 records. Once it is full, a later
 claim is not recorded, the member's earlier record stays in
 `status.memberDataClaims`, and no rebuild is offered or accepted for any
 member of the cluster: every request is refused with "the list is full". The
@@ -1519,10 +1522,125 @@ the source. An observation whose Pods or claims could not be read, or whose
 write quarantine step failed, also keeps it, unless the status shows a write
 quarantine: that withdraws it even then.
 
-Whether this build restores the database on the member for an accepted
-request is recorded in [ROADMAP.md](../ROADMAP.md). An accepted request has
-no other way out: removing the annotation does not cancel it, and only a
-withdrawal as above ends it.
+**The copy of an accepted rebuild.** The Operator copies the database from
+the accepted `source` to the member, one step per observation, and records
+the copy in `status.memberRebuild.copy`:
+
+- Every step needs an observation in which the accepted source is the only
+  active master among the other members and the member is neither the
+  current primary nor answering as a master. The source is the one the
+  request was accepted with; it is never chosen again.
+- Nothing is started until the Instance Managers of the source and of the
+  member both report the `rebuild-restore` capability (ADR-0013); the
+  Operator's log says what it waits for.
+- The backup runs on the source under the idempotency key
+  `rebuild-backup-<operationID>` and is uploaded to
+  `<prefix>/<clusterUID>/rebuild-<operationID>/<database>` in
+  `spec.objectStorage`, never to the HA bootstrap's seed location. Its
+  manifest carries the rebuild's operation ID and token.
+- Immediately before the restore is started, the Operator checks again that
+  no write quarantine is in the status, and reads the source's Pod and the
+  member's claim from the API server: a Pod UID, claim UID or volume name
+  that is not the accepted one means no restore call in that observation.
+- The restore runs on the member under the key
+  `rebuild-restore-<operationID>-<member>`, bound to the operation ID and
+  token, with a Normal Event `MemberRebuildRestoreStarted`. The member's
+  Instance Manager asks the source's Instance Manager whether it is the
+  active master, and refuses a target that already holds a database.
+- Every operation is recorded once started and only polled from then on. An
+  Operator restart keeps the operation ID and the keys and polls the
+  recorded operations. While no restore is recorded, the member is asked in
+  every observation for a restore under the rebuild's key, so a restore
+  started in passes whose status writes were lost is found and judged as
+  below; with no copy recorded at all, it is judged from the acceptance on,
+  which counts as a gap in the readings. While the member cannot be asked,
+  the rebuild is neither copied nor withdrawn, and the reconcile error says
+  so.
+- The backups under `rebuild-<operationID>/` in object storage are not
+  removed by the Operator, whatever the outcome; remove them by hand once
+  they are not needed.
+
+Until the restore is started, the rebuild can be withdrawn as above. A change
+of master or more than 30 seconds without a reading that confirms the source
+as the only master also withdraws it then: its backup may predate the change.
+A backup that fails or is refused, or a restore the member refuses before
+recording it, ends the rebuild `Failed`; nothing was restored then.
+
+Once the restore is started, the rebuild is never withdrawn; its outcome is
+decided first, by the same rule as a member seeded by the HA bootstrap
+(#768):
+
+- It is `Completed`, with a Normal Event `MemberRebuildCompleted`, only when
+  the restore completed and the member answers as a slave that applies the
+  source's log with no failed change and no page waiting, and whose copy
+  and applier reached the end of the source's log read after the restore
+  completed. A restore that completed does not by itself make the member
+  healthy.
+- It is `Failed`, with a Warning Event `MemberRebuildFailed` and a message,
+  when a write quarantine is in the status, the member's claim or volume or
+  the source's Pod changed, the restore failed or restored another backup,
+  another member (or the member itself) reported itself master or the source
+  reported itself a slave, or no reading confirmed the source as the only
+  master for more than 30 seconds. An Operator that is unavailable for more
+  than 30 seconds while a restore runs therefore fails the rebuild. Nothing
+  is deleted, and nothing is stopped: the restore on the member may still be
+  running, and the member may join the group with what it restored, which
+  is not trusted. The member's claim and volume are added to
+  `status.formerDataClaims` and never offered for a rebuild again, so no
+  later request makes the Instance Manager take over or remove what the
+  failed restore left: a new request needs a new empty claim.
+- It is `Withdrawn` when the member's Instance Manager refused the restore
+  with `RebuildSourceUnconfirmed` or `RebuildSourceNotMaster` before
+  restoredb: it asks the source before it touches the target, so nothing was
+  restored, and the claim can be offered again. The same codes after
+  restoredb, from the second question right before the member is started,
+  end it `Failed`.
+
+**The member stays held until it caught up.** The restored member joins HA
+as a slave, so that its catch-up can be read, but its database keeps the
+ownership marker of the restore: after a restart of its Pod or its
+Instance Manager it is not started again, and the role answer reports it in
+`status.instances[].unfinishedDatabase` (`WaitingForOperation`). Only when
+the rebuild is judged caught up does the Operator release it
+(`POST /v1/rebuild/release`, bound to the rebuild's operation ID and
+token); the rebuild is `Completed` once the release succeeded. A new Pod of
+the member before then ends the rebuild `Failed`, as its database stays
+stopped. A restart of the containers of the same Pod also leaves the
+database stopped; the rebuild then waits for a catch-up that does not come,
+and is ended by a person replacing the member's Pod and claim as below.
+
+**A failed rebuild is stopped and left for a person.** A member restored
+across a change of master can lack acknowledged writes and still look
+caught up (docs/poc/RESULTS.md, POC-57; ADR-0006). When a rebuild ends
+`Failed` after its restore was started, the Operator asks the member to stop
+(`POST /v1/shutdown`), which also ends a restore still running and admits
+nothing that would start it again until the Pod is replaced. It asks again
+in every observation while the member answers as a master or a slave, and
+once for each new Pod of the member. `Degraded` is `True` with
+`RebuildFailed` meanwhile. The member is never released, and its claim is
+never offered again. A short window remains: the restore may start the
+member between the failure and the stop. To recover, check that nothing on
+the member's claim is needed, then delete the member's Pod and its claim
+`data-<member>` so that the StatefulSet creates an empty one, wait for a
+new offer for the member, and request a new rebuild. `Degraded` is removed
+once the member runs on another claim. The stop is sent only while the
+member's Pod and claim, read from the API server right before it, are the
+ones the observation decided on, so a Pod or claim replaced since is never
+stopped. A held member that CUBRID has meanwhile promoted is stopped as
+well: that is an outage of writes until a person acts, not a promotion.
+
+**The promotion window.** From the restored member's `heartbeat start` until
+the Operator's verdict, the member runs as a slave that CUBRID can promote.
+The Instance Manager's second question to the source finds a change of
+master that lasts until the start, but not a change from the source to
+another member and back during the copy. The Operator detects that change
+from its own readings and stops the member, but a master failure inside
+that window can promote a member that lacks acknowledged rows
+(docs/poc/RESULTS.md, POC-57). The VM-lab storage-loss run (#118) has to
+exercise this window.
+
+An accepted request has no other way out: removing the annotation does not
+cancel it.
 Restrict `update`/`patch` on `cubridclusters` to administrators; the actor is
 in the API audit log.
 

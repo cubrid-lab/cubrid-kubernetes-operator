@@ -164,6 +164,9 @@ func (s *Server) unfinishedDatabase() *UnfinishedDatabase {
 		// The operation runs now and clears the marker when it completes;
 		// its own status reports it.
 		return nil
+	case op.State == OpCompleted && op.Rebuild != nil:
+		u.State, u.Reason = UnfinishedWaiting, "operation "+id+" restored the database for member rebuild "+
+			op.Rebuild.OperationID+"; it is held, and not started after a restart, until the Operator releases it"
 	case op.State == OpCompleted:
 		u.State, u.Reason = UnfinishedWaiting,
 			"operation "+id+" completed and left its marker; the next restore or HA bootstrap of the database clears it"
