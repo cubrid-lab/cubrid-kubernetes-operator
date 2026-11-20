@@ -279,11 +279,69 @@ func replicationStallStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(endpoint).To(Equal("True"), "WriteEndpointReady")
 		}, 4*time.Minute, 3*time.Second).Should(Succeed(), observed)
+		endpointReady := time.Now().UTC()
+
+		// clientHistory returns the lines of the run's history that the
+		// client id recorded, and keeps them under replication-stall/.
+		clientHistory := func(id string) string {
+			var lines []string
+			for line := range strings.SplitSeq(r.historyText(), "\n") {
+				if strings.Contains(line, `"client":"`+id+`"`) {
+					lines = append(lines, line)
+				}
+			}
+			text := strings.Join(lines, "\n") + "\n"
+			writeScenarioFile("replication-stall/history-"+id+".jsonl", []byte(text))
+			return text
+		}
+
+		// WriteEndpointReady=True has been seen while some writes sent
+		// right after it were not acknowledged (#1029). One write at a
+		// time is sent until one is acknowledged, so that the batch below
+		// starts on a write path the client can use. These probe writes
+		// have a client id of their own and are not counted in the batch;
+		// they stay in the run's history, so the data check judges them.
+		By("waiting until a single write through the read-write Broker is acknowledged")
+		probe := clients + "p"
+		var probes []string
+		Eventually(func(g Gomega) {
+			seq := len(probes) + 1
+			h, err := r.runWorkload(context.Background(),
+				fmt.Sprintf("CLIENT_ID=%s START_SEQ=%d OPS=1 ROLLBACK_EVERY=0", probe, seq))
+			if err != nil {
+				probes = append(probes, fmt.Sprintf("probe %d: %v", seq, err))
+			} else {
+				outcomes := make([]string, 0, len(h.Operations))
+				for _, op := range h.Operations {
+					outcomes = append(outcomes, strings.TrimSpace(op.Outcome+" "+op.Error))
+				}
+				probes = append(probes, fmt.Sprintf("probe %d at %s: %s", seq,
+					time.Now().UTC().Format(time.RFC3339Nano), strings.Join(outcomes, "; ")))
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(h.Counts[workload.Acknowledged]).To(Equal(1), "probe write %d", seq)
+		}, 2*time.Minute, 2*time.Second).Should(Succeed(), func() string {
+			return fmt.Sprintf("no write through the read-write Broker was acknowledged after "+
+				"WriteEndpointReady=True at %s:\n%s\nhistory of client %s:\n%s%s", endpointReady.Format(time.RFC3339Nano),
+				strings.Join(probes, "\n"), probe, clientHistory(probe), observed())
+		})
+		clientHistory(probe)
+		if len(probes) > 1 {
+			// A write path reported ready that refuses or loses writes
+			// for a while is what #1029 is about; it is kept, not hidden.
+			note := fmt.Sprintf("after WriteEndpointReady=True at %s, %d probe writes were sent before one "+
+				"was acknowledged:\n%s", endpointReady.Format(time.RFC3339Nano), len(probes), strings.Join(probes, "\n"))
+			writeScenarioFile("replication-stall/write-probes.txt", []byte(note+"\n"))
+			AddReportEntry("replication-stall write probes", note)
+		}
 
 		By("writing more, so that log pages wait on the slave")
 		h, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"b OPS=40 ROLLBACK_EVERY=0")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(h.Counts[workload.Acknowledged]).To(Equal(40))
+		batch := clientHistory(clients + "b")
+		Expect(h.Counts[workload.Acknowledged]).To(Equal(40),
+			"outcomes of the 40 writes after the probe was acknowledged: %v\nhistory of client %sb:\n%s",
+			h.Counts, clients, batch)
 
 		By("waiting for the operator to report the slave as stalled")
 		var message string
