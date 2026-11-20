@@ -531,6 +531,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	recoverySnapshot, recoveryFile, recoveryNote := finishS03Recovery(outcome, recoveryState, variant,
 		redactor, writeScenarioFile)
 	newMaster, electedAt, noticedAt = recoverySnapshot.newMaster, recoverySnapshot.electedAt, recoverySnapshot.noticedAt
+	// The master's Pod was deleted at FaultIssuedAt, and the recovery check
+	// first accepted a member as the only active master at electedAt.
+	r.addFailover(outcome.FaultIssuedAt, electedAt)
 	addEvidence(&result, recoveryFile)
 	if recoveryNote != "" {
 		_, _ = fmt.Fprintln(GinkgoWriter, "warning: "+recoveryNote)

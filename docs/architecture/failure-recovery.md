@@ -216,6 +216,9 @@ and direct database clients.
   every connection, so the Operator leaves the Broker configuration as it
   is. That a standby's natural lag caused the Kind read mismatches of
   [#786](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/786) is a hypothesis; the POC made the lag itself.
+  The Kind data check reports such a read and does not fail on it only under
+  the narrow conditions of the
+  [scenario contract](../testing/scenario-contract.md#rules-the-data-must-always-satisfy).
 - Installation and recovery procedures for operators of a cluster are out of
   scope here; they are tracked in
   [#125](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/125).

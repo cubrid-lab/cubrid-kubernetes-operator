@@ -482,6 +482,172 @@ func TestCheck_Reads(t *testing.T) {
 	}
 }
 
+// staleReadBase is when the fault of staleReadHistory is issued.
+var staleReadBase = time.Date(2026, 11, 20, 10, 35, 31, 0, time.UTC)
+
+// Operations of staleReadHistory after the first two: the read that misses
+// c1-2, the write after it and a write after the recovery.
+const (
+	staleRead   = verifiedRead // c1-3
+	nextWriteOp = unknownOp    // c1-4
+	laterWrite  = failedRead   // c1-5
+)
+
+// staleReadHistory is client c1 as in the Kind run of 2026-11-20 UTC (#1048):
+// c1-1 is acknowledged before the master's Pod is deleted at staleReadBase,
+// c1-2 is acknowledged right after, the read c1-3 does not find c1-2 (or,
+// with differentValues, finds it with other values), the next write c1-4
+// gets nextWrite (failed with the updates-disabled error of a standby, or
+// acknowledged), and c1-5 is acknowledged after the new master is active.
+// others are events of other clients, added after those of c1.
+func staleReadHistory(t *testing.T, nextWrite Event, differentValues bool, others ...Event) History {
+	t.Helper()
+	mismatch := ReadMismatch + " c1-2 not found"
+	if differentValues {
+		mismatch = ReadMismatch + " c1-2 has c1/2/99/n2, sent c1/2/20/n2"
+	}
+	at := func(ms int) time.Time { return staleReadBase.Add(time.Duration(ms) * time.Millisecond) }
+	events := []Event{
+		{T: at(-1000), Seq: 1, Op: OpInsert, OpID: firstOp, Event: Attempted, Amount: 10, Note: "n1"},
+		{T: at(-990), Seq: 1, Op: OpInsert, OpID: firstOp, Event: Acknowledged},
+		{T: at(100), Seq: 2, Op: OpInsert, OpID: secondOp, Event: Attempted, Amount: 20, Note: "n2"},
+		{T: at(110), Seq: 2, Op: OpInsert, OpID: secondOp, Event: Acknowledged},
+		{T: at(210), Seq: 3, Op: OpRead, OpID: staleRead, Event: Attempted, Amount: 20, Note: "n2", Target: secondOp},
+		{T: at(225), Seq: 3, Op: OpRead, OpID: staleRead, Event: Failed, Error: mismatch},
+		{T: at(325), Seq: 4, Op: OpInsert, OpID: nextWriteOp, Event: Attempted, Amount: 40, Note: "n4"},
+		{T: at(345), Seq: 4, Op: OpInsert, OpID: nextWriteOp, Event: nextWrite.Event, Error: nextWrite.Error},
+		{T: at(5000), Seq: 5, Op: OpInsert, OpID: laterWrite, Event: Attempted, Amount: 50, Note: "n5"},
+		{T: at(5010), Seq: 5, Op: OpInsert, OpID: laterWrite, Event: Acknowledged},
+	}
+	for i := range events {
+		events[i].Client = "c1"
+	}
+	var b strings.Builder
+	for _, e := range append(events, others...) {
+		data, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(append(data, '\n'))
+	}
+	h, err := ReadHistory(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// A read through the read-write Service can miss the client's own
+// acknowledged write from the moment the master is lost until the new master
+// is active, because the read-write Broker connects to a standby
+// (docs/architecture/failure-recovery.md, POC-60, #786). The check accepts
+// such a read only when it ran inside a failover window the scenario
+// recorded, before the new master was seen active, the same client's next
+// write failed in that window with the updates-disabled error of a standby,
+// and the row it missed is on
+// every member and endpoint with the values sent. The read stays in the
+// report. Any other read mismatch still fails the check (#1048).
+func TestCheckDuringFailovers_StaleRead(t *testing.T) {
+	refused := Event{Event: Failed,
+		Error: ReadOnlyRefusal + " Attempted to update the database when updates are disabled."}
+	all := []Row{row(1, 10, "n1"), row(2, 20, "n2"), row(5, 50, "n5")}
+	withFourth := []Row{row(1, 10, "n1"), row(2, 20, "n2"), row(4, 40, "n4"), row(5, 50, "n5")}
+	lostSecond := []Row{row(1, 10, "n1"), row(5, 50, "n5")}
+	// members gives memberB onB and every other member and endpoint rows.
+	members := func(rows, onB []Row) map[string][]Row {
+		return map[string][]Row{memberA: rows, memberB: onB, "rw": rows, "ro": rows}
+	}
+	// The new master is first seen active 4.8 s after the fault.
+	window := []FailoverWindow{{From: staleReadBase, To: staleReadBase.Add(4800 * time.Millisecond)}}
+	ms := func(n int) time.Time { return staleReadBase.Add(time.Duration(n) * time.Millisecond) }
+	// otherClientOp is the first operation of client c2.
+	const otherClientOp = "c2-1"
+	// otherRefused is a write of client c2 that a standby refuses right after
+	// the read of c1.
+	otherRefused := []Event{
+		{T: ms(300), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Attempted, Amount: 1, Note: "m1"},
+		{T: ms(320), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: refused.Event, Error: refused.Error},
+	}
+	// otherClientsRow is a history in which the read of c1 missed a row that
+	// client c2 inserted and had acknowledged before the read, not a row of
+	// c1's own.
+	otherClientsRow := staleReadHistory(t, refused, false,
+		Event{T: ms(50), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Attempted, Amount: 7, Note: "m1"},
+		Event{T: ms(60), Client: "c2", Seq: 1, Op: OpInsert, OpID: otherClientOp, Event: Acknowledged})
+	read := otherClientsRow.Operations[staleRead]
+	read.Target, read.Error = otherClientOp, ReadMismatch+" c2-1 not found"
+	otherClientsRow.Operations[staleRead] = read
+	withOthers := append([]Row{{OpID: otherClientOp, Client: "c2", Seq: 1, Amount: 7, Note: "m1"}}, all...)
+	// ackedAfterRead is a history in which c1-2 was acknowledged only after
+	// the read that missed it had started.
+	ackedAfterRead := staleReadHistory(t, refused, false)
+	target := ackedAfterRead.Operations[secondOp]
+	target.AcknowledgedAt = ms(220)
+	ackedAfterRead.Operations[secondOp] = target
+
+	report := CheckDuringFailovers(staleReadHistory(t, refused, false), members(all, all), window)
+	if !report.OK {
+		t.Fatalf("a stale read inside the failover window failed the check: %+v", report)
+	}
+	if len(report.ReadMismatches) != 0 || len(report.ExplainedReadMismatches) != 1 ||
+		report.ExplainedReadMismatches[0].OpID != staleRead || report.ExplainedReadMismatches[0].Rule != RuleReadMismatch ||
+		!strings.Contains(report.ExplainedReadMismatches[0].Detail, ReadMismatch+" c1-2 not found") {
+		t.Fatalf("the stale read is not reported as explained: %+v / %+v",
+			report.ReadMismatches, report.ExplainedReadMismatches)
+	}
+	if _, _, total := report.FirstViolation(nil, ""); total != 0 {
+		t.Fatalf("an explained read mismatch counts as a violation: %d", total)
+	}
+
+	for _, c := range []struct {
+		name      string
+		h         History
+		rows, onB []Row
+		failovers []FailoverWindow
+	}{
+		{"no failover window was recorded", staleReadHistory(t, refused, false), all, all, nil},
+		{"the new master was seen active before the read", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(200)}}},
+		{"the new master was seen active while the read ran", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(215)}}},
+		{"the new master was seen active before the refused write", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase, To: ms(300)}}},
+		{"the window started after the read", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: ms(220), To: ms(4800)}}},
+		{"the window has no end", staleReadHistory(t, refused, false), all, all,
+			[]FailoverWindow{{From: staleReadBase}}},
+		{"the next write was acknowledged", staleReadHistory(t, Event{Event: Acknowledged}, false),
+			withFourth, withFourth, window},
+		{"only another client's write was refused",
+			staleReadHistory(t, Event{Event: Acknowledged}, false, otherRefused...), withFourth, withFourth, window},
+		{"the next write failed for another reason",
+			staleReadHistory(t, Event{Event: Failed, Error: "code -111: aborted"}, false), all, all, window},
+		{"the read found other values", staleReadHistory(t, refused, true), all, all, window},
+		{"the row is absent on a member", staleReadHistory(t, refused, false), all, lostSecond, window},
+		{"the row is absent on every member", staleReadHistory(t, refused, false), lostSecond, lostSecond, window},
+		{"the row the read missed is another client's", otherClientsRow, withOthers, withOthers, window},
+		{"the row was acknowledged after the read started", ackedAfterRead, all, all, window},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			report := CheckDuringFailovers(c.h, members(c.rows, c.onB), c.failovers)
+			if report.OK {
+				t.Fatalf("the read mismatch passed the check: %+v", report)
+			}
+			if len(report.ReadMismatches) != 1 || report.ReadMismatches[0].OpID != staleRead ||
+				len(report.ExplainedReadMismatches) != 0 {
+				t.Fatalf("read mismatches %+v, explained %+v", report.ReadMismatches, report.ExplainedReadMismatches)
+			}
+		})
+	}
+
+	// The acknowledged write the read missed is lost on a member: it stays
+	// missing data, whatever the window.
+	report = CheckDuringFailovers(staleReadHistory(t, refused, false), members(all, lostSecond), window)
+	if report.AcknowledgedMissing != 1 || !strings.Contains(rules(report.Members[memberB]), RuleMissing+":"+secondOp) {
+		t.Fatalf("the missing acknowledged write is not reported: %+v", report)
+	}
+}
+
 // lossHistory is client c1 writing c1-1 to c1-4 one second apart from base,
 // c1-3 with an unknown outcome and c1-4 rolled back, then c1-5 after the
 // fault.
