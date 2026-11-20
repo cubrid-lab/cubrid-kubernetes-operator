@@ -49,7 +49,7 @@ func TestRebuildTreatsAFailedQuarantineStepAsUnreadable(t *testing.T) {
 	if err := errors.Join(clientgoscheme.AddToScheme(sch), databasev1alpha1.AddToScheme(sch)); err != nil {
 		t.Fatal(err)
 	}
-	objs := []client.Object{}
+	objs := make([]client.Object, 0, 7)
 	for _, m := range []string{m0, m1, m2} {
 		objs = append(objs,
 			&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: m, Namespace: ns, UID: types.UID("pod-" + m),

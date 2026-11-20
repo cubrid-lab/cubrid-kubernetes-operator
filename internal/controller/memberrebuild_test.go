@@ -33,7 +33,7 @@ import (
 const (
 	rbM0, rbM1, rbM2                        = "r-0", "r-1", "r-2"
 	rbPod0, rbPod2, rbPod2b                 = "pod-0", "pod-2", "pod-2b"
-	rbClaim0, rbClaim1                      = "claim-0", "claim-1"
+	rbClaim0, rbClaim1, rbClaim1New         = "claim-0", "claim-1", "claim-1-new"
 	rbClaim2New, rbClaim2Old, rbClaim2Newer = "claim-2-new", "claim-2-old", "claim-2-newer"
 	rbWantCurrentPrimary                    = "current primary"
 	rbWantNoHealthyPrimary                  = "no healthy primary"
@@ -153,7 +153,7 @@ func TestRecordDataClaims(t *testing.T) {
 	got = record(func(in *rebuildInput) {
 		in.Observations[rbM1] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave,
 			ObservedAt: now.Add(-time.Hour)}
-		in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Hour)}
+		in.Claims[rbM1] = claimIdentity{UID: rbClaim1New, Created: now.Add(-2 * time.Hour)}
 	})
 	if dataClaimOf(got, rbM1) != rbClaim1 {
 		t.Fatalf("a stale answer records nothing, got %+v", got)
@@ -440,7 +440,7 @@ func TestDecideRebuildRequest(t *testing.T) {
 	// claims that were not recorded holding the database before this pass,
 	// so that both are offered.
 	bothReplaced := func(in *rebuildInput) {
-		in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Hour), VolumeName: "pv-1-new"}
+		in.Claims[rbM1] = claimIdentity{UID: rbClaim1New, Created: now.Add(-2 * time.Hour), VolumeName: "pv-1-new"}
 		in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
 	}
 	cases := []struct {
@@ -755,7 +755,7 @@ func TestRebuildRefusesAVolumeAFormerRecordHeld(t *testing.T) {
 
 	in.Observations[rbM1] = RoleObservation{}
 	in.Identities[rbM1] = memberIdentity{PodUID: "pod-1b", Created: now.Add(-time.Minute)}
-	in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Minute), VolumeName: rbPV2Old}
+	in.Claims[rbM1] = claimIdentity{UID: rbClaim1New, Created: now.Add(-2 * time.Minute), VolumeName: rbPV2Old}
 	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
 	in.DataClaims, in.FormerDataClaims = recordDataClaims(in)
 	if got := rebuildRefusal(in, rbM1); !strings.Contains(got, rbPV2Old) {
@@ -765,7 +765,7 @@ func TestRebuildRefusesAVolumeAFormerRecordHeld(t *testing.T) {
 		t.Fatalf("expected no offer, got %+v, %v", offers, err)
 	}
 
-	in.Claims[rbM1] = claimIdentity{UID: "claim-1-new", Created: now.Add(-2 * time.Minute), VolumeName: "pv-1-new"}
+	in.Claims[rbM1] = claimIdentity{UID: rbClaim1New, Created: now.Add(-2 * time.Minute), VolumeName: "pv-1-new"}
 	if got := rebuildRefusal(in, rbM1); got != "" {
 		t.Fatalf("a volume no record held is offered, got %q", got)
 	}
