@@ -113,6 +113,63 @@ whether the Brokers are available
 ([docs/observability.md](./docs/observability.md#conditions)); they do not
 prove that a client can run SQL.
 
+## v0.1 release scope and known HA limitations
+
+**Scope decision: 2026-11-21 UTC. v0.1 is not released or production-ready.**
+A release candidate must still pass its mandatory scenarios on the pinned
+CUBRID 11.4.x/amd64 three-worker reference lab and an independently reproduced
+runbook. The candidate freeze is targeted for **2026-12-07**, followed by
+repeated scenarios and a 24-hour soak (Dec 08–14), independent reproduction
+(Dec 15–20), and a conditional release review (Dec 21–27).
+See [ROADMAP.md](./ROADMAP.md#v01-release-calendar--2026-11-21-decision) and
+[the scenario contract](./docs/testing/scenario-contract.md#v01-candidate-acceptance--2026-11-21-decision).
+These dates do not waive incomplete evidence or authorize a lab fault or release.
+
+The following limitations are part of the **proposed v0.1 experimental claim**,
+not guarantees of zero data loss or general CUBRID HA safety:
+
+- **Actual VM power loss (S04):** the required outcome is observed role and
+  managed-routing recovery. Recovery time and acknowledged-write loss are
+  measured and disclosed, not judged against the earlier 30-second limit.
+  With the pinned engine's default `ha_copy_log_timeout=5`, a stalled
+  `copylogdb -m sync` can stop copying while the master continues to
+  acknowledge commits. An induced copier-stall + VM-off run found **13
+  acknowledged writes absent from the promoted master** ([#1035](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1035),
+  [POC-69](./docs/poc/poc69/README.md)). Do not treat a healthy role or
+  `Ready=True` as durable replication evidence.
+- **Network partitions / repeated failover (S07–S08):** write quarantine is
+  **best-effort isolation of the Operator-managed `-rw` Broker path**, not
+  database-process fencing. Each candidate run must measure time to actual
+  closure (Brokers, Endpoints and SQL), and independently establish **no
+  acknowledged writes after that closure** on new and established sessions.
+  During earlier partition/heal trials a higher-ranked member lacked up to
+  **73 writes already acknowledged before closure** ([#702](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/702)).
+  The Operator cannot prevent native heartbeat promotion or guarantee that
+  every acknowledged write survives it; directly connected database clients
+  are outside managed `-rw` isolation.
+- **Graceful primary Pod deletion (S03):** abrupt-failure variants remain
+  mandatory, but the graceful variant's recovery time and the cause of its
+  unnecessary quarantine are published as measured limitations ([#938](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/938)),
+  without converting other safety failures to passes.
+- **Recovery:** explicitly authorized rebuild onto verified replacement storage
+  (S10) remains mandatory. Automatic rejoin/adoption of potentially divergent
+  retained data (S09) and automatic adoption of old HA PVCs on cluster
+  recreation ([#798](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/798))
+  are deferred to v0.2. Preserve original volumes and follow the reviewed
+  [manual recovery procedure](./docs/operations/retained-volume-recovery.md);
+  an accepted rebuild request alone does not authorize deleting data.
+- **API group:** `database.cubrid.io` is not proven owned by this project
+  ([#20](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/20)).
+  The v0.1 experimental API may need a breaking CRD recreation in a later
+  version; do not assume an in-place upgrade.
+
+The earlier Kind regression for observing/enforcing quarantine under denied
+child writes ([#949](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/949))
+has been completed; it is **not** proof of VM partition durability. Historical
+failed SQL/VM runs remain recorded and must never be relabelled as successful.
+The mandatory candidate matrix, observational results and current test-harness
+alignment gaps are tracked in the scenario contract.
+
 ## Security limitations
 
 - **The DBA password is empty unless the cluster names one.** A standalone or
