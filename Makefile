@@ -277,14 +277,20 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	# interrupted; the target exits with the failure's status (#461). An interrupt
 	# must reach make's process group (Ctrl-C, a CI job's cancel): a signal sent
 	# to make alone is handled only once the running build returns.
-	# Once EXIT cleanup starts, ignore further cancellation so builder removal
+	# Once cleanup starts, ignore further cancellation so builder removal
 	# cannot be interrupted before the temporary Dockerfile is removed.
+	# The INT and TERM traps clean up themselves before they exit: the shell can
+	# get a second signal (make sends its recipe SIGTERM again, a user presses
+	# Ctrl-C twice), and the shell (bash, and dash too) can run a pending
+	# signal's trap before the EXIT trap's first command, so an "exit" there
+	# would end the shell without the EXIT trap's cleanup (#1068). When the EXIT
+	# trap runs the cleanup again after a signal's trap, it removes nothing more.
 	# The copy of Dockerfile gets --platform=${BUILDPLATFORM} inserted; the original is preserved.
 	cross="$$(mktemp Dockerfile.cross.XXXXXX)" || exit 1; \
 	builder="cubrid-kubernetes-operator-builder-$${cross##*.}"; \
 	created=; \
-	trap 'trap "" INT TERM HUP; if [ -n "$$created" ]; then $(CONTAINER_TOOL) buildx rm "$$builder" || echo "Could not remove the buildx builder $$builder" >&2; fi; rm -f "$$cross"' EXIT; \
-	trap 'exit 130' INT; trap 'exit 143' TERM; \
+	cleanup='trap "" INT TERM HUP; if [ -n "$$created" ]; then created=; $(CONTAINER_TOOL) buildx rm "$$builder" || echo "Could not remove the buildx builder $$builder" >&2; fi; rm -f "$$cross"'; \
+	trap "$$cleanup" EXIT; trap "$$cleanup; exit 130" INT; trap "$$cleanup; exit 143" TERM; \
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > "$$cross" || exit 1; \
 	$(CONTAINER_TOOL) buildx create --name "$$builder" || { echo "Could not create the buildx builder $$builder; no builder was used or removed" >&2; exit 1; }; \
 	created=1; \
