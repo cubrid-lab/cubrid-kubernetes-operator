@@ -250,6 +250,54 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)))
 	})
 
+	// One answer that cannot tell said nothing about the password, so the
+	// member is asked again after dbaPasswordInconclusiveRetry rather than
+	// after the whole poll. In a Kind e2e run the only check after the value
+	// was put back answered Unknown, because csql did not prompt, and the
+	// condition stayed False until the next poll, 5 minutes later (#1031).
+	It("asks again soon after an answer that cannot tell, and clears the report once the value logs in", func() {
+		checker := &fakeDBAPasswordChecker{}
+		r := newReconciler(checker)
+		key := runningCluster("dba-inconclusive", r)
+		checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		drain(r.Recorder.(*record.FakeRecorder))
+
+		for name, set := range map[string]func(){
+			"csql not prompting": func() { checker.set(instancemanager.DBAPasswordUnknown, "csql did not prompt", nil) },
+			"a failed call":      func() { checker.set("", "", errors.New("connection refused")) },
+		} {
+			By("keeping the report after " + name)
+			set()
+			res := reconcileOnce(r, key)
+			Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported), name)
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0), name)
+			Expect(res.RequeueAfter).To(BeNumerically("<=", dbaPasswordInconclusiveRetry), name)
+			asked := len(checker.calls())
+
+			By("not asking again at once after " + name)
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(checker.calls()).To(HaveLen(asked), name)
+
+			By("asking again once the short retry has passed, well before the poll, after " + name)
+			checker.set(instancemanager.DBAPasswordMatches, "", nil)
+			advance(dbaPasswordInconclusiveRetry)
+			res, err = r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(checker.calls()).To(HaveLen(asked+1), name)
+			Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved), name)
+			Expect(res.RequeueAfter).To(Equal(poll), "a conclusive answer waits the whole poll: "+name)
+
+			By("reporting the changed value again before the next case")
+			checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+			reconcileOnce(r, key)
+			Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported), name)
+		}
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)))
+	})
+
 	It("never asks about a cluster without the reference, nor a member that is not ready", func() {
 		checker := &fakeDBAPasswordChecker{}
 		r := newReconciler(checker)

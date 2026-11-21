@@ -251,6 +251,12 @@ const reasonDBAPasswordRotationUnsupported = "DBAPasswordRotationUnsupported"
 // so this is how long a changed value may go unreported.
 const defaultDBAPasswordPoll = 5 * time.Minute
 
+// dbaPasswordInconclusiveRetry is how soon a member whose answer could not
+// tell (Unknown, a failed call) is asked again, when that is sooner than the
+// poll: such an answer says nothing about the password, so it does not hold
+// back the next check for a whole poll (#1031).
+const dbaPasswordInconclusiveRetry = 30 * time.Second
+
 func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 	if r.DBAPasswordPoll > 0 {
 		return r.DBAPasswordPoll
@@ -271,8 +277,9 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 // applied, and neither the StatefulSet nor its Pods are changed. An answer
 // that cannot tell (Unknown, a failed call, no member to ask) leaves the
 // condition as it is, so that it does not flap. A member is asked at most
-// once per poll per cluster; only the time of the last check is kept, in
-// memory, so an operator that restarts asks again at once.
+// once per poll per cluster, or once per dbaPasswordInconclusiveRetry after
+// an Unknown answer or a failed call; only the time of the next check is
+// kept, in memory, so an operator that restarts asks again at once.
 func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
 	cluster *databasev1alpha1.CubridCluster, member string) time.Duration {
 	ref := cluster.Spec.DBAPasswordSecretRef
@@ -288,20 +295,30 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		return poll
 	}
 	// The member is asked at most once per poll: each check is a login to the
-	// database, and a cluster is reconciled on every event of its objects.
+	// database, and a cluster is reconciled on every event of its objects. A
+	// next check further away than the poll is not trusted: the clock went
+	// back.
 	now := r.now()
-	if last, ok := r.dbaPasswordCheckedAt.Load(cluster.UID); ok {
-		if since := now.Sub(last.(time.Time)); since >= 0 && since < poll {
-			return poll - since
+	if next, ok := r.dbaPasswordNextCheck.Load(cluster.UID); ok {
+		if wait := next.(time.Time).Sub(now); wait > 0 && wait <= poll {
+			return wait
 		}
 	}
-	r.dbaPasswordCheckedAt.Store(cluster.UID, now)
+	r.dbaPasswordNextCheck.Store(cluster.UID, now.Add(poll))
+	// An answer that cannot tell said nothing about the password; the member
+	// is asked again sooner than the poll (#1031).
+	inconclusive := func() time.Duration {
+		retry := min(dbaPasswordInconclusiveRetry, poll)
+		r.dbaPasswordNextCheck.Store(cluster.UID, now.Add(retry))
+		return retry
+	}
 	log := logf.FromContext(ctx)
 	check, err := r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace)
 	switch {
 	case err != nil:
 		log.V(1).Info("Could not check the DBA password Secret against the database", "member", member,
 			"error", err.Error())
+		return inconclusive()
 	case check.State == instancemanager.DBAPasswordDiffers:
 		msg := fmt.Sprintf("the key %q of the Secret %s is not the database's current DBA password: the Secret's value "+
 			"or the database's password was changed after it was set, and changing the DBA password is not supported. "+
@@ -324,6 +341,7 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 	default:
 		log.V(1).Info("Could not tell whether the DBA password Secret is the database's password", "member", member,
 			"reason", check.Reason)
+		return inconclusive()
 	}
 	return poll
 }

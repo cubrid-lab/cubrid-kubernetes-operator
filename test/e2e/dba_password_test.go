@@ -845,6 +845,14 @@ spec:
 						out, _ := h.kubectl(append(args, "--request-timeout=10s")...)
 						_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 					}
+					// The Operator's log shows how it reconciled the cluster after
+					// each restart (#1031); the members' logs above hold the
+					// Instance Manager's answer to each password check. The
+					// passwords are test values, and a step of this scenario
+					// checks that the Operator log holds neither.
+					out, _ := utils.Run(exec.Command("kubectl", "-n", namespace, "logs", "-l", operatorSelector,
+						"--all-containers", "--tail=300", "--request-timeout=10s"))
+					_, _ = fmt.Fprintf(GinkgoWriter, "the Operator log:\n%s\n", out)
 				}
 				_, _ = h.kubectl("delete", "cubridbackup", "--all", "--ignore-not-found", "--timeout=5m")
 				_, _ = h.kubectl("delete", "cubridcluster", "--all", "--ignore-not-found", "--timeout=5m")
