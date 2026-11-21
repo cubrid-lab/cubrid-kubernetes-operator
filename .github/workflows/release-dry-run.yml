@@ -52,11 +52,13 @@ jobs:
             exit 1
           fi
 
+      # Begin from the trusted workflow commit, not untrusted inputs.sha.
+      # Fetch full history to validate both workflow and candidate against
+      # refs/remotes/origin/main before checking out candidate code.
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.sha }}
-          # The full history, so the ancestry check below can see main.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -72,24 +74,38 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # Nothing from the checked-out commit runs before this step: it refuses
-      # a commit that is not an ancestor of main, so every later step that
-      # runs repository code (the image builds, make) runs only code already
-      # merged to main. The full ref name: a tag called origin/main would
-      # otherwise be read first. The image creation label is the commit time,
-      # not the time of this run.
+      # Before switching to the requested source, verify the workflow itself
+      # came from main and that inputs.sha is an ancestor of main. Nothing
+      # from a requested commit is checked out or executed before this step.
+      # Use the full refs/remotes/origin/main name to defeat an origin/main tag
+      # shadow. Only main-history code can run later in make and Docker.
+      # The image creation label is the selected commit time, not run time.
       - name: Resolve the commit and check that it is on main
         id: meta
         env:
           INPUT_SHA: ${{ inputs.sha }}
         run: |
+          workflow_sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$workflow_sha" refs/remotes/origin/main; then
+            echo "::error::Workflow revision $workflow_sha is not on main"
+            exit 1
+          fi
+          if ! git cat-file -e "$INPUT_SHA^{commit}" 2>/dev/null; then
+            echo "::error::Requested commit $INPUT_SHA is not in the fetched history"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$INPUT_SHA" refs/remotes/origin/main; then
+            echo "::error::Commit $INPUT_SHA is not on main; a release is built only from a main commit"
+            exit 1
+          fi
+          # Now, and only now, select the already-vetted release candidate.
+          if ! git checkout --detach --quiet "$INPUT_SHA"; then
+            echo "::error::Could not select the verified main commit $INPUT_SHA"
+            exit 1
+          fi
           sha=$(git rev-parse HEAD)
           if [ "$sha" != "$INPUT_SHA" ]; then
             echo "::error::Checked out $sha, not the requested commit $INPUT_SHA"
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
-            echo "::error::Commit $sha is not on main; a release is built only from a main commit"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/images"
