@@ -4,6 +4,35 @@ Thanks for your interest in the CUBRID Kubernetes Operator. This is an
 experimental project under `cubrid-lab`; the design is decided before code
 through Architecture Decision Records (ADRs).
 
+
+## Suggest improvements and credit problem discovery
+
+You can contribute by **finding problems**, not just implementing a ready-made
+task. Confusing docs and onboarding, missing tests, an unexpected result or
+an awkward workflow are worth reporting. Select **Improvement Idea** from
+[New issue](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/new/choose).
+One clear observation is enough; the fix, root cause, reproduction and
+acceptance criteria can be unknown at intake. Maintainers check duplicates,
+evidence, relative priority, ownership and implementation scope during triage.
+
+Keep secrets, private logs, personal data and security vulnerabilities out
+of public issues. A suggestion is not permission to implement a new public
+feature or to bypass design, safety, CI or release gates. Don't open a
+separate issue merely to satisfy a checkbox before a small PR **where local
+implementation rules permit a direct PR**; check existing issues and PRs.
+
+**Operator-specific gate:** Reporting or discussing a finding requires no
+assignment, but implementation still follows the accepted issue/Assignee,
+ADR, independent safety review and SQL/VM evidence requirements. The v0.1
+feature/design intake freeze remains unchanged.
+
+When a reported problem leads to a PR, **link the originating issue** and
+acknowledge its verified reporter as a reporter. In reviews, distinguish
+discovery from code authorship; in curated release notes, preserve the
+repository's verified implementation-author credits and, where useful and
+allowed, add a separate `reported by @handle` credit. Do not invent
+identities or require repetitive credit boilerplate.
+
 ## Early external contributions
 
 An outside contributor may **report**, investigate, reproduce or discuss a
