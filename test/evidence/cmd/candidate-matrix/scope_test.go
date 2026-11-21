@@ -22,6 +22,8 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
+const s03Scenario = "S03"
+
 func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 	tests := []struct {
 		id      string
@@ -31,9 +33,9 @@ func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 		{"S00", "", scopeMustPass},
 		{"S01", "", scopeMustPass},
 		{"S02", "", scopeMustPass},
-		{"S03", "abrupt-first-member", scopeMustPass},
-		{"S03", "abrupt", scopeMustPass},
-		{"S03", "graceful", scopeMustMeasure},
+		{s03Scenario, "abrupt-first-member", scopeMustPass},
+		{s03Scenario, "abrupt", scopeMustPass},
+		{s03Scenario, "graceful", scopeMustMeasure},
 		{"S04", "power-off", scopeMustMeasure},
 		{"S05", "one-broker-pod", scopeMustPass},
 		{"S06", "restart", scopeMustPass},
@@ -50,8 +52,8 @@ func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 		{"LAB01", "", scopeMustPass},
 		{"S16", "", scopeConditional},
 		{"S17", "", scopeConditional},
-		{"S03", "", scopeUnmapped},
-		{"S03", "unexpected-variant", scopeUnmapped},
+		{s03Scenario, "", scopeUnmapped},
+		{s03Scenario, "unexpected-variant", scopeUnmapped},
 		{"S99", "", scopeUnmapped},
 		{"", "", scopeUnmapped},
 	}
