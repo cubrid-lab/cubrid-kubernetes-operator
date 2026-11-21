@@ -226,12 +226,33 @@ func TestDockerBuildx_FailedCreationLeavesExistingBuildersAlone(t *testing.T) {
 // An interrupted run (SIGINT or SIGTERM to the whole process group, as a
 // terminal or a CI job sends it) fails the target and still removes the builder
 // this run created and its Dockerfile.cross copy, and no other builder.
+//
+// The recipe's shell can get the signal more than once: GNU make sends its
+// children SIGTERM again when it gets one, and a user can press Ctrl-C twice.
+// When a second signal reached the recipe's shell just as it started the EXIT
+// trap, the shell ran that signal's own trap first, and its "exit" ended the
+// shell without any cleanup (#1068). The repeated cases send the signal to the group again and again
+// until every process has ended, so that a signal lands at every point of the
+// shell's exit.
 func TestDockerBuildx_InterruptionCleansUpOnlyThisRunsResources(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make is not installed")
 	}
-	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
-		t.Run(sig.String(), func(t *testing.T) {
+	for _, tc := range []struct {
+		sig      syscall.Signal
+		repeated bool
+	}{
+		{syscall.SIGTERM, false},
+		{syscall.SIGINT, false},
+		{syscall.SIGTERM, true},
+		{syscall.SIGINT, true},
+	} {
+		sig := tc.sig
+		name := sig.String()
+		if tc.repeated {
+			name += " repeatedly"
+		}
+		t.Run(name, func(t *testing.T) {
 			_, here, _, _ := runtime.Caller(0)
 			repo := filepath.Join(filepath.Dir(here), "..", "..")
 			dir := t.TempDir()
@@ -273,6 +294,11 @@ func TestDockerBuildx_InterruptionCleansUpOnlyThisRunsResources(t *testing.T) {
 			}
 			if err := syscall.Kill(-pgid, sig); err != nil {
 				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(10 * time.Second); tc.repeated && syscall.Kill(-pgid, sig) == nil; {
+				if time.Now().After(deadline) {
+					t.Fatal("the recipe's processes did not end while being interrupted repeatedly")
+				}
 			}
 			select {
 			case err := <-done:
