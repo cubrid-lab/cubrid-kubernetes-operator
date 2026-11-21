@@ -24,11 +24,11 @@ package main
 type v01Scope string
 
 const (
-	scopeMustPass       v01Scope = "MUST PASS"
-	scopeMustMeasure    v01Scope = "MEASURE + SAFETY REVIEW"
-	scopeDeferred       v01Scope = "v0.2 DEFERRED"
-	scopeConditional    v01Scope = "CONDITIONAL (NOT CLAIMED)"
-	scopeUnmapped       v01Scope = "UNMAPPED (REVIEW REQUIRED)"
+	scopeMustPass    v01Scope = "MUST PASS"
+	scopeMustMeasure v01Scope = "MEASURE + SAFETY REVIEW"
+	scopeDeferred    v01Scope = "v0.2 DEFERRED"
+	scopeConditional v01Scope = "CONDITIONAL (NOT CLAIMED)"
+	scopeUnmapped    v01Scope = "UNMAPPED (REVIEW REQUIRED)"
 )
 
 // scopeOf classifies the result already recorded in summary.json by its
