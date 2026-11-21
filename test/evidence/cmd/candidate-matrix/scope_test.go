@@ -73,7 +73,9 @@ func TestV01ScopeDoesNotRejudgeHistoricalFailure(t *testing.T) {
 	if got := scopeOf(rec); got != scopeMustMeasure {
 		t.Fatalf("S04 scope = %q, want measured", got)
 	}
-	if rec != before || verdict(rec.Recorded) != "FAIL" || verdict(rec.Judged) != "FAIL" {
+	if rec.ID != before.ID || rec.Variant != before.Variant ||
+		rec.Recorded != before.Recorded || rec.Judged != before.Judged ||
+		verdict(rec.Recorded) != "FAIL" || verdict(rec.Judged) != "FAIL" {
 		t.Fatal("the v0.1 scope mapping changed a historical failed verdict")
 	}
 }
