@@ -761,7 +761,9 @@ and waits for the running ones, and runs `cubrid heartbeat stop` and
 `cubrid server stop <db>`. The ADR-0003 steps "readyz false", "persist a
 shutdown marker" on the PVC and "verify processes exited" are not part of
 it (the stop record does not outlive the container); a failed
-command is reported, but no check confirms that no CUBRID process remains
+command is reported, except a `cubrid server stop` that answers that the
+database's server is not running after `cubrid heartbeat stop` succeeded,
+because on an HA member heartbeat stop already stops the server. No check confirms that no CUBRID process remains
 (POC-26 recorded `state unknown` with `cub_master` alive after
 `cubrid heartbeat stop`). `terminationGracePeriodSeconds` is 120s and the
 stop's own budget 100s (`IM_SHUTDOWN_TIMEOUT`); no POC in

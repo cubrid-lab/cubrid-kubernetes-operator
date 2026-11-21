@@ -99,19 +99,30 @@ func Backup(ctx context.Context, cli CLI, req BackupRequest) (BackupResult, erro
 // 11.4.6, #148).
 const haNotConfigured = "not configured for HA"
 
+// serverNotRunning is what `cubrid server stop <db>` prints, exiting 1, when
+// no server of that database runs (observed on the VM lab, #1063). %s is
+// the database name.
+const serverNotRunning = "++ cubrid server '%s' is not running."
+
 // Shutdown performs the ADR-0003 ordered graceful shutdown: withdraw HA
 // participation first, then stop the local server. A failed step does not stop
 // the sequence — the goal is to leave the node cleanly stopped — and every
 // failure is reported. A standalone server has no heartbeat to stop; that is
-// not a failure.
+// not a failure. On an HA member a successful heartbeat stop already stops the
+// server, so a server stop that then answers that this database's server is
+// not running is not a failure either. After a failed heartbeat stop that
+// answer is still a failure: HA participation was not positively withdrawn.
 func Shutdown(ctx context.Context, cli CLI, database string) error {
 	var errs []error
 	// Withdraw HA/heartbeat first so the peer can react before the server goes.
-	if out, err := cli.Run(ctx, "cubrid", "heartbeat", "stop"); err != nil && !strings.Contains(out, haNotConfigured) {
+	out, err := cli.Run(ctx, "cubrid", "heartbeat", "stop")
+	heartbeatStopped := err == nil
+	if err != nil && !strings.Contains(out, haNotConfigured) {
 		errs = append(errs, fmt.Errorf("heartbeat stop failed: %w: %s", err, out))
 	}
 	if database != "" {
-		if out, err := cli.Run(ctx, "cubrid", "server", "stop", database); err != nil {
+		if out, err := cli.Run(ctx, "cubrid", "server", "stop", database); err != nil &&
+			(!heartbeatStopped || !strings.Contains(out, fmt.Sprintf(serverNotRunning, database))) {
 			errs = append(errs, fmt.Errorf("server stop failed: %w: %s", err, out))
 		}
 	}
