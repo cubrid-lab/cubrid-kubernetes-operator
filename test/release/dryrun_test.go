@@ -431,9 +431,12 @@ func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 	_, _, j := readDryRun(t)
 	record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run
-	if !strings.Contains(record, `grep -Fq "$im_ref" dist/install.yaml`) ||
+	if !strings.Contains(record, "go run ./hack/check-installer-image") ||
+		!strings.Contains(record, "-manifest dist/install.yaml") ||
+		!strings.Contains(record, "-manager \"$REGISTRY/manager:$VERSION\"") ||
+		!strings.Contains(record, "-instance-manager \"$im_ref\"") ||
 		!strings.Contains(record, "DefaultInstanceManagerImage") {
-		t.Error("the record does not check install.yaml for the built Instance Manager image")
+		t.Error("the record does not structurally verify the manager Deployment and its built image arguments")
 	}
 	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
 	if err != nil {
