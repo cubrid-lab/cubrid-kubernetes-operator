@@ -200,14 +200,77 @@ credited to the step running when it returns, so a background read that
 outlives its step counts toward the next one. These counts are recorded and judge
 nothing: no limit applies to them.
 
+### v0.1 candidate acceptance — 2026-11-21 decision
+
+This is an **explicit reduction in the experimental release claim**, decided
+after the engine evidence of [#702](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/702),
+[#1035](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1035)
+and [POC-69](../poc/poc69/README.md). It does not change CUBRID's
+behavior, rewrite historical verdicts, relax the Operator's ADR-0005
+quarantine/authorization rules, or permit missing evidence. CUBRID upstream
+source is read and its behavior verified; no upstream code changes are
+part of this work. The candidate calendar is in [ROADMAP](../../ROADMAP.md).
+
+| Release acceptance | Scenario and variants | Candidate rule |
+|---|---|---|
+| **Must pass** | S00–S02; S03 `abrupt`, `abrupt-first-member`; S05–S06; S10; S11–S12; S13–S15; Conditions, Events and metrics | Exact-candidate positive and negative SQL, roles, data protection, required evidence and non-time safety rules must pass; `fail`, `blocked`, `not_run` or a missing variant blocks release. |
+| **Must execute, measure and publish** | S04 VM power loss; S07–S08 partition, quarantine and repeated failure; S03 `graceful` | Record real fault identity, timing, SQL and all member histories, and separately record former threshold failures and current known limitations. No previous failure is renamed `pass`. A missing required observation blocks acceptance. |
+| **Deferred to v0.2** | S09 automatic rejoin of retained data; automatic HA PVC adoption on cluster recreation (#798) | Keep prior evidence and held-member safety behavior. Suspect retained data may be recovered only through an explicitly approved S10 replacement-storage rebuild in the v0.1 claim. |
+
+**S04 release claim:** a confirmed physical VM loss must eventually lead to
+observed roles and Operator-managed routing that recover, with no fabricated
+`Ready`/role claim. Report per-run taint-to-first-ack and fault-to-recovery
+times as a distribution (run count, range and median; percentiles only where
+supported by enough samples), fault/return barriers, unknown operations,
+and any acknowledged writes missing on the new master or surviving members.
+The former **30-second** criterion is **not a v0.1 release pass/fail bound**.
+With the default `ha_copy_log_timeout=5`, the engine can acknowledge commits
+after stalled copiers are disconnected. An induced VM power-off/copy-stall run
+lost 13 client-acknowledged writes (#1035); do not claim that this
+hazard was fixed or that the Operator guarantees zero RPO. A failure of
+role/routing recovery or false-healthy status still blocks the claimed outcome.
+
+**S07–S08 release claim:** the Operator offers **best-effort closure of the
+managed `-rw` Broker path**, not prevention of CUBRID native promotion or
+database-process fencing. Measure fault-to-closure and separately retain
+request/actual Broker scale-down, Pod termination, empty endpoints, fresh-
+connection SQL and already-open-session SQL. **No write may be acknowledged
+after the managed path is proven closed**; this remains a required safety
+assertion, as do identity-safe quarantine persistence, release and truthful
+Conditions. Loss of writes acknowledged *before* actual closure, including
+the 13–73 missing rows in #702, and an engine-elected master without those
+writes must be recorded and disclosed, not called fixed or silently hidden.
+If closure or the post-closure SQL observation is not established, the
+candidate claim is not qualified. The old 30-second `quarantine_limit` is
+reported for comparison, not a v0.1 numeric pass/fail criterion.
+
+**S03 graceful release claim:** run the graceful-termination variant and
+publish the actual time and reason for any unnecessary write quarantine
+(#938), including historical 30-second exceedances. Do not waive unrelated
+data-integrity, second-master, unauthorized-restart, status or resource
+ownership checks. Abrupt S03 variants remain strict pass/fail gates.
+
+**Existing tools need alignment before candidate acceptance:** the Kind
+and installed-HA runners currently encode the previous limits and S03's
+embedded S09 `clean` rejoin check. Their raw `pass`/`fail`/`blocked`
+output retains its original meaning until explicitly updated with negative
+regressions to distinguish required safety checks from measured-only
+release criteria. The #126 evidence index must include both the raw
+scenario result and its separate v0.1 scope disposition; never change
+an earlier `fail` to `pass` in place. A docs-only CI pass cannot qualify
+a candidate, and **no candidate is approved by this document change**.
+
 ### Required scenarios
 
-Each lane names the scenarios, and the variants of each, that a run of it
-must pass. A run passes its lane only when every required scenario and
-variant has at least one result and every result of it is `pass`. A required
-scenario or variant that is missing, `not_run`, `blocked` or `fail`, a result
-that is not one of the five, and a claimed `pass` without its evidence all
-make the run not passed. A scenario that the lane does not require but that
+Each lane below names the scenarios and variants that its **current test
+runner** requires. A raw lane passes only when each required result is
+`pass`. For the narrowed v0.1 release, apply the explicit acceptance mapping
+above separately: formerly required S04/S07–S08 and S03 graceful outcomes
+still must be executed and reported, but their old numeric and engine-loss
+guarantees are not v0.1 acceptance claims. Align the runners and the #126
+evidence-index verifier before counting a candidate as qualified. A missing
+required result, a `not_run`/`blocked` outcome or evidence-free `pass`
+never counts as a verified scenario. A scenario that the lane does not require but that
 ends as `fail` also makes the run not passed. `not_applicable` satisfies a
 requirement only where the lane allows it for that scenario, because the
 lane's environment rules the scenario out; work that was skipped is
@@ -2141,20 +2204,23 @@ it needs more.
 - **The Operator must** (ADR-0005): promote nothing; report
   `PrimaryResolved=True` again only after all three members are observed with
   exactly one master; never make the returned member the master again.
-- **Expected:** writes through the read-write endpoint succeed again within
-  `failover_limit` in the `graceful` variant, and within
-  `quarantined_failover_limit` in the `abrupt` and `abrupt-first-member`
-  variants, on whichever member CUBRID made the master, and the master
-  does not change a second time. A Pod deleted with `--force` is gone before
-  the kubelet reports its container terminated, so the Operator cannot see
-  the former master's process end: the write quarantine (ADR-0005, section
-  8) closes the read-write path until that member's new Pod is verified.
-  The longer limit is that quarantine's availability cost. A graceful
-  deletion is seen confirmed by the kubelet, so it keeps `failover_limit`
-  (ADR-0005, section 8, as amended by #870). The run records which member it is. How a
-  former master comes back is judged by S09 `clean`, which this scenario runs
-  as its second half. The suite measures that return against `rejoin_limit`
-  inside S03; S09 itself has no test and no result in `summary.json`.
+- **Expected:** on `abrupt` and `abrupt-first-member`, managed writes
+  recover within `quarantined_failover_limit` on the surviving master,
+  with no unsafe second role change or missing acknowledged rows. The
+  `graceful` variant must be executed but its recovery time and reason for
+  any quarantine are *measured and reported*, not judged against the former
+  30-second `failover_limit` for v0.1 release acceptance (#938); all other
+  safety and data checks still apply. A Pod deleted with `--force` can
+  disappear before the kubelet confirms its container stopped, so the
+  Operator keeps the managed write path quarantined until the new member
+  is verified (ADR-0005, section 8).
+  The current Kind suite also runs the S09 `clean` rejoin check as S03's
+  second half and applies `rejoin_limit`. That remains **legacy test
+  behavior**; the v0.1 candidate must not make automatic retained-data
+  rejoin an implicit prerequisite after S09 moves to v0.2. A suspect
+  returning member must be held, not reported healthy without verification.
+  Change this runner dependency explicitly before candidate qualification;
+  do not delete its historical results or silently skip a safety check.
 - **Recovery observations:** a changed Pod UID alone does not show that the
   deleted container stopped answering. To initially accept the deleted member's
   name as the recovered master, the harness observes its new, non-deleting,
@@ -2183,8 +2249,11 @@ it needs more.
   two consecutive sweeps of all members; the Operator deleting or restarting another member
   to force a role, or any member other than the deleted one getting a new Pod
   or a container restart.
-- **Data check:** all data rules on all three members after the former master
-  has rejoined.
+- **Data check:** all acknowledged rows and values on the serving and
+  healthy-rejoined members. A returning member that is explicitly held
+  because its retained data is unverified is **not** counted healthy, and
+  may not reintroduce or overwrite divergent data. Retain per-member
+  observations for the v0.2 rejoin investigation.
 - **Conditions during the fault** (see
   [Conditions during the fault](#conditions-during-the-fault)), in every
   variant, from before the Pod is deleted to the end of the stable period,
@@ -2211,8 +2280,12 @@ it needs more.
   check above and is not repeated on the Conditions. Each sweep is a line of
   `S03/<variant>/roles.jsonl` with its start and end, the role heartbeat gives
   each member and the state of each member's own node.
-- **Limits:** `failover_limit` (`graceful`), `quarantined_failover_limit`
-  (`abrupt`, `abrupt-first-member`), `rejoin_limit`, `stable_period`.
+- **Limits:** `quarantined_failover_limit` for the two required abrupt
+  variants; `stable_period` and the other applicable safety checks.
+  For `graceful`, record the former `failover_limit` and its violation
+  as a measured result, not a v0.1 numeric release gate. The current
+  implementation still applies `rejoin_limit` to S03's embedded S09
+  check until the accepted change is implemented and tested.
 - **Replication record:** after each abrupt variant, passed or failed,
   `S03/<variant>/replication-state.txt` keeps the Events of the members'
   Pods, old and new (the deleted Pod's `Killing`, the replacement's
@@ -2250,26 +2323,37 @@ it needs more.
   `PrimaryResolved` not `True` while the old master cannot be observed; keep
   the read-write path quarantined from the fault until the taint, and again
   from the barrier until the returning member is verified.
-- **Expected:** existing sessions to the surviving master keep working.
-  Writes through the read-write endpoint are refused until the taint, and
-  acknowledged within `failover_limit` of it.
-- **Three intervals:**
-  - **fault to taint:** reported, without a limit. It depends on the person
-    or automation that fences.
-  - **taint to the first acknowledged write through `-rw`:** judged
-    against `failover_limit`.
-  - **return**, from setting the annotation to the release: reported,
-    without a limit until it has been measured.
+- **Expected for v0.1:** a confirmed real VM loss is fenced according to
+  ADR-0005, CUBRID's active roles settle, and Operator-managed `-rw`
+  routing eventually recovers. Observe actual client SQL; a Condition
+  alone cannot establish recovery. Keep `-rw` unavailable while the
+  accepted quarantine/fencing contract requires it. **Recovery latency is
+  measured and published, not bounded by the earlier 30-second
+  `failover_limit` for this release.** A run with no role or routing
+  recovery fails the claimed outcome, regardless of elapsed time.
+- **Three intervals (keep each run's precise timestamps):**
+  - **fault to taint:** report; dependent on the authorized fencing step.
+  - **taint to first acknowledged write through `-rw`:** report as a
+    distribution across repeat runs; retain the former 30 s baseline
+    and any exceedances as historical evidence, not v0.1 acceptance.
+  - **return**, from annotation to release: report separately.
 - **Must never happen:** the Operator promoting a member; the Operator
   deleting or evicting a Pod (the force-deletion after the taint is
   Kubernetes', and the evidence must show it came from the taint);
   `PrimaryResolved=True` while a member is unobserved; the taint removed
-  before the barrier is `enforced`; an `acknowledged` operation missing after
-  the VM returns and the cluster has converged.
-- **Data check:** all data rules after the VM has been powered on again and
-  the member has rejoined.
-- **Limits:** `failover_limit` (from the taint), `vm_return_limit`,
-  `stable_period`.
+  before the barrier is `enforced`; claiming healthy, converged data
+  without adequate per-member SQL evidence. Acknowledged rows missing
+  after the copy-stall/power-off case (#1035) are a **documented known
+  engine exposure**, not a v0.1 zero-loss guarantee; record them exactly.
+- **Data check:** compare acknowledged, failed and outcome-unknown
+  operations separately, with per-member row IDs and values after VM return.
+  Publish missing acknowledged writes and divergence even if roles/routing
+  recover. The Operator may not silently report known divergence as
+  successfully replicated, and unmeasured data is `unknown`, not zero.
+- **Limits:** `stable_period` and the applicable return/fencing
+  barriers remain judged. Record the former 30 s `failover_limit`
+  and `vm_return_limit` as measured fields where available; a numeric
+  S04 recovery-time bound is not in the v0.1 release claim.
 - **Implementation:** the Operator reads the taint for the release and runs
   the return-to-service barrier (#113; unit/envtest only, S04 not run). The
   installed harness (`test/installed/`) adds the taint once the fault is
@@ -2460,10 +2544,15 @@ it needs more.
   | A quarantine already in force under later observations | Keep it enforced until an accepted release. Apply only the ADR's revision, escalation and confirmed-termination/rebase transitions; never downgrade a manual-only quarantine to an automatically releasable one. A non-triggering snapshot is not a release. |
 
 - **Expected, new connections:** when a current observation triggers
-  quarantine, connections through the managed read-write endpoint stop
-  succeeding within `quarantine_limit` of that triggering observation. Record
-  fault time, detection, requested scale-down, actual Broker Pod termination,
-  empty EndpointSlices and SQL interruption separately. The non-triggering
+  quarantine, the Operator attempts to stop writes through the managed
+  read-write endpoint. Measure the elapsed time from fault and triggering
+  observation to **proven** closure (Broker Pods actually terminated,
+  EndpointSlices empty and SQL rejected), without judging against the
+  former 30-second numeric `quarantine_limit` in the v0.1 release claim.
+  **After closure is proven, no new or established managed `-rw` session
+  may acknowledge another write until an accepted release.** Record the
+  fault, detection, requested scale-down, actual Broker termination, empty
+  endpoints and SQL interruption separately. The non-triggering
   controls do not require the Operator to stop new connections merely because
   a primary observation is incomplete.
 - **Expected, already-open connections:** run independent SQL clients whose
@@ -2500,21 +2589,27 @@ it needs more.
   unique. Preserve that barrier through restart and escalate new active-master
   claims as the ADR requires. Manual exemptions never turn an unobserved
   member into an authoritative role answer.
-- **Must never happen:** `PrimaryResolved=True` or `RoutingReady=True` while
-  two masters exist or a member is unobserved; the Operator choosing which
-  data set survives; the cluster reported healthy after the partition ends
-  while the members hold different data.
-- **Data check:** after the partition ends, each member's rows are compared.
-  A difference between members is the expected input for S09 and S10, and
-  must be *reported* by the cluster's status, not hidden.
-- **Limits:** `quarantine_limit`, `partition_duration`. On the VM lab they
-  are 30 seconds and 2 minutes ([time limits](#time-limits)); elsewhere they
-  are unset, and an unset value remains a blocked baseline, not a passing
-  measurement.
-  Established-session timing is reported independently; this contract invents
-  no numeric bound for it. Missing or unordered measurements remain unknown,
-  never zero. Direct database connections and the interval when the Operator
-  cannot observe or act retain the ADR's stated limits.
+- **Must never happen:** an acknowledged write through the managed `-rw`
+  path *after proven closure* and before valid release;
+  `PrimaryResolved=True` or `RoutingReady=True` while two active masters
+  exist or a member is unobserved; the Operator choosing which data set
+  survives; claiming fully healthy replication while known divergent
+  member data remains. Native CUBRID may promote a member lacking
+  acknowledged pre-closure writes; this is a documented engine limitation,
+  not a success claim.
+- **Data check:** compare every member's acknowledged IDs and values
+  after healing; distinguish pre-closure loss (up to 73 in #702),
+  post-closure acknowledgements, unknown outcomes and successful recovery.
+  A suspect member remains held until authorized S10 rebuild; S09
+  automatic rejoin is v0.2. Data differences must not be concealed by
+  a healthy status.
+- **Limits:** `partition_duration` and the applicable fault, cleanup,
+  evidence and stable-period safety bounds. Report `quarantine_limit`
+  (30 s on the historical VM baseline) and the actual closure interval;
+  the old numeric deadline is not a v0.1 release pass/fail threshold.
+  Missing or unordered timing/evidence is `unknown` or `blocked`,
+  never zero. Direct database connections and the period before
+  managed-path closure retain ADR-0005's explicitly disclosed limits.
 - **VM-lab lane:** the installed HA command runs `master-isolated`, the
   `slave-isolated` control and `higher-rank-isolated` on the lab
   (`lab-installed-ha-s07-master-isolated`,
@@ -2566,19 +2661,31 @@ it needs more.
   sessions' SQL histories separate and compare every required member after
   recovery; apply the same external-fence and pre-untaint return barrier as
   S07 when that path is exercised.
-- **Expected:** either writes resume on a member that holds every
-  `acknowledged` operation, or the cluster stays not `Ready` with a status
-  that says a manual step is needed. Both are acceptable outcomes; the run
-  records which one occurred.
-- **Must never happen:** writes resume through the managed endpoint on a
-  member that is missing `acknowledged` operations while the cluster reports
-  healthy.
-- **Data check:** all data rules; missing `acknowledged` operations are
-  counted as observed data loss and make the result `fail` unless the cluster
-  refused writes.
-- **Limits:** `failover_limit`, `stable_period`.
+- **Expected for v0.1:** exercise repeated failures with real role, Broker,
+  client and per-member SQL observations; measure time to managed `-rw`
+  closure and disclose missing acknowledged pre-closure rows and native
+  promotions. The Operator never chooses a survivor or silently declares
+  divergent members caught up. Missing data may be a known engine outcome,
+  but neither a manual release nor a new heartbeat master proves durability.
+- **Must never happen:** a write acknowledged through an actually closed
+  managed `-rw` path before valid release; an unauthorized release;
+  `Ready=True` reporting a known incomplete dataset as converged.
+- **Data check:** retain the original `acknowledged`, `failed` and
+  `unknown` histories and row/value mismatches on each member, including
+  the exact point of closure and any later accepted release. Pre-closure
+  engine loss is published, not reclassified as a successful data check.
+- **Limits:** report measured recovery and quarantine closure intervals
+  without applying the earlier numeric `failover_limit` to v0.1 release
+  acceptance; maintain all fault cleanup, authorization and evidence gates.
 
 ### S09: former primary rejoins
+
+**v0.2 scope:** automatic rejoin/adoption of retained data is no longer a
+v0.1 candidate pass gate. This historical scenario and its `clean`/
+`diverged` evidence remain here unchanged for future implementation;
+v0.1 must hold suspicious retained data and use an explicitly approved S10
+replacement-storage rebuild rather than unsafe failback. S03's current
+embedded S09 `clean` test must be disentangled before candidate acceptance.
 
 - **Level:** real database on Kind for the variant `clean`; VM lab for
   `diverged`.
@@ -2606,18 +2713,25 @@ it needs more.
 
 ### S10: rebuild after PVC loss
 
-- **Level:** real database on Kind.
-- **Fault:** a slave's PVC and Pod are deleted, so the member returns with an
-  empty volume.
+- **Level:** real database on Kind and, for v0.1 candidate qualification,
+  the authorized installed-Operator VM lab. The earlier Kind and two
+  Nov 20 VM runs are evidence, not a pinned-candidate pass (#118).
+- **Fault:** a selected member (slave or former primary) is offered verified
+  *replacement* storage only after explicit administrator authorization.
+  No test may delete or replace a PVC or power down a node without the
+  scenario-specific #80/#122 lab approval, Lease and durable data retention.
 - **Fault confirmed by:** the new PVC has a different UID and holds no
   database files.
 - **CUBRID is expected to** (Manual, `cubrid restoreslave`; POC-7, POC-14,
   POC-15): accept a member rebuilt from the master's backup with
   `restoreslave`, and to leave a member that was created empty without the
   earlier data while reporting it as a slave (POC-15).
-- **The Operator must** (ADR-0006): rebuild only a member that was explicitly
-  selected for it; never rebuild over a volume that holds a database; never
-  create an empty database on a member of a cluster that already holds data.
+- **The Operator must** (ADR-0006): rebuild only the member and source
+  explicitly approved for the bound replacement claim and volume; reject
+  stale/old data-bearing volumes, changing source identity and an active
+  write quarantine. Never rebuild over a volume that may already hold a
+  database, erase retained data, pick the newest master itself or create
+  an empty database on an existing HA member.
 - **Expected:** the rebuilt member holds every row and its applier's fail
   count is zero within `rebuild_limit`.
 - **Must never happen:** a healthy member's data overwritten; the master's
@@ -3246,8 +3360,14 @@ A value is unset until its baseline measurement. This table is the only place
 the values are recorded. A value holds for the environment named with it; the
 VM lab gets its own values from its own baseline.
 
-The values below are the defaults of the Kind suite. Each can be set for
-another environment without changing the code, through an environment
+The values below are the defaults of the **current** Kind suite. The
+Nov 21 candidate scope decision above changes which observations are
+release pass criteria, not the numeric limits that earlier tests
+actually used. The historical runner may still judge S03 graceful,
+S04 and S07/S08 with the old limits; a release verifier must make the
+scope distinction explicitly and retain those raw failures.
+Each limit can be set for another environment without changing the code,
+through an environment
 variable that holds a duration such as `45s` or `2m`:
 `E2E_INSTALL_LIMIT`, `E2E_READY_LIMIT`, `E2E_FORMATION_LIMIT`,
 `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`,
@@ -3285,14 +3405,14 @@ measured; **unset** limits have neither a value nor a baseline.
 | `ready_limit` | Single-member cluster created until SQL succeeds | Kind on a GitHub-hosted runner: 90 seconds. VM lab: unset | Kind: measured |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
-| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: S15 node drain, 1 minute; other scenarios unset | Kind: measured; VM lab S15: measured |
+| `failover_limit` | Start of fault until managed `-rw` write succeeds; strict for the remaining required variants. For S03 `graceful` and VM S04, report the former threshold only as a measurement under the 2026-11-21 decision | Kind on a GitHub-hosted runner: 30 seconds for legacy S03 `graceful`; VM lab S15 node drain, 1 minute; S04 historical comparison 30 seconds, **not v0.1 release gate** | Kind/VM: measured historical bounds; candidate treatment requires verifier alignment |
 | `quarantined_failover_limit` | The same, for a master Pod whose termination the Operator cannot see confirmed: S03 `abrupt` and `abrupt-first-member` (deleted with `--force`) and S06 `absent-during-failover` (deleted while the Operator is absent). It is the write quarantine's availability cost (ADR-0005, section 8) | Kind on a GitHub-hosted runner: 6 minutes. VM lab: unset | Kind: measured, one run |
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds | choice |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset | Kind: measured |
 | `vm_return_limit` | VM powered on until its member has rejoined | unset | unset |
 | `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
 | `operator_resync_limit` | Operator started until status matches fresh observations | Kind on a GitHub-hosted runner: 2 minutes. VM lab: unset | Kind: measured |
-| `quarantine_limit` | Quarantine-triggering observation until new managed read-write connections stop succeeding | VM lab: 30 seconds. Kind: unset | VM lab: measured |
+| `quarantine_limit` | Triggering observation until the managed `-rw` path actually closes; v0.1 requires measurement and no post-closure acknowledged write, not a numeric 30 s pass bound | VM lab: historical 30-second comparison. Kind: unset | VM lab: measured historical baseline; not a v0.1 numeric release gate |
 | `partition_duration` | How long the partition is held, at least | VM lab: 2 minutes. Kind: unset | VM lab: choice, checked against the measured holds |
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
