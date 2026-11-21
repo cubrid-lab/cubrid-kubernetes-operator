@@ -298,7 +298,7 @@ the database by hand with `ALTER USER`.
 - **The check cannot tell** (the server is not running, an HA member is not
   the active master, the Instance Manager cannot be reached, another check is
   running, or csql neither accepted nor refused the login): the Condition is left as it is, and the Operator asks
-  again later. It is never reported as a changed password.
+  again after about 30 seconds instead of waiting out the 5-minute poll. It is never reported as a changed password.
 
 A change is therefore reported within about 5 minutes, plus the time the
 kubelet takes to update the mounted file (up to its sync period, about a
@@ -372,4 +372,5 @@ csql. A Kind e2e step changes the Secret of an HA cluster after it became
 Ready and expects `DBAPasswordRotationUnsupported`, then `True` once the
 password is put back; it restarts the Operator instead of waiting out the
 5-minute poll. It is not yet run on the VM lab. If csql does not prompt, the check answers that it cannot tell, and
-no change is reported.
+no change is reported. In one Kind run (2026-11-19 UTC, #1031) the only check after the value was put back answered
+that csql did not prompt; why csql exited without prompting is not known, since what csql prints is not kept.
