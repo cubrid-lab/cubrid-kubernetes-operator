@@ -427,9 +427,24 @@ func TestJudgeS07(t *testing.T) {
 		"a manager Pod that changed blocks the trigger variant": {false, testS07Limits, func(r *s07Record) {
 			r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, "the manager Pod was replaced"
 		}, evidence.Blocked, "manager Pod"},
-		"an acknowledgement on the established session after the path was closed is an anomaly": {false,
+		"an acknowledgement while the path stayed closed is a safety failure": {false,
 			testS07Limits, func(r *s07Record) { r.Session = &s07Session{AcknowledgedAfterClosed: 1} },
-			evidence.Blocked, "already-open connection"},
+			evidence.Fail, "without an accepted release"},
+		"an acknowledgement after closure with a recorded release is inconclusive": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				v := at(*r.FaultIssuedAt, 150)
+				r.ReleaseSeenAt = &v
+			}, evidence.Blocked, "prevents attributing them"},
+		"an acknowledgement without an end-of-run quarantine observation is inconclusive": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				r.QuarantineAtEnd = ""
+			}, evidence.Blocked, "incomplete quarantine evidence"},
+		"an unread established-session history blocks qualification": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session = &s07Session{ReadError: "the client history file is missing"}
+			}, evidence.Blocked, "established-session SQL history could not be read"},
 		"a step still running blocks": {false, testS07Limits, func(r *s07Record) { r.StillRunning = []string{"check"} },
 			evidence.Blocked, "still running"},
 		"no reading of the cluster after the data check is blocked": {false, testS07Limits,
