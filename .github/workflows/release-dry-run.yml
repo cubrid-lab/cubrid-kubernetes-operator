@@ -1,0 +1,370 @@
+name: Release Dry Run
+
+# Builds the artifacts of a proposed release from one main commit without
+# publishing anything (#124): the manager image, the Instance Manager image and
+# the installer manifest. It pushes no image, creates no tag, release, branch,
+# pull request or cache entry, and has only a read-only token, so a failed run
+# leaves nothing behind and a rerun starts from the same state. Its only output
+# is the workflow artifact with the installer manifest and a record of the
+# image digests and file checksums.
+#
+# Run it from main: `gh workflow run release-dry-run.yml -f sha=<full sha> -f version=vX.Y.Z`.
+# See docs/testing/release-version-check.md#release-dry-run.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full 40-character commit SHA on main to build"
+        required: true
+      version:
+        description: "Proposed release version, vMAJOR.MINOR.PATCH (for example v0.1.0)"
+        required: true
+
+permissions: {}
+
+jobs:
+  dry-run:
+    permissions:
+      contents: read
+    name: Build release artifacts without publishing
+    runs-on: ubuntu-latest
+    # A cold build of both images takes well under this; a hung pull would
+    # otherwise hold the runner for the default 6 hours.
+    timeout-minutes: 60
+    env:
+      # The names a release would publish under; nothing is pushed to them.
+      REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
+    steps:
+      # Before anything is fetched: an input that is not exactly a full SHA or
+      # a vMAJOR.MINOR.PATCH version fails here, whatever else it contains. The
+      # inputs are not echoed.
+      - name: Check the format of the commit and the version
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character lowercase commit SHA"
+            exit 1
+          fi
+          if [[ ! "$INPUT_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must be vMAJOR.MINOR.PATCH, for example v0.1.0"
+            exit 1
+          fi
+
+      # Begin from the trusted workflow commit, not untrusted inputs.sha.
+      # Fetch full history to validate both workflow and candidate against
+      # refs/remotes/origin/main before checking out candidate code.
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The version check and the installer image check of this workflow's
+      # own commit, not of the commit being built: an older commit has no such
+      # tools, or older ones. go.mod and go.sum give the checker its module.
+      # The image builds ignore this directory (.dockerignore), and as a
+      # nested module it is outside the candidate's ./... packages.
+      - name: Clone the version check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-check
+          sparse-checkout: |
+            hack/release-version-check.sh
+            hack/check-installer-image/
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # Before switching to the requested source, verify the workflow itself
+      # came from main and that inputs.sha is an ancestor of main. Nothing
+      # from a requested commit is checked out or executed before this step.
+      # Use the full refs/remotes/origin/main name to defeat an origin/main tag
+      # shadow. Only main-history code can run later in make and Docker.
+      # The image creation label is the selected commit time, not run time.
+      - name: Resolve the commit and check that it is on main
+        id: meta
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          workflow_sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$workflow_sha" refs/remotes/origin/main; then
+            echo "::error::Workflow revision $workflow_sha is not on main"
+            exit 1
+          fi
+          if ! git cat-file -e "$INPUT_SHA^{commit}" 2>/dev/null; then
+            echo "::error::Requested commit $INPUT_SHA is not in the fetched history"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$INPUT_SHA" refs/remotes/origin/main; then
+            echo "::error::Commit $INPUT_SHA is not on main; a release is built only from a main commit"
+            exit 1
+          fi
+          # Now, and only now, select the already-vetted release candidate.
+          if ! git checkout --detach --quiet "$INPUT_SHA"; then
+            echo "::error::Could not select the verified main commit $INPUT_SHA"
+            exit 1
+          fi
+          sha=$(git rev-parse HEAD)
+          if [ "$sha" != "$INPUT_SHA" ]; then
+            echo "::error::Checked out $sha, not the requested commit $INPUT_SHA"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/images"
+          {
+            echo "sha=$sha"
+            echo "created=$(TZ=UTC0 git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "$sha")"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      # The duplicate-version guard. Anything but "no tag and no release" stops
+      # the run, including a draft for the same commit that a publishing run
+      # would resume. This job's token can only read: GitHub lists draft
+      # releases only to a token that can push, so a draft is invisible here
+      # and this step refuses only an existing tag or published release. The
+      # publishing workflow must run the same check with its write token.
+      - name: Refuse a version that already has a tag or a release
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ steps.meta.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          state_file=$(mktemp)
+          GITHUB_OUTPUT=$state_file .release-check/hack/release-version-check.sh
+          if ! grep -qx 'state=create' "$state_file"; then
+            echo "::error::$TAG already has a draft release; a dry run builds only a version that does not exist yet"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Same Dockerfile, context and build arguments as `make docker-build`
+      # (BASE_IMAGE left at its default) and as the development images. The
+      # image goes to an OCI archive on the runner, never to a registry; no
+      # build cache is read or written, and no build record is uploaded as an
+      # artifact. The digest is that of this build: the base images are
+      # mutable, so a later rebuild can differ.
+      - name: Build the manager image without pushing
+        id: manager
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/images/manager.oci.tar
+          provenance: false
+          sbom: false
+          tags: ${{ env.REGISTRY }}/manager:${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+
+      # Same Dockerfile, context and build arguments as
+      # `make docker-build-instance-manager`.
+      - name: Build the Instance Manager image without pushing
+        id: instance-manager
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: build/instance-manager/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/images/instance-manager.oci.tar
+          provenance: false
+          sbom: false
+          tags: ${{ env.REGISTRY }}/instance-manager:${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+
+      # No module cache: setup-go would otherwise save one under main's scope,
+      # state that outlives the run.
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Built from the workflow's own copy, before any of the candidate's code
+      # runs through make.
+      - name: Build the installer image check
+        working-directory: .release-check
+        run: go build -o "$RUNNER_TEMP/check-installer-image" ./hack/check-installer-image
+
+      # make runs the commit's own code. The defense against cache poisoning is
+      # that this commit is an ancestor of main (checked above), not the job's
+      # permissions: code running in a job on main could still reach the
+      # runner's cache token whatever `permissions:` says.
+      # build-installer regenerates the CRDs, RBAC and DeepCopy code first. A
+      # commit whose generated files are stale would publish manifests that do
+      # not match its source, so any change to a tracked file stops the run.
+      - name: Build the installer manifest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          make build-installer IMG="$REGISTRY/manager:$VERSION"
+          # The cloned version check is not part of the commit.
+          changed=$(git status --porcelain -- . ':!.release-check')
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::make build-installer changed tracked files; the commit's generated files are stale"
+            exit 1
+          fi
+
+      # Records which Instance Manager image the installer makes the manager
+      # use, read from the manager container's arguments in the one
+      # controller-manager Deployment. When it sets no --instance-manager-image
+      # (exit 3), the manager falls back to its built-in default
+      # (DefaultInstanceManagerImage), a mutable development tag; any other
+      # failure is recorded with the checker's reason. Only the failure of the
+      # run waits for the step after the upload.
+      - name: Record the digests and checksums
+        id: record
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          CREATED: ${{ steps.meta.outputs.created }}
+          BUILT: ${{ steps.meta.outputs.built }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
+          MANAGER_ID: ${{ steps.manager.outputs.imageid }}
+          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+          IM_ID: ${{ steps.instance-manager.outputs.imageid }}
+        run: |
+          for d in "$MANAGER_DIGEST" "$IM_DIGEST"; do
+            if [[ ! "$d" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::An image build reported no digest"
+              exit 1
+            fi
+          done
+          im_ref="$REGISTRY/instance-manager:$VERSION"
+          # A substring anywhere in the YAML is not proof: another resource
+          # could mention this image while the manager still uses :dev.
+          if reason=$("$RUNNER_TEMP/check-installer-image" \
+            -manifest dist/install.yaml \
+            -manager "$REGISTRY/manager:$VERSION" \
+            -instance-manager "$im_ref" 2>&1); then
+            rc=0
+          else
+            rc=$?
+          fi
+          reason=${reason%%$'\n'*}
+          im_built=false
+          case $rc in
+            0)
+              im_built=true
+              im_used="$im_ref"
+              ;;
+            3)
+              default_im=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
+                internal/controller/cubridcluster_controller.go)
+              im_used="${default_im:-unknown}, the manager's built-in default: install.yaml sets no --instance-manager-image"
+              ;;
+            *)
+              im_used="not verified: $reason"
+              ;;
+          esac
+          out="$RUNNER_TEMP/release-dry-run"
+          mkdir -p "$out"
+          cp dist/install.yaml "$out/install.yaml"
+          sum() { sha256sum "$1" | cut -d' ' -f1; }
+          jq -n \
+            --arg version "$VERSION" --arg commit "$SHA" --arg created "$CREATED" --arg built "$BUILT" \
+            --arg workflowCommit "$WORKFLOW_SHA" --arg runId "$RUN_ID" --arg runAttempt "$RUN_ATTEMPT" \
+            --arg managerRef "$REGISTRY/manager:$VERSION" --arg managerDigest "$MANAGER_DIGEST" \
+            --arg managerId "$MANAGER_ID" --arg managerArchive "$(sum "$RUNNER_TEMP/images/manager.oci.tar")" \
+            --arg imRef "$im_ref" --arg imDigest "$IM_DIGEST" \
+            --arg imId "$IM_ID" --arg imArchive "$(sum "$RUNNER_TEMP/images/instance-manager.oci.tar")" \
+            --arg installer "$(sum "$out/install.yaml")" \
+            --argjson imBuilt "$im_built" --arg imUsed "$im_used" \
+            '{
+              dryRun: true,
+              published: false,
+              version: $version,
+              commit: $commit,
+              commitTime: $created,
+              builtAt: $built,
+              workflowCommit: $workflowCommit,
+              runId: $runId,
+              runAttempt: $runAttempt,
+              versionCheck: "no tag and no published release; drafts are not visible to this read-only token",
+              images: [
+                {name: "manager", reference: $managerRef, platform: "linux/amd64",
+                 digest: $managerDigest, imageId: $managerId, ociArchiveSha256: $managerArchive},
+                {name: "instance-manager", reference: $imRef, platform: "linux/amd64",
+                 digest: $imDigest, imageId: $imId, ociArchiveSha256: $imArchive}
+              ],
+              files: [{path: "install.yaml", sha256: $installer,
+                       usesBuiltInstanceManagerImage: $imBuilt, instanceManagerImage: $imUsed}]
+            }' > "$out/release-dry-run.json"
+          (cd "$out" && sha256sum install.yaml release-dry-run.json > SHA256SUMS)
+          cat "$out/release-dry-run.json" "$out/SHA256SUMS"
+          {
+            echo "im_built=$im_built"
+            echo "im_used=$im_used"
+          } >> "$GITHUB_OUTPUT"
+
+      # The image archives stay on the runner: they are large, and a release
+      # rebuilds rather than reuses them.
+      - name: Upload the installer manifest and the record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dry-run-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-dry-run/
+          if-no-files-found: error
+
+      # After the upload, so the record of a failing candidate is kept.
+      - name: Require the installer to use the Instance Manager image built here
+        env:
+          IM_BUILT: ${{ steps.record.outputs.im_built }}
+          IM_USED: ${{ steps.record.outputs.im_used }}
+        run: |
+          if [ "$IM_BUILT" != true ]; then
+            echo "::error::install.yaml does not make the manager use the Instance Manager image built here. Image it would use: $IM_USED"
+            exit 1
+          fi
+
+      # Also after a failed step, so a partial run says how far it got.
+      - name: Write the result to the job summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
+          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+          IM_USED: ${{ steps.record.outputs.im_used }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Release dry run"
+            echo
+            echo "Nothing was published. Job status: $JOB_STATUS."
+            echo
+            if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Version \`$VERSION\` from commit \`$SHA\`."
+              echo
+            fi
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| manager | ${MANAGER_DIGEST:-(not built)} |"
+            echo "| instance-manager | ${IM_DIGEST:-(not built)} |"
+            echo
+            echo "Instance Manager image the installer makes the manager use: ${IM_USED:-(not recorded)}"
+          } >> "$GITHUB_STEP_SUMMARY"

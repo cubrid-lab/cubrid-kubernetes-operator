@@ -4,9 +4,10 @@
 anything, whether a release version may be drafted for the frozen candidate
 commit, whether a rerun may continue the draft an earlier run left behind, or
 whether the run must stop. It only reads the GitHub API. It never creates,
-edits or deletes a tag or a release, and no workflow calls it yet: the
-release workflow that will run it before drafting and again before publishing
-is still to be written under
+edits or deletes a tag or a release. The [release dry run](#release-dry-run)
+calls it with a read-only token; the publishing release workflow that will
+run it before drafting and again before publishing is still to be written
+under
 [issue #124](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/124).
 
 ## What it decides
@@ -72,3 +73,90 @@ license and API group gates, or that release-please opens its release PR with
 the GitHub App token so that CI runs on it. Those stay with issue #124, the
 [release candidate procedure](release-candidate-review.md) and the
 publication gates of #94.
+
+## Release dry run
+
+`.github/workflows/release-dry-run.yml` builds the artifacts of a proposed
+release without publishing anything. A maintainer starts it from `main`:
+
+```sh
+gh workflow run release-dry-run.yml --ref main -f sha=<full commit SHA on main> -f version=v0.1.0
+```
+
+It runs only on that manual dispatch and its token can only read the
+repository. In order, it:
+
+1. refuses a commit that is not a full 40-character SHA or a version that is
+   not `vMAJOR.MINOR.PATCH`, before anything is cloned;
+2. checks out the trusted workflow commit first; confirms both that
+   workflow revision **and** the requested source SHA are ancestors of
+   `refs/remotes/origin/main`, then (and only then) checks out the source
+   commit. No unverified requested source is checked out or executed;
+3. runs this check, taken from the workflow's own commit, and continues only
+   on `state=create`; a draft that a publishing rerun would resume also stops
+   it;
+4. builds the manager image and the Instance Manager image for linux/amd64
+   from the same Dockerfiles as `make docker-build` and
+   `make docker-build-instance-manager`, into OCI archives on the runner,
+   with no push, no registry login, no build cache and no build record
+   artifact, labelled with the commit time;
+5. builds the installer image check (`hack/check-installer-image`) from the
+   workflow's own commit, which the version check's sparse checkout also
+   clones with its `go.mod` and `go.sum`, so an older candidate without the
+   checker is still checked;
+6. builds the installer manifest with `make build-installer` for the
+   manager image the release would publish, and stops if that changed a
+   tracked file (the commit's generated files are stale);
+7. runs the installer image check on `install.yaml` and writes
+   `release-dry-run.json`: the commit, version, each image's digest, image
+   ID and archive checksum, the installer's SHA-256, and which Instance
+   Manager image the installer makes the manager use, with
+   `usesBuiltInstanceManagerImage`;
+8. uploads `install.yaml`, `release-dry-run.json` and `SHA256SUMS` as the
+   run's artifact;
+9. only then fails the run if the installer does not make the manager use
+   the Instance Manager image built in step 4.
+
+The installer image check reads the one Deployment of kind `apps/v1`
+`Deployment` whose name ends in `controller-manager` and whose
+`control-plane` label is `controller-manager`, and its one container named
+`manager`. That container must run the built manager image, and its `args`
+must set `--instance-manager-image` exactly once, to the built Instance
+Manager image, in any form Go's `flag` package parses (`-flag=v`,
+`--flag=v`, `-flag v`, `--flag v`). It fails on the flag after a `--`
+(where the manager stops parsing), on the flag in `command`, on a flag with
+no value, and on a reference that appears only in another resource,
+annotation or container. Each manifest document must be a single object: a
+`kind: List` is not unpacked, so a Deployment inside one is not found and
+the check fails. It exits 3 when the manager sets no
+`--instance-manager-image`; the record then names the manager's built-in
+default image. Any other failure is recorded as "not verified" with the
+checker's reason.
+
+Step 9 fails every run today: `make build-installer` sets only the manager
+image, so the manager sets no `--instance-manager-image` and an installed
+release would run the mutable built-in default
+`ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`, not
+the image built and recorded here. The record and the job summary say so.
+Until the installer sets the Instance Manager image, a dry run shows this
+gap instead of a candidate.
+
+Any failed step fails the job, and the job summary shows how far it got.
+It writes nothing outside the run (the Go setup's module cache is turned
+off too), so a rerun starts from the same state.
+
+Its limits:
+
+- **Drafts are invisible to it.** GitHub lists draft releases only to a
+  token that can push, and this job's token cannot. It therefore refuses an
+  existing tag or published release, but not a draft: with this token the
+  check's draft refusals (a draft for this or another commit, several
+  drafts) will in practice not trigger. The publishing workflow must run the
+  same check with its write token.
+- **The digests identify this build only.** The base images are mutable
+  tags, so a later build of the same commit can produce other digests. The
+  image archives are not kept.
+- The installer manifest names the manager image by tag, not by digest.
+- It does not exercise release-please, the GitHub App token, a draft
+  release, publication, or a failure or rerun on the publishing path. Those
+  stay with issue #124.
