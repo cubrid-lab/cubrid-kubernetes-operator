@@ -49,7 +49,7 @@ not silently waived or relabelled as passing tests.
 The reference environment lives in
 [`terraform-zadara-k8s`](https://github.com/cubrid-lab/terraform-zadara-k8s).
 Its installed Operator/Instance Manager pins are not automatically the
-December candidate. An approved pin change, continuously held campaign Lease,
+December candidate ([lab documentation alignment PR #147](https://github.com/cubrid-lab/terraform-zadara-k8s/pull/147)). An approved pin change, continuously held campaign Lease,
 scenario-specific fault authority, compatible Node placement and storage,
 and off-node retained evidence are required before running the campaign.
 An open Terraform state-security migration PR is not authority to change the
@@ -139,7 +139,9 @@ narrowing of the release.
 The initial support claim is limited to one pinned CUBRID 11.4.x/amd64
 configuration on one reference environment, the three-VM lab of #80 as its
 [inventory](docs/testing/lab-inventory.md) records it: three k3s workers
-(`v1.36.5+k3s1`, measured 2026-10-15) with 2 vCPU and 8 GiB each, and the
+(`v1.37.2+k3s1`, in-place upgraded 2026-11-18 as recorded in
+[the lab Kubernetes docs](https://github.com/cubrid-lab/terraform-zadara-k8s/blob/main/k8s/README.md))
+with 2 vCPU and 8 GiB each, and the
 node-local `local-path` StorageClass, which is **not CSI**. Evidence from it
 establishes no CSI semantics (attach/detach, a volume following its Pod to
 another node, snapshots), no volume resizing and no zone resilience: the
