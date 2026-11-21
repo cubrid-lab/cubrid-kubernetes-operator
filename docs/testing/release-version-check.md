@@ -100,28 +100,46 @@ repository. In order, it:
    `make docker-build-instance-manager`, into OCI archives on the runner,
    with no push, no registry login, no build cache and no build record
    artifact, labelled with the commit time;
-5. builds the installer manifest with `make build-installer` for the
+5. builds the installer image check (`hack/check-installer-image`) from the
+   workflow's own commit, which the version check's sparse checkout also
+   clones with its `go.mod` and `go.sum`, so an older candidate without the
+   checker is still checked;
+6. builds the installer manifest with `make build-installer` for the
    manager image the release would publish, and stops if that changed a
    tracked file (the commit's generated files are stale);
-6. uploads `install.yaml`, `release-dry-run.json` (the commit, version, each
-   image's digest, image ID and archive checksum, the installer's SHA-256
-   and which Instance Manager image the installer makes the manager use)
-   and `SHA256SUMS` as the run's artifact;
-7. structurally parses the multi-document `install.yaml`: the one
-   controller-manager Deployment must run the built manager image and have
-   exactly one `--instance-manager-image` argument naming the built
-   Instance Manager image. A reference in another resource or annotation,
-   a missing/wrong flag, or duplicate arguments does not count. The run
-   records the result and fails after uploading the evidence when invalid.
+7. runs the installer image check on `install.yaml` and writes
+   `release-dry-run.json`: the commit, version, each image's digest, image
+   ID and archive checksum, the installer's SHA-256, and which Instance
+   Manager image the installer makes the manager use, with
+   `usesBuiltInstanceManagerImage`;
+8. uploads `install.yaml`, `release-dry-run.json` and `SHA256SUMS` as the
+   run's artifact;
+9. only then fails the run if the installer does not make the manager use
+   the Instance Manager image built in step 4.
 
-Step 7 fails every run today: `make build-installer` sets only the manager
-image. The structural validator (`hack/check-installer-image`) rejects the
-missing Instance Manager argument; an installed release would otherwise
-fall back to the mutable built-in `instance-manager:dev` tag, not the image
-built and recorded here. Its negative tests reject an image reference
-appearing only in another resource and duplicate or incorrect flags. The record and the job summary name the image
-that would be used. Until the installer sets the Instance Manager image, a
-dry run shows this gap instead of a candidate.
+The installer image check reads the one Deployment of kind `apps/v1`
+`Deployment` whose name ends in `controller-manager` and whose
+`control-plane` label is `controller-manager`, and its one container named
+`manager`. That container must run the built manager image, and its `args`
+must set `--instance-manager-image` exactly once, to the built Instance
+Manager image, in any form Go's `flag` package parses (`-flag=v`,
+`--flag=v`, `-flag v`, `--flag v`). It fails on the flag after a `--`
+(where the manager stops parsing), on the flag in `command`, on a flag with
+no value, and on a reference that appears only in another resource,
+annotation or container. Each manifest document must be a single object: a
+`kind: List` is not unpacked, so a Deployment inside one is not found and
+the check fails. It exits 3 when the manager sets no
+`--instance-manager-image`; the record then names the manager's built-in
+default image. Any other failure is recorded as "not verified" with the
+checker's reason.
+
+Step 9 fails every run today: `make build-installer` sets only the manager
+image, so the manager sets no `--instance-manager-image` and an installed
+release would run the mutable built-in default
+`ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`, not
+the image built and recorded here. The record and the job summary say so.
+Until the installer sets the Instance Manager image, a dry run shows this
+gap instead of a candidate.
 
 Any failed step fails the job, and the job summary shows how far it got.
 It writes nothing outside the run (the Go setup's module cache is turned

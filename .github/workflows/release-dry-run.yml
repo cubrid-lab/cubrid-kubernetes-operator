@@ -62,15 +62,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # The version check of this workflow's own commit, not of the commit
-      # being built: an older commit has no such script, or an older one. The
-      # image builds ignore this directory (.dockerignore).
+      # The version check and the installer image check of this workflow's
+      # own commit, not of the commit being built: an older commit has no such
+      # tools, or older ones. go.mod and go.sum give the checker its module.
+      # The image builds ignore this directory (.dockerignore), and as a
+      # nested module it is outside the candidate's ./... packages.
       - name: Clone the version check
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-check
-          sparse-checkout: hack/release-version-check.sh
+          sparse-checkout: |
+            hack/release-version-check.sh
+            hack/check-installer-image/
+            go.mod
+            go.sum
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -194,6 +200,12 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # Built from the workflow's own copy, before any of the candidate's code
+      # runs through make.
+      - name: Build the installer image check
+        working-directory: .release-check
+        run: go build -o "$RUNNER_TEMP/check-installer-image" ./hack/check-installer-image
+
       # make runs the commit's own code. The defense against cache poisoning is
       # that this commit is an ancestor of main (checked above), not the job's
       # permissions: code running in a job on main could still reach the
@@ -215,10 +227,12 @@ jobs:
           fi
 
       # Records which Instance Manager image the installer makes the manager
-      # use. If install.yaml does not name the image built here, the manager
-      # falls back to its built-in default (DefaultInstanceManagerImage), a
-      # mutable development tag; the record says so, and a step below fails
-      # the run after the upload.
+      # use, read from the manager container's arguments in the one
+      # controller-manager Deployment. When it sets no --instance-manager-image
+      # (exit 3), the manager falls back to its built-in default
+      # (DefaultInstanceManagerImage), a mutable development tag; any other
+      # failure is recorded with the checker's reason. Only the failure of the
+      # run waits for the step after the upload.
       - name: Record the digests and checksums
         id: record
         env:
@@ -242,20 +256,31 @@ jobs:
           done
           im_ref="$REGISTRY/instance-manager:$VERSION"
           # A substring anywhere in the YAML is not proof: another resource
-          # could mention this image while the Manager still uses :dev.
-          # Check the one manager Deployment, its image, and its actual args.
-          if go run ./hack/check-installer-image \
+          # could mention this image while the manager still uses :dev.
+          if reason=$("$RUNNER_TEMP/check-installer-image" \
             -manifest dist/install.yaml \
             -manager "$REGISTRY/manager:$VERSION" \
-            -instance-manager "$im_ref"; then
-            im_built=true
-            im_used="$im_ref"
+            -instance-manager "$im_ref" 2>&1); then
+            rc=0
           else
-            im_built=false
-            default_im=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
-              internal/controller/cubridcluster_controller.go)
-            im_used="unverified manager arguments (if absent, built-in default ${default_im:-unknown}; see structural validation error)"
+            rc=$?
           fi
+          reason=${reason%%$'\n'*}
+          im_built=false
+          case $rc in
+            0)
+              im_built=true
+              im_used="$im_ref"
+              ;;
+            3)
+              default_im=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
+                internal/controller/cubridcluster_controller.go)
+              im_used="${default_im:-unknown}, the manager's built-in default: install.yaml sets no --instance-manager-image"
+              ;;
+            *)
+              im_used="not verified: $reason"
+              ;;
+          esac
           out="$RUNNER_TEMP/release-dry-run"
           mkdir -p "$out"
           cp dist/install.yaml "$out/install.yaml"
@@ -312,7 +337,7 @@ jobs:
           IM_USED: ${{ steps.record.outputs.im_used }}
         run: |
           if [ "$IM_BUILT" != true ]; then
-            echo "::error::install.yaml does not name the Instance Manager image built here; an installed release would run $IM_USED"
+            echo "::error::install.yaml does not make the manager use the Instance Manager image built here. Image it would use: $IM_USED"
             exit 1
           fi
 

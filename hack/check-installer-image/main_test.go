@@ -15,16 +15,19 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
 const (
-	testManager = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0"
-	testIM      = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
+	testManager  = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0"
+	testIM       = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
+	noDeployment = "0 controller-manager Deployments"
+	goodFlag     = "            - --instance-manager-image=" + testIM + "\n"
 )
 
-const goodDeployment = `apiVersion: apps/v1
+const deploymentHead = `apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cubrid-kubernetes-operator-controller-manager
@@ -36,47 +39,45 @@ spec:
       containers:
         - name: sidecar
           image: example/other:1
-        - name: manager
-          image: ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0
           args:
-            - --leader-elect
-            - --instance-manager-image=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0
-`
+            - --instance-manager-image=` + testIM + `
+        - name: manager
+          image: ` + testManager + "\n"
+
+// withArgs is the controller-manager Deployment whose manager container has
+// the given argument lines.
+func withArgs(lines ...string) string {
+	s := deploymentHead + "          args:\n            - --leader-elect\n"
+	for _, l := range lines {
+		s += "            - " + l + "\n"
+	}
+	return s
+}
+
+var goodDeployment = withArgs("--instance-manager-image=" + testIM)
 
 // A reference in an unrelated object, annotation or container is not proof
-// that the manager actually uses it. Duplicate or ambiguous flags fail closed.
+// that the manager actually uses it. Every flag form Go's flag package parses
+// counts, and anything ambiguous or unreadable fails closed.
 func TestVerifyInstallerImageBinding(t *testing.T) {
 	other := `apiVersion: v1
 kind: ConfigMap
 metadata:
   name: unrelated-image-reference
   annotations:
-    image: ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0
+    image: ` + testIM + `
 data:
-  note: "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
+  note: "` + testIM + `"
 ---
 `
 	change := func(old, replacement string) string {
 		return strings.Replace(goodDeployment, old, replacement, 1)
 	}
-	cases := []struct {
-		name     string
-		manifest string
-		want     string
-	}{
-		{"valid multi-document installer", other + goodDeployment, ""},
-		{"reference only in unrelated YAML", other, "controller-manager Deployments"},
-		{"reference only in annotation", other + change(
-			"            - --instance-manager-image="+testIM+"\n", ""), "0 Instance Manager image arguments"},
-		{"wrong Manager image", change(testManager, "example/wrong-manager:1"), "manager image"},
-		{"wrong Instance Manager image", change("--instance-manager-image="+testIM,
-			"--instance-manager-image=example/wrong:1"), "not the built Instance Manager"},
-		{"two exact flags", goodDeployment + "            - --instance-manager-image=" + testIM + "\n", "2 Instance Manager"},
-		{"two controller managers", goodDeployment + "---\n" + goodDeployment, "more than one"},
-		{"reference on unrelated Deployment", `apiVersion: apps/v1
-kind: Deployment
+	deployment := func(kind, name, labels string) string {
+		return `apiVersion: apps/v1
+kind: ` + kind + `
 metadata:
-  name: unrelated
+  name: ` + name + labels + `
 spec:
   template:
     spec:
@@ -84,8 +85,91 @@ spec:
         - name: manager
           image: ` + testManager + `
           args:
-            - --instance-manager-image=` + testIM + "\n", "controller-manager Deployments"},
-		{"broken YAML", "kind: Deployment\nmetadata: [this isn't yaml\n", "decode installer"},
+            - --instance-manager-image=` + testIM + "\n"
+	}
+	label := "\n  labels:\n    control-plane: controller-manager"
+	cases := []struct {
+		name     string
+		manifest string
+		want     string // "" for a valid installer
+		absent   bool   // the error must be errFlagAbsent
+	}{
+		{name: "valid multi-document installer", manifest: other + goodDeployment},
+		{name: "single dash with value", manifest: withArgs("-instance-manager-image=" + testIM)},
+		{name: "double dash, separate value", manifest: withArgs("--instance-manager-image", testIM)},
+		{name: "single dash, separate value", manifest: withArgs("-instance-manager-image", testIM)},
+		{name: "reference only in unrelated YAML", manifest: other, want: "controller-manager Deployments"},
+		{name: "no flag at all", manifest: other + withArgs(), want: "sets no", absent: true},
+		{name: "no args", manifest: deploymentHead, want: "has no args", absent: true},
+		{name: "args not strings", manifest: deploymentHead + "          args: [1]\n", want: "not a list of strings"},
+		{name: "wrong Manager image", manifest: change(testManager, "example/wrong-manager:1"),
+			want: "not the built manager image"},
+		{name: "no Manager image", manifest: change("          image: "+testManager+"\n", ""),
+			want: "has no image"},
+		{name: "wrong Instance Manager image",
+			manifest: withArgs("--instance-manager-image=example/wrong:1"), want: "not the built image"},
+		{name: "wrong image, separate value",
+			manifest: withArgs("-instance-manager-image", "example/wrong:1"), want: "not the built image"},
+		{name: "two flags, same value", manifest: goodDeployment + goodFlag, want: "2 times"},
+		{name: "a later flag in another form overrides",
+			manifest: withArgs("--instance-manager-image="+testIM, "-instance-manager-image", "example/wrong:1"),
+			want:     "2 times"},
+		{name: "bare flag with no value", manifest: withArgs("--instance-manager-image"), want: "has no value"},
+		{name: "flag after the terminator", manifest: withArgs("--", "--instance-manager-image="+testIM),
+			want: "after \"--\""},
+		{name: "flag in another form after the terminator",
+			manifest: withArgs("--instance-manager-image="+testIM, "--", "-instance-manager-image", "x"),
+			want:     "after \"--\""},
+		// The manager container is the last one, so its args come last.
+		{name: "flag in command", manifest: goodDeployment[:strings.LastIndex(goodDeployment, "          args:\n")] +
+			"          command: [/manager, -instance-manager-image=example/wrong:1]\n" +
+			goodDeployment[strings.LastIndex(goodDeployment, "          args:\n"):],
+			want: "set in the manager's command"},
+		{name: "a longer flag name is another flag",
+			manifest: withArgs("--instance-manager-image-pull-policy=Always"), want: "sets no", absent: true},
+		{name: "no manager container", manifest: strings.Replace(goodDeployment, "- name: manager", "- name: other", 1),
+			want: "0 manager containers"},
+		{name: "two manager containers", manifest: goodDeployment + `        - name: manager
+          image: ` + testManager + `
+          args:
+            - --instance-manager-image=` + testIM + "\n", want: "2 manager containers"},
+		{name: "no containers", manifest: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x-controller-manager` + label + `
+spec:
+  template:
+    spec:
+      hostNetwork: false
+`, want: "has no containers"},
+		{name: "containers not a list", manifest: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x-controller-manager` + label + `
+spec:
+  template:
+    spec:
+      containers: manager
+`, want: "containers are unreadable"},
+		{name: "two controller managers", manifest: goodDeployment + "---\n" + goodDeployment, want: "more than one"},
+		{name: "right name without the label", manifest: deployment("Deployment", "x-controller-manager", ""),
+			want: noDeployment},
+		{name: "the label on another name", manifest: deployment("Deployment", "unrelated", label),
+			want: noDeployment},
+		{name: "another kind with the right name and label",
+			manifest: deployment("StatefulSet", "x-controller-manager", label),
+			want:     noDeployment},
+		{name: "a Deployment inside a List is not unpacked", manifest: `apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: x-controller-manager
+      labels:
+        control-plane: controller-manager
+`, want: noDeployment},
+		{name: "broken YAML", manifest: "kind: Deployment\nmetadata: [this isn't yaml\n", want: "decode installer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +183,31 @@ spec:
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("verifyInstaller error = %v; want %q", err, tc.want)
 			}
+			if strings.Contains(err.Error(), "<nil>") {
+				t.Errorf("the error prints <nil>: %v", err)
+			}
+			if got := errors.Is(err, errFlagAbsent); got != tc.absent {
+				t.Errorf("errors.Is(err, errFlagAbsent) = %t; want %t", got, tc.absent)
+			}
 		})
+	}
+}
+
+// The workflow reads the exit code: 3 says the installer leaves the manager on
+// its built-in default image, 1 any other mismatch.
+func TestExitCode(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{nil, 0},
+		{errFlagAbsent, exitFlagAbsent},
+		{errors.New("the manager container has no args: " + errFlagAbsent.Error()), exitMismatch},
+		{errors.New("other"), exitMismatch},
+	}
+	for _, c := range cases {
+		if got := exitCode(c.err); got != c.want {
+			t.Errorf("exitCode(%v) = %d; want %d", c.err, got, c.want)
+		}
 	}
 }

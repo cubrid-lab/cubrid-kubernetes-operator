@@ -19,6 +19,7 @@ package release
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,11 +51,12 @@ type job struct {
 }
 
 type step struct {
-	Name string            `yaml:"name"`
-	Uses string            `yaml:"uses"`
-	Run  string            `yaml:"run"`
-	With map[string]any    `yaml:"with"`
-	Env  map[string]string `yaml:"env"`
+	WorkingDirectory string            `yaml:"working-directory"`
+	Name             string            `yaml:"name"`
+	Uses             string            `yaml:"uses"`
+	Run              string            `yaml:"run"`
+	With             map[string]any    `yaml:"with"`
+	Env              map[string]string `yaml:"env"`
 }
 
 const (
@@ -259,17 +261,23 @@ func TestDryRunChecksInputFormats(t *testing.T) {
 // the version has no tag and no release. A draft for the same commit, which a
 // publishing rerun would resume, also stops a dry run.
 func TestDryRunRefusesAnExistingVersion(t *testing.T) {
-	text, _, j := readDryRun(t)
+	_, _, j := readDryRun(t)
 	i := stepIndex(t, j, versionStepName)
 	for k, s := range j.Steps {
 		if strings.HasPrefix(s.Uses, "docker/") && k < i {
 			t.Errorf("step %q runs before the duplicate-version check", s.Name)
 		}
 	}
-	if !strings.Contains(text, "path: .release-check") ||
-		!strings.Contains(text, "ref: ${{ github.workflow_sha }}") ||
-		!strings.Contains(text, "sparse-checkout: hack/release-version-check.sh") {
+	tools := j.Steps[stepIndex(t, j, "Clone the version check")]
+	sparse, _ := tools.With["sparse-checkout"].(string)
+	if tools.With["path"] != ".release-check" || tools.With["ref"] != "${{ github.workflow_sha }}" {
 		t.Error("the version check is not cloned from the workflow's own commit into .release-check")
+	}
+	// The installer image check needs its module files next to it.
+	for _, want := range []string{"hack/release-version-check.sh", "hack/check-installer-image/", "go.mod", "go.sum"} {
+		if !strings.Contains("\n"+sparse, "\n"+want+"\n") {
+			t.Errorf("the workflow's own copy of %s is not cloned into .release-check", want)
+		}
 	}
 	s := j.Steps[i]
 	if s.Env["TAG"] != "${{ inputs.version }}" || s.Env["EXPECTED_SHA"] != "${{ steps.meta.outputs.sha }}" {
@@ -437,6 +445,9 @@ func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 	for k, s := range j.Steps {
 		runsRepoCode := strings.Contains(s.Run, "make ") || strings.HasPrefix(s.Uses, "docker/") ||
 			strings.HasPrefix(s.Uses, "./")
+		for _, goCmd := range []string{"go run", "go build", "go test", "go generate"} {
+			runsRepoCode = runsRepoCode || strings.Contains(s.Run, goCmd)
+		}
 		if runsRepoCode && k < meta {
 			t.Errorf("step %q runs before the check that the commit is on main", s.Name)
 		}
@@ -458,13 +469,21 @@ func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 	_, _, j := readDryRun(t)
 	record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run
-	if !strings.Contains(record, "go run ./hack/check-installer-image") ||
-		!strings.Contains(record, "-manifest dist/install.yaml") ||
-		!strings.Contains(record, "-manager \"$REGISTRY/manager:$VERSION\"") ||
-		!strings.Contains(record, "-instance-manager \"$im_ref\"") ||
-		!strings.Contains(record, "DefaultInstanceManagerImage") {
-		t.Error("the record does not structurally verify the manager Deployment and its built image arguments")
+	// The checker is the workflow's own copy, built from .release-check, not
+	// the candidate's, which an older commit does not have.
+	buildStep := j.Steps[stepIndex(t, j, "Build the installer image check")]
+	if buildStep.WorkingDirectory != ".release-check" ||
+		!strings.Contains(buildStep.Run, `go build -o "$RUNNER_TEMP/check-installer-image" ./hack/check-installer-image`) {
+		t.Errorf("the installer image check is not built from the workflow's own copy: %q in %q",
+			buildStep.Run, buildStep.WorkingDirectory)
 	}
+	if stepIndex(t, j, "Build the installer image check") > stepIndex(t, j, "Build the installer manifest") {
+		t.Error("the installer image check is built after the candidate's make runs")
+	}
+	if strings.Contains(record, "go run") {
+		t.Error("the record runs a checker from the candidate commit")
+	}
+	runRecordStep(t, record)
 	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -484,5 +503,103 @@ func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 	code, out := runStep(t, t.TempDir(), script, "IM_BUILT=false", "IM_USED=example/instance-manager:dev")
 	if code == 0 || !strings.Contains(out, "example/instance-manager:dev") {
 		t.Errorf("the built image is not used: exit %d\n%s", code, out)
+	}
+}
+
+// runRecordStep runs the record step with a checker built from this
+// repository on three installers: one that sets the built Instance Manager
+// image, one that sets none, and one that sets another image. The record
+// must say which image the manager would use in each case.
+func runRecordStep(t *testing.T, script string) {
+	t.Helper()
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
+	}
+	const registry = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator"
+	runnerTemp := t.TempDir()
+	checker := filepath.Join(runnerTemp, "check-installer-image")
+	build := exec.Command("go", "build", "-o", checker, "./hack/check-installer-image")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the checker: %v\n%s", err, out)
+	}
+	if err := os.MkdirAll(filepath.Join(runnerTemp, "images"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manager.oci.tar", "instance-manager.oci.tar"} {
+		if err := os.WriteFile(filepath.Join(runnerTemp, "images", name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer := func(args string) string {
+		return `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x-controller-manager
+  labels:
+    control-plane: controller-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          image: ` + registry + `/manager:` + version + `
+          args: [--leader-elect` + args + `]
+`
+	}
+	digest := "sha256:" + strings.Repeat("0", 64)
+	cases := []struct {
+		name, args string
+		built      bool
+		used       string
+	}{
+		{"the built image", ", --instance-manager-image=" + registry + "/instance-manager:" + version,
+			true, registry + "/instance-manager:" + version},
+		{"no flag", "", false, registry +
+			"/instance-manager:dev, the manager's built-in default: install.yaml sets no --instance-manager-image"},
+		{"another image", ", -instance-manager-image, example/im:1", false,
+			`not verified: the manager uses Instance Manager image "example/im:1"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			work := t.TempDir()
+			files := map[string]string{
+				"dist/install.yaml": installer(c.args),
+				"internal/controller/cubridcluster_controller.go": string(src),
+			}
+			for path, data := range files {
+				full := filepath.Join(work, path)
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.RemoveAll(filepath.Join(runnerTemp, "release-dry-run")); err != nil {
+				t.Fatal(err)
+			}
+			outFile := filepath.Join(work, "github-output")
+			code, out := runStep(t, work, script, "REGISTRY="+registry, "VERSION="+version, "SHA="+sha,
+				"CREATED=c", "BUILT=b", "WORKFLOW_SHA="+otherSHA, "RUN_ID=1", "RUN_ATTEMPT=1",
+				"MANAGER_DIGEST="+digest, "MANAGER_ID="+digest, "IM_DIGEST="+digest, "IM_ID="+digest,
+				"RUNNER_TEMP="+runnerTemp, "GITHUB_OUTPUT="+outFile)
+			if code != 0 {
+				t.Fatalf("the record step failed: exit %d\n%s", code, out)
+			}
+			written, _ := os.ReadFile(outFile)
+			if !strings.Contains(string(written), fmt.Sprintf("im_built=%t\n", c.built)) ||
+				!strings.Contains(string(written), "im_used="+c.used) {
+				t.Errorf("the step output %q does not say im_built=%t and %q", written, c.built, c.used)
+			}
+			record, _ := os.ReadFile(filepath.Join(runnerTemp, "release-dry-run", "release-dry-run.json"))
+			if !strings.Contains(string(record), fmt.Sprintf(`"usesBuiltInstanceManagerImage": %t`, c.built)) {
+				t.Errorf("the record does not say usesBuiltInstanceManagerImage %t:\n%s", c.built, record)
+			}
+		})
 	}
 }
