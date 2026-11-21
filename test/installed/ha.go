@@ -1802,6 +1802,10 @@ func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][
 	return rows, nil
 }
 
+// csqlReadScript is the shell command csqlRead runs on a member: $0 is the
+// database name and $1 the query.
+const csqlReadScript = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0@$(hostname)" -c "$1"`
+
 // csqlRead runs a query with csql on a member, not through a Broker. It
 // connects to the member's own server over TCP, by the member's hostname,
 // rather than through the local Unix socket that "localhost" uses: on the VM
@@ -1811,10 +1815,6 @@ func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][
 // answering is the same either way. It is for reads only: a query whose output
 // still holds both errors (#238, POC-36) is recorded and run once more, which
 // a write must never be. The second answer is the read's, whatever it is.
-// csqlReadScript is the shell command csqlRead runs on a member: $0 is the
-// database name and $1 the query.
-const csqlReadScript = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0@$(hostname)" -c "$1"`
-
 func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 	return func(sql string) (string, error) {
 		run := func() (string, error) {
