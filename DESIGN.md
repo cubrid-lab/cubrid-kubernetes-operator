@@ -865,61 +865,59 @@ identities are required, the broker tier becomes a StatefulSet.
 
 ## 11. Health Model
 
-Pod readiness and cluster health are separate concepts.
-
-The states that are told apart, where each is observed and where it is
-published are listed in [docs/observability.md](docs/observability.md),
-section "Health model". The lists below are the original proposal.
+Pod readiness and cluster health are separate concepts. Each state is
+observed by itself. [docs/observability.md](docs/observability.md),
+sections "Health model" and "Conditions", lists where each observation
+comes from, where it is published, and every reason of each Condition.
 
 ### Pod readiness
 
-```text
-ProcessHealthy
-BrokerHealthy
-DatabaseReady
-```
+The database container's startup and liveness probes call the Instance
+Manager's `/livez` (the process answers). Its readiness probe calls
+`/readyz`: the member's database server is registered and has a role
+(HA), or is running (standalone). No cluster-level state feeds Pod
+readiness.
 
 ### Cluster Conditions
 
-```text
-HAReady
-ReplicationHealthy
-ClusterReady
-```
+The Operator sets these `metav1.Condition` types on a CubridCluster:
 
-`HAReady` is **not** put directly into Pod readiness by default.
+- `Ready`: the expected members are ready, no recovery bootstrap runs,
+  the HA bootstrap recorded every member, and no more than one master is
+  observed. It comes from the members' readiness, the bootstrap status
+  and the role reports.
+- `Progressing`: the Operator is still working towards the spec, for
+  example while members start or a recovery bootstrap runs.
+- `PrimaryResolved`: every member was observed freshly in one reconcile
+  and exactly one reports master, from each member's `/v1/role`.
+- `HAReady`: the primary is resolved, every other member is observed as a
+  slave and replication is healthy. `Unknown` with
+  `RoleDiscoveryDisabled` when no role prober is configured.
+- `ReplicationHealthy`: every observed slave applies the master's log,
+  from the `replication` field of each slave's `/v1/role`.
+- `BrokerReady`: a Broker of each access mode is available, from the
+  Broker Deployments. `WriteEndpointReady` and `ReadEndpointReady` say
+  the same for one access mode.
+- `RoutingReady`: a read-write Broker is available and, in HA, the
+  primary is resolved; for a standalone cluster, the member is ready.
+- `BootstrapReady`: the database exists on every member, from the
+  bootstrap's per-member records; otherwise the phase in progress or why
+  it stopped.
+- `Updating`: a member is being replaced for a new image, or the rolling
+  update waits, for example for a resolved primary, replication catch-up
+  or the PodDisruptionBudget.
+- `MemberPlacement`: HA only; whether each member runs on a node of its
+  own, from the members' Pods and data PVCs. It is a report only.
+- `DBAPasswordSecretResolved`: only when `spec.dbaPasswordSecretRef` is
+  set; whether the named key exists in the Secret and holds a value the
+  Instance Manager accepts.
+- `Degraded`: present only while the member of a failed member rebuild
+  is held out of service on the claim its restore wrote to; removed once
+  that claim is replaced.
 
-Reason: during failover the HA state is briefly unstable; that must not
-cause every Pod to be removed from Kubernetes Services as a side effect.
-
-Full proposed hierarchy:
-
-```text
-PodScheduled
-     ↓
-ProcessHealthy
-     ↓
-BrokerHealthy
-     ↓
-DatabaseReady
-     ↓
-HAReady (cluster-level)
-     ↓
-ClusterReady
-```
-
-Possible conditions:
-
-- `Ready`
-- `Progressing`
-- `Degraded`
-- `HAReady`
-- `BackupReady`
-- `Restoring`
-- `Updating`
-- `FailingOver`
-
-These use `metav1.Condition`.
+`HAReady` is never put into Pod readiness. During a failover the HA
+state is briefly unstable; that must not remove every Pod from the
+Kubernetes Services as a side effect.
 
 ### Pod readiness and cluster Conditions in the code (#14)
 
