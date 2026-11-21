@@ -64,7 +64,7 @@ func verifyInstaller(r io.Reader, managerImage, instanceManagerImage string) err
 		}
 		managerCount := 0
 		for _, raw := range containers {
-			c, ok := raw.(map[string]interface{})
+			c, ok := raw.(map[string]any)
 			if !ok {
 				return errors.New("controller-manager contains an invalid container object")
 			}
@@ -124,9 +124,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer f.Close()
-	if err := verifyInstaller(f, *manager, *instanceManager); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	checkErr := verifyInstaller(f, *manager, *instanceManager)
+	closeErr := f.Close()
+	if checkErr != nil {
+		fmt.Fprintln(os.Stderr, checkErr)
+		os.Exit(1)
+	}
+	if closeErr != nil {
+		fmt.Fprintln(os.Stderr, closeErr)
 		os.Exit(1)
 	}
 }
