@@ -724,11 +724,13 @@ func s07NeverEvents(rec *s07Record) []string {
 	// The established client's counter includes every acknowledgement after
 	// the path was first observed closed, including legitimate writes after a
 	// release. Count it as a never-event only when the same run also observed
-	// that quarantine was still in force at the end and saw no release.
+	// that the same quarantine generation was still in force at the end
+	// and saw no release. A new generation makes that history ambiguous.
 	// With a release or unread history, the timing remains inconclusive.
 	if s := rec.Session; s != nil && s.ReadError == "" && s.AcknowledgedAfterClosed > 0 &&
 		rec.RWPodsGoneAt != nil && rec.RWEndpointsEmptyAt != nil &&
-		rec.ReleaseSeenAt == nil && rec.QuarantineAtEnd != "" {
+		rec.ReleaseSeenAt == nil && rec.QuarantineAtEnd != "" &&
+		len(rec.Generations) == 1 {
 		never = append(never, fmt.Sprintf("%d established-session write(s) were acknowledged after the managed "+
 			"-rw path was observed closed while the quarantine remained in force without an accepted release",
 			s.AcknowledgedAfterClosed))
