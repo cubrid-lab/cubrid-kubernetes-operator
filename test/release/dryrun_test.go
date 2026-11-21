@@ -429,9 +429,9 @@ func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 		t.Errorf("the first checkout selects %v, not the trusted workflow commit", clone.With["ref"])
 	}
 	guard := j.Steps[meta].Run
-	workflowCheck := strings.Index(guard, "git merge-base --is-ancestor \\"$workflow_sha\\" refs/remotes/origin/main")
-	candidateCheck := strings.Index(guard, "git merge-base --is-ancestor \\"$INPUT_SHA\\" refs/remotes/origin/main")
-	checkout := strings.Index(guard, "git checkout --detach --quiet \\"$INPUT_SHA\\"")
+	workflowCheck := strings.Index(guard, "git merge-base --is-ancestor \"$workflow_sha\" refs/remotes/origin/main")
+	candidateCheck := strings.Index(guard, "git merge-base --is-ancestor \"$INPUT_SHA\" refs/remotes/origin/main")
+	checkout := strings.Index(guard, "git checkout --detach --quiet \"$INPUT_SHA\"")
 	if workflowCheck < 0 || candidateCheck <= workflowCheck || checkout <= candidateCheck {
 		t.Error("the requested commit can be checked out before verifying both main histories")
 	}
