@@ -281,6 +281,13 @@ reads take at most 18 s, change no verdict, retry or cleanup, and a failed read
 is only recorded in `readError`. This is evidence for telling a restart from a
 client-side hang-up, not a finding on the cause.
 
+The smoke's `csql` statements, the marker write and its read, connect to the
+server over TCP by the Pod's own hostname (`appdb@$(hostname)`), not through the
+local Unix socket that `appdb@localhost` uses: on the VM lab's members, reads
+over that socket lost their session after printing the whole result in 52 of
+2,000 reads, and none of 2,000 over TCP did (POC-70). The write is not retried
+either way, so a lost session after `Committed.` would leave its outcome open.
+
 Expected image selection and observed runtime IDs are separate facts.
 Kubernetes allows the runtime's `imageID` to differ from the PodSpec image
 identity; locally imported containerd images can report a configuration ID

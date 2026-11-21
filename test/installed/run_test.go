@@ -947,3 +947,34 @@ func checkSmokeOutputCompatibility(t *testing.T, summary evidence.Summary,
 		t.Fatal("checkpoint became a passing run")
 	}
 }
+
+// The smoke's csql steps, the write and the read of the marker row, connect to
+// the server over TCP by the Pod's own hostname, not through the local Unix
+// socket that "localhost" uses, where lab members lost about one session in
+// forty after printing the whole result (POC-70, #238). A write is never
+// retried, so a lost session after "Committed." would leave its outcome open.
+func TestRunSQLConnectsOverTCPByThePodsHostname(t *testing.T) {
+	f := newFixture(t)
+	var csql [][]string
+	f.commandHook = func(_ context.Context, args []string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "csql") {
+			csql = append(csql, args)
+		}
+		return f.answer(t, args)
+	}
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(csql) < 2 {
+		t.Fatalf("ran %d csql commands, want the marker write and read: %q", len(csql), csql)
+	}
+	for _, args := range csql {
+		script := strings.Join(args, " ")
+		if strings.Contains(script, "@localhost") {
+			t.Errorf("csql connects through the local socket: %q", script)
+		}
+		if !strings.Contains(script, `"$0@$(hostname)"`) || args[len(args)-2] != databaseName {
+			t.Errorf("csql does not connect to %s by the Pod's hostname: %q", databaseName, args)
+		}
+	}
+}
