@@ -71,7 +71,7 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 			roles.sample(ctx, r)
 		},
 		"conditionRound": func(ctx context.Context) {
-			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}})
+			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}}, nil)
 		},
 		"heartbeatRole":     func(ctx context.Context) { _, _ = r.heartbeatRole(ctx, pod0) },
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
@@ -136,7 +136,7 @@ func TestConditionRoundRunsNoHeartbeatWithoutSweep(t *testing.T) {
 	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
 	execs := func(sampling conditionSampling) int {
 		_ = os.Remove(log)
-		round := r.conditionRound(context.Background(), sampling)
+		round := r.conditionRound(context.Background(), sampling, nil)
 		if (round.Roles != nil) != sampling.roles {
 			t.Errorf("sampling %+v gave sweep %+v", sampling, round.Roles)
 		}
@@ -149,4 +149,108 @@ func TestConditionRoundRunsNoHeartbeatWithoutSweep(t *testing.T) {
 	if n := execs(conditionSampling{roles: true}); n != 1 {
 		t.Errorf("a round with a sweep ran %d commands in a Pod, want 1", n)
 	}
+}
+
+// fakeStatusKubectl puts a kubectl on PATH that answers the status read of
+// conditionRound, after delay seconds when delay is not empty: an empty
+// CubridCluster status, and two available read-write Brokers.
+func fakeStatusKubectl(t *testing.T, delay string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n"
+	if delay != "" {
+		script += "sleep " + delay + "\n"
+	}
+	script += "case \"$*\" in *cubridcluster*) echo '{\"status\":{}}' ;; *) echo 2 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestConditionSamplerReadNowReadsAtOnceAndWaitsForTheRead checks that readNow
+// starts a round right away instead of at the next conditionSampleEvery tick,
+// and returns only once that round's status read has ended: a slow read that
+// ends after the service recovered still ends before anything readNow's
+// caller does next, such as recording the outcome (#1027).
+func TestConditionSamplerReadNowReadsAtOnceAndWaitsForTheRead(t *testing.T) {
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
+	fakeStatusKubectl(t, "")
+	sampler := r.sampleConditions(conditionSampling{})
+	time.Sleep(300 * time.Millisecond) // the first round is done; the next is due in about 2s
+	fakeStatusKubectl(t, "0.4")        // the read readNow asks for takes 0.4s per command
+	asked := time.Now()
+	if err := sampler.readNow(context.Background()); err != nil {
+		t.Fatalf("readNow: %v", err)
+	}
+	returned := time.Now()
+	if waited := returned.Sub(asked); waited > conditionSampleEvery/2*3 {
+		t.Errorf("readNow returned after %s, want it not to wait for the next tick", waited)
+	}
+	rounds := sampler.stop()
+	if len(rounds) != 2 || rounds[1].Status == nil {
+		t.Fatalf("got %d rounds, want the first one and the one readNow asked for: %+v", len(rounds), rounds)
+	}
+	read := rounds[1].Status
+	if read.ReadStart.Before(asked) || read.ReadEnd.After(returned) {
+		t.Errorf("the read ran %s..%s, not within readNow's call %s..%s",
+			read.ReadStart.Format(time.StampMicro), read.ReadEnd.Format(time.StampMicro),
+			asked.UTC().Format(time.StampMicro), returned.UTC().Format(time.StampMicro))
+	}
+	if read.ReadEnd.Sub(read.ReadStart) < 400*time.Millisecond {
+		t.Errorf("the slow read took %s; the test did not slow it down", read.ReadEnd.Sub(read.ReadStart))
+	}
+}
+
+// TestConditionSamplerReadNowFailsClosed checks that readNow reports an error,
+// rather than returning as if the read had been made, when the read fails,
+// when the round in progress outlasts readNow's deadline so that no read
+// starts in time, and when the sampler has stopped.
+func TestConditionSamplerReadNowFailsClosed(t *testing.T) {
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
+
+	t.Run("the status read fails", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		sampler := r.sampleConditions(conditionSampling{})
+		defer sampler.stop()
+		if err := sampler.readNow(context.Background()); err == nil {
+			t.Error("readNow returned no error for a status read that failed")
+		}
+	})
+
+	t.Run("the round in progress outlasts the deadline", func(t *testing.T) {
+		hangingKubectl(t)
+		sampler := r.sampleConditions(conditionSampling{})
+		defer sampler.stop()
+		time.Sleep(100 * time.Millisecond) // the first round is now waiting on kubectl
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		if err := sampler.readNow(ctx); err == nil {
+			t.Error("readNow returned no error although no read could start before its deadline")
+		}
+		if waited := time.Since(start); waited > 2*time.Second {
+			t.Errorf("readNow waited %s past its deadline", waited)
+		}
+	})
+
+	t.Run("the sampler has stopped", func(t *testing.T) {
+		fakeStatusKubectl(t, "")
+		sampler := r.sampleConditions(conditionSampling{})
+		sampler.stop()
+		done := make(chan error, 1)
+		go func() { done <- sampler.readNow(context.Background()) }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("readNow returned no error on a stopped sampler")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("readNow waited on a stopped sampler")
+		}
+	})
 }

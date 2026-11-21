@@ -36,6 +36,10 @@ const (
 	ReasonInjectionFailed   = "fault_injection_failed"
 	ReasonFaultNotConfirmed = "fault_not_confirmed"
 	ReasonStepStillRunning  = "step_still_running"
+	// ReasonConfirmedStepFailed blocks a run whose Confirmed step returned an
+	// error or did not end within its limit: what it was to observe between
+	// the fault and the outcome is not established.
+	ReasonConfirmedStepFailed = "confirmed_step_failed"
 )
 
 // Fault is what a scenario plugs in.
@@ -80,6 +84,13 @@ type Scenario struct {
 	// Check observes the expected behavior. It returns true when it holds,
 	// false to be asked again, and an error when an expectation is broken.
 	Check func(ctx context.Context) (bool, error)
+	// Confirmed, when set, runs once right after the fault is confirmed and
+	// before Check is first called, within the confirmation limit. What it
+	// observes, such as a status read, lies between the fault and the
+	// outcome however soon the outcome comes (#1027). An error, or not
+	// ending within the limit, blocks the run: the observation it was to
+	// make is not established.
+	Confirmed func(ctx context.Context) error
 }
 
 // Step is one line of the run's timeline.
@@ -115,11 +126,12 @@ var errStepStillRunning = fmt.Errorf("%w, and did not stop when it was cancelled
 
 // Names of the steps, as Outcome.StillRunning reports them.
 const (
-	stepNameBefore  = "before"
-	stepNameInject  = "inject"
-	stepNameConfirm = "confirm"
-	stepNameCheck   = "check"
-	stepNameRemove  = "remove"
+	stepNameBefore    = "before"
+	stepNameInject    = "inject"
+	stepNameConfirm   = "confirm"
+	stepNameConfirmed = "confirmed"
+	stepNameCheck     = "check"
+	stepNameRemove    = "remove"
 )
 
 // Run executes the scenario. It always returns: no step waits longer than its
@@ -209,6 +221,17 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	}
 	o.FaultConfirmed = true
 	note("fault_confirmed", "")
+	if s.Confirmed != nil {
+		err := bounded(ctx, l.Confirm, l.Stop, s.Confirmed)
+		switch {
+		case stillRunning(stepNameConfirmed, err):
+			end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameConfirmed)
+			return o
+		case err != nil:
+			end(evidence.Blocked, ReasonConfirmedStepFailed, ReasonConfirmedStepFailed+": "+err.Error())
+			return o
+		}
+	}
 
 	reached, err := poll(ctx, l.Outcome, l.Poll, l.Stop, true, s.Check)
 	switch {

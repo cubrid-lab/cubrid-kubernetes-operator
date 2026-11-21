@@ -510,6 +510,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	outcome = r.runFault(faults.Scenario{
 		Fault:  logs.observeFault(podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful}),
 		Limits: s03FlowLimits,
+		// One status read right after the fault is confirmed lies between the
+		// fault and the outcome however soon the outcome comes (#1027).
+		Confirmed: sampler.readNow,
 		Before: func(ctx context.Context) error {
 			now, _, err := r.master(ctx)
 			if err != nil {
