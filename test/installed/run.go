@@ -489,9 +489,15 @@ func (r *Runner) checkSQL(
 			rec.SQLFailureState = r.readSQLFailureState(ctx, cfg, rec, failedStep, startRestarts)
 		}
 	}()
+	// csql connects to the server over TCP by the Pod's own hostname (a
+	// StatefulSet Pod's hostname is its name, listed in /etc/hosts), not
+	// through the local Unix socket that "localhost" uses, where lab members
+	// lost about one session in 40 after printing the whole result and none
+	// over TCP did (POC-70, #238). The marker write is never retried, so a
+	// lost session after "Committed." would leave its outcome open.
 	runSQL := func(statement string) (string, error) {
 		out, err := execInDatabase("bash", "-c",
-			"PATH=\"$CUBRID/bin:$PATH\" csql -u dba \"$0\" -c \"$1\"", databaseName+"@localhost", statement)
+			"PATH=\"$CUBRID/bin:$PATH\" csql -u dba \"$0@$(hostname)\" -c \"$1\"", databaseName, statement)
 		step := sqlStep{Statement: statement, Output: out}
 		if err != nil {
 			step.Error = err.Error()
