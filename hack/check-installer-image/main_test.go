@@ -21,7 +21,7 @@ import (
 
 const (
 	testManager = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0"
-	testIM = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
+	testIM      = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
 )
 
 const goodDeployment = `apiVersion: apps/v1
@@ -71,7 +71,7 @@ data:
 		{"wrong Manager image", change(testManager, "example/wrong-manager:1"), "manager image"},
 		{"wrong Instance Manager image", change("--instance-manager-image="+testIM,
 			"--instance-manager-image=example/wrong:1"), "not the built Instance Manager"},
-		{"two exact flags", goodDeployment + "            - --instance-manager-image="+testIM+"\n", "2 Instance Manager"},
+		{"two exact flags", goodDeployment + "            - --instance-manager-image=" + testIM + "\n", "2 Instance Manager"},
 		{"two controller managers", goodDeployment + "---\n" + goodDeployment, "more than one"},
 		{"reference on unrelated Deployment", `apiVersion: apps/v1
 kind: Deployment
