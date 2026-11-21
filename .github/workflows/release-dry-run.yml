@@ -225,14 +225,20 @@ jobs:
             fi
           done
           im_ref="$REGISTRY/instance-manager:$VERSION"
-          if grep -Fq "$im_ref" dist/install.yaml; then
+          # A substring anywhere in the YAML is not proof: another resource
+          # could mention this image while the Manager still uses :dev.
+          # Check the one manager Deployment, its image, and its actual args.
+          if go run ./hack/check-installer-image \
+            -manifest dist/install.yaml \
+            -manager "$REGISTRY/manager:$VERSION" \
+            -instance-manager "$im_ref"; then
             im_built=true
             im_used="$im_ref"
           else
             im_built=false
-            im_used=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
+            default_im=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
               internal/controller/cubridcluster_controller.go)
-            im_used="${im_used:-unknown} (the manager's built-in default; install.yaml names no Instance Manager image)"
+            im_used="unverified manager arguments (if absent, built-in default ${default_im:-unknown}; see structural validation error)"
           fi
           out="$RUNNER_TEMP/release-dry-run"
           mkdir -p "$out"
