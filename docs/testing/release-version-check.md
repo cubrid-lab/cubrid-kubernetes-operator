@@ -4,9 +4,10 @@
 anything, whether a release version may be drafted for the frozen candidate
 commit, whether a rerun may continue the draft an earlier run left behind, or
 whether the run must stop. It only reads the GitHub API. It never creates,
-edits or deletes a tag or a release, and no workflow calls it yet: the
-release workflow that will run it before drafting and again before publishing
-is still to be written under
+edits or deletes a tag or a release. The [release dry run](#release-dry-run)
+calls it with a read-only token; the publishing release workflow that will
+run it before drafting and again before publishing is still to be written
+under
 [issue #124](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/124).
 
 ## What it decides
@@ -72,3 +73,52 @@ license and API group gates, or that release-please opens its release PR with
 the GitHub App token so that CI runs on it. Those stay with issue #124, the
 [release candidate procedure](release-candidate-review.md) and the
 publication gates of #94.
+
+## Release dry run
+
+`.github/workflows/release-dry-run.yml` builds the artifacts of a proposed
+release without publishing anything. A maintainer starts it from `main`:
+
+```sh
+gh workflow run release-dry-run.yml --ref main -f sha=<full commit SHA on main> -f version=v0.1.0
+```
+
+It runs only on that manual dispatch and its token can only read the
+repository. In order, it:
+
+1. refuses a commit that is not a full 40-character SHA or a version that is
+   not `vMAJOR.MINOR.PATCH`, before anything is cloned;
+2. clones that commit and refuses it unless it is on `main`;
+3. runs this check, taken from the workflow's own commit, and continues only
+   on `state=create`; a draft that a publishing rerun would resume also stops
+   it;
+4. builds the manager image and the Instance Manager image for linux/amd64
+   from the same Dockerfiles as `make docker-build` and
+   `make docker-build-instance-manager`, into OCI archives on the runner,
+   with no push, no registry login and no build cache;
+5. builds the installer manifest with `make build-installer` for the
+   manager image the release would publish, and stops if that changed a
+   tracked file (the commit's generated files are stale);
+6. uploads `install.yaml`, `release-dry-run.json` (the commit, version, each
+   image's digest, image ID and archive checksum, and the installer's
+   SHA-256) and `SHA256SUMS` as the run's artifact.
+
+Any failed step fails the job, and the job summary shows how far it got.
+It writes nothing outside the run, so a rerun starts from the same state.
+
+Its limits:
+
+- **Drafts are invisible to it.** GitHub lists draft releases only to a
+  token that can push, and this job's token cannot. It therefore refuses an
+  existing tag or published release, but not a draft. The publishing
+  workflow must run the same check with its write token.
+- **The digests identify this build only.** The base images are mutable
+  tags and each image carries its build time in a label, so a later build
+  of the same commit produces other digests. The image archives are not
+  kept.
+- The installer manifest names the manager image by tag. It does not set the
+  Instance Manager image, which the manager then takes from its built-in
+  default.
+- It does not exercise release-please, the GitHub App token, a draft
+  release, publication, or a failure or rerun on the publishing path. Those
+  stay with issue #124.
