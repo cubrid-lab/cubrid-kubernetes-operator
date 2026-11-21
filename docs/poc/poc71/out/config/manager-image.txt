@@ -1,0 +1,1 @@
+cubrid-kubernetes-operator-controller-manager-5dcbb9569d-j5d8x ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager@sha256:a9bdf926f210056bcf260ab997ae977a292784c7920103814f7c5b26c19c4506

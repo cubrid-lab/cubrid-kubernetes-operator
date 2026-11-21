@@ -1,0 +1,7 @@
+volume-soak-0 cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-1 cubrid-k8s-worker-2 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-2 cubrid-k8s-worker-1 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-broker-ro-7d78dd5896-7c5dp cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-broker-ro-7d78dd5896-m42zl cubrid-k8s-worker-1 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-broker-rw-7b7d58ddc7-2kg9w cubrid-k8s-worker-2 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+volume-soak-broker-rw-7b7d58ddc7-s86f9 cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02

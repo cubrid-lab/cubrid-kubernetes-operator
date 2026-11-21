@@ -1,0 +1,41 @@
+
+Time: 11/21/26 12:11:02.426 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 647) connected to database server 'appdb@volume-soak-0' on the host 'volume-soak-0' (port 1523).
+Execute OK. (0.029000 sec) Committed. (0.019000 sec) 
+Execute OK. (0.086001 sec) Committed. (0.192002 sec) 
+2000 rows affected. (0.699007 sec) Committed. (0.000000 sec) 
+
+Time: 11/21/26 12:11:03.513 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 656) connected to database server 'appdb@volume-soak-0' on the host 'volume-soak-0' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)       sum(v)
+===================================
+                  2000            0
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+== volume-soak-1
+
+Time: 11/21/26 12:11:18.830 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 611) connected to database server 'appdb@volume-soak-1' on the host 'volume-soak-1' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                  2000
+
+1 row selected. (0.003000 sec) Committed. (0.000000 sec) 
+== volume-soak-2
+
+Time: 11/21/26 12:11:19.114 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 532) connected to database server 'appdb@volume-soak-2' on the host 'volume-soak-2' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                  2000
+
+1 row selected. (0.003000 sec) Committed. (0.000000 sec) 

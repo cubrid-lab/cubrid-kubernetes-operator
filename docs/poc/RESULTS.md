@@ -6877,3 +6877,78 @@ Separately, the slave watchers read `-1` 32 times and `-2` 5 times this way, ove
 - The seed objects under `cubrid-seed/lab-runs/csql-read-check-20261121t0537z` were left in place, as installed-harness runs leave theirs.
 - In `ha`, only `reads.sh`'s temporary files under `/tmp` were written, and the script removed them.
 - The Lease was released with one SIGTERM to `bin/lab`.
+
+## POC-71 — whether a long-lived HA member's 2Gi data volume stays within its request under seven hours of steady writes with healthy replication, on the VM lab with the installed Operator, 11.4.7.1995 (#666) — **observation: with 64 MiB log files and the image's and engine's archive defaults, at about 813 MiB of log an hour for 7 hours, every member's volume stayed between 593 and 775 MiB after its first 20 minutes, 38% of the request at most, and did not grow (least squares +0.1, −0.3 and −0.4 MiB an hour); no member held more than 2 of its own archives or 1 per copied peer; the highest samples held exactly the fixed set of the database volume and ten 64 MiB log files (768 MiB), each nearly full, plus the double-write buffer and the troubleshooting logs, up to 10.9 MiB above POC-67's highest sample of 758 MiB; replication stayed healthy throughout, and every member ended with every acknowledged marker row**
+
+**Question (#666).** Does a long-lived HA member's data volume stay within its storage request over a stated period of steady writes with healthy replication? POC-67 measured the same cluster shape for 150 minutes, including a replication stall. This run repeats its healthy-replication part for seven hours.
+
+**Environment (2026-11-21 12:08Z to 19:29Z).**
+- **Lab:** the VM lab (`vm-lab`, kube-system UID `ddc0876e-c844-47ab-82c5-0f11d3985707`), k3s `v1.37.2+k3s1`. The campaign Lease was held from 12:08:22 to 19:29:05 UTC, and the run was announced on #122. There was no fault injection and no VM power action.
+- **Operator and image:** the installed Operator (recorded by the lab as `b6486c5`). The manager is `sha256:a9bdf926f210056bcf260ab997ae977a292784c7920103814f7c5b26c19c4506` and the Instance Manager `sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02`, both read from the live Pods. The engine is `CUBRID 11.4.7 (11.4.7.1995-f39ab8c)`.
+- **Cluster:** a new run-only cluster, `cubrid-test/volume-soak`.
+  - Three promotable members, one per worker, `memberSpread: Required`. 512Mi memory request each.
+  - Seeded through the object store. `volume-soak-0` was the master throughout.
+  - One 2Gi `local-path` `data` claim per member.
+- **Settings read on every member:** `log_volume_size=64.0M`, `log_max_archives=0`, `ha_copy_log_max_archives=1`, `force_remove_log_archives=y`, `background_archiving=y`, the same as POC-67.
+
+**Method.** `docs/poc/poc71/README.md` is the full record, with the scripts, the per-sample CSVs and four raw sample sets under `out/`.
+- **Writes.** For 7 hours (12:11:23 to 19:11:27), POC-67's writer ran on the master: about 100 row updates a second on a table with a primary key, plus one marker row a minute. csql connected over TCP (`appdb@<member hostname>`, after POC-70), not the local socket.
+- **Samples.** Every 5 minutes, POC-67's sampler recorded on every member:
+  - `df`, and `du` of the volume and of each directory;
+  - every log file;
+  - `cubrid heartbeat status -v` and `cubrid applyinfo`;
+  - the cluster's conditions and each node's `DiskPressure`.
+- **Data check.** On every member over TCP, 15 minutes after the writes.
+
+**Pass rule, announced on #122 before the run.**
+1. Every member's `du` stays below 2Gi in every sample.
+2. In the last 3 hours of writes, no member rises above POC-67's 640 to 758 MiB band by more than the growth of the troubleshooting logs.
+3. Replication stays healthy (delays below one archive, `ReplicationHealthy=True`, every marker on every member).
+
+**Results.**
+
+| Hour of writes (UTC) | volume-soak-0 (master), MiB: lowest / highest / last | volume-soak-1 | volume-soak-2 |
+|---|---|---|---|
+| 1: 12:11–13:11 (new member at 331) | 331 / 687 / 687 | 331 / 710 / 710 | 331 / 710 / 710 |
+| 2: 13:11–14:11 | 648 / 733 / 733 | 669 / 736 / 717 | 662 / 736 / 718 |
+| 3: 14:11–15:11 | 594 / 772 / 652 | 593 / 765 / 661 | 655 / 766 / 661 |
+| 4: 15:11–16:11 | 631 / 693 / 693 | 629 / 727 / 727 | 629 / 728 / 728 |
+| 5: 16:11–17:11 | 667 / 739 / 739 | 645 / 734 / 734 | 645 / 735 / 735 |
+| 6: 17:11–18:11 | 613 / 774 / 657 | 611 / 763 / 678 | 610 / 763 / 678 |
+| 7: 18:11–19:11 | 642 / 699 / 650 | 633 / 726 / 685 | 633 / 727 / 685 |
+| after the writes: 19:11–19:22 | 669 / 671 / 671 | 719 / 720 / 720 | 719 / 720 / 720 |
+
+- **Clause 1, met.** The highest of 261 samples was 774.5 MiB, 38% of the request.
+- **Clause 2, missed as written by up to 10.9 MiB, with no upward trend.**
+  - 12 samples, in hour 3 and hour 6, went 0.2 to 10.9 MiB above 758 MiB plus that member's troubleshooting logs. Three of them (17:42 to 17:52 on `volume-soak-0`) fall in the clause's window.
+  - Each holds exactly the fixed file set POC-67 described, every file nearly full: the 128 MiB database volume, four 64 MiB files of its own, and three per copied peer. That is 768 MiB, plus the 1 MiB double-write buffer and the troubleshooting logs. No sample held an extra archive.
+  - POC-67's 758 MiB was its highest sample, not the size of that set.
+  - Without the troubleshooting logs the peak was 768.9 MiB in hour 3 and 767.4 MiB in hour 6. Least-squares lines through the last 3 hours fall (−17.5, −10.1, −9.9 MiB an hour).
+- **Clause 3, met.**
+  - All 87 cluster samples showed `ReplicationHealthy=True` (`AppliersProgressing`). The highest delays were 40 pages to copy and 125 to apply.
+  - No Pod restarted, and no node reported `DiskPressure`.
+  - Every member holds markers 1 to 420 and `SUM(v)` 2,518,000 (2,518 rounds, all without error).
+- **Log files.**
+  - The master created 88 archives, one every 283.4 s on average, about 813 MiB of log an hour.
+  - No member held more than 2 of its own archives or 1 per copied peer.
+  - The own database directory was at most 385.1 MiB, and each copied-peer directory at most 192.0 MiB.
+  - The troubleshooting logs grew about 1 MiB an hour, to 5.6–8.8 MiB.
+
+**What this does not show.**
+- **No quota.** `local-path` does not enforce the request, so "within" means the `du` of the claim's directory.
+- **One run.** One write rate, one engine build, seven hours.
+- **Not tested:**
+  - a longer period, other write rates, and larger volumes and log files;
+  - restarts or failovers during the period;
+  - replication stalls (POC-67 covers them);
+  - `restoreslave` after a long gap.
+
+**Consequences.**
+- **#666.** Over seven hours of steady writes with healthy replication, a 2Gi member stayed within its request. Its volume was bounded by the fixed set of log files, not by time.
+- **`docs/operations/data-volume-sizing.md`.** It gives the healthy volume as POC-67's sampled band. The set's size, about 768 MiB plus the troubleshooting logs, is the better figure.
+
+**Cleanup.**
+- The `volume-soak` cluster and its claims were deleted at 19:29 UTC with kubectl, and the local-path volumes went with them.
+- The seed objects under `cubrid-seed/cubrid-test/volume-soak-20261121` were left in place.
+- `demo`, `ha` and `logsize` were not touched.
+- The Lease was released with one SIGTERM to `bin/lab`.

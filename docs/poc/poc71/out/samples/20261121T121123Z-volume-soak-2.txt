@@ -1,0 +1,230 @@
+### date
+2026-11-21T12:11:23Z
+### df
+Filesystem       1B-blocks       Used   Available Use% Mounted on
+/dev/vdb       52521566208 2446843904 47373590528   5% /var/lib/cubrid
+### du-allocated-kib
+338836	/var/lib/cubrid
+84	/var/lib/cubrid/cubrid-log/
+338736	/var/lib/cubrid/databases/
+8	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+201004	/var/lib/cubrid/databases/appdb/
+68828	/var/lib/cubrid/databases/appdb_volume-soak-0/
+68896	/var/lib/cubrid/databases/appdb_volume-soak-1/
+8	/var/lib/cubrid/cubrid-log/pl/
+16	/var/lib/cubrid/cubrid-log/server/
+### du-apparent-kib
+400944	/var/lib/cubrid
+47	/var/lib/cubrid/cubrid-log/
+400886	/var/lib/cubrid/databases/
+5	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+263177	/var/lib/cubrid/databases/appdb/
+68821	/var/lib/cubrid/databases/appdb_volume-soak-0/
+68885	/var/lib/cubrid/databases/appdb_volume-soak-1/
+5	/var/lib/cubrid/cubrid-log/pl/
+11	/var/lib/cubrid/cubrid-log/server/
+### ls-databases
+/var/lib/cubrid/databases/appdb/:
+total 201000
+131072 -rw------- 1 cubrid cubrid 134217728 2026-11-21 12:10:03.919106087 +0000 appdb
+     4 -rw-r--r-- 1 cubrid cubrid       137 2026-11-21 12:10:02.246081937 +0000 appdb_bkvinf
+  1024 -rw------- 1 cubrid cubrid   1048576 2026-11-21 12:10:07.465157282 +0000 appdb_dwb
+     4 -rw------- 1 cubrid cubrid        65 2026-11-21 12:10:03.139094827 +0000 appdb_keys
+  3344 -rw------- 1 cubrid cubrid  67108864 2026-11-21 12:11:21.398227560 +0000 appdb_lgar_t
+ 65536 -rw------- 1 cubrid cubrid  67108864 2026-11-21 12:11:22.399242087 +0000 appdb_lgat
+     4 -rw-r--r-- 1 cubrid cubrid        34 2026-11-21 12:10:07.160152878 +0000 appdb_lgat__lock
+     4 -rw------- 1 cubrid cubrid       197 2026-11-21 12:10:00.946063175 +0000 appdb_lginf
+     4 -rw------- 1 cubrid cubrid       238 2026-11-21 12:10:02.256082082 +0000 appdb_vinf
+     4 drwxr-s--- 2 cubrid cubrid      4096 2026-11-21 12:09:58.608029435 +0000 lob
+
+/var/lib/cubrid/databases/appdb_volume-soak-0/:
+total 68824
+ 3280 -rw------- 1 cubrid cubrid  3358720 2026-11-21 12:11:22.287240462 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-21 12:11:22.295240578 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       35 2026-11-21 12:10:10.335198728 +0000 appdb_lgat__lock
+    4 -rw-r--r-- 1 cubrid cubrid       46 2026-11-21 12:10:10.270197789 +0000 appdb_lgla__lock
+
+/var/lib/cubrid/databases/appdb_volume-soak-1/:
+total 68892
+ 3344 -rw------- 1 cubrid cubrid  3424256 2026-11-21 12:11:22.406242189 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-21 12:11:22.412242276 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       35 2026-11-21 12:10:10.300198222 +0000 appdb_lgat__lock
+    4 -rw-r--r-- 1 cubrid cubrid       95 2026-11-21 12:10:11.698218413 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       46 2026-11-21 12:10:10.291198092 +0000 appdb_lgla__lock
+### ls-cubrid-log
+/var/lib/cubrid/cubrid-log:
+total 64
+4 -rw-r--r-- 1 cubrid cubrid 1455 2026-11-21 12:10:13.689247173 +0000 appdb@localhost_applylogdb_appdb_volume-soak-0.err
+8 -rw-r--r-- 1 cubrid cubrid 4113 2026-11-21 12:11:21.702231972 +0000 appdb@localhost_applylogdb_appdb_volume-soak-1.err
+4 -rw-rw-r-- 1 cubrid cubrid  808 2026-11-21 12:10:56.487866356 +0000 appdb@localhost_paramdump.err
+4 -rw-r--r-- 1 cubrid cubrid 1084 2026-11-21 12:10:12.771233912 +0000 appdb@volume-soak-0_copylogdb.err
+4 -rw-r--r-- 1 cubrid cubrid  811 2026-11-21 12:10:11.672218038 +0000 appdb@volume-soak-1_copylogdb.err
+8 -rw-r--r-- 1 cubrid cubrid 4690 2026-11-21 12:11:14.094121590 +0000 appdb_applyinfo.err
+4 -rw-r--r-- 1 cubrid cubrid  321 2026-11-21 12:10:03.889105654 +0000 appdb_restoreslave.access
+8 -rw-r--r-- 1 cubrid cubrid 5554 2026-11-21 12:10:03.995107184 +0000 appdb_restoreslave.err
+0 -rw-r--r-- 1 cubrid cubrid    0 2026-11-21 12:10:06.081137299 +0000 cub_client.err
+0 -rw-r--r-- 1 cubrid cubrid    0 2026-11-21 12:09:01.783211274 +0000 cub_server.access
+0 -rw-r--r-- 1 cubrid cubrid    0 2026-11-21 12:09:01.783211274 +0000 cub_server.err
+8 -rw-r--r-- 1 cubrid cubrid 6636 2026-11-21 12:11:21.524229389 +0000 cubrid_utility.log
+4 drwxr-sr-x 2 cubrid cubrid 4096 2026-11-21 12:10:07.490157643 +0000 pl
+4 drwxr-sr-x 2 cubrid cubrid 4096 2026-11-21 12:10:07.150152733 +0000 server
+4 -rw-r--r-- 1 cubrid cubrid 2299 2026-11-21 12:10:10.263197688 +0000 volume-soak-2_master.err
+
+/var/lib/cubrid/cubrid-log/pl:
+total 4
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.170153022 +0000 appdb_pl.access
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.170153022 +0000 appdb_pl.err
+4 -rw-r--r-- 1 cubrid cubrid 335 2026-11-21 12:10:07.743161296 +0000 appdb_pl.log
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.490157643 +0000 appdb_pl.log.lck
+
+/var/lib/cubrid/cubrid-log/server:
+total 12
+8 -rw-r--r-- 1 cubrid cubrid 6101 2026-11-21 12:11:19.114194418 +0000 appdb.access
+4 -rw-r--r-- 1 cubrid cubrid  492 2026-11-21 12:10:08.250168617 +0000 appdb.err
+0 -rw-r--r-- 1 cubrid cubrid    0 2026-11-21 12:10:07.150152733 +0000 appdb_20261121_1210.event
+0 lrwxrwxrwx 1 cubrid cubrid   43 2026-11-21 12:10:07.150152733 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+0 lrwxrwxrwx 1 cubrid cubrid   40 2026-11-21 12:10:07.150152733 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+0 lrwxrwxrwx 1 cubrid cubrid   56 2026-11-21 12:10:07.150152733 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261121_1210.event
+### lginf
+== /var/lib/cubrid/databases/appdb/
+Time: 11/21/26 12:09:03.376 - COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb/appdb
+Time: 11/21/26 12:09:03.376 - ACTIVE: /var/lib/cubrid/databases/appdb/appdb_lgat 4096 pages
+== /var/lib/cubrid/databases/appdb_volume-soak-0/
+cat: /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lginf: No such file or directory
+== /var/lib/cubrid/databases/appdb_volume-soak-1/
+COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lginf
+### heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current volume-soak-2, state slave)
+   Node volume-soak-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node volume-soak-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node volume-soak-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 69, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-1 (pid 349, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 12:10:10.264
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 347, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 12:10:10.243
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@volume-soak-1:/var/lib/cubrid/databases/appdb_volume-soak-1 (pid 345, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-1 -m sync appdb@volume-soak-1 ] 
+    - registered-time   11/21/26 12:10:10.229
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@volume-soak-0:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 343, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-0 -m sync appdb@volume-soak-0 ] 
+    - registered-time   11/21/26 12:10:10.215
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 82, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/21/26 12:10:08.274
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+### applyinfo
+== copy of volume-soak-0
+
+ *** Applied Info. *** 
+Insert count                   : 2000
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 49
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 203 | 12064
+Append LSA                     : 203 | 12064
+HA server state                : active
+HA promotion time              : 12:10:10.000 PM 11/21/2026 (1795263010)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 203 | 12064
+Append LSA                     : 203 | 12064
+HA server state                : active
+HA promotion time              : 12:10:10.000 PM 11/21/2026 (1795263010)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+== copy of volume-soak-1
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 134
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 207 | 3888
+Append LSA                     : 207 | 3888
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:09:37.000 PM 11/21/2026 (1795262977)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 207 | 3888
+Append LSA                     : 207 | 3888
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:09:37.000 PM 11/21/2026 (1795262977)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+### writer
+### end

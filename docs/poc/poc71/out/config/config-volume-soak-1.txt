@@ -1,0 +1,52 @@
+### cubrid_rel
+
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+
+### cubrid.conf
+[service]
+service=server,broker,manager
+[common]
+data_buffer_size=512M
+log_buffer_size=256M
+sort_buffer_size=2M
+max_clients=100
+cubrid_port_id=1523
+db_volume_size=512M
+log_volume_size=512M
+log_max_archives=0 
+error_log=/home/cubrid/CUBRID/log/server/appdb.err
+error_log_size=10485760
+no_backslash_escapes=yes
+ha_mode=on
+### cubrid_ha.conf
+[common]
+ha_node_list=cubrid@volume-soak-0:volume-soak-1:volume-soak-2
+ha_db_list=appdb
+ha_port_id=59901
+### paramdump
+checkpoint_interval_in_mins=6
+checkpoint_interval=360.000 sec
+background_archiving=y
+ha_mode="yes"
+ha_mode_for_sa_utils_only="off"
+ha_copy_log_base=""
+ha_copy_log_max_archives=1
+log_max_archives=0
+force_remove_log_archives=y
+log_volume_size=64.0M
+### heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current volume-soak-1, state slave)
+   Node volume-soak-2 (priority 3, state slave)
+   Node volume-soak-1 (priority 2, state slave)
+   Node volume-soak-0 (priority 1, state master)
+
+
+ HA-Process Info (master 61, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-2 (pid 342, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 340, state registered)
+   Copylogdb appdb@volume-soak-2:/var/lib/cubrid/databases/appdb_volume-soak-2 (pid 338, state registered)
+   Copylogdb appdb@volume-soak-0:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 336, state registered)
+   Server appdb (pid 70, state registered_and_standby)
+

@@ -1,0 +1,1376 @@
+### date
+2026-11-21T19:22:45Z
+### df
+Filesystem       1B-blocks       Used   Available Use% Mounted on
+/dev/vdb       52521566208 2918764544 46901669888   6% /var/lib/cubrid
+### du-allocated-kib
+737460	/var/lib/cubrid
+5740	/var/lib/cubrid/cubrid-log/
+731704	/var/lib/cubrid/databases/
+8	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+394288	/var/lib/cubrid/databases/appdb/
+194124	/var/lib/cubrid/databases/appdb_volume-soak-0/
+143284	/var/lib/cubrid/databases/appdb_volume-soak-1/
+8	/var/lib/cubrid/cubrid-log/pl/
+1012	/var/lib/cubrid/cubrid-log/server/
+### du-apparent-kib
+793203	/var/lib/cubrid
+5677	/var/lib/cubrid/cubrid-log/
+787513	/var/lib/cubrid/databases/
+5	/var/lib/cubrid/operations/
+4	/var/lib/cubrid/restore-staging/
+394253	/var/lib/cubrid/databases/appdb/
+196629	/var/lib/cubrid/databases/appdb_volume-soak-0/
+196628	/var/lib/cubrid/databases/appdb_volume-soak-1/
+5	/var/lib/cubrid/cubrid-log/pl/
+1001	/var/lib/cubrid/cubrid-log/server/
+### ls-databases
+/var/lib/cubrid/databases/appdb/:
+total 394284
+131072 -rw------- 1 cubrid cubrid 134217728 2026-11-21 19:22:08.238531802 +0000 appdb
+     4 -rw-r--r-- 1 cubrid cubrid       137 2026-11-21 12:10:02.246081937 +0000 appdb_bkvinf
+  1024 -rw------- 1 cubrid cubrid   1048576 2026-11-21 19:22:08.228531785 +0000 appdb_dwb
+     4 -rw------- 1 cubrid cubrid        65 2026-11-21 12:10:03.139094827 +0000 appdb_keys
+ 65524 -rw------- 1 cubrid cubrid  67092480 2026-11-21 19:05:47.758630371 +0000 appdb_lgar.removed
+ 65524 -rw------- 1 cubrid cubrid  67092480 2026-11-21 19:10:38.494974041 +0000 appdb_lgar085
+ 65524 -rw------- 1 cubrid cubrid  67092480 2026-11-21 19:22:36.463583958 +0000 appdb_lgar_t
+ 65536 -rw------- 1 cubrid cubrid  67108864 2026-11-21 19:22:44.559601619 +0000 appdb_lgat
+     4 -rw-r--r-- 1 cubrid cubrid        34 2026-11-21 12:10:07.160152878 +0000 appdb_lgat__lock
+    60 -rw------- 1 cubrid cubrid     53290 2026-11-21 19:16:08.482552110 +0000 appdb_lginf
+     4 -rw------- 1 cubrid cubrid       238 2026-11-21 12:10:02.256082082 +0000 appdb_vinf
+     4 drwxr-s--- 2 cubrid cubrid      4096 2026-11-21 12:09:58.608029435 +0000 lob
+
+/var/lib/cubrid/databases/appdb_volume-soak-0/:
+total 194120
+65540 -rw------- 1 cubrid cubrid 67108864 2026-11-21 19:06:48.966785771 +0000 appdb_lgar087
+62996 -rw------- 1 cubrid cubrid 67092480 2026-11-21 19:22:44.427601321 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-21 19:22:44.437601344 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       35 2026-11-21 12:10:10.335198728 +0000 appdb_lgat__lock
+   40 -rw-r--r-- 1 cubrid cubrid    33176 2026-11-21 19:06:49.083787980 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       46 2026-11-21 19:06:49.061787564 +0000 appdb_lgla__lock
+
+/var/lib/cubrid/databases/appdb_volume-soak-1/:
+total 143280
+65540 -rw------- 1 cubrid cubrid 67108864 2026-11-21 19:10:38.193981975 +0000 appdb_lgar085
+12160 -rw------- 1 cubrid cubrid 67092480 2026-11-21 19:22:44.564601630 +0000 appdb_lgar_t
+65536 -rw------- 1 cubrid cubrid 67108864 2026-11-21 19:22:44.647601817 +0000 appdb_lgat
+    4 -rw-r--r-- 1 cubrid cubrid       35 2026-11-21 12:10:10.300198222 +0000 appdb_lgat__lock
+   36 -rw-r--r-- 1 cubrid cubrid    32509 2026-11-21 19:10:39.296952922 +0000 appdb_lginf
+    4 -rw-r--r-- 1 cubrid cubrid       46 2026-11-21 19:10:39.296952922 +0000 appdb_lgla__lock
+### ls-cubrid-log
+/var/lib/cubrid/cubrid-log:
+total 4724
+   4 -rw-r--r-- 1 cubrid cubrid    1455 2026-11-21 12:10:13.689247173 +0000 appdb@localhost_applylogdb_appdb_volume-soak-0.err
+2536 -rw-r--r-- 1 cubrid cubrid 2590203 2026-11-21 19:22:36.743584548 +0000 appdb@localhost_applylogdb_appdb_volume-soak-1.err
+   4 -rw-rw-r-- 1 cubrid cubrid     808 2026-11-21 12:10:56.487866356 +0000 appdb@localhost_paramdump.err
+  52 -rw-r--r-- 1 cubrid cubrid   46687 2026-11-21 19:06:49.083787980 +0000 appdb@volume-soak-0_copylogdb.err
+  52 -rw-r--r-- 1 cubrid cubrid   45372 2026-11-21 19:10:38.285979550 +0000 appdb@volume-soak-1_copylogdb.err
+ 956 -rw-r--r-- 1 cubrid cubrid  971923 2026-11-21 19:22:38.255587765 +0000 appdb_applyinfo.err
+   4 -rw-r--r-- 1 cubrid cubrid     321 2026-11-21 12:10:03.889105654 +0000 appdb_restoreslave.access
+   8 -rw-r--r-- 1 cubrid cubrid    5554 2026-11-21 12:10:03.995107184 +0000 appdb_restoreslave.err
+   0 -rw-r--r-- 1 cubrid cubrid       0 2026-11-21 12:10:06.081137299 +0000 cub_client.err
+   0 -rw-r--r-- 1 cubrid cubrid       0 2026-11-21 12:09:01.783211274 +0000 cub_server.access
+   0 -rw-r--r-- 1 cubrid cubrid       0 2026-11-21 12:09:01.783211274 +0000 cub_server.err
+1096 -rw-r--r-- 1 cubrid cubrid 1115558 2026-11-21 19:22:41.516594843 +0000 cubrid_utility.log
+   4 drwxr-sr-x 2 cubrid cubrid    4096 2026-11-21 12:10:07.490157643 +0000 pl
+   4 drwxr-sr-x 2 cubrid cubrid    4096 2026-11-21 12:10:07.150152733 +0000 server
+   4 -rw-r--r-- 1 cubrid cubrid    2299 2026-11-21 12:10:10.263197688 +0000 volume-soak-2_master.err
+
+/var/lib/cubrid/cubrid-log/pl:
+total 4
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.170153022 +0000 appdb_pl.access
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.170153022 +0000 appdb_pl.err
+4 -rw-r--r-- 1 cubrid cubrid 335 2026-11-21 12:10:07.743161296 +0000 appdb_pl.log
+0 -rw-r--r-- 1 cubrid cubrid   0 2026-11-21 12:10:07.490157643 +0000 appdb_pl.log.lck
+
+/var/lib/cubrid/cubrid-log/server:
+total 1008
+876 -rw-r--r-- 1 cubrid cubrid 891380 2026-11-21 19:22:38.256587767 +0000 appdb.access
+132 -rw-r--r-- 1 cubrid cubrid 128900 2026-11-21 19:22:08.262531839 +0000 appdb.err
+  0 -rw-r--r-- 1 cubrid cubrid      0 2026-11-21 12:10:07.150152733 +0000 appdb_20261121_1210.event
+  0 lrwxrwxrwx 1 cubrid cubrid     43 2026-11-21 12:10:07.150152733 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+  0 lrwxrwxrwx 1 cubrid cubrid     40 2026-11-21 12:10:07.150152733 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+  0 lrwxrwxrwx 1 cubrid cubrid     56 2026-11-21 12:10:07.150152733 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261121_1210.event
+### lginf
+== /var/lib/cubrid/databases/appdb/
+Time: 11/21/26 12:09:03.376 - COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb/appdb
+Time: 11/21/26 12:09:03.376 - ACTIVE: /var/lib/cubrid/databases/appdb/appdb_lgat 4096 pages
+Time: 11/21/26 12:16:05.393 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb/appdb_lgar000 0 4093
+Time: 11/21/26 12:16:08.555 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar000 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:20:56.571 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb/appdb_lgar001 4094 8187
+Time: 11/21/26 12:20:56.571 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar000, which contains log pages before 8188, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:20:56.776 - REMOVE: 0 /var/lib/cubrid/databases/appdb/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:22:08.494 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar001 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:25:48.415 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb/appdb_lgar002 8188 12281
+Time: 11/21/26 12:25:48.415 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar001, which contains log pages before 12282, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:25:48.606 - REMOVE: 1 /var/lib/cubrid/databases/appdb/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:28:08.970 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar002 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:30:47.248 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb/appdb_lgar003 12282 16375
+Time: 11/21/26 12:30:47.248 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar002, which contains log pages before 16376, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:30:47.451 - REMOVE: 2 /var/lib/cubrid/databases/appdb/appdb_lgar002 to 
+        2 /var/lib/cubrid/databases/appdb/appdb_lgar002.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:34:09.079 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar003 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:35:38.088 - ARCHIVE: 4 /var/lib/cubrid/databases/appdb/appdb_lgar004 16376 20469
+Time: 11/21/26 12:35:38.088 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar003, which contains log pages before 20470, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:35:38.591 - REMOVE: 3 /var/lib/cubrid/databases/appdb/appdb_lgar003 to 
+        3 /var/lib/cubrid/databases/appdb/appdb_lgar003.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:40:09.243 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar004 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:40:28.018 - ARCHIVE: 5 /var/lib/cubrid/databases/appdb/appdb_lgar005 20470 24563
+Time: 11/21/26 12:40:28.018 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar004, which contains log pages before 24564, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:40:28.522 - REMOVE: 4 /var/lib/cubrid/databases/appdb/appdb_lgar004 to 
+        4 /var/lib/cubrid/databases/appdb/appdb_lgar004.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:45:18.725 - ARCHIVE: 6 /var/lib/cubrid/databases/appdb/appdb_lgar006 24564 28657
+Time: 11/21/26 12:45:18.725 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar005, which contains log pages before 28658, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:46:09.243 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar005 to /var/lib/cubrid/databases/appdb/appdb_lgar006 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:50:17.487 - ARCHIVE: 7 /var/lib/cubrid/databases/appdb/appdb_lgar007 28658 32751
+Time: 11/21/26 12:50:17.488 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar006, which contains log pages before 32752, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:50:17.983 - REMOVE: 5 /var/lib/cubrid/databases/appdb/appdb_lgar005 to 
+        6 /var/lib/cubrid/databases/appdb/appdb_lgar006.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:52:08.690 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar007 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:55:07.712 - ARCHIVE: 8 /var/lib/cubrid/databases/appdb/appdb_lgar008 32752 36845
+Time: 11/21/26 12:55:07.712 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar007, which contains log pages before 36846, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:55:08.204 - REMOVE: 7 /var/lib/cubrid/databases/appdb/appdb_lgar007 to 
+        7 /var/lib/cubrid/databases/appdb/appdb_lgar007.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:58:08.871 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar008 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 12:59:58.639 - ARCHIVE: 9 /var/lib/cubrid/databases/appdb/appdb_lgar009 36846 40939
+Time: 11/21/26 12:59:58.639 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar008, which contains log pages before 40940, is not needed any longer by any HA utilities.
+Time: 11/21/26 12:59:58.937 - REMOVE: 8 /var/lib/cubrid/databases/appdb/appdb_lgar008 to 
+        8 /var/lib/cubrid/databases/appdb/appdb_lgar008.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:04:09.318 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar009 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:04:48.874 - ARCHIVE: 10 /var/lib/cubrid/databases/appdb/appdb_lgar010 40940 45033
+Time: 11/21/26 13:04:48.874 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar009, which contains log pages before 45034, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:04:49.277 - REMOVE: 9 /var/lib/cubrid/databases/appdb/appdb_lgar009 to 
+        9 /var/lib/cubrid/databases/appdb/appdb_lgar009.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:09:47.515 - ARCHIVE: 11 /var/lib/cubrid/databases/appdb/appdb_lgar011 45034 49127
+Time: 11/21/26 13:09:47.515 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar010, which contains log pages before 49128, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:10:09.320 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar010 to /var/lib/cubrid/databases/appdb/appdb_lgar011 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:14:36.971 - ARCHIVE: 12 /var/lib/cubrid/databases/appdb/appdb_lgar012 49128 53221
+Time: 11/21/26 13:14:36.971 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar011, which contains log pages before 53222, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:14:37.490 - REMOVE: 10 /var/lib/cubrid/databases/appdb/appdb_lgar010 to 
+        11 /var/lib/cubrid/databases/appdb/appdb_lgar011.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:16:09.249 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar012 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:19:28.642 - ARCHIVE: 13 /var/lib/cubrid/databases/appdb/appdb_lgar013 53222 57315
+Time: 11/21/26 13:19:28.642 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar012, which contains log pages before 57316, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:19:29.049 - REMOVE: 12 /var/lib/cubrid/databases/appdb/appdb_lgar012 to 
+        12 /var/lib/cubrid/databases/appdb/appdb_lgar012.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:22:08.970 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar013 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:24:18.570 - ARCHIVE: 14 /var/lib/cubrid/databases/appdb/appdb_lgar014 57316 61409
+Time: 11/21/26 13:24:18.570 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar013, which contains log pages before 61410, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:24:18.862 - REMOVE: 13 /var/lib/cubrid/databases/appdb/appdb_lgar013 to 
+        13 /var/lib/cubrid/databases/appdb/appdb_lgar013.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:28:08.847 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar014 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:29:08.995 - ARCHIVE: 15 /var/lib/cubrid/databases/appdb/appdb_lgar015 61410 65503
+Time: 11/21/26 13:29:08.996 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar014, which contains log pages before 65504, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:29:09.396 - REMOVE: 14 /var/lib/cubrid/databases/appdb/appdb_lgar014 to 
+        14 /var/lib/cubrid/databases/appdb/appdb_lgar014.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:34:07.069 - ARCHIVE: 16 /var/lib/cubrid/databases/appdb/appdb_lgar016 65504 69597
+Time: 11/21/26 13:34:07.069 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar015, which contains log pages before 69598, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:34:08.865 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar015 to /var/lib/cubrid/databases/appdb/appdb_lgar016 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:38:57.669 - ARCHIVE: 17 /var/lib/cubrid/databases/appdb/appdb_lgar017 69598 73691
+Time: 11/21/26 13:38:57.669 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar016, which contains log pages before 73692, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:38:58.080 - REMOVE: 15 /var/lib/cubrid/databases/appdb/appdb_lgar015 to 
+        16 /var/lib/cubrid/databases/appdb/appdb_lgar016.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:40:09.600 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar017 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:43:48.683 - ARCHIVE: 18 /var/lib/cubrid/databases/appdb/appdb_lgar018 73692 77785
+Time: 11/21/26 13:43:48.683 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar017, which contains log pages before 77786, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:43:48.966 - REMOVE: 17 /var/lib/cubrid/databases/appdb/appdb_lgar017 to 
+        17 /var/lib/cubrid/databases/appdb/appdb_lgar017.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:46:09.025 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar018 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:48:40.043 - ARCHIVE: 19 /var/lib/cubrid/databases/appdb/appdb_lgar019 77786 81879
+Time: 11/21/26 13:48:40.043 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar018, which contains log pages before 81880, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:48:40.547 - REMOVE: 18 /var/lib/cubrid/databases/appdb/appdb_lgar018 to 
+        18 /var/lib/cubrid/databases/appdb/appdb_lgar018.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:52:08.983 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar019 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:53:38.875 - ARCHIVE: 20 /var/lib/cubrid/databases/appdb/appdb_lgar020 81880 85973
+Time: 11/21/26 13:53:38.876 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar019, which contains log pages before 85974, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:53:39.164 - REMOVE: 19 /var/lib/cubrid/databases/appdb/appdb_lgar019 to 
+        19 /var/lib/cubrid/databases/appdb/appdb_lgar019.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:58:08.550 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar020 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 13:58:29.434 - ARCHIVE: 21 /var/lib/cubrid/databases/appdb/appdb_lgar021 85974 90067
+Time: 11/21/26 13:58:29.434 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar020, which contains log pages before 90068, is not needed any longer by any HA utilities.
+Time: 11/21/26 13:58:29.827 - REMOVE: 20 /var/lib/cubrid/databases/appdb/appdb_lgar020 to 
+        20 /var/lib/cubrid/databases/appdb/appdb_lgar020.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:03:20.397 - ARCHIVE: 22 /var/lib/cubrid/databases/appdb/appdb_lgar022 90068 94161
+Time: 11/21/26 14:03:20.397 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar021, which contains log pages before 94162, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:04:08.593 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar021 to /var/lib/cubrid/databases/appdb/appdb_lgar022 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:08:11.394 - ARCHIVE: 23 /var/lib/cubrid/databases/appdb/appdb_lgar023 94162 98255
+Time: 11/21/26 14:08:11.395 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar022, which contains log pages before 98256, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:08:11.935 - REMOVE: 21 /var/lib/cubrid/databases/appdb/appdb_lgar021 to 
+        22 /var/lib/cubrid/databases/appdb/appdb_lgar022.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:10:08.577 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar023 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:13:09.523 - ARCHIVE: 24 /var/lib/cubrid/databases/appdb/appdb_lgar024 98256 102349
+Time: 11/21/26 14:13:09.523 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar023, which contains log pages before 102350, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:13:10.002 - REMOVE: 23 /var/lib/cubrid/databases/appdb/appdb_lgar023 to 
+        23 /var/lib/cubrid/databases/appdb/appdb_lgar023.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:16:08.382 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar024 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:18:00.568 - ARCHIVE: 25 /var/lib/cubrid/databases/appdb/appdb_lgar025 102350 106443
+Time: 11/21/26 14:18:00.568 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar024, which contains log pages before 106444, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:18:00.861 - REMOVE: 24 /var/lib/cubrid/databases/appdb/appdb_lgar024 to 
+        24 /var/lib/cubrid/databases/appdb/appdb_lgar024.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:22:08.762 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar025 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:22:50.908 - ARCHIVE: 26 /var/lib/cubrid/databases/appdb/appdb_lgar026 106444 110537
+Time: 11/21/26 14:22:50.908 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar025, which contains log pages before 110538, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:22:51.191 - REMOVE: 25 /var/lib/cubrid/databases/appdb/appdb_lgar025 to 
+        25 /var/lib/cubrid/databases/appdb/appdb_lgar025.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:27:41.896 - ARCHIVE: 27 /var/lib/cubrid/databases/appdb/appdb_lgar027 110538 114631
+Time: 11/21/26 14:27:41.896 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar026, which contains log pages before 114632, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:28:08.517 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar026 to /var/lib/cubrid/databases/appdb/appdb_lgar027 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:32:38.618 - ARCHIVE: 28 /var/lib/cubrid/databases/appdb/appdb_lgar028 114632 118725
+Time: 11/21/26 14:32:38.618 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar027, which contains log pages before 118726, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:32:38.754 - REMOVE: 26 /var/lib/cubrid/databases/appdb/appdb_lgar026 to 
+        27 /var/lib/cubrid/databases/appdb/appdb_lgar027.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:34:08.479 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar028 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:37:31.334 - ARCHIVE: 29 /var/lib/cubrid/databases/appdb/appdb_lgar029 118726 122819
+Time: 11/21/26 14:37:31.334 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar028, which contains log pages before 122820, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:37:31.653 - REMOVE: 28 /var/lib/cubrid/databases/appdb/appdb_lgar028 to 
+        28 /var/lib/cubrid/databases/appdb/appdb_lgar028.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:40:08.393 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar029 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:42:22.763 - ARCHIVE: 30 /var/lib/cubrid/databases/appdb/appdb_lgar030 122820 126913
+Time: 11/21/26 14:42:22.763 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar029, which contains log pages before 126914, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:42:23.055 - REMOVE: 29 /var/lib/cubrid/databases/appdb/appdb_lgar029 to 
+        29 /var/lib/cubrid/databases/appdb/appdb_lgar029.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:46:08.876 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar030 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:47:12.798 - ARCHIVE: 31 /var/lib/cubrid/databases/appdb/appdb_lgar031 126914 131007
+Time: 11/21/26 14:47:12.798 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar030, which contains log pages before 131008, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:47:13.206 - REMOVE: 30 /var/lib/cubrid/databases/appdb/appdb_lgar030 to 
+        30 /var/lib/cubrid/databases/appdb/appdb_lgar030.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:52:03.547 - ARCHIVE: 32 /var/lib/cubrid/databases/appdb/appdb_lgar032 131008 135101
+Time: 11/21/26 14:52:03.547 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar031, which contains log pages before 135102, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:52:08.423 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar031 to /var/lib/cubrid/databases/appdb/appdb_lgar032 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 14:57:03.370 - ARCHIVE: 33 /var/lib/cubrid/databases/appdb/appdb_lgar033 135102 139195
+Time: 11/21/26 14:57:03.370 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar032, which contains log pages before 139196, is not needed any longer by any HA utilities.
+Time: 11/21/26 14:57:03.618 - REMOVE: 31 /var/lib/cubrid/databases/appdb/appdb_lgar031 to 
+        32 /var/lib/cubrid/databases/appdb/appdb_lgar032.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:58:08.649 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar033 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:01:54.523 - ARCHIVE: 34 /var/lib/cubrid/databases/appdb/appdb_lgar034 139196 143289
+Time: 11/21/26 15:01:54.523 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar033, which contains log pages before 143290, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:01:54.922 - REMOVE: 33 /var/lib/cubrid/databases/appdb/appdb_lgar033 to 
+        33 /var/lib/cubrid/databases/appdb/appdb_lgar033.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:04:08.390 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar034 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:06:44.548 - ARCHIVE: 35 /var/lib/cubrid/databases/appdb/appdb_lgar035 143290 147383
+Time: 11/21/26 15:06:44.548 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar034, which contains log pages before 147384, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:06:45.032 - REMOVE: 34 /var/lib/cubrid/databases/appdb/appdb_lgar034 to 
+        34 /var/lib/cubrid/databases/appdb/appdb_lgar034.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:10:08.533 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar035 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:11:35.507 - ARCHIVE: 36 /var/lib/cubrid/databases/appdb/appdb_lgar036 147384 151477
+Time: 11/21/26 15:11:35.507 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar035, which contains log pages before 151478, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:11:35.825 - REMOVE: 35 /var/lib/cubrid/databases/appdb/appdb_lgar035 to 
+        35 /var/lib/cubrid/databases/appdb/appdb_lgar035.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:16:09.213 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar036 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:16:35.646 - ARCHIVE: 37 /var/lib/cubrid/databases/appdb/appdb_lgar037 151478 155571
+Time: 11/21/26 15:16:35.646 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar036, which contains log pages before 155572, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:16:35.936 - REMOVE: 36 /var/lib/cubrid/databases/appdb/appdb_lgar036 to 
+        36 /var/lib/cubrid/databases/appdb/appdb_lgar036.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:21:26.755 - ARCHIVE: 38 /var/lib/cubrid/databases/appdb/appdb_lgar038 155572 159665
+Time: 11/21/26 15:21:26.755 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar037, which contains log pages before 159666, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:22:08.492 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar037 to /var/lib/cubrid/databases/appdb/appdb_lgar038 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:26:17.528 - ARCHIVE: 39 /var/lib/cubrid/databases/appdb/appdb_lgar039 159666 163759
+Time: 11/21/26 15:26:17.528 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar038, which contains log pages before 163760, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:26:18.010 - REMOVE: 37 /var/lib/cubrid/databases/appdb/appdb_lgar037 to 
+        38 /var/lib/cubrid/databases/appdb/appdb_lgar038.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:28:08.517 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar039 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:31:06.882 - ARCHIVE: 40 /var/lib/cubrid/databases/appdb/appdb_lgar040 163760 167853
+Time: 11/21/26 15:31:06.882 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar039, which contains log pages before 167854, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:31:07.163 - REMOVE: 39 /var/lib/cubrid/databases/appdb/appdb_lgar039 to 
+        39 /var/lib/cubrid/databases/appdb/appdb_lgar039.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:34:08.779 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar040 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:36:07.549 - ARCHIVE: 41 /var/lib/cubrid/databases/appdb/appdb_lgar041 167854 171947
+Time: 11/21/26 15:36:07.549 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar040, which contains log pages before 171948, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:36:07.951 - REMOVE: 40 /var/lib/cubrid/databases/appdb/appdb_lgar040 to 
+        40 /var/lib/cubrid/databases/appdb/appdb_lgar040.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:40:09.401 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar041 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:40:57.079 - ARCHIVE: 42 /var/lib/cubrid/databases/appdb/appdb_lgar042 171948 176041
+Time: 11/21/26 15:40:57.079 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar041, which contains log pages before 176042, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:40:57.473 - REMOVE: 41 /var/lib/cubrid/databases/appdb/appdb_lgar041 to 
+        41 /var/lib/cubrid/databases/appdb/appdb_lgar041.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:45:47.472 - ARCHIVE: 43 /var/lib/cubrid/databases/appdb/appdb_lgar043 176042 180135
+Time: 11/21/26 15:45:47.472 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar042, which contains log pages before 180136, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:46:09.192 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar042 to /var/lib/cubrid/databases/appdb/appdb_lgar043 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:50:38.633 - ARCHIVE: 44 /var/lib/cubrid/databases/appdb/appdb_lgar044 180136 184229
+Time: 11/21/26 15:50:38.633 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar043, which contains log pages before 184230, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:50:39.082 - REMOVE: 42 /var/lib/cubrid/databases/appdb/appdb_lgar042 to 
+        43 /var/lib/cubrid/databases/appdb/appdb_lgar043.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:52:08.893 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar044 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 15:55:28.882 - ARCHIVE: 45 /var/lib/cubrid/databases/appdb/appdb_lgar045 184230 188323
+Time: 11/21/26 15:55:28.882 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar044, which contains log pages before 188324, is not needed any longer by any HA utilities.
+Time: 11/21/26 15:55:29.269 - REMOVE: 44 /var/lib/cubrid/databases/appdb/appdb_lgar044 to 
+        44 /var/lib/cubrid/databases/appdb/appdb_lgar044.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:58:08.780 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar045 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:00:28.847 - ARCHIVE: 46 /var/lib/cubrid/databases/appdb/appdb_lgar046 188324 192417
+Time: 11/21/26 16:00:28.847 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar045, which contains log pages before 192418, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:00:29.080 - REMOVE: 45 /var/lib/cubrid/databases/appdb/appdb_lgar045 to 
+        45 /var/lib/cubrid/databases/appdb/appdb_lgar045.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:04:08.523 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar046 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:05:19.410 - ARCHIVE: 47 /var/lib/cubrid/databases/appdb/appdb_lgar047 192418 196511
+Time: 11/21/26 16:05:19.410 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar046, which contains log pages before 196512, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:05:20.101 - REMOVE: 46 /var/lib/cubrid/databases/appdb/appdb_lgar046 to 
+        46 /var/lib/cubrid/databases/appdb/appdb_lgar046.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:10:08.395 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar047 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:10:11.556 - ARCHIVE: 48 /var/lib/cubrid/databases/appdb/appdb_lgar048 196512 200605
+Time: 11/21/26 16:10:11.556 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar047, which contains log pages before 200606, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:10:12.243 - REMOVE: 47 /var/lib/cubrid/databases/appdb/appdb_lgar047 to 
+        47 /var/lib/cubrid/databases/appdb/appdb_lgar047.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:15:01.404 - ARCHIVE: 49 /var/lib/cubrid/databases/appdb/appdb_lgar049 200606 204699
+Time: 11/21/26 16:15:01.404 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar048, which contains log pages before 204700, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:16:08.592 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar048 to /var/lib/cubrid/databases/appdb/appdb_lgar049 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:20:00.683 - ARCHIVE: 50 /var/lib/cubrid/databases/appdb/appdb_lgar050 204700 208793
+Time: 11/21/26 16:20:00.683 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar049, which contains log pages before 208794, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:20:01.017 - REMOVE: 48 /var/lib/cubrid/databases/appdb/appdb_lgar048 to 
+        49 /var/lib/cubrid/databases/appdb/appdb_lgar049.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:22:08.715 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar050 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:24:51.411 - ARCHIVE: 51 /var/lib/cubrid/databases/appdb/appdb_lgar051 208794 212887
+Time: 11/21/26 16:24:51.411 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar050, which contains log pages before 212888, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:24:51.812 - REMOVE: 50 /var/lib/cubrid/databases/appdb/appdb_lgar050 to 
+        50 /var/lib/cubrid/databases/appdb/appdb_lgar050.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:28:08.549 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar051 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:29:42.876 - ARCHIVE: 52 /var/lib/cubrid/databases/appdb/appdb_lgar052 212888 216981
+Time: 11/21/26 16:29:42.876 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar051, which contains log pages before 216982, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:29:43.089 - REMOVE: 51 /var/lib/cubrid/databases/appdb/appdb_lgar051 to 
+        51 /var/lib/cubrid/databases/appdb/appdb_lgar051.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:34:08.564 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar052 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:34:34.476 - ARCHIVE: 53 /var/lib/cubrid/databases/appdb/appdb_lgar053 216982 221075
+Time: 11/21/26 16:34:34.476 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar052, which contains log pages before 221076, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:34:34.871 - REMOVE: 52 /var/lib/cubrid/databases/appdb/appdb_lgar052 to 
+        52 /var/lib/cubrid/databases/appdb/appdb_lgar052.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:39:33.293 - ARCHIVE: 54 /var/lib/cubrid/databases/appdb/appdb_lgar054 221076 225169
+Time: 11/21/26 16:39:33.293 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar053, which contains log pages before 225170, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:40:08.566 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar053 to /var/lib/cubrid/databases/appdb/appdb_lgar054 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:44:23.677 - ARCHIVE: 55 /var/lib/cubrid/databases/appdb/appdb_lgar055 225170 229263
+Time: 11/21/26 16:44:23.677 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar054, which contains log pages before 229264, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:44:23.920 - REMOVE: 53 /var/lib/cubrid/databases/appdb/appdb_lgar053 to 
+        54 /var/lib/cubrid/databases/appdb/appdb_lgar054.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:46:08.770 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar055 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:49:14.183 - ARCHIVE: 56 /var/lib/cubrid/databases/appdb/appdb_lgar056 229264 233357
+Time: 11/21/26 16:49:14.183 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar055, which contains log pages before 233358, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:49:14.580 - REMOVE: 55 /var/lib/cubrid/databases/appdb/appdb_lgar055 to 
+        55 /var/lib/cubrid/databases/appdb/appdb_lgar055.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:52:08.479 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar056 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:54:04.458 - ARCHIVE: 57 /var/lib/cubrid/databases/appdb/appdb_lgar057 233358 237451
+Time: 11/21/26 16:54:04.458 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar056, which contains log pages before 237452, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:54:04.834 - REMOVE: 56 /var/lib/cubrid/databases/appdb/appdb_lgar056 to 
+        56 /var/lib/cubrid/databases/appdb/appdb_lgar056.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:58:08.498 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar057 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 16:58:55.142 - ARCHIVE: 58 /var/lib/cubrid/databases/appdb/appdb_lgar058 237452 241545
+Time: 11/21/26 16:58:55.142 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar057, which contains log pages before 241546, is not needed any longer by any HA utilities.
+Time: 11/21/26 16:58:55.315 - REMOVE: 57 /var/lib/cubrid/databases/appdb/appdb_lgar057 to 
+        57 /var/lib/cubrid/databases/appdb/appdb_lgar057.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:03:53.756 - ARCHIVE: 59 /var/lib/cubrid/databases/appdb/appdb_lgar059 241546 245639
+Time: 11/21/26 17:03:53.756 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar058, which contains log pages before 245640, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:04:08.488 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar058 to /var/lib/cubrid/databases/appdb/appdb_lgar059 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:08:45.004 - ARCHIVE: 60 /var/lib/cubrid/databases/appdb/appdb_lgar060 245640 249733
+Time: 11/21/26 17:08:45.004 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar059, which contains log pages before 249734, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:08:45.535 - REMOVE: 58 /var/lib/cubrid/databases/appdb/appdb_lgar058 to 
+        59 /var/lib/cubrid/databases/appdb/appdb_lgar059.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:10:08.415 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar060 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:13:34.924 - ARCHIVE: 61 /var/lib/cubrid/databases/appdb/appdb_lgar061 249734 253827
+Time: 11/21/26 17:13:34.925 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar060, which contains log pages before 253828, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:13:35.127 - REMOVE: 60 /var/lib/cubrid/databases/appdb/appdb_lgar060 to 
+        60 /var/lib/cubrid/databases/appdb/appdb_lgar060.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:16:08.749 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar061 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:18:25.844 - ARCHIVE: 62 /var/lib/cubrid/databases/appdb/appdb_lgar062 253828 257921
+Time: 11/21/26 17:18:25.844 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar061, which contains log pages before 257922, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:18:26.239 - REMOVE: 61 /var/lib/cubrid/databases/appdb/appdb_lgar061 to 
+        61 /var/lib/cubrid/databases/appdb/appdb_lgar061.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:22:08.578 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar062 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:23:24.972 - ARCHIVE: 63 /var/lib/cubrid/databases/appdb/appdb_lgar063 257922 262015
+Time: 11/21/26 17:23:24.972 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar062, which contains log pages before 262016, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:23:25.568 - REMOVE: 62 /var/lib/cubrid/databases/appdb/appdb_lgar062 to 
+        62 /var/lib/cubrid/databases/appdb/appdb_lgar062.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:28:08.570 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar063 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:28:15.058 - ARCHIVE: 64 /var/lib/cubrid/databases/appdb/appdb_lgar064 262016 266109
+Time: 11/21/26 17:28:15.058 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar063, which contains log pages before 266110, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:28:15.378 - REMOVE: 63 /var/lib/cubrid/databases/appdb/appdb_lgar063 to 
+        63 /var/lib/cubrid/databases/appdb/appdb_lgar063.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:33:05.648 - ARCHIVE: 65 /var/lib/cubrid/databases/appdb/appdb_lgar065 266110 270203
+Time: 11/21/26 17:33:05.648 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar064, which contains log pages before 270204, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:34:08.527 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar064 to /var/lib/cubrid/databases/appdb/appdb_lgar065 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:37:55.841 - ARCHIVE: 66 /var/lib/cubrid/databases/appdb/appdb_lgar066 270204 274297
+Time: 11/21/26 17:37:55.842 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar065, which contains log pages before 274298, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:37:56.185 - REMOVE: 64 /var/lib/cubrid/databases/appdb/appdb_lgar064 to 
+        65 /var/lib/cubrid/databases/appdb/appdb_lgar065.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:40:08.566 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar066 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:42:54.610 - ARCHIVE: 67 /var/lib/cubrid/databases/appdb/appdb_lgar067 274298 278391
+Time: 11/21/26 17:42:54.610 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar066, which contains log pages before 278392, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:42:54.911 - REMOVE: 66 /var/lib/cubrid/databases/appdb/appdb_lgar066 to 
+        66 /var/lib/cubrid/databases/appdb/appdb_lgar066.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:46:08.502 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar067 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:47:44.991 - ARCHIVE: 68 /var/lib/cubrid/databases/appdb/appdb_lgar068 278392 282485
+Time: 11/21/26 17:47:44.991 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar067, which contains log pages before 282486, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:47:45.306 - REMOVE: 67 /var/lib/cubrid/databases/appdb/appdb_lgar067 to 
+        67 /var/lib/cubrid/databases/appdb/appdb_lgar067.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:52:08.639 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar068 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 17:52:36.604 - ARCHIVE: 69 /var/lib/cubrid/databases/appdb/appdb_lgar069 282486 286579
+Time: 11/21/26 17:52:36.604 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar068, which contains log pages before 286580, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:52:36.816 - REMOVE: 68 /var/lib/cubrid/databases/appdb/appdb_lgar068 to 
+        68 /var/lib/cubrid/databases/appdb/appdb_lgar068.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:57:26.438 - ARCHIVE: 70 /var/lib/cubrid/databases/appdb/appdb_lgar070 286580 290673
+Time: 11/21/26 17:57:26.438 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar069, which contains log pages before 290674, is not needed any longer by any HA utilities.
+Time: 11/21/26 17:58:08.729 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar069 to /var/lib/cubrid/databases/appdb/appdb_lgar070 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:02:17.064 - ARCHIVE: 71 /var/lib/cubrid/databases/appdb/appdb_lgar071 290674 294767
+Time: 11/21/26 18:02:17.064 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar070, which contains log pages before 294768, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:02:17.218 - REMOVE: 69 /var/lib/cubrid/databases/appdb/appdb_lgar069 to 
+        70 /var/lib/cubrid/databases/appdb/appdb_lgar070.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:04:08.912 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar071 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:07:15.317 - ARCHIVE: 72 /var/lib/cubrid/databases/appdb/appdb_lgar072 294768 298861
+Time: 11/21/26 18:07:15.317 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar071, which contains log pages before 298862, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:07:15.706 - REMOVE: 71 /var/lib/cubrid/databases/appdb/appdb_lgar071 to 
+        71 /var/lib/cubrid/databases/appdb/appdb_lgar071.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:10:08.752 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar072 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:12:05.541 - ARCHIVE: 73 /var/lib/cubrid/databases/appdb/appdb_lgar073 298862 302955
+Time: 11/21/26 18:12:05.541 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar072, which contains log pages before 302956, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:12:05.847 - REMOVE: 72 /var/lib/cubrid/databases/appdb/appdb_lgar072 to 
+        72 /var/lib/cubrid/databases/appdb/appdb_lgar072.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:16:08.827 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar073 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:16:55.435 - ARCHIVE: 74 /var/lib/cubrid/databases/appdb/appdb_lgar074 302956 307049
+Time: 11/21/26 18:16:55.435 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar073, which contains log pages before 307050, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:16:55.710 - REMOVE: 73 /var/lib/cubrid/databases/appdb/appdb_lgar073 to 
+        73 /var/lib/cubrid/databases/appdb/appdb_lgar073.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:21:49.078 - ARCHIVE: 75 /var/lib/cubrid/databases/appdb/appdb_lgar075 307050 311143
+Time: 11/21/26 18:21:49.078 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar074, which contains log pages before 311144, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:22:08.928 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar074 to /var/lib/cubrid/databases/appdb/appdb_lgar075 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:26:46.966 - ARCHIVE: 76 /var/lib/cubrid/databases/appdb/appdb_lgar076 311144 315237
+Time: 11/21/26 18:26:46.966 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar075, which contains log pages before 315238, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:26:47.299 - REMOVE: 74 /var/lib/cubrid/databases/appdb/appdb_lgar074 to 
+        75 /var/lib/cubrid/databases/appdb/appdb_lgar075.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:28:08.665 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar076 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:31:37.969 - ARCHIVE: 77 /var/lib/cubrid/databases/appdb/appdb_lgar077 315238 319331
+Time: 11/21/26 18:31:37.969 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar076, which contains log pages before 319332, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:31:38.276 - REMOVE: 76 /var/lib/cubrid/databases/appdb/appdb_lgar076 to 
+        76 /var/lib/cubrid/databases/appdb/appdb_lgar076.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:34:08.848 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar077 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:36:28.073 - ARCHIVE: 78 /var/lib/cubrid/databases/appdb/appdb_lgar078 319332 323425
+Time: 11/21/26 18:36:28.073 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar077, which contains log pages before 323426, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:36:28.363 - REMOVE: 77 /var/lib/cubrid/databases/appdb/appdb_lgar077 to 
+        77 /var/lib/cubrid/databases/appdb/appdb_lgar077.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:40:09.142 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar078 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:41:19.108 - ARCHIVE: 79 /var/lib/cubrid/databases/appdb/appdb_lgar079 323426 327519
+Time: 11/21/26 18:41:19.108 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar078, which contains log pages before 327520, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:41:19.321 - REMOVE: 78 /var/lib/cubrid/databases/appdb/appdb_lgar078 to 
+        78 /var/lib/cubrid/databases/appdb/appdb_lgar078.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:46:08.940 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar079 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:46:17.017 - ARCHIVE: 80 /var/lib/cubrid/databases/appdb/appdb_lgar080 327520 331613
+Time: 11/21/26 18:46:17.017 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar079, which contains log pages before 331614, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:46:17.300 - REMOVE: 79 /var/lib/cubrid/databases/appdb/appdb_lgar079 to 
+        79 /var/lib/cubrid/databases/appdb/appdb_lgar079.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:51:07.400 - ARCHIVE: 81 /var/lib/cubrid/databases/appdb/appdb_lgar081 331614 335707
+Time: 11/21/26 18:51:07.400 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar080, which contains log pages before 335708, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:52:09.342 - COMMENT: Log archives from /var/lib/cubrid/databases/appdb/appdb_lgar080 to /var/lib/cubrid/databases/appdb/appdb_lgar081 are not needed any longer unless a database media crash occurs.
+Time: 11/21/26 18:55:58.611 - ARCHIVE: 82 /var/lib/cubrid/databases/appdb/appdb_lgar082 335708 339801
+Time: 11/21/26 18:55:58.611 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar081, which contains log pages before 339802, is not needed any longer by any HA utilities.
+Time: 11/21/26 18:55:59.094 - REMOVE: 80 /var/lib/cubrid/databases/appdb/appdb_lgar080 to 
+        81 /var/lib/cubrid/databases/appdb/appdb_lgar081.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:58:08.865 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar082 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 19:00:48.502 - ARCHIVE: 83 /var/lib/cubrid/databases/appdb/appdb_lgar083 339802 343895
+Time: 11/21/26 19:00:48.502 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar082, which contains log pages before 343896, is not needed any longer by any HA utilities.
+Time: 11/21/26 19:00:48.798 - REMOVE: 82 /var/lib/cubrid/databases/appdb/appdb_lgar082 to 
+        82 /var/lib/cubrid/databases/appdb/appdb_lgar082.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:04:08.665 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar083 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 19:05:47.771 - ARCHIVE: 84 /var/lib/cubrid/databases/appdb/appdb_lgar084 343896 347989
+Time: 11/21/26 19:05:47.771 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar083, which contains log pages before 347990, is not needed any longer by any HA utilities.
+Time: 11/21/26 19:05:48.068 - REMOVE: 83 /var/lib/cubrid/databases/appdb/appdb_lgar083 to 
+        83 /var/lib/cubrid/databases/appdb/appdb_lgar083.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:10:08.889 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar084 is not needed any longer unless a database media crash occurs.
+Time: 11/21/26 19:10:38.574 - ARCHIVE: 85 /var/lib/cubrid/databases/appdb/appdb_lgar085 347990 352083
+Time: 11/21/26 19:10:38.574 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar084, which contains log pages before 352084, is not needed any longer by any HA utilities.
+Time: 11/21/26 19:10:38.877 - REMOVE: 84 /var/lib/cubrid/databases/appdb/appdb_lgar084 to 
+        84 /var/lib/cubrid/databases/appdb/appdb_lgar084.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:16:08.483 - COMMENT: Log archive /var/lib/cubrid/databases/appdb/appdb_lgar085 is not needed any longer unless a database media crash occurs.
+== /var/lib/cubrid/databases/appdb_volume-soak-0/
+Time: 11/21/26 12:15:56.416 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar000 0 4093
+Time: 11/21/26 12:20:36.371 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar001 4094 8187
+Time: 11/21/26 12:20:36.481 - REMOVE: 0 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:25:26.408 - REMOVE: 1 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:25:26.413 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar002 8188 12281
+Time: 11/21/26 12:30:07.523 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar003 12282 16375
+Time: 11/21/26 12:30:07.602 - REMOVE: 2 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar002 to 
+        2 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar002.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:34:48.172 - ARCHIVE: 4 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar004 16376 20469
+Time: 11/21/26 12:34:48.181 - REMOVE: 3 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar003 to 
+        3 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar003.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:39:37.227 - ARCHIVE: 5 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar005 20470 24563
+Time: 11/21/26 12:39:37.413 - REMOVE: 4 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar004 to 
+        4 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar004.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:44:17.610 - ARCHIVE: 6 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar006 24564 28657
+Time: 11/21/26 12:44:17.913 - REMOVE: 5 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar005 to 
+        5 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar005.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:48:58.960 - ARCHIVE: 7 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar007 28658 32751
+Time: 11/21/26 12:48:59.068 - REMOVE: 6 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar006 to 
+        6 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar006.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:53:47.412 - ARCHIVE: 8 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar008 32752 36845
+Time: 11/21/26 12:53:47.604 - REMOVE: 7 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar007 to 
+        7 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar007.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:58:27.434 - REMOVE: 8 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar008 to 
+        8 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar008.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:58:27.519 - ARCHIVE: 9 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar009 36846 40939
+Time: 11/21/26 13:03:08.115 - ARCHIVE: 10 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar010 40940 45033
+Time: 11/21/26 13:03:08.315 - REMOVE: 9 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar009 to 
+        9 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar009.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:07:57.147 - ARCHIVE: 11 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar011 45034 49127
+Time: 11/21/26 13:07:57.356 - REMOVE: 10 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar010 to 
+        10 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar010.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:12:37.806 - ARCHIVE: 12 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar012 49128 53221
+Time: 11/21/26 13:12:37.885 - REMOVE: 11 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar011 to 
+        11 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar011.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:17:18.162 - ARCHIVE: 13 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar013 53222 57315
+Time: 11/21/26 13:17:18.240 - REMOVE: 12 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar012 to 
+        12 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar012.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:22:06.244 - ARCHIVE: 14 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar014 57316 61409
+Time: 11/21/26 13:22:06.447 - REMOVE: 13 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar013 to 
+        13 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar013.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:26:47.393 - ARCHIVE: 15 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar015 61410 65503
+Time: 11/21/26 13:26:47.402 - REMOVE: 14 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar014 to 
+        14 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar014.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:31:28.413 - ARCHIVE: 16 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar016 65504 69597
+Time: 11/21/26 13:31:28.495 - REMOVE: 15 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar015 to 
+        15 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar015.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:36:08.703 - ARCHIVE: 17 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar017 69598 73691
+Time: 11/21/26 13:36:08.808 - REMOVE: 16 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar016 to 
+        16 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar016.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:40:56.583 - ARCHIVE: 18 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar018 73692 77785
+Time: 11/21/26 13:40:56.596 - REMOVE: 17 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar017 to 
+        17 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar017.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:45:38.540 - ARCHIVE: 19 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar019 77786 81879
+Time: 11/21/26 13:45:38.655 - REMOVE: 18 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar018 to 
+        18 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar018.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:50:19.046 - ARCHIVE: 20 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar020 81880 85973
+Time: 11/21/26 13:50:19.136 - REMOVE: 19 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar019 to 
+        19 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar019.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:55:08.956 - ARCHIVE: 21 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar021 85974 90067
+Time: 11/21/26 13:55:08.980 - REMOVE: 20 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar020 to 
+        20 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar020.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:59:49.680 - ARCHIVE: 22 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar022 90068 94161
+Time: 11/21/26 13:59:49.864 - REMOVE: 21 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar021 to 
+        21 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar021.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:04:30.006 - REMOVE: 22 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar022 to 
+        22 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar022.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:04:30.099 - ARCHIVE: 23 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar023 94162 98255
+Time: 11/21/26 14:09:20.187 - ARCHIVE: 24 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar024 98256 102349
+Time: 11/21/26 14:09:20.188 - REMOVE: 23 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar023 to 
+        23 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar023.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:14:00.418 - ARCHIVE: 25 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar025 102350 106443
+Time: 11/21/26 14:14:00.850 - REMOVE: 24 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar024 to 
+        24 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar024.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:18:41.036 - ARCHIVE: 26 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar026 106444 110537
+Time: 11/21/26 14:18:41.042 - REMOVE: 25 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar025 to 
+        25 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar025.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:23:30.288 - ARCHIVE: 27 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar027 110538 114631
+Time: 11/21/26 14:23:30.296 - REMOVE: 26 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar026 to 
+        26 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar026.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:28:10.707 - ARCHIVE: 28 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar028 114632 118725
+Time: 11/21/26 14:28:10.798 - REMOVE: 27 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar027 to 
+        27 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar027.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:32:51.238 - ARCHIVE: 29 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar029 118726 122819
+Time: 11/21/26 14:32:51.332 - REMOVE: 28 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar028 to 
+        28 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar028.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:37:32.628 - ARCHIVE: 30 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar030 122820 126913
+Time: 11/21/26 14:37:32.638 - REMOVE: 29 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar029 to 
+        29 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar029.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:42:21.566 - ARCHIVE: 31 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar031 126914 131007
+Time: 11/21/26 14:42:21.660 - REMOVE: 30 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar030 to 
+        30 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar030.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:47:03.171 - ARCHIVE: 32 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar032 131008 135101
+Time: 11/21/26 14:47:03.262 - REMOVE: 31 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar031 to 
+        31 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar031.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:51:43.261 - REMOVE: 32 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar032 to 
+        32 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar032.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:51:43.266 - ARCHIVE: 33 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar033 135102 139195
+Time: 11/21/26 14:56:32.714 - ARCHIVE: 34 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar034 139196 143289
+Time: 11/21/26 14:56:32.727 - REMOVE: 33 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar033 to 
+        33 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar033.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:01:14.243 - ARCHIVE: 35 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar035 143290 147383
+Time: 11/21/26 15:01:14.281 - REMOVE: 34 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar034 to 
+        34 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar034.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:05:55.273 - ARCHIVE: 36 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar036 147384 151477
+Time: 11/21/26 15:05:55.278 - REMOVE: 35 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar035 to 
+        35 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar035.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:10:43.954 - ARCHIVE: 37 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar037 151478 155571
+Time: 11/21/26 15:10:43.965 - REMOVE: 36 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar036 to 
+        36 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar036.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:15:26.137 - ARCHIVE: 38 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar038 155572 159665
+Time: 11/21/26 15:15:26.330 - REMOVE: 37 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar037 to 
+        37 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar037.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:20:07.092 - REMOVE: 38 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar038 to 
+        38 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar038.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:20:07.096 - ARCHIVE: 39 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar039 159666 163759
+Time: 11/21/26 15:24:55.331 - ARCHIVE: 40 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar040 163760 167853
+Time: 11/21/26 15:24:55.334 - REMOVE: 39 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar039 to 
+        39 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar039.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:29:36.371 - ARCHIVE: 41 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar041 167854 171947
+Time: 11/21/26 15:29:36.380 - REMOVE: 40 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar040 to 
+        40 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar040.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:34:18.446 - ARCHIVE: 42 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar042 171948 176041
+Time: 11/21/26 15:34:18.520 - REMOVE: 41 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar041 to 
+        41 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar041.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:39:06.834 - ARCHIVE: 43 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar043 176042 180135
+Time: 11/21/26 15:39:06.915 - REMOVE: 42 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar042 to 
+        42 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar042.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:43:47.187 - ARCHIVE: 44 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar044 180136 184229
+Time: 11/21/26 15:43:47.372 - REMOVE: 43 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar043 to 
+        43 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar043.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:48:28.784 - ARCHIVE: 45 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar045 184230 188323
+Time: 11/21/26 15:48:28.866 - REMOVE: 44 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar044 to 
+        44 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar044.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:53:08.680 - ARCHIVE: 46 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar046 188324 192417
+Time: 11/21/26 15:53:08.788 - REMOVE: 45 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar045 to 
+        45 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar045.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:57:57.939 - ARCHIVE: 47 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar047 192418 196511
+Time: 11/21/26 15:57:58.040 - REMOVE: 46 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar046 to 
+        46 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar046.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:02:39.881 - ARCHIVE: 48 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar048 196512 200605
+Time: 11/21/26 16:02:39.981 - REMOVE: 47 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar047 to 
+        47 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar047.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:07:20.596 - ARCHIVE: 49 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar049 200606 204699
+Time: 11/21/26 16:07:20.702 - REMOVE: 48 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar048 to 
+        48 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar048.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:12:10.127 - ARCHIVE: 50 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar050 204700 208793
+Time: 11/21/26 16:12:10.152 - REMOVE: 49 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar049 to 
+        49 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar049.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:16:50.820 - ARCHIVE: 51 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar051 208794 212887
+Time: 11/21/26 16:16:50.936 - REMOVE: 50 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar050 to 
+        50 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar050.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:21:32.049 - REMOVE: 51 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar051 to 
+        51 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar051.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:21:32.125 - ARCHIVE: 52 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar052 212888 216981
+Time: 11/21/26 16:26:21.029 - ARCHIVE: 53 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar053 216982 221075
+Time: 11/21/26 16:26:21.055 - REMOVE: 52 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar052 to 
+        52 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar052.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:31:02.215 - REMOVE: 53 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar053 to 
+        53 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar053.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:31:02.302 - ARCHIVE: 54 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar054 221076 225169
+Time: 11/21/26 16:35:43.270 - ARCHIVE: 55 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar055 225170 229263
+Time: 11/21/26 16:35:43.345 - REMOVE: 54 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar054 to 
+        54 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar054.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:40:32.791 - ARCHIVE: 56 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar056 229264 233357
+Time: 11/21/26 16:40:32.807 - REMOVE: 55 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar055 to 
+        55 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar055.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:45:13.980 - ARCHIVE: 57 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar057 233358 237451
+Time: 11/21/26 16:45:14.163 - REMOVE: 56 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar056 to 
+        56 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar056.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:49:54.213 - ARCHIVE: 58 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar058 237452 241545
+Time: 11/21/26 16:49:54.219 - REMOVE: 57 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar057 to 
+        57 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar057.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:54:42.286 - ARCHIVE: 59 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar059 241546 245639
+Time: 11/21/26 16:54:42.299 - REMOVE: 58 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar058 to 
+        58 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar058.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:59:23.183 - ARCHIVE: 60 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar060 245640 249733
+Time: 11/21/26 16:59:23.269 - REMOVE: 59 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar059 to 
+        59 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar059.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:04:04.977 - ARCHIVE: 61 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar061 249734 253827
+Time: 11/21/26 17:04:04.978 - REMOVE: 60 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar060 to 
+        60 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar060.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:08:46.202 - ARCHIVE: 62 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar062 253828 257921
+Time: 11/21/26 17:08:46.307 - REMOVE: 61 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar061 to 
+        61 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar061.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:13:34.018 - ARCHIVE: 63 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar063 257922 262015
+Time: 11/21/26 17:13:34.313 - REMOVE: 62 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar062 to 
+        62 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar062.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:18:16.094 - REMOVE: 63 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar063 to 
+        63 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar063.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:18:16.098 - ARCHIVE: 64 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar064 262016 266109
+Time: 11/21/26 17:22:56.367 - ARCHIVE: 65 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar065 266110 270203
+Time: 11/21/26 17:22:56.481 - REMOVE: 64 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar064 to 
+        64 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar064.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:27:45.234 - REMOVE: 65 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar065 to 
+        65 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar065.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:27:45.235 - ARCHIVE: 66 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar066 270204 274297
+Time: 11/21/26 17:32:25.916 - ARCHIVE: 67 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar067 274298 278391
+Time: 11/21/26 17:32:26.127 - REMOVE: 66 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar066 to 
+        66 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar066.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:37:06.045 - ARCHIVE: 68 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar068 278392 282485
+Time: 11/21/26 17:37:06.152 - REMOVE: 67 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar067 to 
+        67 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar067.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:41:55.019 - ARCHIVE: 69 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar069 282486 286579
+Time: 11/21/26 17:41:55.440 - REMOVE: 68 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar068 to 
+        68 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar068.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:46:35.705 - ARCHIVE: 70 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar070 286580 290673
+Time: 11/21/26 17:46:35.796 - REMOVE: 69 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar069 to 
+        69 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar069.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:51:16.670 - ARCHIVE: 71 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar071 290674 294767
+Time: 11/21/26 17:51:16.758 - REMOVE: 70 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar070 to 
+        70 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar070.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:56:05.342 - ARCHIVE: 72 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar072 294768 298861
+Time: 11/21/26 17:56:05.434 - REMOVE: 71 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar071 to 
+        71 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar071.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:00:44.891 - ARCHIVE: 73 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar073 298862 302955
+Time: 11/21/26 18:00:45.088 - REMOVE: 72 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar072 to 
+        72 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar072.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:05:26.895 - ARCHIVE: 74 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar074 302956 307049
+Time: 11/21/26 18:05:26.990 - REMOVE: 73 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar073 to 
+        73 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar073.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:10:15.177 - ARCHIVE: 75 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar075 307050 311143
+Time: 11/21/26 18:10:15.261 - REMOVE: 74 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar074 to 
+        74 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar074.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:14:55.279 - ARCHIVE: 76 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar076 311144 315237
+Time: 11/21/26 18:14:55.414 - REMOVE: 75 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar075 to 
+        75 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar075.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:19:36.716 - REMOVE: 76 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar076 to 
+        76 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar076.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:19:36.720 - ARCHIVE: 77 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar077 315238 319331
+Time: 11/21/26 18:24:26.926 - ARCHIVE: 78 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar078 319332 323425
+Time: 11/21/26 18:24:26.953 - REMOVE: 77 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar077 to 
+        77 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar077.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:29:07.414 - ARCHIVE: 79 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar079 323426 327519
+Time: 11/21/26 18:29:07.477 - REMOVE: 78 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar078 to 
+        78 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar078.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:33:48.178 - ARCHIVE: 80 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar080 327520 331613
+Time: 11/21/26 18:33:48.188 - REMOVE: 79 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar079 to 
+        79 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar079.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:38:28.346 - REMOVE: 80 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar080 to 
+        80 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar080.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:38:28.346 - ARCHIVE: 81 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar081 331614 335707
+Time: 11/21/26 18:43:17.243 - ARCHIVE: 82 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar082 335708 339801
+Time: 11/21/26 18:43:17.286 - REMOVE: 81 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar081 to 
+        81 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar081.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:47:58.320 - ARCHIVE: 83 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar083 339802 343895
+Time: 11/21/26 18:47:58.445 - REMOVE: 82 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar082 to 
+        82 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar082.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:52:38.378 - ARCHIVE: 84 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar084 343896 347989
+Time: 11/21/26 18:52:38.774 - REMOVE: 83 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar083 to 
+        83 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar083.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:57:27.214 - ARCHIVE: 85 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar085 347990 352083
+Time: 11/21/26 18:57:27.303 - REMOVE: 84 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar084 to 
+        84 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar084.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:02:08.037 - ARCHIVE: 86 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar086 352084 356177
+Time: 11/21/26 19:02:08.131 - REMOVE: 85 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar085 to 
+        85 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar085.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:06:49.062 - REMOVE: 86 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar086 to 
+        86 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar086.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:06:49.084 - ARCHIVE: 87 /var/lib/cubrid/databases/appdb_volume-soak-0/appdb_lgar087 356178 360271
+== /var/lib/cubrid/databases/appdb_volume-soak-1/
+COMMENT: CUBRID/LogInfo for database /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lginf
+Time: 11/21/26 12:16:05.496 - ARCHIVE: 0 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar000 0 4093
+Time: 11/21/26 12:20:56.373 - ARCHIVE: 1 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar001 4094 8187
+Time: 11/21/26 12:20:57.376 - REMOVE: 0 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar000 to 
+        0 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar000.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:25:48.630 - ARCHIVE: 2 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar002 8188 12281
+Time: 11/21/26 12:25:49.124 - REMOVE: 1 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar001 to 
+        1 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar001.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:30:47.651 - ARCHIVE: 3 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar003 12282 16375
+Time: 11/21/26 12:30:48.751 - REMOVE: 2 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar002 to 
+        2 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar002.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:35:38.389 - ARCHIVE: 4 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar004 16376 20469
+Time: 11/21/26 12:35:38.487 - REMOVE: 3 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar003 to 
+        3 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar003.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:40:27.819 - ARCHIVE: 5 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar005 20470 24563
+Time: 11/21/26 12:40:28.217 - REMOVE: 4 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar004 to 
+        4 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar004.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:45:18.930 - ARCHIVE: 6 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar006 24564 28657
+Time: 11/21/26 12:45:19.619 - REMOVE: 5 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar005 to 
+        5 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar005.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:50:17.698 - ARCHIVE: 7 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar007 28658 32751
+Time: 11/21/26 12:50:19.083 - REMOVE: 6 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar006 to 
+        6 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar006.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:55:07.999 - ARCHIVE: 8 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar008 32752 36845
+Time: 11/21/26 12:55:08.292 - REMOVE: 7 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar007 to 
+        7 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar007.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 12:59:58.748 - ARCHIVE: 9 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar009 36846 40939
+Time: 11/21/26 13:00:00.033 - REMOVE: 8 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar008 to 
+        8 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar008.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:04:48.788 - ARCHIVE: 10 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar010 40940 45033
+Time: 11/21/26 13:04:50.277 - REMOVE: 9 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar009 to 
+        9 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar009.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:09:47.722 - ARCHIVE: 11 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar011 45034 49127
+Time: 11/21/26 13:09:47.908 - REMOVE: 10 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar010 to 
+        10 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar010.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:14:36.975 - ARCHIVE: 12 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar012 49128 53221
+Time: 11/21/26 13:14:37.808 - REMOVE: 11 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar011 to 
+        11 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar011.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:19:28.449 - ARCHIVE: 13 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar013 53222 57315
+Time: 11/21/26 13:19:28.742 - REMOVE: 12 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar012 to 
+        12 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar012.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:24:18.758 - ARCHIVE: 14 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar014 57316 61409
+Time: 11/21/26 13:24:19.367 - REMOVE: 13 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar013 to 
+        13 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar013.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:29:09.095 - ARCHIVE: 15 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar015 61410 65503
+Time: 11/21/26 13:29:09.394 - REMOVE: 14 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar014 to 
+        14 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar014.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:34:07.071 - ARCHIVE: 16 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar016 65504 69597
+Time: 11/21/26 13:34:08.621 - REMOVE: 15 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar015 to 
+        15 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar015.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:38:57.852 - ARCHIVE: 17 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar017 69598 73691
+Time: 11/21/26 13:38:57.959 - REMOVE: 16 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar016 to 
+        16 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar016.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:43:48.373 - ARCHIVE: 18 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar018 73692 77785
+Time: 11/21/26 13:43:48.380 - REMOVE: 17 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar017 to 
+        17 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar017.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:48:39.452 - ARCHIVE: 19 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar019 77786 81879
+Time: 11/21/26 13:48:39.643 - REMOVE: 18 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar018 to 
+        18 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar018.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:53:38.779 - ARCHIVE: 20 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar020 81880 85973
+Time: 11/21/26 13:53:40.453 - REMOVE: 19 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar019 to 
+        19 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar019.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:58:28.979 - REMOVE: 20 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar020 to 
+        20 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar020.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 13:58:29.022 - ARCHIVE: 21 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar021 85974 90067
+Time: 11/21/26 14:03:20.584 - ARCHIVE: 22 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar022 90068 94161
+Time: 11/21/26 14:03:20.966 - REMOVE: 21 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar021 to 
+        21 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar021.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:08:11.110 - ARCHIVE: 23 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar023 94162 98255
+Time: 11/21/26 14:08:11.300 - REMOVE: 22 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar022 to 
+        22 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar022.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:13:01.569 - REMOVE: 23 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar023 to 
+        23 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar023.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:13:01.574 - ARCHIVE: 24 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar024 98256 102349
+Time: 11/21/26 14:17:59.759 - ARCHIVE: 25 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar025 102350 106443
+Time: 11/21/26 14:18:01.044 - REMOVE: 24 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar024 to 
+        24 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar024.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:22:50.979 - ARCHIVE: 26 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar026 106444 110537
+Time: 11/21/26 14:22:52.287 - REMOVE: 25 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar025 to 
+        25 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar025.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:27:41.983 - ARCHIVE: 27 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar027 110538 114631
+Time: 11/21/26 14:27:42.390 - REMOVE: 26 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar026 to 
+        26 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar026.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:32:33.154 - ARCHIVE: 28 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar028 114632 118725
+Time: 11/21/26 14:32:33.882 - REMOVE: 27 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar027 to 
+        27 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar027.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:37:30.935 - ARCHIVE: 29 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar029 118726 122819
+Time: 11/21/26 14:37:31.045 - REMOVE: 28 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar028 to 
+        28 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar028.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:42:22.759 - ARCHIVE: 30 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar030 122820 126913
+Time: 11/21/26 14:42:23.595 - REMOVE: 29 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar029 to 
+        29 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar029.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:47:12.800 - ARCHIVE: 31 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar031 126914 131007
+Time: 11/21/26 14:47:13.086 - REMOVE: 30 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar030 to 
+        30 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar030.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:52:03.362 - REMOVE: 31 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar031 to 
+        31 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar031.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:52:03.445 - ARCHIVE: 32 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar032 131008 135101
+Time: 11/21/26 14:56:57.894 - REMOVE: 32 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar032 to 
+        32 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar032.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 14:56:57.925 - ARCHIVE: 33 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar033 135102 139195
+Time: 11/21/26 15:01:54.121 - ARCHIVE: 34 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar034 139196 143289
+Time: 11/21/26 15:01:55.148 - REMOVE: 33 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar033 to 
+        33 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar033.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:06:44.650 - REMOVE: 34 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar034 to 
+        34 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar034.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:06:44.727 - ARCHIVE: 35 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar035 143290 147383
+Time: 11/21/26 15:11:35.432 - ARCHIVE: 36 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar036 147384 151477
+Time: 11/21/26 15:11:36.924 - REMOVE: 35 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar035 to 
+        35 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar035.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:16:27.991 - ARCHIVE: 37 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar037 151478 155571
+Time: 11/21/26 15:16:28.758 - REMOVE: 36 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar036 to 
+        36 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar036.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:21:26.459 - ARCHIVE: 38 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar038 155572 159665
+Time: 11/21/26 15:21:26.573 - REMOVE: 37 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar037 to 
+        37 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar037.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:26:16.928 - ARCHIVE: 39 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar039 159666 163759
+Time: 11/21/26 15:26:17.368 - REMOVE: 38 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar038 to 
+        38 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar038.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:31:06.969 - ARCHIVE: 40 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar040 163760 167853
+Time: 11/21/26 15:31:07.278 - REMOVE: 39 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar039 to 
+        39 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar039.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:35:59.093 - ARCHIVE: 41 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar041 167854 171947
+Time: 11/21/26 15:35:59.502 - REMOVE: 40 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar040 to 
+        40 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar040.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:40:56.974 - ARCHIVE: 42 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar042 171948 176041
+Time: 11/21/26 15:40:56.981 - REMOVE: 41 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar041 to 
+        41 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar041.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:45:47.254 - ARCHIVE: 43 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar043 176042 180135
+Time: 11/21/26 15:45:48.073 - REMOVE: 42 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar042 to 
+        42 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar042.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:50:38.525 - ARCHIVE: 44 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar044 180136 184229
+Time: 11/21/26 15:50:39.033 - REMOVE: 43 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar043 to 
+        43 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar043.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 15:55:28.693 - ARCHIVE: 45 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar045 184230 188323
+Time: 11/21/26 15:55:29.582 - REMOVE: 44 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar044 to 
+        44 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar044.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:00:20.666 - ARCHIVE: 46 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar046 188324 192417
+Time: 11/21/26 16:00:21.252 - REMOVE: 45 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar045 to 
+        45 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar045.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:05:19.602 - ARCHIVE: 47 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar047 192418 196511
+Time: 11/21/26 16:05:21.204 - REMOVE: 46 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar046 to 
+        46 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar046.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:10:11.163 - ARCHIVE: 48 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar048 196512 200605
+Time: 11/21/26 16:10:11.557 - REMOVE: 47 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar047 to 
+        47 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar047.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:15:01.097 - ARCHIVE: 49 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar049 200606 204699
+Time: 11/21/26 16:15:01.199 - REMOVE: 48 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar048 to 
+        48 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar048.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:19:52.445 - ARCHIVE: 50 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar050 204700 208793
+Time: 11/21/26 16:19:53.170 - REMOVE: 49 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar049 to 
+        49 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar049.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:24:51.016 - ARCHIVE: 51 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar051 208794 212887
+Time: 11/21/26 16:24:52.018 - REMOVE: 50 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar050 to 
+        50 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar050.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:29:42.595 - ARCHIVE: 52 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar052 212888 216981
+Time: 11/21/26 16:29:43.326 - REMOVE: 51 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar051 to 
+        51 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar051.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:34:34.587 - ARCHIVE: 53 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar053 216982 221075
+Time: 11/21/26 16:34:34.675 - REMOVE: 52 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar052 to 
+        52 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar052.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:39:24.860 - ARCHIVE: 54 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar054 221076 225169
+Time: 11/21/26 16:39:25.549 - REMOVE: 53 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar053 to 
+        53 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar053.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:44:23.577 - ARCHIVE: 55 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar055 225170 229263
+Time: 11/21/26 16:44:23.975 - REMOVE: 54 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar054 to 
+        54 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar054.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:49:13.973 - ARCHIVE: 56 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar056 229264 233357
+Time: 11/21/26 16:49:14.868 - REMOVE: 55 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar055 to 
+        55 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar055.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:54:03.929 - ARCHIVE: 57 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar057 233358 237451
+Time: 11/21/26 16:54:04.237 - REMOVE: 56 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar056 to 
+        56 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar056.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 16:58:54.758 - ARCHIVE: 58 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar058 237452 241545
+Time: 11/21/26 16:58:55.755 - REMOVE: 57 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar057 to 
+        57 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar057.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:03:53.559 - ARCHIVE: 59 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar059 241546 245639
+Time: 11/21/26 17:03:54.645 - REMOVE: 58 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar058 to 
+        58 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar058.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:08:44.809 - ARCHIVE: 60 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar060 245640 249733
+Time: 11/21/26 17:08:45.094 - REMOVE: 59 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar059 to 
+        59 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar059.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:13:35.609 - ARCHIVE: 61 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar061 249734 253827
+Time: 11/21/26 17:13:36.511 - REMOVE: 60 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar060 to 
+        60 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar060.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:18:25.744 - ARCHIVE: 62 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar062 253828 257921
+Time: 11/21/26 17:18:25.951 - REMOVE: 61 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar061 to 
+        61 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar061.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:23:16.645 - ARCHIVE: 63 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar063 257922 262015
+Time: 11/21/26 17:23:16.736 - REMOVE: 62 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar062 to 
+        62 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar062.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:28:14.868 - ARCHIVE: 64 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar064 262016 266109
+Time: 11/21/26 17:28:16.045 - REMOVE: 63 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar063 to 
+        63 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar063.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:33:05.776 - ARCHIVE: 65 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar065 266110 270203
+Time: 11/21/26 17:33:06.061 - REMOVE: 64 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar064 to 
+        64 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar064.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:37:55.741 - ARCHIVE: 66 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar066 270204 274297
+Time: 11/21/26 17:37:56.159 - REMOVE: 65 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar065 to 
+        65 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar065.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:42:46.586 - ARCHIVE: 67 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar067 274298 278391
+Time: 11/21/26 17:42:47.379 - REMOVE: 66 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar066 to 
+        66 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar066.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:47:44.811 - ARCHIVE: 68 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar068 278392 282485
+Time: 11/21/26 17:47:44.812 - REMOVE: 67 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar067 to 
+        67 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar067.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:52:36.101 - ARCHIVE: 69 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar069 282486 286579
+Time: 11/21/26 17:52:36.712 - REMOVE: 68 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar068 to 
+        68 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar068.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 17:57:26.234 - ARCHIVE: 70 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar070 286580 290673
+Time: 11/21/26 17:57:26.940 - REMOVE: 69 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar069 to 
+        69 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar069.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:02:16.863 - ARCHIVE: 71 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar071 290674 294767
+Time: 11/21/26 18:02:17.746 - REMOVE: 70 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar070 to 
+        70 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar070.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:07:14.896 - ARCHIVE: 72 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar072 294768 298861
+Time: 11/21/26 18:07:14.903 - REMOVE: 71 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar071 to 
+        71 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar071.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:12:05.351 - ARCHIVE: 73 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar073 298862 302955
+Time: 11/21/26 18:12:05.993 - REMOVE: 72 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar072 to 
+        72 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar072.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:16:55.417 - ARCHIVE: 74 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar074 302956 307049
+Time: 11/21/26 18:16:55.914 - REMOVE: 73 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar073 to 
+        73 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar073.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:21:48.899 - ARCHIVE: 75 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar075 307050 311143
+Time: 11/21/26 18:21:49.684 - REMOVE: 74 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar074 to 
+        74 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar074.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:26:38.882 - ARCHIVE: 76 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar076 311144 315237
+Time: 11/21/26 18:26:39.389 - REMOVE: 75 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar075 to 
+        75 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar075.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:31:37.272 - ARCHIVE: 77 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar077 315238 319331
+Time: 11/21/26 18:31:38.281 - REMOVE: 76 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar076 to 
+        76 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar076.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:36:27.820 - ARCHIVE: 78 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar078 319332 323425
+Time: 11/21/26 18:36:28.326 - REMOVE: 77 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar077 to 
+        77 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar077.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:41:18.426 - ARCHIVE: 79 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar079 323426 327519
+Time: 11/21/26 18:41:18.717 - REMOVE: 78 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar078 to 
+        78 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar078.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:46:08.265 - ARCHIVE: 80 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar080 327520 331613
+Time: 11/21/26 18:46:08.531 - REMOVE: 79 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar079 to 
+        79 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar079.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:51:07.101 - ARCHIVE: 81 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar081 331614 335707
+Time: 11/21/26 18:51:08.059 - REMOVE: 80 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar080 to 
+        80 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar080.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 18:55:58.517 - ARCHIVE: 82 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar082 335708 339801
+Time: 11/21/26 18:55:58.998 - REMOVE: 81 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar081 to 
+        81 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar081.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:00:48.594 - ARCHIVE: 83 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar083 339802 343895
+Time: 11/21/26 19:00:48.893 - REMOVE: 82 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar082 to 
+        82 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar082.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:05:39.332 - ARCHIVE: 84 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar084 343896 347989
+Time: 11/21/26 19:05:40.330 - REMOVE: 83 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar083 to 
+        83 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar083.
+        REASON: Number of active log archives has been exceeded the max desired number.
+Time: 11/21/26 19:10:38.286 - ARCHIVE: 85 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar085 347990 352083
+Time: 11/21/26 19:10:39.297 - REMOVE: 84 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar084 to 
+        84 /var/lib/cubrid/databases/appdb_volume-soak-1/appdb_lgar084.
+        REASON: Number of active log archives has been exceeded the max desired number.
+### heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current volume-soak-2, state slave)
+   Node volume-soak-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node volume-soak-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node volume-soak-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 69, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-1 (pid 349, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 12:10:10.264
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 347, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 12:10:10.243
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@volume-soak-1:/var/lib/cubrid/databases/appdb_volume-soak-1 (pid 345, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-1 -m sync appdb@volume-soak-1 ] 
+    - registered-time   11/21/26 12:10:10.229
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@volume-soak-0:/var/lib/cubrid/databases/appdb_volume-soak-0 (pid 343, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_volume-soak-0 -m sync appdb@volume-soak-0 ] 
+    - registered-time   11/21/26 12:10:10.215
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 82, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/21/26 12:10:08.274
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+### applyinfo
+== copy of volume-soak-0
+
+ *** Applied Info. *** 
+Insert count                   : 2420
+Update count                   : 2518000
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 63611
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 364206 | 5840
+Append LSA                     : 364206 | 5840
+HA server state                : active
+HA promotion time              : 12:10:10.000 PM 11/21/2026 (1795263010)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 364206 | 5840
+Append LSA                     : 364206 | 5840
+HA server state                : active
+HA promotion time              : 12:10:10.000 PM 11/21/2026 (1795263010)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+== copy of volume-soak-1
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 77981
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 352841 | 14088
+Append LSA                     : 352841 | 14088
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:09:37.000 PM 11/21/2026 (1795262977)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:09:01.000 PM 11/21/2026 (1795262941)
+Vol creation time              : 12:09:02.000 PM 11/21/2026 (1795262942)
+EOF LSA                        : 352841 | 14088
+Append LSA                     : 352841 | 14088
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:09:37.000 PM 11/21/2026 (1795262977)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+### writer
+### end
