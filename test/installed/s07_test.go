@@ -427,9 +427,16 @@ func TestJudgeS07(t *testing.T) {
 		"a manager Pod that changed blocks the trigger variant": {false, testS07Limits, func(r *s07Record) {
 			r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, "the manager Pod was replaced"
 		}, evidence.Blocked, "manager Pod"},
-		"an acknowledgement while the path stayed closed is a safety failure": {false,
-			testS07Limits, func(r *s07Record) { r.Session = &s07Session{AcknowledgedAfterClosed: 1} },
-			evidence.Fail, "without an accepted release"},
+		"an acknowledgement while one quarantine generation stayed closed is a safety failure": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				r.Generations = []string{"generation-1"}
+			}, evidence.Fail, "without an accepted release"},
+		"an acknowledgement with changed quarantine generations remains inconclusive": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				r.Generations = []string{"generation-1", "generation-2"}
+			}, evidence.Blocked, "incomplete quarantine evidence"},
 		"an acknowledgement after closure with a recorded release is inconclusive": {false,
 			testS07Limits, func(r *s07Record) {
 				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
