@@ -88,8 +88,10 @@ repository. In order, it:
 
 1. refuses a commit that is not a full 40-character SHA or a version that is
    not `vMAJOR.MINOR.PATCH`, before anything is cloned;
-2. clones that commit and refuses it unless it is an ancestor of
-   `refs/remotes/origin/main`; no code from the commit runs before this;
+2. checks out the trusted workflow commit first; confirms both that
+   workflow revision **and** the requested source SHA are ancestors of
+   `refs/remotes/origin/main`, then (and only then) checks out the source
+   commit. No unverified requested source is checked out or executed;
 3. runs this check, taken from the workflow's own commit, and continues only
    on `state=create`; a draft that a publishing rerun would resume also stops
    it;
