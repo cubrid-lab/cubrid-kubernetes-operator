@@ -88,20 +88,32 @@ repository. In order, it:
 
 1. refuses a commit that is not a full 40-character SHA or a version that is
    not `vMAJOR.MINOR.PATCH`, before anything is cloned;
-2. clones that commit and refuses it unless it is on `main`;
+2. clones that commit and refuses it unless it is an ancestor of
+   `refs/remotes/origin/main`; no code from the commit runs before this;
 3. runs this check, taken from the workflow's own commit, and continues only
    on `state=create`; a draft that a publishing rerun would resume also stops
    it;
 4. builds the manager image and the Instance Manager image for linux/amd64
    from the same Dockerfiles as `make docker-build` and
    `make docker-build-instance-manager`, into OCI archives on the runner,
-   with no push, no registry login and no build cache;
+   with no push, no registry login, no build cache and no build record
+   artifact, labelled with the commit time;
 5. builds the installer manifest with `make build-installer` for the
    manager image the release would publish, and stops if that changed a
    tracked file (the commit's generated files are stale);
 6. uploads `install.yaml`, `release-dry-run.json` (the commit, version, each
-   image's digest, image ID and archive checksum, and the installer's
-   SHA-256) and `SHA256SUMS` as the run's artifact.
+   image's digest, image ID and archive checksum, the installer's SHA-256
+   and which Instance Manager image the installer makes the manager use)
+   and `SHA256SUMS` as the run's artifact;
+7. fails, after that upload, unless `install.yaml` names the Instance
+   Manager image built in the same run.
+
+Step 7 fails every run today: `make build-installer` sets only the manager
+image, so an installed release would run the manager's built-in default
+Instance Manager image, the mutable `instance-manager:dev` tag, not the
+image built and recorded here. The record and the job summary name the image
+that would be used. Until the installer sets the Instance Manager image, a
+dry run shows this gap instead of a candidate.
 
 Any failed step fails the job, and the job summary shows how far it got.
 It writes nothing outside the run (the Go setup's module cache is turned
@@ -111,15 +123,14 @@ Its limits:
 
 - **Drafts are invisible to it.** GitHub lists draft releases only to a
   token that can push, and this job's token cannot. It therefore refuses an
-  existing tag or published release, but not a draft. The publishing
-  workflow must run the same check with its write token.
+  existing tag or published release, but not a draft: with this token the
+  check's draft refusals (a draft for this or another commit, several
+  drafts) will in practice not trigger. The publishing workflow must run the
+  same check with its write token.
 - **The digests identify this build only.** The base images are mutable
-  tags and each image carries its build time in a label, so a later build
-  of the same commit produces other digests. The image archives are not
-  kept.
-- The installer manifest names the manager image by tag. It does not set the
-  Instance Manager image, which the manager then takes from its built-in
-  default.
+  tags, so a later build of the same commit can produce other digests. The
+  image archives are not kept.
+- The installer manifest names the manager image by tag, not by digest.
 - It does not exercise release-please, the GitHub App token, a draft
   release, publication, or a failure or rerun on the publishing path. Those
   stay with issue #124.

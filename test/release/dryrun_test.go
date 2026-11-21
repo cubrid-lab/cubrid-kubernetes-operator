@@ -113,7 +113,8 @@ func TestDryRunCannotPublish(t *testing.T) {
 		t.Errorf("job permissions %v; want contents: read only", j.Permissions)
 	}
 	forbidden := []string{
-		"continue-on-error", "secrets.", "docker/login-action", "cache-to", "gh release", "git push", "git tag",
+		"continue-on-error", "secrets.", "docker/login-action", "cache-to", "actions/cache@",
+		"gh release", "git push", "git tag", "docker push",
 	}
 	for _, bad := range forbidden {
 		if strings.Contains(text, bad) {
@@ -123,6 +124,9 @@ func TestDryRunCannotPublish(t *testing.T) {
 	if regexp.MustCompile(`(?m):\s*write\s*$`).MatchString(text) {
 		t.Error("the workflow grants a write permission")
 	}
+	if regexp.MustCompile(`gh api\b.*(-X|--method)[ =]?(POST|PUT|PATCH|DELETE)`).MatchString(text) {
+		t.Error("the workflow calls the GitHub API with a write method")
+	}
 	builds := 0
 	for _, s := range j.Steps {
 		// setup-go saves a module cache unless told not to.
@@ -131,6 +135,11 @@ func TestDryRunCannotPublish(t *testing.T) {
 		}
 		if strings.HasPrefix(s.Uses, "docker/build-push-action@") {
 			builds++
+			// The action uploads a build record artifact unless told not to.
+			if s.Env["DOCKER_BUILD_RECORD_UPLOAD"] != "false" {
+				t.Errorf("step %q: DOCKER_BUILD_RECORD_UPLOAD is %q; want \"false\"",
+					s.Name, s.Env["DOCKER_BUILD_RECORD_UPLOAD"])
+			}
 			if s.With["push"] != false {
 				t.Errorf("step %q: push is %v; want false", s.Name, s.With["push"])
 			}
@@ -310,5 +319,140 @@ func TestDryRunRefusesAnExistingVersion(t *testing.T) {
 				t.Errorf("unexpected requests: %v", a.problems)
 			}
 		})
+	}
+}
+
+const metaStepName = "Resolve the commit and check that it is on main"
+
+// gitRepo makes a repository with commit a on main and its child b, which is
+// not on main, and returns a function that runs git in it.
+func gitRepo(t *testing.T) (dir, a, b string, git func(args ...string) string) {
+	t.Helper()
+	dir = t.TempDir()
+	git = func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_COMMITTER_DATE=2026-11-20T10:00:00+09:00")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "on main")
+	a = git("rev-parse", "HEAD")
+	git("commit", "-q", "--allow-empty", "-m", "not on main")
+	b = git("rev-parse", "HEAD")
+	// What actions/checkout leaves for main: a remote-tracking ref.
+	git("update-ref", "refs/remotes/origin/main", a)
+	return dir, a, b, git
+}
+
+// The step that confirms the checked-out commit and refuses one that is not
+// on main runs as the runner would, in a repository whose origin/main is
+// known. A tag named origin/main must not stand in for main.
+func TestDryRunBuildsOnlyMainCommits(t *testing.T) {
+	_, _, j := readDryRun(t)
+	script := j.Steps[stepIndex(t, j, metaStepName)].Run
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir, a, b, git := gitRepo(t)
+	run := func(head, input string) (int, string, string) {
+		t.Helper()
+		git("checkout", "-q", "--detach", head)
+		tmp := t.TempDir()
+		outFile := filepath.Join(tmp, "github-output")
+		code, out := runStep(t, dir, script, "INPUT_SHA="+input, "RUNNER_TEMP="+tmp,
+			"GITHUB_OUTPUT="+outFile, "HOME="+tmp, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		written, _ := os.ReadFile(outFile)
+		return code, out, string(written)
+	}
+
+	code, out, written := run(a, a)
+	if code != 0 || !strings.Contains(written, "sha="+a+"\n") {
+		t.Errorf("a main commit: exit %d, output %q\n%s", code, written, out)
+	}
+	// The creation label is the commit time in UTC, not the time of the run.
+	if !strings.Contains(written, "created=2026-11-20T01:00:00Z\n") {
+		t.Errorf("a main commit: created is not the commit time in UTC: %q", written)
+	}
+
+	code, out, _ = run(b, b)
+	if code == 0 || !strings.Contains(out, "is not on main") {
+		t.Errorf("a commit not on main: exit %d\n%s", code, out)
+	}
+
+	code, out, _ = run(a, b)
+	if code == 0 || !strings.Contains(out, "not the requested commit") {
+		t.Errorf("a checkout that is not the requested commit: exit %d\n%s", code, out)
+	}
+
+	git("tag", "origin/main", b)
+	code, out, _ = run(b, b)
+	if code == 0 || !strings.Contains(out, "is not on main") {
+		t.Errorf("a commit not on main with a tag named origin/main at it: exit %d\n%s", code, out)
+	}
+}
+
+// No code from the checked-out commit runs before it is known to be on main:
+// every step that runs make or a Docker action comes after the ancestry
+// check. No checkout leaves a credential in the repository, and the stale
+// generated file check follows make build-installer.
+func TestDryRunStepOrderAndCheckouts(t *testing.T) {
+	_, _, j := readDryRun(t)
+	meta := stepIndex(t, j, metaStepName)
+	for k, s := range j.Steps {
+		runsRepoCode := strings.Contains(s.Run, "make ") || strings.HasPrefix(s.Uses, "docker/") ||
+			strings.HasPrefix(s.Uses, "./")
+		if runsRepoCode && k < meta {
+			t.Errorf("step %q runs before the check that the commit is on main", s.Name)
+		}
+		if strings.HasPrefix(s.Uses, "actions/checkout@") && s.With["persist-credentials"] != false {
+			t.Errorf("step %q: persist-credentials is %v; want false", s.Name, s.With["persist-credentials"])
+		}
+	}
+	installer := j.Steps[stepIndex(t, j, "Build the installer manifest")].Run
+	build := strings.Index(installer, "make build-installer")
+	status := strings.Index(installer, "git status --porcelain")
+	if build < 0 || status < build || !strings.Contains(installer[status:], "exit 1") {
+		t.Error("the installer step does not fail on tracked files that make build-installer changed")
+	}
+}
+
+// The installer must make the manager use the Instance Manager image built in
+// the same run. When install.yaml does not name it, the record says which
+// image the manager falls back to, and the run fails after the upload.
+func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
+	_, _, j := readDryRun(t)
+	record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run
+	if !strings.Contains(record, `grep -Fq "$im_ref" dist/install.yaml`) ||
+		!strings.Contains(record, "DefaultInstanceManagerImage") {
+		t.Error("the record does not check install.yaml for the built Instance Manager image")
+	}
+	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^\s*DefaultInstanceManagerImage = "[^"]+"$`).Match(src) {
+		t.Error("the record cannot read DefaultInstanceManagerImage from the controller")
+	}
+	require := stepIndex(t, j, "Require the installer to use the Instance Manager image built here")
+	upload := stepIndex(t, j, "Upload the installer manifest and the record")
+	if require < upload {
+		t.Error("the Instance Manager image requirement runs before the record is uploaded")
+	}
+	script := j.Steps[require].Run
+	if code, out := runStep(t, t.TempDir(), script, "IM_BUILT=true"); code != 0 {
+		t.Errorf("the built image is used: exit %d\n%s", code, out)
+	}
+	code, out := runStep(t, t.TempDir(), script, "IM_BUILT=false", "IM_USED=example/instance-manager:dev")
+	if code == 0 || !strings.Contains(out, "example/instance-manager:dev") {
+		t.Errorf("the built image is not used: exit %d\n%s", code, out)
 	}
 }

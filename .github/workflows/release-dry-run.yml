@@ -72,6 +72,12 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      # Nothing from the checked-out commit runs before this step: it refuses
+      # a commit that is not an ancestor of main, so every later step that
+      # runs repository code (the image builds, make) runs only code already
+      # merged to main. The full ref name: a tag called origin/main would
+      # otherwise be read first. The image creation label is the commit time,
+      # not the time of this run.
       - name: Resolve the commit and check that it is on main
         id: meta
         env:
@@ -82,14 +88,15 @@ jobs:
             echo "::error::Checked out $sha, not the requested commit $INPUT_SHA"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$sha" origin/main; then
+          if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
             echo "::error::Commit $sha is not on main; a release is built only from a main commit"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/images"
           {
             echo "sha=$sha"
-            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "created=$(TZ=UTC0 git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "$sha")"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
 
       # The duplicate-version guard. Anything but "no tag and no release" stops
@@ -118,11 +125,14 @@ jobs:
       # Same Dockerfile, context and build arguments as `make docker-build`
       # (BASE_IMAGE left at its default) and as the development images. The
       # image goes to an OCI archive on the runner, never to a registry; no
-      # build cache is read or written. The digest is that of this build:
-      # the base images are mutable, so a later rebuild can differ.
+      # build cache is read or written, and no build record is uploaded as an
+      # artifact. The digest is that of this build: the base images are
+      # mutable, so a later rebuild can differ.
       - name: Build the manager image without pushing
         id: manager
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           file: Dockerfile
@@ -143,6 +153,8 @@ jobs:
       - name: Build the Instance Manager image without pushing
         id: instance-manager
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           file: build/instance-manager/Dockerfile
@@ -158,14 +170,18 @@ jobs:
             org.opencontainers.image.version=${{ inputs.version }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
-      # No module cache: setup-go would otherwise save one from the built
-      # commit's code under main's scope, state that outlives the run.
+      # No module cache: setup-go would otherwise save one under main's scope,
+      # state that outlives the run.
       - name: Setup Go
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
 
+      # make runs the commit's own code. The defense against cache poisoning is
+      # that this commit is an ancestor of main (checked above), not the job's
+      # permissions: code running in a job on main could still reach the
+      # runner's cache token whatever `permissions:` says.
       # build-installer regenerates the CRDs, RBAC and DeepCopy code first. A
       # commit whose generated files are stale would publish manifests that do
       # not match its source, so any change to a tracked file stops the run.
@@ -182,11 +198,18 @@ jobs:
             exit 1
           fi
 
+      # Records which Instance Manager image the installer makes the manager
+      # use. If install.yaml does not name the image built here, the manager
+      # falls back to its built-in default (DefaultInstanceManagerImage), a
+      # mutable development tag; the record says so, and a step below fails
+      # the run after the upload.
       - name: Record the digests and checksums
+        id: record
         env:
           VERSION: ${{ inputs.version }}
           SHA: ${{ steps.meta.outputs.sha }}
           CREATED: ${{ steps.meta.outputs.created }}
+          BUILT: ${{ steps.meta.outputs.built }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -201,24 +224,36 @@ jobs:
               exit 1
             fi
           done
+          im_ref="$REGISTRY/instance-manager:$VERSION"
+          if grep -Fq "$im_ref" dist/install.yaml; then
+            im_built=true
+            im_used="$im_ref"
+          else
+            im_built=false
+            im_used=$(sed -n 's/^[[:space:]]*DefaultInstanceManagerImage = "\([^"]*\)"$/\1/p' \
+              internal/controller/cubridcluster_controller.go)
+            im_used="${im_used:-unknown} (the manager's built-in default; install.yaml names no Instance Manager image)"
+          fi
           out="$RUNNER_TEMP/release-dry-run"
           mkdir -p "$out"
           cp dist/install.yaml "$out/install.yaml"
           sum() { sha256sum "$1" | cut -d' ' -f1; }
           jq -n \
-            --arg version "$VERSION" --arg commit "$SHA" --arg created "$CREATED" \
+            --arg version "$VERSION" --arg commit "$SHA" --arg created "$CREATED" --arg built "$BUILT" \
             --arg workflowCommit "$WORKFLOW_SHA" --arg runId "$RUN_ID" --arg runAttempt "$RUN_ATTEMPT" \
             --arg managerRef "$REGISTRY/manager:$VERSION" --arg managerDigest "$MANAGER_DIGEST" \
             --arg managerId "$MANAGER_ID" --arg managerArchive "$(sum "$RUNNER_TEMP/images/manager.oci.tar")" \
-            --arg imRef "$REGISTRY/instance-manager:$VERSION" --arg imDigest "$IM_DIGEST" \
+            --arg imRef "$im_ref" --arg imDigest "$IM_DIGEST" \
             --arg imId "$IM_ID" --arg imArchive "$(sum "$RUNNER_TEMP/images/instance-manager.oci.tar")" \
             --arg installer "$(sum "$out/install.yaml")" \
+            --argjson imBuilt "$im_built" --arg imUsed "$im_used" \
             '{
               dryRun: true,
               published: false,
               version: $version,
               commit: $commit,
-              createdAt: $created,
+              commitTime: $created,
+              builtAt: $built,
               workflowCommit: $workflowCommit,
               runId: $runId,
               runAttempt: $runAttempt,
@@ -229,10 +264,15 @@ jobs:
                 {name: "instance-manager", reference: $imRef, platform: "linux/amd64",
                  digest: $imDigest, imageId: $imId, ociArchiveSha256: $imArchive}
               ],
-              files: [{path: "install.yaml", sha256: $installer}]
+              files: [{path: "install.yaml", sha256: $installer,
+                       usesBuiltInstanceManagerImage: $imBuilt, instanceManagerImage: $imUsed}]
             }' > "$out/release-dry-run.json"
           (cd "$out" && sha256sum install.yaml release-dry-run.json > SHA256SUMS)
           cat "$out/release-dry-run.json" "$out/SHA256SUMS"
+          {
+            echo "im_built=$im_built"
+            echo "im_used=$im_used"
+          } >> "$GITHUB_OUTPUT"
 
       # The image archives stay on the runner: they are large, and a release
       # rebuilds rather than reuses them.
@@ -243,6 +283,17 @@ jobs:
           path: ${{ runner.temp }}/release-dry-run/
           if-no-files-found: error
 
+      # After the upload, so the record of a failing candidate is kept.
+      - name: Require the installer to use the Instance Manager image built here
+        env:
+          IM_BUILT: ${{ steps.record.outputs.im_built }}
+          IM_USED: ${{ steps.record.outputs.im_used }}
+        run: |
+          if [ "$IM_BUILT" != true ]; then
+            echo "::error::install.yaml does not name the Instance Manager image built here; an installed release would run $IM_USED"
+            exit 1
+          fi
+
       # Also after a failed step, so a partial run says how far it got.
       - name: Write the result to the job summary
         if: always()
@@ -251,6 +302,7 @@ jobs:
           SHA: ${{ steps.meta.outputs.sha }}
           MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
           IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+          IM_USED: ${{ steps.record.outputs.im_used }}
           JOB_STATUS: ${{ job.status }}
         run: |
           {
@@ -266,4 +318,6 @@ jobs:
             echo "|---|---|"
             echo "| manager | ${MANAGER_DIGEST:-(not built)} |"
             echo "| instance-manager | ${IM_DIGEST:-(not built)} |"
+            echo
+            echo "Instance Manager image the installer makes the manager use: ${IM_USED:-(not recorded)}"
           } >> "$GITHUB_STEP_SUMMARY"
