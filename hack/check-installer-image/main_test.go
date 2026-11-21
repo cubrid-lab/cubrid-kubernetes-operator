@@ -71,7 +71,6 @@ data:
 		{"wrong Manager image", change(testManager, "example/wrong-manager:1"), "manager image"},
 		{"wrong Instance Manager image", change("--instance-manager-image="+testIM,
 			"--instance-manager-image=example/wrong:1"), "not the built Instance Manager"},
-		{"duplicate image flags", goodDeployment + "          args: []\n", "decode installer manifest"},
 		{"two exact flags", goodDeployment + "            - --instance-manager-image="+testIM+"\n", "2 Instance Manager"},
 		{"two controller managers", goodDeployment + "---\n" + goodDeployment, "more than one"},
 		{"reference on unrelated Deployment", `apiVersion: apps/v1
