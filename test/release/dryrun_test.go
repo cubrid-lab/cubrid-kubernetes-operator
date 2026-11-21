@@ -353,9 +353,9 @@ func gitRepo(t *testing.T) (dir, a, b string, git func(args ...string) string) {
 	return dir, a, b, git
 }
 
-// The step that confirms the checked-out commit and refuses one that is not
-// on main runs as the runner would, in a repository whose origin/main is
-// known. A tag named origin/main must not stand in for main.
+// The initial checkout is the trusted workflow revision. This step checks
+// that it and the requested source are both on main *before* switching to the
+// candidate. A tag named origin/main must not stand in for the remote ref.
 func TestDryRunBuildsOnlyMainCommits(t *testing.T) {
 	_, _, j := readDryRun(t)
 	script := j.Steps[stepIndex(t, j, metaStepName)].Run
@@ -417,10 +417,9 @@ func TestDryRunBuildsOnlyMainCommits(t *testing.T) {
 	}
 }
 
-// No code from the checked-out commit runs before it is known to be on main:
-// every step that runs make or a Docker action comes after the ancestry
-// check. No checkout leaves a credential in the repository, and the stale
-// generated file check follows make build-installer.
+// No candidate source is checked out before the trusted main-ancestry
+// checks; every step that runs make or Docker follows them. No checkout
+// leaves credentials, and generated-file changes still stop the dry run.
 func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 	_, _, j := readDryRun(t)
 	meta := stepIndex(t, j, metaStepName)
