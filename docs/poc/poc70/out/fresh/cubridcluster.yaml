@@ -1,0 +1,199 @@
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  annotations:
+    database.cubrid.io/member-spread-default: Required
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"database.cubrid.io/v1alpha1","kind":"CubridCluster","metadata":{"annotations":{},"name":"csql-read-check","namespace":"csql-read-check"},"spec":{"databases":[{"name":"appdb"}],"highAvailability":{"enabled":true},"objectStorage":{"bucket":"cubrid-seed","credentialsSecretRef":{"name":"object-storage"},"endpoint":"seaweedfs.object-store.svc:8333","insecure":true,"prefix":"lab-runs/csql-read-check-20261121t0537z"},"placement":{"memberSpread":"Required"},"resources":{"requests":{"cpu":"150m","memory":"640Mi"}},"storage":{"data":{"size":"2Gi","storageClassName":"local-path"}},"topology":{"promotableMembers":3,"readReplicas":0},"version":"11.4"}}
+  creationTimestamp: "2026-11-21T05:37:34Z"
+  generation: 1
+  name: csql-read-check
+  namespace: csql-read-check
+  resourceVersion: "5036055"
+  uid: 1b7af3de-d2c2-4812-844e-b861aa66d2ce
+spec:
+  databases:
+  - name: appdb
+  highAvailability:
+    enabled: true
+    fencingPolicy: Manual
+  objectStorage:
+    bucket: cubrid-seed
+    credentialsSecretRef:
+      name: object-storage
+    endpoint: seaweedfs.object-store.svc:8333
+    insecure: true
+    prefix: lab-runs/csql-read-check-20261121t0537z
+  placement:
+    memberSpread: Required
+  resources:
+    requests:
+      cpu: 150m
+      memory: 640Mi
+  storage:
+    data:
+      size: 2Gi
+      storageClassName: local-path
+    retentionPolicy: Retain
+  topology:
+    promotableMembers: 3
+    readReplicas: 0
+  version: "11.4"
+status:
+  conditions:
+  - lastTransitionTime: "2026-11-21T05:37:51Z"
+    message: each of the 3 members runs on a node of its own
+    observedGeneration: 1
+    reason: MembersOnSeparateNodes
+    status: "True"
+    type: MemberPlacement
+  - lastTransitionTime: "2026-11-21T05:39:49Z"
+    message: database appdb was created on csql-read-check-0 and copied to the other
+      members
+    observedGeneration: 1
+    reason: PeersSeeded
+    status: "True"
+    type: BootstrapReady
+  - lastTransitionTime: "2026-11-21T05:39:25Z"
+    message: 'current primary: csql-read-check-0'
+    observedGeneration: 1
+    reason: SinglePrimaryObserved
+    status: "True"
+    type: PrimaryResolved
+  - lastTransitionTime: "2026-11-21T05:38:50Z"
+    message: every observed slave applies the master's log
+    observedGeneration: 1
+    reason: AppliersProgressing
+    status: "True"
+    type: ReplicationHealthy
+  - lastTransitionTime: "2026-11-21T05:39:49Z"
+    message: 'single primary resolved: csql-read-check-0'
+    observedGeneration: 1
+    reason: HealthyReplication
+    status: "True"
+    type: HAReady
+  - lastTransitionTime: "2026-11-21T05:37:39Z"
+    message: 2 of 2 rw Broker Pods available behind csql-read-check-rw
+    observedGeneration: 1
+    reason: BrokerAvailable
+    status: "True"
+    type: WriteEndpointReady
+  - lastTransitionTime: "2026-11-21T05:37:38Z"
+    message: 2 of 2 ro Broker Pods available behind csql-read-check-ro
+    observedGeneration: 1
+    reason: BrokerAvailable
+    status: "True"
+    type: ReadEndpointReady
+  - lastTransitionTime: "2026-11-21T05:37:39Z"
+    message: read-write and read-only Brokers are available
+    observedGeneration: 1
+    reason: BrokersAvailable
+    status: "True"
+    type: BrokerReady
+  - lastTransitionTime: "2026-11-21T05:39:26Z"
+    message: 'RW routing target resolved: csql-read-check-0'
+    observedGeneration: 1
+    reason: PrimaryResolved
+    status: "True"
+    type: RoutingReady
+  - lastTransitionTime: "2026-11-21T05:37:35Z"
+    message: all members run the desired revision
+    observedGeneration: 1
+    reason: UpToDate
+    status: "False"
+    type: Updating
+  - lastTransitionTime: "2026-11-21T05:39:49Z"
+    message: 3/3 instances ready
+    observedGeneration: 1
+    reason: ClusterReady
+    status: "True"
+    type: Ready
+  - lastTransitionTime: "2026-11-21T05:39:49Z"
+    message: cluster reconciled
+    observedGeneration: 1
+    reason: Reconciled
+    status: "False"
+    type: Progressing
+  currentPrimary: csql-read-check-0
+  databases:
+  - bootstrapOperationID: op-dff8b76a5d6f99f6eae13dff34e068e2
+    haConfigured: true
+    name: appdb
+    phase: Created
+    primaryCreated: true
+    seedActiveMasterSince: "2026-11-21T05:39:25Z"
+    seededMembers:
+    - csql-read-check-1
+    - csql-read-check-2
+  instances:
+  - lastObservedTime: "2026-11-21T05:44:25Z"
+    name: csql-read-check-0
+    observedEngineVersion: 11.4.7.1995
+    ready: true
+    role: master
+  - lastObservedTime: "2026-11-21T05:44:25Z"
+    name: csql-read-check-1
+    observedEngineVersion: 11.4.7.1995
+    ordinal: 1
+    ready: true
+    replication:
+      appliedChanges: 21
+      applier: pid:533:346247023
+      observedAt: "2026-11-21T05:44:25Z"
+      source: csql-read-check-0
+    role: slave
+  - lastObservedTime: "2026-11-21T05:44:25Z"
+    name: csql-read-check-2
+    observedEngineVersion: 11.4.7.1995
+    ordinal: 2
+    ready: true
+    replication:
+      appliedChanges: 21
+      applier: pid:891:346251735
+      observedAt: "2026-11-21T05:44:25Z"
+      source: csql-read-check-0
+    role: slave
+  lastObservedTime: "2026-11-21T05:44:25Z"
+  lastResolvedPrimary: csql-read-check-0
+  lastResolvedPrimaryTime: "2026-11-21T05:44:25Z"
+  memberDataClaims:
+  - claimUID: a3a63f97-9a97-48fd-a387-b3d2d7515edd
+    name: csql-read-check-1
+    volumeName: pvc-a3a63f97-9a97-48fd-a387-b3d2d7515edd
+  - claimUID: de0c9a93-11bd-48ea-8865-91bc79d35adb
+    name: csql-read-check-0
+    volumeName: pvc-de0c9a93-11bd-48ea-8865-91bc79d35adb
+  - claimUID: 3f38def3-957c-4a93-8144-2a93926026c8
+    name: csql-read-check-2
+    volumeName: pvc-3f38def3-957c-4a93-8144-2a93926026c8
+  memberPods:
+  - name: csql-read-check-0
+    nodeName: cubrid-k8s-worker-3
+    nodePodCreated: "2026-11-21T05:37:35Z"
+    nodePodUID: 23a848eb-abc9-4aec-ab3c-cbf2d610d2cc
+    podUID: 23a848eb-abc9-4aec-ab3c-cbf2d610d2cc
+  - name: csql-read-check-1
+    nodeName: cubrid-k8s-worker-1
+    nodePodCreated: "2026-11-21T05:37:35Z"
+    nodePodUID: d85c7fc1-b593-4ea0-a41f-f5d0e27d1bec
+    podUID: d85c7fc1-b593-4ea0-a41f-f5d0e27d1bec
+  - name: csql-read-check-2
+    nodeName: cubrid-k8s-worker-2
+    nodePodCreated: "2026-11-21T05:37:35Z"
+    nodePodUID: 2207124c-658a-437e-bea3-de52249e24e3
+    podUID: 2207124c-658a-437e-bea3-de52249e24e3
+  memberVerifications:
+  - lastNonMasterAt: "2026-11-21T05:44:25Z"
+    name: csql-read-check-1
+    nonMasterSince: "2026-11-21T05:38:51Z"
+    podUID: d85c7fc1-b593-4ea0-a41f-f5d0e27d1bec
+  - lastNonMasterAt: "2026-11-21T05:44:25Z"
+    name: csql-read-check-2
+    nonMasterSince: "2026-11-21T05:39:26Z"
+    podUID: 2207124c-658a-437e-bea3-de52249e24e3
+  observedEngineVersion: 11.4.7.1995
+  observedGeneration: 1
+  update:
+    currentRevision: csql-read-check-585dd6f55
+    desiredRevision: csql-read-check-585dd6f55
+    engineVersion: 11.4.7.1995

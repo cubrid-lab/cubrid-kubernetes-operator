@@ -1,0 +1,120 @@
+
+Time: 11/21/26 05:34:30.189 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(23407), EID = 1765
+Session expired.
+
+Time: 11/21/26 05:34:30.581 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(23491), EID = 1770
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:30.581 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(23491), EID = 1771
+Session expired.
+
+Time: 11/21/26 05:34:33.166 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(24045), EID = 1798
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:33.166 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(24045), EID = 1799
+Session expired.
+
+Time: 11/21/26 05:34:36.666 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(24788), EID = 1836
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:36.666 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(24788), EID = 1837
+Session expired.
+
+Time: 11/21/26 05:34:39.704 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(25441), EID = 1869
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:39.704 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(25441), EID = 1870
+Session expired.
+
+Time: 11/21/26 05:34:41.636 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(25841), EID = 1890
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:41.637 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(25841), EID = 1891
+Session expired.
+
+Time: 11/21/26 05:34:47.850 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(27160), EID = 1955
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:47.850 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(27160), EID = 1956
+Session expired.
+
+Time: 11/21/26 05:34:48.822 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(27370), EID = 1967
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:48.822 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(27370), EID = 1968
+Session expired.
+
+Time: 11/21/26 05:34:49.018 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(27412), EID = 1971
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:49.018 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(27412), EID = 1972
+Session expired.
+
+Time: 11/21/26 05:34:49.336 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(27475), EID = 1976
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:49.336 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(27475), EID = 1977
+Session expired.
+
+Time: 11/21/26 05:35:01.740 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(30046), EID = 2100
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:01.740 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(30046), EID = 2101
+Session expired.
+
+Time: 11/21/26 05:35:07.033 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(31127), EID = 2154
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:07.033 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(31127), EID = 2155
+Session expired.
+
+Time: 11/21/26 05:35:07.135 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(31148), EID = 2157
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:07.135 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(31148), EID = 2158
+Session expired.
+
+Time: 11/21/26 05:35:12.030 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(32160), EID = 2207
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:12.030 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(32160), EID = 2208
+Session expired.
+
+Time: 11/21/26 05:35:13.224 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(32412), EID = 2221
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:13.224 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(32412), EID = 2222
+Session expired.
+
+Time: 11/21/26 05:35:15.245 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(32836), EID = 2243
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:15.245 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(32836), EID = 2244
+Session expired.
+
+Time: 11/21/26 05:35:21.513 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(34153), EID = 2308
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:21.513 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(34153), EID = 2309
+Session expired.
+
+Time: 11/21/26 05:35:27.537 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(35414), EID = 2370
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:27.537 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(35414), EID = 2371
+Session expired.
+
+Time: 11/21/26 05:35:29.879 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(35918), EID = 2396
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:29.879 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(35918), EID = 2397
+Session expired.
+
+Time: 11/21/26 05:35:40.229 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-1:csql(38078), EID = 2501
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:35:40.229 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-1:csql(38078), EID = 2502
+Session expired.
+
+*** The previous error message is the last one. ***
+

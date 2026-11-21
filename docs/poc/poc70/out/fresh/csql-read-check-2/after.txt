@@ -1,0 +1,75 @@
+utc: 2026-11-21T05:40:41.805051Z
+hostname: csql-read-check-2
+uptime: 3462601.42 4632813.66
+loadavg: 6.49 3.18 1.72 1/988 18043
+process: pid=567 startTicks=346251420 start=2026-11-21T05:39:14Z cmd=cub_master 
+process: pid=600 startTicks=346251525 start=2026-11-21T05:39:15Z cmd=cub_server appdb 
+--- cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current csql-read-check-2, state slave)
+   Node csql-read-check-2 (priority 3, state slave)
+   Node csql-read-check-1 (priority 2, state slave)
+   Node csql-read-check-0 (priority 1, state master)
+
+
+ HA-Process Info (master 567, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_csql-read-check-1 (pid 893, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_csql-read-check-0 (pid 891, state registered)
+   Copylogdb appdb@csql-read-check-1:/var/lib/cubrid/databases/appdb_csql-read-check-1 (pid 889, state registered)
+   Copylogdb appdb@csql-read-check-0:/var/lib/cubrid/databases/appdb_csql-read-check-0 (pid 887, state registered)
+   Server appdb (pid 600, state registered_and_standby)
+
+--- cubrid changemode appdb@localhost
+The server 'appdb@localhost''s current HA running mode is standby.
+--- server logs
+total 256
+-rw-r--r-- 1 cubrid cubrid 252021 2026-11-21 05:40:41.977119694 +0000 appdb.access
+-rw-r--r-- 1 cubrid cubrid   5745 2026-11-21 05:40:24.754969840 +0000 appdb.err
+-rw-r--r-- 1 cubrid cubrid      0 2026-11-21 05:39:15.680406460 +0000 appdb_20261121_0539.event
+lrwxrwxrwx 1 cubrid cubrid     43 2026-11-21 05:39:15.680406460 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+lrwxrwxrwx 1 cubrid cubrid     40 2026-11-21 05:39:15.680406460 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+lrwxrwxrwx 1 cubrid cubrid     56 2026-11-21 05:39:15.680406460 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261121_0539.event
+appdb.err lines: 75
+appdb.access lines: 2481
+--- tail -n 40 appdb.err
+Session expired.
+
+Time: 11/21/26 05:39:43.285 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(5409), EID = 238
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:39:43.285 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = csql-read-check-2:csql(5409), EID = 239
+Session expired.
+
+Time: 11/21/26 05:39:45.196 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(5829), EID = 260
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:39:45.196 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = csql-read-check-2:csql(5829), EID = 261
+Session expired.
+
+Time: 11/21/26 05:39:53.207 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(7541), EID = 344
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:40:04.030 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(9927), EID = 458
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:40:19.035 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(13195), EID = 614
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:40:20.191 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(13447), EID = 627
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:40:20.191 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = csql-read-check-2:csql(13447), EID = 628
+Session expired.
+
+Time: 11/21/26 05:40:24.361 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(14322), EID = 671
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:40:24.361 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = csql-read-check-2:csql(14322), EID = 672
+Session expired.
+
+Time: 11/21/26 05:40:24.755 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = csql-read-check-2:csql(14406), EID = 677
+Set interrupt to the transaction 5.
+
+*** The previous error message is the last one. ***
+

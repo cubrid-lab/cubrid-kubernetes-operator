@@ -1,0 +1,185 @@
+=== 2026-11-21T05:43:34.964Z unix rc=0
+
+Time: 11/21/26 05:43:35.194 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 23274) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.003000 sec) Committed. (0.000000 sec) 
+
+Time: 11/21/26 05:43:35.220 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 5, EID = 2
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:43:35.220 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 5, EID = 3
+Your transaction has been aborted by the system due to server failure or mode change.
+=== 2026-11-21T05:43:53.071Z unix rc=0
+
+Time: 11/21/26 05:43:53.396 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 23707) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.003000 sec) Committed. (0.000000 sec) 
+
+Time: 11/21/26 05:43:53.421 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 5, EID = 2
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:43:53.421 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 5, EID = 3
+Your transaction has been aborted by the system due to server failure or mode change.
+=== 2026-11-21T05:44:14.790Z unix rc=0
+
+Time: 11/21/26 05:44:15.072 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 24215) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.003000 sec) Committed. (0.000000 sec) 
+
+Time: 11/21/26 05:44:15.094 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 5, EID = 2
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:44:15.094 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 5, EID = 3
+Your transaction has been aborted by the system due to server failure or mode change.
+=== 2026-11-21T05:44:16.811Z unix rc=0
+
+Time: 11/21/26 05:44:17.038 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 24268) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:44:17.059 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 5, EID = 2
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:44:17.059 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 5, EID = 3
+Your transaction has been aborted by the system due to server failure or mode change.
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.002000 sec) Committed. (0.000000 sec) 
+=== 2026-11-21T05:44:17.086Z unix rc=0
+
+Time: 11/21/26 05:44:17.364 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 24274) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.002000 sec) Committed. (0.000000 sec) 
+
+Time: 11/21/26 05:44:17.387 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 5, EID = 2
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:44:17.387 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 5, EID = 3
+Your transaction has been aborted by the system due to server failure or mode change.

@@ -1,0 +1,3 @@
+lab: "vm-lab" (context "default") is held for this run
+lab: passing terminated on to process group 1359971; a second signal sends it SIGTERM, a third SIGKILL
+lab: "vm-lab" released

@@ -1,0 +1,62 @@
+utc: 2026-11-21T05:39:20.419100Z
+hostname: csql-read-check-0
+uptime: 121966.66 185958.64
+loadavg: 0.90 0.66 0.71 2/813 1456
+process: pid=159 startTicks=12189766 start=2026-11-21T05:38:10Z cmd=cub_master 
+process: pid=182 startTicks=12189871 start=2026-11-21T05:38:11Z cmd=cub_server appdb 
+--- cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current csql-read-check-0, state master)
+   Node csql-read-check-2 (priority 3, state slave)
+   Node csql-read-check-1 (priority 2, state slave)
+   Node csql-read-check-0 (priority 1, state master)
+
+
+ HA-Process Info (master 159, state master)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_csql-read-check-2 (pid 450, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_csql-read-check-1 (pid 448, state registered)
+   Copylogdb appdb@csql-read-check-2:/var/lib/cubrid/databases/appdb_csql-read-check-2 (pid 446, state registered)
+   Copylogdb appdb@csql-read-check-1:/var/lib/cubrid/databases/appdb_csql-read-check-1 (pid 444, state registered)
+   Server appdb (pid 182, state registered_and_active)
+
+--- cubrid changemode appdb@localhost
+The server 'appdb@localhost''s current HA running mode is active.
+--- server logs
+total 8
+-rw-r--r-- 1 cubrid cubrid 2536 2026-11-21 05:39:20.647365520 +0000 appdb.access
+-rw-r--r-- 1 cubrid cubrid 2173 2026-11-21 05:39:19.193342556 +0000 appdb.err
+-rw-r--r-- 1 cubrid cubrid    0 2026-11-21 05:38:12.504287904 +0000 appdb_20261121_0538.event
+lrwxrwxrwx 1 cubrid cubrid   43 2026-11-21 05:38:12.504287904 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+lrwxrwxrwx 1 cubrid cubrid   40 2026-11-21 05:38:12.504287904 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+lrwxrwxrwx 1 cubrid cubrid   56 2026-11-21 05:38:12.504287904 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261121_0538.event
+appdb.err lines: 27
+appdb.access lines: 27
+--- tail -n 40 appdb.err
+
+Time: 11/21/26 05:38:13.977 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 1
+Server HA mode is changed from 'idle' to 'standby'.
+
+Time: 11/21/26 05:38:13.977 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0, CLIENT = :(0), EID = 2
+Server status is UP.
+
+Time: 11/21/26 05:38:24.559 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 5
+Server HA mode is changed from 'standby' to 'to-be-active'.
+
+Time: 11/21/26 05:38:30.669 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8372  CODE = -1087, Tran = 3, CLIENT = csql-read-check-0:backupdb(647), EID = 7
+Backup active log '/var/lib/cubrid/databases/appdb/appdb_lgat' started.
+
+Time: 11/21/26 05:38:30.749 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8486  CODE = -1088, Tran = 3, CLIENT = csql-read-check-0:backupdb(647), EID = 8
+Backup active log '/var/lib/cubrid/databases/appdb/appdb_lgat' finished.
+
+Time: 11/21/26 05:38:56.348 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8372  CODE = -1087, Tran = 4, CLIENT = csql-read-check-0:backupdb(1078), EID = 11
+Backup active log '/var/lib/cubrid/databases/appdb/appdb_lgat' started.
+
+Time: 11/21/26 05:38:56.422 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8486  CODE = -1088, Tran = 4, CLIENT = csql-read-check-0:backupdb(1078), EID = 12
+Backup active log '/var/lib/cubrid/databases/appdb/appdb_lgat' finished.
+
+Time: 11/21/26 05:39:19.194 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 2, CLIENT = csql-read-check-0:applylogdb(450), EID = 14
+Server HA mode is changed from 'to-be-active' to 'active'.
+
+*** The previous error message is the last one. ***
+

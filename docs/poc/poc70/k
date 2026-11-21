@@ -1,0 +1,3 @@
+#!/bin/sh
+# kubectl against the VM lab only: the lab kubeconfig and its one context.
+exec env KUBECONFIG="$HOME/kubeconfig.yaml" kubectl --context default "$@"

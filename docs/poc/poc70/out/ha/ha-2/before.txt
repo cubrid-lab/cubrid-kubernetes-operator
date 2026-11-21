@@ -1,0 +1,75 @@
+utc: 2026-11-21T05:35:43.780073Z
+hostname: ha-2
+uptime: 3462291.41 4889751.79
+loadavg: 0.75 0.69 0.88 1/620 21485
+process: pid=30 startTicks=344714493 start=2026-11-21T01:23:16Z cmd=cub_master 
+process: pid=39 startTicks=344714598 start=2026-11-21T01:23:17Z cmd=cub_server appdb 
+--- cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current ha-2, state slave)
+   Node ha-2 (priority 3, state slave)
+   Node ha-1 (priority 2, state slave)
+   Node ha-0 (priority 1, state master)
+
+
+ HA-Process Info (master 30, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_ha-1 (pid 298, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_ha-0 (pid 296, state registered)
+   Copylogdb appdb@ha-1:/var/lib/cubrid/databases/appdb_ha-1 (pid 294, state registered)
+   Copylogdb appdb@ha-0:/var/lib/cubrid/databases/appdb_ha-0 (pid 292, state registered)
+   Server appdb (pid 39, state registered_and_standby)
+
+--- cubrid changemode appdb@localhost
+The server 'appdb@localhost''s current HA running mode is standby.
+--- server logs
+total 484
+-rw-r--r-- 1 cubrid cubrid 436669 2026-11-21 05:35:43.971822065 +0000 appdb.access
+-rw-r--r-- 1 cubrid cubrid  46962 2026-11-21 05:35:20.165384610 +0000 appdb.err
+-rw-r--r-- 1 cubrid cubrid      0 2026-11-21 01:23:18.406306672 +0000 appdb_20261121_0123.event
+lrwxrwxrwx 1 cubrid cubrid     43 2026-11-21 01:23:18.406306672 +0000 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb.access
+lrwxrwxrwx 1 cubrid cubrid     40 2026-11-21 01:23:18.406306672 +0000 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb.err
+lrwxrwxrwx 1 cubrid cubrid     56 2026-11-21 01:23:18.406306672 +0000 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261121_0123.event
+appdb.err lines: 555
+appdb.access lines: 4530
+--- tail -n 40 appdb.err
+Checkpoint finished (checkpoint page id: 76961, checkpoint redo page id: 76961, flushed page count: 2).
+
+Time: 11/21/26 05:17:19.932 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 1573
+Checkpoint started (previous checkpoint page id: 76961, previous redo page id: 76961).
+
+Time: 11/21/26 05:17:20.044 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 1574
+Checkpoint finished (checkpoint page id: 76994, checkpoint redo page id: 76994, flushed page count: 2).
+
+Time: 11/21/26 05:23:19.932 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 1610
+Checkpoint started (previous checkpoint page id: 76994, previous redo page id: 76994).
+
+Time: 11/21/26 05:23:20.044 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 1611
+Checkpoint finished (checkpoint page id: 77027, checkpoint redo page id: 77027, flushed page count: 2).
+
+Time: 11/21/26 05:29:19.932 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 1648
+Checkpoint started (previous checkpoint page id: 77027, previous redo page id: 77027).
+
+Time: 11/21/26 05:29:20.322 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 1649
+Checkpoint finished (checkpoint page id: 77060, checkpoint redo page id: 77060, flushed page count: 2).
+
+Time: 11/21/26 05:33:54.482 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-2:applyinfo(21331), EID = 1677
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:33:54.482 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-2:applyinfo(21331), EID = 1678
+Session expired.
+
+Time: 11/21/26 05:34:35.237 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_tran_table.c, line 2767  CODE = -982, Tran = 5, CLIENT = ha-2:applyinfo(21387), EID = 1683
+Set interrupt to the transaction 5.
+
+Time: 11/21/26 05:34:35.237 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = ha-2:applyinfo(21387), EID = 1684
+Session expired.
+
+Time: 11/21/26 05:35:19.932 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7189  CODE = -977, Tran = 0, CLIENT = :(0), EID = 1689
+Checkpoint started (previous checkpoint page id: 77060, previous redo page id: 77060).
+
+Time: 11/21/26 05:35:20.167 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 7622  CODE = -978, Tran = 0, CLIENT = :(0), EID = 1690
+Checkpoint finished (checkpoint page id: 77093, checkpoint redo page id: 77093, flushed page count: 2).
+
+*** The previous error message is the last one. ***
+
