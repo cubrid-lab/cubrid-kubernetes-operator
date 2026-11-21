@@ -1,0 +1,624 @@
+=== 2026-11-21T00:40:12.904Z base ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:40:12.994Z base ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                     0
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:40:13.063Z base poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:40:13.217Z base poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:13.300Z base poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:13.372Z base poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:13.444Z base poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:13.515Z base poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:13.590Z base poc69-copy-ha-1 applyinfo
+EOF LSA                        : 147 | 2888
+Append LSA                     : 147 | 2888
+HA server state                : active
+rc=0
+=== 2026-11-21T00:40:13.658Z base poc69-copy-ha-2 applyinfo
+EOF LSA                        : 147 | 2888
+Append LSA                     : 147 | 2888
+HA server state                : active
+rc=0
+=== 2026-11-21T00:40:28.727Z base ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:40:28.824Z base ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    10
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:40:28.917Z base poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:40:29.059Z base poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:29.144Z base poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:29.237Z base poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:29.329Z base poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:29.406Z base poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:29.497Z base poc69-copy-ha-1 applyinfo
+EOF LSA                        : 147 | 14488
+Append LSA                     : 147 | 14488
+HA server state                : active
+rc=0
+=== 2026-11-21T00:40:29.577Z base poc69-copy-ha-2 applyinfo
+EOF LSA                        : 147 | 14488
+Append LSA                     : 147 | 14488
+HA server state                : active
+rc=0
+=== 2026-11-21T00:40:45.360Z all-1 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:40:45.502Z all-1 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    10
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:40:45.576Z all-1 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:40:45.649Z all-1 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:45.730Z all-1 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:45.803Z all-1 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:45.877Z all-1 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:40:45.949Z all-1 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:40:46.027Z all-1 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 148 | 1320
+Append LSA                     : 148 | 1320
+HA server state                : active
+rc=0
+=== 2026-11-21T00:40:46.094Z all-1 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 148 | 1320
+Append LSA                     : 148 | 1320
+HA server state                : active
+rc=0
+=== 2026-11-21T00:41:01.172Z all-1 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:41:01.700Z all-1 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    25
+1 row selected. (0.463995 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:41:02.321Z all-1 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:41:02.421Z all-1 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:41:02.495Z all-1 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:41:02.703Z all-1 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:41:02.808Z all-1 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:41:02.909Z all-1 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:41:02.991Z all-1 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 148 | 13400
+Append LSA                     : 148 | 13400
+HA server state                : active
+rc=0
+=== 2026-11-21T00:41:03.082Z all-1 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 148 | 13400
+Append LSA                     : 148 | 13400
+HA server state                : active
+rc=0
+=== 2026-11-21T00:41:59.916Z one-1 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:42:00.012Z one-1 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    25
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:42:00.080Z one-1 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:42:00.157Z one-1 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:00.247Z one-1 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:00.322Z one-1 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:00.417Z one-1 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:00.498Z one-1 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:00.576Z one-1 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 149 | 4632
+Append LSA                     : 149 | 4632
+HA server state                : active
+rc=0
+=== 2026-11-21T00:42:00.646Z one-1 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 149 | 4632
+Append LSA                     : 149 | 4632
+HA server state                : active
+rc=0
+=== 2026-11-21T00:42:15.719Z one-1 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:42:15.816Z one-1 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    40
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:42:15.908Z one-1 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:42:16.004Z one-1 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:16.077Z one-1 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:16.147Z one-1 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:16.226Z one-1 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:16.298Z one-1 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:16.376Z one-1 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 150 | 2712
+Append LSA                     : 150 | 2712
+HA server state                : active
+rc=0
+=== 2026-11-21T00:42:16.449Z one-1 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 150 | 2712
+Append LSA                     : 150 | 2712
+HA server state                : active
+rc=0
+=== 2026-11-21T00:42:31.530Z one-1 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:42:31.693Z one-1 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    40
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:42:31.817Z one-1 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:42:31.897Z one-1 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:31.971Z one-1 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:32.056Z one-1 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:32.134Z one-1 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:42:32.208Z one-1 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:42:32.284Z one-1 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 150 | 5912
+Append LSA                     : 150 | 5912
+HA server state                : active
+rc=0
+=== 2026-11-21T00:42:32.359Z one-1 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 150 | 5912
+Append LSA                     : 150 | 5912
+HA server state                : active
+rc=0
+=== 2026-11-21T00:43:18.897Z all-2 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:43:18.978Z all-2 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    40
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:43:19.067Z all-2 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:43:19.136Z all-2 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:19.220Z all-2 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:19.297Z all-2 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:19.384Z all-2 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:19.451Z all-2 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:19.524Z all-2 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 151 | 1528
+Append LSA                     : 151 | 1528
+HA server state                : active
+rc=0
+=== 2026-11-21T00:43:19.590Z all-2 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 151 | 1528
+Append LSA                     : 151 | 1528
+HA server state                : active
+rc=0
+=== 2026-11-21T00:43:34.661Z all-2 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:43:34.768Z all-2 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    55
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:43:34.833Z all-2 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:43:34.901Z all-2 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:34.971Z all-2 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:35.043Z all-2 poc69-copy-ha-1 processes
+408 State: T (stopped) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:35.113Z all-2 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:35.190Z all-2 poc69-copy-ha-2 processes
+408 State: T (stopped) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:35.269Z all-2 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 151 | 1816
+Append LSA                     : 151 | 1816
+HA server state                : dead
+rc=0
+=== 2026-11-21T00:43:35.342Z all-2 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 151 | 2456
+Append LSA                     : 151 | 2456
+HA server state                : dead
+rc=0
+=== 2026-11-21T00:43:50.415Z all-2 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:43:50.541Z all-2 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    55
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:43:50.633Z all-2 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:43:50.730Z all-2 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:50.806Z all-2 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:50.877Z all-2 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:50.949Z all-2 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:43:51.025Z all-2 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:43:51.099Z all-2 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 151 | 11704
+Append LSA                     : 151 | 11704
+HA server state                : active
+rc=0
+=== 2026-11-21T00:43:51.165Z all-2 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 151 | 11704
+Append LSA                     : 151 | 11704
+HA server state                : active
+rc=0
+=== 2026-11-21T00:44:37.730Z one-2 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:44:37.810Z one-2 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    55
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:44:37.877Z one-2 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:44:37.947Z one-2 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:38.024Z one-2 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:44:38.092Z one-2 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:38.163Z one-2 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:44:38.246Z one-2 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:38.320Z one-2 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 152 | 2480
+Append LSA                     : 152 | 2480
+HA server state                : active
+rc=0
+=== 2026-11-21T00:44:38.386Z one-2 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 152 | 2480
+Append LSA                     : 152 | 2480
+HA server state                : active
+rc=0
+=== 2026-11-21T00:44:53.452Z one-2 ha-0 heartbeat
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state slave)
+   Node poc69-copy-ha-0 (priority 1, state master)
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 412, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 410, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Server appdb (pid 141, state registered_and_active)
+rc=0
+=== 2026-11-21T00:44:53.545Z one-2 ha-0 read
+=== <Result of SELECT Command in Line 1> ===
+              count(*)
+                    70
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+=== 2026-11-21T00:44:53.636Z one-2 poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+rc=0
+=== 2026-11-21T00:44:53.730Z one-2 poc69-copy-ha-0 processes
+406 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+410 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:53.822Z one-2 poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:44:53.890Z one-2 poc69-copy-ha-1 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:53.966Z one-2 poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+rc=0
+=== 2026-11-21T00:44:54.040Z one-2 poc69-copy-ha-2 processes
+408 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+410 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+412 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+414 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost 
+=== 2026-11-21T00:44:54.117Z one-2 poc69-copy-ha-1 applyinfo
+EOF LSA                        : 152 | 3312
+Append LSA                     : 152 | 3312
+HA server state                : dead
+rc=0
+=== 2026-11-21T00:44:54.183Z one-2 poc69-copy-ha-2 applyinfo
+EOF LSA                        : 152 | 14512
+Append LSA                     : 152 | 14512
+HA server state                : active
+rc=0

@@ -1,0 +1,316 @@
+2026-11-21T01:19:30.481Z run start, mode unbounded-one, image cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604
+sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604 ["cubrid/cubrid@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604"] linux/amd64
+2026-11-21T01:19:30.508Z host: 6 CPUs,  10:19:30 up 9 days, 13:38, 15 users,  load average: 14.72, 14.62, 15.52
+left: containers=[] networks=[]
+setup start 2026-11-21T01:19:30.557Z
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+## poc69-copy-ha-0 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+ha_copy_log_timeout=-1
+## poc69-copy-ha-1 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+ha_copy_log_timeout=-1
+## poc69-copy-ha-2 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+ha_copy_log_timeout=-1
+heartbeat start rc=0
+heartbeat start rc=0
+heartbeat start rc=0
+2026-11-21T01:21:10.997Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+Execute OK. (0.000000 sec) Committed. (0.000000 sec) 
+2026-11-21T01:21:11.164Z table t on poc69-copy-ha-1
+2026-11-21T01:21:11.253Z table t on poc69-copy-ha-2
+## 2026-11-21T01:21:11.254Z poc69-copy-ha-0
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-0, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc69-copy-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc69-copy-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 132, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 407, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:20:21.929
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 405, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:20:21.923
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 403, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 ] 
+    - registered-time   11/21/26 01:20:21.917
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 401, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 ] 
+    - registered-time   11/21/26 01:20:21.911
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 141, state registered_and_active)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/21/26 01:20:19.887
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-21T01:21:11.350Z poc69-copy-ha-1
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-1, state slave)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc69-copy-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc69-copy-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 138, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 413, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:20:47.132
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 411, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:20:47.124
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 409, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 ] 
+    - registered-time   11/21/26 01:20:47.115
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-0:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 407, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 ] 
+    - registered-time   11/21/26 01:20:47.106
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 147, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/21/26 01:20:45.120
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-21T01:21:11.436Z poc69-copy-ha-2
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-2, state slave)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc69-copy-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc69-copy-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 138, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 413, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:21:01.898
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 411, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/21/26 01:21:01.891
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 409, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 ] 
+    - registered-time   11/21/26 01:21:01.883
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc69-copy-ha-0:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 407, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 ] 
+    - registered-time   11/21/26 01:21:01.873
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 147, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/21/26 01:20:59.876
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+setup end 2026-11-21T01:21:11.517Z
+## 2026-11-21T01:21:11.520Z poc69-copy-ha-0 paramdump -b -C
+System parameters to be used by the client program.
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=5
+ha_check_disk_failure_interval=15.000 sec
+System parameters loaded by the server 'appdb@localhost'
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=-1
+ha_check_disk_failure_interval=15.000 sec
+## 2026-11-21T01:21:11.597Z poc69-copy-ha-0 copiers
+401 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+403 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+## 2026-11-21T01:21:11.668Z poc69-copy-ha-1 paramdump -b -C
+System parameters to be used by the client program.
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=5
+ha_check_disk_failure_interval=15.000 sec
+System parameters loaded by the server 'appdb@localhost'
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=-1
+ha_check_disk_failure_interval=15.000 sec
+## 2026-11-21T01:21:11.758Z poc69-copy-ha-1 copiers
+407 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+409 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+## 2026-11-21T01:21:11.848Z poc69-copy-ha-2 paramdump -b -C
+System parameters to be used by the client program.
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=5
+ha_check_disk_failure_interval=15.000 sec
+System parameters loaded by the server 'appdb@localhost'
+#
+# cubrid.conf
+#
+# system parameters were loaded from the files ([@section])
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# /home/cubrid/CUBRID/conf/cubrid.conf [@appdb]
+# /home/cubrid/CUBRID/conf/cubrid_ha.conf
+# system parameters
+ha_copy_sync_mode=""
+ha_copy_log_timeout=-1
+ha_check_disk_failure_interval=15.000 sec
+## 2026-11-21T01:21:11.920Z poc69-copy-ha-2 copiers
+407 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+409 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-copy-ha-1 
+## 2026-11-21T01:21:11.992Z auto-commit check on ha-0
+1 row affected. (0.004000 sec) 
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                     0
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+2026-11-21T01:21:12.123Z case base: stop [], hold up to 300 s, client a 10 commits, client b 0
+2026-11-21T01:21:17.126Z base SIGSTOP issued
+2026-11-21T01:21:19.146Z base before SIGCONT: client a ended, client b none
+2026-11-21T01:21:19.265Z base csql processes on ha-0: 
+2026-11-21T01:21:19.265Z base SIGCONT issued
+2026-11-21T01:21:19.268Z base after SIGCONT: client a ended, client b none
+2026-11-21T01:21:43.960Z base counts ha-0 ha-1 ha-2: 10 10 10
+2026-11-21T01:21:44.193Z base ids: ha-0=10 ha-1=10 ha-2=10 
+2026-11-21T01:21:44.260Z case one-1: stop [poc69-copy-ha-1], hold up to 120 s, client a 3 commits, client b 1
+2026-11-21T01:21:49.263Z poc69-copy-ha-1:
+sent SIGSTOP to 407
+407 State: T (stopped) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+409 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+411 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+413 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+2026-11-21T01:21:49.376Z one-1 SIGSTOP issued
+2026-11-21T01:22:33.559Z one-1 before SIGCONT: client a ended, client b ended
+2026-11-21T01:22:33.651Z one-1 csql processes on ha-0: 
+2026-11-21T01:22:33.652Z poc69-copy-ha-1:
+sent SIGCONT to 407
+407 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-copy-ha-0 
+409 State: S (sleeping) | cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-copy-ha-2 
+411 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 appdb@localhost 
+413 State: S (sleeping) | cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 appdb@localhost 
+2026-11-21T01:22:33.724Z one-1 SIGCONT issued
+2026-11-21T01:22:33.727Z one-1 after SIGCONT: client a ended, client b ended
+2026-11-21T01:23:03.602Z one-1 counts ha-0 ha-1 ha-2: 11 11 11
+2026-11-21T01:23:03.800Z one-1 ids: ha-0=11 ha-1=11 ha-2=11 
+2026-11-21T01:23:03.868Z one-1: ha-0 is no longer the active master: The server 'appdb@localhost''s current HA running mode is standby.
+2026-11-21T01:23:04.755Z case all-1 skipped: ha-0 is no longer the active master
+2026-11-21T01:23:04.756Z case one-2 skipped: ha-0 is no longer the active master
+2026-11-21T01:23:04.756Z case all-2 skipped: ha-0 is no longer the active master
+left: containers=[] networks=[]
+2026-11-21T01:23:25.436Z run end

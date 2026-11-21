@@ -1,0 +1,62 @@
+## ha-0: server
+11/21/26 01:02:19.028 [-970] Server HA mode is changed from 'idle' to 'standby'.
+11/21/26 01:02:30.027 [-970] Server HA mode is changed from 'standby' to 'to-be-active'.
+11/21/26 01:03:00.416 [-970] Server HA mode is changed from 'to-be-active' to 'active'.
+11/21/26 01:04:33.290 [-1128] Log recovery is started.
+11/21/26 01:04:34.227 [-970] Server HA mode is changed from 'idle' to 'standby'.
+## ha-0: cub_master node and process events
+11/21/26 01:02:19.033 [-989] Process event: Registered as local process entries. Success (pid:142, state:registered_and_standby, args:cub_server appdb )
+11/21/26 01:02:21.045 [-989] Process event: Registered as local process entries. Success (pid:402, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-cop
+11/21/26 01:02:21.053 [-989] Process event: Registered as local process entries. Success (pid:404, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-cop
+11/21/26 01:02:21.124 [-989] Process event: Registered as local process entries. Success (pid:406, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 app
+11/21/26 01:02:21.125 [-989] Process event: Registered as local process entries. Success (pid:408, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 app
+11/21/26 01:02:30.018 [-988] Node event: [Failover] [Success] Current node has been successfully promoted to master.
+11/21/26 01:02:30.018 [-988] Node event: HA Node Info
+11/21/26 01:02:33.026 [-988] Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+11/21/26 01:02:33.026 [-988] Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+11/21/26 01:02:36.034 [-988] Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+11/21/26 01:02:36.034 [-988] Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+11/21/26 01:02:39.040 [-988] Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+11/21/26 01:02:39.040 [-988] Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+11/21/26 01:02:42.050 [-988] Node event: [Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition.
+11/21/26 01:02:42.050 [-988] Node event: [Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition.
+11/21/26 01:04:32.111 [-988] Node event: [Failback] [Diagnosis] The master node has lost its role due to server process problem, such as disk failure.
+11/21/26 01:04:32.111 [-988] Node event: [Failback] [Success] Current node has been successfully demoted to slave.
+## ha-1: cub_master node and process events
+11/21/26 01:02:44.648 [-989] Process event: Registered as local process entries. Success (pid:147, state:registered_and_standby, args:cub_server appdb )
+11/21/26 01:02:46.662 [-989] Process event: Registered as local process entries. Success (pid:407, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-cop
+11/21/26 01:02:46.668 [-989] Process event: Registered as local process entries. Success (pid:409, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 -m sync appdb@poc69-cop
+11/21/26 01:02:46.674 [-989] Process event: Registered as local process entries. Success (pid:411, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 app
+11/21/26 01:02:46.680 [-989] Process event: Registered as local process entries. Success (pid:413, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 --max-mem-size=500 app
+11/21/26 01:04:32.631 [-988] Node event: [Failover] [Diagnosis] The master node (poc69-copy-ha-0) has lost its role due to server process problem, such as disk failure.
+11/21/26 01:04:33.008 [-988] Node event: [Failover] [Success] Current node has been successfully promoted to master.
+11/21/26 01:04:33.074 [-988] Node event: HA Node Info
+## ha-1: copier of ha-0's log
+11/21/26 01:02:46.666 [-971] Program 'copylogdb' (pid 407) connected to database server 'appdb@poc69-copy-ha-0' on the host 'poc69-copy-ha-0' (port 1523).
+11/21/26 01:02:46.719 [-1039] log writer: log writer started. mode: 3.
+11/21/26 01:02:46.748 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'na' to 'to-be-active'. 
+11/21/26 01:03:00.517 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'to-be-active' to 'active'. 
+11/21/26 01:04:32.697 [-199] Server no longer responding.... Invalid argument
+11/21/26 01:04:32.697 [-111] Your transaction has been aborted by the system due to server failure or mode change.
+11/21/26 01:04:32.697 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'active' to 'dead'. 
+11/21/26 01:04:32.697 [-199] Server no longer responding.... Invalid argument
+11/21/26 01:04:35.704 [-971] Program 'copylogdb' (pid 407) connected to database server 'appdb@poc69-copy-ha-0' on the host 'poc69-copy-ha-0' (port 1523).
+11/21/26 01:04:35.732 [-1039] log writer: log writer started. mode: 3.
+11/21/26 01:04:35.732 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'dead' to 'standby'. 
+## ha-2: cub_master node and process events
+11/21/26 01:02:59.546 [-989] Process event: Registered as local process entries. Success (pid:147, state:registered_and_standby, args:cub_server appdb )
+11/21/26 01:03:01.536 [-989] Process event: Registered as local process entries. Success (pid:407, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 -m sync appdb@poc69-cop
+11/21/26 01:03:01.541 [-989] Process event: Registered as local process entries. Success (pid:409, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 -m sync appdb@poc69-cop
+11/21/26 01:03:01.547 [-989] Process event: Registered as local process entries. Success (pid:411, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 --max-mem-size=500 app
+11/21/26 01:03:01.555 [-989] Process event: Registered as local process entries. Success (pid:413, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 --max-mem-size=500 app
+## ha-2: copier of ha-0's log
+11/21/26 01:03:01.540 [-971] Program 'copylogdb' (pid 407) connected to database server 'appdb@poc69-copy-ha-0' on the host 'poc69-copy-ha-0' (port 1523).
+11/21/26 01:03:01.595 [-1039] log writer: log writer started. mode: 3.
+11/21/26 01:03:01.626 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'na' to 'active'. 
+11/21/26 01:04:32.774 [-199] Server no longer responding.... Invalid argument
+11/21/26 01:04:32.774 [-111] Your transaction has been aborted by the system due to server failure or mode change.
+11/21/26 01:04:32.774 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'active' to 'dead'. 
+11/21/26 01:04:32.774 [-199] Server no longer responding.... Invalid argument
+11/21/26 01:04:35.783 [-971] Program 'copylogdb' (pid 407) connected to database server 'appdb@poc69-copy-ha-0' on the host 'poc69-copy-ha-0' (port 1523).
+11/21/26 01:04:35.800 [-1039] log writer: log writer started. mode: 3.
+11/21/26 01:04:35.801 [-1040] HA generic: change the state of HA server (appdb@poc69-copy-ha-0) from 'dead' to 'standby'. 
