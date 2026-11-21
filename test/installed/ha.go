@@ -1802,15 +1802,23 @@ func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][
 	return rows, nil
 }
 
-// csqlRead runs a query with csql on a member, not through a Broker. It is for
-// reads only: a query whose output holds both errors of a session the server
-// dropped (#238, POC-36) is recorded and run once more, which a write must
-// never be. The second answer is the read's, whatever it is.
+// csqlRead runs a query with csql on a member, not through a Broker. It
+// connects to the member's own server over TCP, by the member's hostname,
+// rather than through the local Unix socket that "localhost" uses: on the VM
+// lab's members, 52 of 2,000 reads over that socket printed their whole result
+// and then both errors of a lost session (-199, -111), and none of 2,000 over
+// TCP did, with the same server before and after (POC-70, #238). The server
+// answering is the same either way. It is for reads only: a query whose output
+// still holds both errors (#238, POC-36) is recorded and run once more, which
+// a write must never be. The second answer is the read's, whatever it is.
+// csqlReadScript is the shell command csqlRead runs on a member: $0 is the
+// database name and $1 the query.
+const csqlReadScript = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0@$(hostname)" -c "$1"`
+
 func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 	return func(sql string) (string, error) {
 		run := func() (string, error) {
-			return h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`,
-				databaseName+"@localhost", sql)
+			return h.member(ctx, pod, "bash", "-c", csqlReadScript, databaseName, sql)
 		}
 		if h.reads == nil {
 			h.reads = map[string]int{}
