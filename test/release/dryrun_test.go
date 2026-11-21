@@ -384,19 +384,36 @@ func TestDryRunBuildsOnlyMainCommits(t *testing.T) {
 	}
 
 	code, out, _ = run(b, b)
-	if code == 0 || !strings.Contains(out, "is not on main") {
-		t.Errorf("a commit not on main: exit %d\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "Workflow revision") {
+		t.Errorf("a workflow revision not on main: exit %d\n%s", code, out)
 	}
 
 	code, out, _ = run(a, b)
-	if code == 0 || !strings.Contains(out, "not the requested commit") {
-		t.Errorf("a checkout that is not the requested commit: exit %d\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "Commit "+b+" is not on main") {
+		t.Errorf("a candidate not on main: exit %d\n%s", code, out)
+	}
+	if got := git("rev-parse", "HEAD"); got != a {
+		t.Errorf("an unverified candidate was checked out: HEAD %s, want %s", got, a)
+	}
+
+	code, out, _ = run(b, a)
+	if code == 0 || !strings.Contains(out, "Workflow revision") {
+		t.Errorf("an untrusted workflow built a main candidate: exit %d\n%s", code, out)
 	}
 
 	git("tag", "origin/main", b)
-	code, out, _ = run(b, b)
-	if code == 0 || !strings.Contains(out, "is not on main") {
-		t.Errorf("a commit not on main with a tag named origin/main at it: exit %d\n%s", code, out)
+	code, out, _ = run(a, b)
+	if code == 0 || !strings.Contains(out, "Commit "+b+" is not on main") {
+		t.Errorf("a tag origin/main shadowed the remote main ref: exit %d\n%s", code, out)
+	}
+
+	// Once b becomes part of main, the trusted workflow revision a can
+	// select it, but only after the ancestry checks have succeeded.
+	git("update-ref", "refs/remotes/origin/main", b)
+	code, out, written = run(a, b)
+	if code != 0 || !strings.Contains(written, "sha="+b+"\n") {
+		t.Errorf("a verified main candidate different from the workflow: exit %d, output %q\n%s",
+			code, written, out)
 	}
 }
 
@@ -407,6 +424,17 @@ func TestDryRunBuildsOnlyMainCommits(t *testing.T) {
 func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 	_, _, j := readDryRun(t)
 	meta := stepIndex(t, j, metaStepName)
+	clone := j.Steps[stepIndex(t, j, "Clone the code")]
+	if clone.With["ref"] != "${{ github.workflow_sha }}" {
+		t.Errorf("the first checkout selects %v, not the trusted workflow commit", clone.With["ref"])
+	}
+	guard := j.Steps[meta].Run
+	workflowCheck := strings.Index(guard, "git merge-base --is-ancestor \\"$workflow_sha\\" refs/remotes/origin/main")
+	candidateCheck := strings.Index(guard, "git merge-base --is-ancestor \\"$INPUT_SHA\\" refs/remotes/origin/main")
+	checkout := strings.Index(guard, "git checkout --detach --quiet \\"$INPUT_SHA\\"")
+	if workflowCheck < 0 || candidateCheck <= workflowCheck || checkout <= candidateCheck {
+		t.Error("the requested commit can be checked out before verifying both main histories")
+	}
 	for k, s := range j.Steps {
 		runsRepoCode := strings.Contains(s.Run, "make ") || strings.HasPrefix(s.Uses, "docker/") ||
 			strings.HasPrefix(s.Uses, "./")
