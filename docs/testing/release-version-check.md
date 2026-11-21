@@ -105,13 +105,19 @@ repository. In order, it:
    image's digest, image ID and archive checksum, the installer's SHA-256
    and which Instance Manager image the installer makes the manager use)
    and `SHA256SUMS` as the run's artifact;
-7. fails, after that upload, unless `install.yaml` names the Instance
-   Manager image built in the same run.
+7. structurally parses the multi-document `install.yaml`: the one
+   controller-manager Deployment must run the built manager image and have
+   exactly one `--instance-manager-image` argument naming the built
+   Instance Manager image. A reference in another resource or annotation,
+   a missing/wrong flag, or duplicate arguments does not count. The run
+   records the result and fails after uploading the evidence when invalid.
 
 Step 7 fails every run today: `make build-installer` sets only the manager
-image, so an installed release would run the manager's built-in default
-Instance Manager image, the mutable `instance-manager:dev` tag, not the
-image built and recorded here. The record and the job summary name the image
+image. The structural validator (`hack/check-installer-image`) rejects the
+missing Instance Manager argument; an installed release would otherwise
+fall back to the mutable built-in `instance-manager:dev` tag, not the image
+built and recorded here. Its negative tests reject an image reference
+appearing only in another resource and duplicate or incorrect flags. The record and the job summary name the image
 that would be used. Until the installer sets the Instance Manager image, a
 dry run shows this gap instead of a candidate.
 
