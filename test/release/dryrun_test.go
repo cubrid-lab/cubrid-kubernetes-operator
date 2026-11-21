@@ -125,6 +125,10 @@ func TestDryRunCannotPublish(t *testing.T) {
 	}
 	builds := 0
 	for _, s := range j.Steps {
+		// setup-go saves a module cache unless told not to.
+		if strings.HasPrefix(s.Uses, "actions/setup-go@") && s.With["cache"] != false {
+			t.Errorf("step %q: cache is %v; want false", s.Name, s.With["cache"])
+		}
 		if strings.HasPrefix(s.Uses, "docker/build-push-action@") {
 			builds++
 			if s.With["push"] != false {

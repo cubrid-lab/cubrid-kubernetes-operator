@@ -158,10 +158,13 @@ jobs:
             org.opencontainers.image.version=${{ inputs.version }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
+      # No module cache: setup-go would otherwise save one from the built
+      # commit's code under main's scope, state that outlives the run.
       - name: Setup Go
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
 
       # build-installer regenerates the CRDs, RBAC and DeepCopy code first. A
       # commit whose generated files are stale would publish manifests that do

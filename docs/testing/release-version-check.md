@@ -104,7 +104,8 @@ repository. In order, it:
    SHA-256) and `SHA256SUMS` as the run's artifact.
 
 Any failed step fails the job, and the job summary shows how far it got.
-It writes nothing outside the run, so a rerun starts from the same state.
+It writes nothing outside the run (the Go setup's module cache is turned
+off too), so a rerun starts from the same state.
 
 Its limits:
 
