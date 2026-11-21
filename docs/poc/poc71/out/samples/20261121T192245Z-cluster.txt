@@ -1,0 +1,42 @@
+### date
+2026-11-21T19:22:45Z
+### cluster
+MemberPlacement=True MembersOnSeparateNodes
+BootstrapReady=True PeersSeeded
+PrimaryResolved=True SinglePrimaryObserved
+ReplicationHealthy=True AppliersProgressing
+HAReady=True HealthyReplication
+WriteEndpointReady=True BrokerAvailable
+ReadEndpointReady=True BrokerAvailable
+BrokerReady=True BrokersAvailable
+RoutingReady=True PrimaryResolved
+Updating=False UpToDate
+Ready=True ClusterReady
+Progressing=False Reconciled
+### pods
+NAME                                     READY   STATUS    RESTARTS   AGE     IP            NODE                  NOMINATED NODE   READINESS GATES
+volume-soak-0                            1/1     Running   0          7h14m   10.42.3.179   cubrid-k8s-worker-3   <none>           <none>
+volume-soak-1                            1/1     Running   0          7h14m   10.42.2.82    cubrid-k8s-worker-2   <none>           <none>
+volume-soak-2                            1/1     Running   0          7h14m   10.42.1.127   cubrid-k8s-worker-1   <none>           <none>
+volume-soak-broker-ro-7d78dd5896-7c5dp   1/1     Running   0          7h14m   10.42.3.178   cubrid-k8s-worker-3   <none>           <none>
+volume-soak-broker-ro-7d78dd5896-m42zl   1/1     Running   0          7h14m   10.42.1.126   cubrid-k8s-worker-1   <none>           <none>
+volume-soak-broker-rw-7b7d58ddc7-2kg9w   1/1     Running   0          7h14m   10.42.2.81    cubrid-k8s-worker-2   <none>           <none>
+volume-soak-broker-rw-7b7d58ddc7-s86f9   1/1     Running   0          7h14m   10.42.3.177   cubrid-k8s-worker-3   <none>           <none>
+### pvc
+NAME                 STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-demo-0          Bound    pvc-fda4dba6-e1fb-4aeb-8765-931d2dbc11b9   1Gi        RWO            local-path     <unset>                 40d
+data-ha-0            Bound    pvc-6ac81a50-7118-4281-8aa0-1d44830b3992   2Gi        RWO            local-path     <unset>                 10d
+data-ha-1            Bound    pvc-068bfaed-de06-4f21-8f75-e692ed0e998c   2Gi        RWO            local-path     <unset>                 10d
+data-ha-2            Bound    pvc-4dd79d47-171b-4b64-b64b-ae8b3789fbed   2Gi        RWO            local-path     <unset>                 10d
+data-logsize-0       Bound    pvc-67f74da3-4b30-418f-b951-7658553af41d   2Gi        RWO            local-path     <unset>                 10d
+data-logsize-1       Bound    pvc-f8123868-063d-482c-9002-5aea766e7c67   2Gi        RWO            local-path     <unset>                 10d
+data-logsize-2       Bound    pvc-f845b35e-f849-44e1-b19a-205262922152   2Gi        RWO            local-path     <unset>                 10d
+data-volume-soak-0   Bound    pvc-831798c8-7165-4ef7-b825-f9acf5a6ead9   2Gi        RWO            local-path     <unset>                 7h14m
+data-volume-soak-1   Bound    pvc-f257ab39-cb06-4c6f-ab37-a3404d5292b1   2Gi        RWO            local-path     <unset>                 7h14m
+data-volume-soak-2   Bound    pvc-4ce2cb74-15f5-4e82-a2e7-a94218c10654   2Gi        RWO            local-path     <unset>                 7h14m
+### nodes
+cubrid-k8s-server DiskPressure=False
+cubrid-k8s-worker-1 DiskPressure=False
+cubrid-k8s-worker-2 DiskPressure=False
+cubrid-k8s-worker-3 DiskPressure=False
+### events

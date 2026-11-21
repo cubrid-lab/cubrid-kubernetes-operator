@@ -1,9 +1,10 @@
 # Sizing a member's data volume
 
 > [!WARNING]
-> **Experimental, not production-ready.** The numbers below come from one
-> run on the VM lab with one engine build and one write rate
-> ([POC-67](../poc/poc67/README.md), CUBRID 11.4.7.1995, 2026-11-18 UTC).
+> **Experimental, not production-ready.** The numbers below come from two
+> runs on the VM lab with one engine build and one write rate
+> ([POC-67](../poc/poc67/README.md), 2026-11-18 UTC, and
+> [POC-71](../poc/poc71/README.md), 2026-11-21 UTC, CUBRID 11.4.7.1995).
 > They are a starting point for your own estimate, not a guarantee.
 
 The Operator does not bound CUBRID's archive logs to the requested volume.
@@ -51,9 +52,11 @@ archive about every 4.7 minutes) for 150 minutes:
 
 - **Healthy replication.** Every own and copied archive was removed when a
   later one was created. Once all its log files existed, each member's
-  volume stayed between **640 and 758 MiB**, moving with the timing of
-  archives rather than growing; only the troubleshooting logs grew, by about
-  1 MiB an hour.
+  volume moved with the timing of archives rather than growing. Its upper
+  bound is the fixed set of files: the 128 MiB database volume plus ten
+  64 MiB log files, about **768 MiB**, plus the troubleshooting logs, which
+  grew by about 1 MiB an hour. POC-67's samples stayed between 640 and
+  758 MiB.
 - **A slave whose applier is stopped** keeps every copied archive it has not
   applied, and grows at the master's log rate: **about 810 MiB an hour** in
   that run. Its highest sample after a 31-minute applier stall was
@@ -65,6 +68,20 @@ archive about every 4.7 minutes) for 150 minutes:
   archive for it. The master removed the archive holding the copier's next
   page 13 minutes into the stall; on resume, the copier failed with `-1024`
   and could not catch up. A larger volume does not protect against this.
+
+[POC-71](../poc/poc71/README.md) ran the same cluster shape and write rate
+(about 813 MiB of log an hour) for seven hours with healthy replication, with
+no stall:
+
+- **Within the request.** Each member's volume stayed between 593 and
+  775 MiB after its first 20 minutes, at most 38% of the 2Gi request, and did
+  not grow over the seven hours.
+- **The highest samples** held exactly the fixed set of files above, each
+  nearly full, plus the 1 MiB double-write buffer and up to 9 MiB of
+  troubleshooting logs. No member held more than two of its own archives or
+  one per copied peer.
+- The result is recorded on
+  [#666](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/666#issuecomment-7068063523).
 
 ## The sizing rule
 
@@ -136,6 +153,5 @@ this grows with a longer backlog was not measured.
   logs on a second 1Gi claim, `log-<cluster>-<ordinal>`.
 - **Not measured:** other write rates and volume sizes, applier stalls longer
   than 31 minutes (copier stalls longer than 34 minutes), restarts or failovers during a stall, and how much a
-  member seeded with `restoreslave` after a long gap needs. Whether a
-  long-lived member stays within its request over a long period is still
-  being checked on the lab (#666).
+  member seeded with `restoreslave` after a long gap needs. A member was
+  observed under steady writes for seven hours (POC-71), not longer.

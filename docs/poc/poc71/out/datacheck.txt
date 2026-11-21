@@ -1,0 +1,60 @@
+== volume-soak-0 2026-11-21T19:26:44Z
+
+Time: 11/21/26 19:26:44.901 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 80566) connected to database server 'appdb@volume-soak-0' on the host 'volume-soak-0' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)
+================================================
+                   420            1          420
+
+1 row selected. (0.003000 sec) Committed. (0.001000 sec) 
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)       sum(v)
+===================================
+                  2000      2518000
+
+1 row selected. (0.007000 sec) Committed. (0.000000 sec) 
+== volume-soak-1 2026-11-21T19:26:45Z
+
+Time: 11/21/26 19:26:45.659 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 45625) connected to database server 'appdb@volume-soak-1' on the host 'volume-soak-1' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)
+================================================
+                   420            1          420
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)       sum(v)
+===================================
+                  2000      2518000
+
+1 row selected. (0.007001 sec) Committed. (0.001000 sec) 
+== volume-soak-2 2026-11-21T19:26:45Z
+
+Time: 11/21/26 19:26:46.220 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 45487) connected to database server 'appdb@volume-soak-2' on the host 'volume-soak-2' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)      min(id)      max(id)
+================================================
+                   420            1          420
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)       sum(v)
+===================================
+                  2000      2518000
+
+1 row selected. (0.008000 sec) Committed. (0.001000 sec) 

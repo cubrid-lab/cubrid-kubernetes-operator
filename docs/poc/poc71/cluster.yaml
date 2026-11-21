@@ -1,0 +1,31 @@
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  name: volume-soak
+  namespace: cubrid-test
+spec:
+  version: "11.4"
+  databases:
+  - name: appdb
+  highAvailability:
+    enabled: true
+    fencingPolicy: Manual
+  objectStorage:
+    bucket: cubrid-seed
+    credentialsSecretRef:
+      name: object-storage
+    endpoint: seaweedfs.object-store.svc:8333
+    insecure: true
+    prefix: cubrid-test/volume-soak-20261121
+  placement:
+    memberSpread: Required
+  resources:
+    requests:
+      memory: 512Mi
+  storage:
+    data:
+      size: 2Gi
+    retentionPolicy: Retain
+  topology:
+    promotableMembers: 3
+    readReplicas: 0
