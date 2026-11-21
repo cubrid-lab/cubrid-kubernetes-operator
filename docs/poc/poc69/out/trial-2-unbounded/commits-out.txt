@@ -1,0 +1,73 @@
+=== base-a 1000 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222078.752358293 1795222078.788151248 0
+=== base-a 1001 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222078.941345837 1795222078.977958284 0
+=== base-a 1002 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.037191958 1795222079.052227599 0
+=== base-a 1003 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.111601164 1795222079.126708441 0
+=== base-a 1004 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.185415043 1795222079.200950658 0
+=== base-a 1005 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.263273545 1795222079.302695951 0
+=== base-a 1006 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.369054875 1795222079.385135026 0
+=== base-a 1007 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.445444999 1795222079.478368429 0
+=== base-a 1008 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.004000 sec) 
+@@ 1795222079.537960225 1795222079.553361184 0
+=== base-a 1009 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795222079.611180455 1795222079.627279106 0
+=== all-1-a 2000 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.999989 sec) 
+@@ 1795222110.817294878 1795222111.857430677 0
+=== all-1-a 2001 rc=1
+=== all-1-b 2500 rc=1
+
+In the command from line 1,
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+Exiting ...
+1 row affected. (0.000000 sec) 
+
+In the command from line 1,
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+Exiting ...
+1 row affected. (0.000000 sec) 
+@@ 1795222111.971662729 1795222154.582154911 1
+@@ 1795222115.816416965 1795222154.582151703 1
+=== all-1-a 2002 rc=1
+
+ERROR: Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+@@ 1795222154.649216132 1795222154.659051952 1

@@ -1,0 +1,73 @@
+=== base-a 1000 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223241.669781095 1795223241.707057991 0
+=== base-a 1001 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223241.772938804 1795223241.808651666 0
+=== base-a 1002 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223241.884465713 1795223242.003587467 0
+=== base-a 1003 rc=0
+1 row affected. (0.004000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.082487031 1795223242.097856937 0
+=== base-a 1004 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.004000 sec) 
+@@ 1795223242.157125329 1795223242.217101028 0
+=== base-a 1005 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.353528136 1795223242.368564169 0
+=== base-a 1006 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.426605353 1795223242.442225761 0
+=== base-a 1007 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.499940658 1795223242.534854981 0
+=== base-a 1008 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.592783214 1795223242.608098647 0
+=== base-a 1009 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.000000 sec) 
+@@ 1795223242.667473087 1795223242.683068691 0
+=== one-1-a 3000 rc=0
+1 row affected. (0.000000 sec) 
+Execute OK. (0.999985 sec) 
+@@ 1795223274.056748583 1795223275.094333709 0
+=== one-1-a 3001 rc=1
+
+In the command from line 1,
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+Exiting ...
+1 row affected. (0.000000 sec) 
+@@ 1795223275.222192581 1795223311.761425711 1
+=== one-1-b 3500 rc=1
+
+In the command from line 1,
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+
+ERROR: Your transaction has been aborted by the system due to server failure or mode change.
+
+Exiting ...
+1 row affected. (0.000000 sec) 
+@@ 1795223279.061327703 1795223311.761423737 1
+=== one-1-a 3002 rc=1
+
+ERROR: Failed to connect to database server, 'appdb', on the following host(s): localhost
+
+@@ 1795223311.822943140 1795223311.832912458 1

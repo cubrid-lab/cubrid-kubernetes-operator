@@ -1,0 +1,81 @@
+=== 2026-11-21T01:05:09.026Z poc69-copy-ha-0 heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-0, state slave)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state master)
+   Node poc69-copy-ha-0 (priority 1, state slave)
+
+
+ HA-Process Info (master 133, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 408, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 406, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 404, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 402, state registered)
+   Server appdb (pid 1984, state registered_and_standby)
+
+=== 2026-11-21T01:05:09.102Z poc69-copy-ha-0 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+=== 2026-11-21T01:05:09.193Z poc69-copy-ha-0 count
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                    11
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+=== 2026-11-21T01:05:09.339Z poc69-copy-ha-1 heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-1, state master)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state master)
+   Node poc69-copy-ha-0 (priority 1, state slave)
+
+
+ HA-Process Info (master 138, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 413, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 411, state registered)
+   Copylogdb appdb@poc69-copy-ha-2:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-2 (pid 409, state registered)
+   Copylogdb appdb@poc69-copy-ha-0:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 407, state registered)
+   Server appdb (pid 147, state registered_and_active)
+
+=== 2026-11-21T01:05:09.415Z poc69-copy-ha-1 changemode
+The server 'appdb@localhost''s current HA running mode is active.
+=== 2026-11-21T01:05:09.484Z poc69-copy-ha-1 count
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                    11
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+=== 2026-11-21T01:05:09.633Z poc69-copy-ha-2 heartbeat
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc69-copy-ha-2, state slave)
+   Node poc69-copy-ha-2 (priority 3, state slave)
+   Node poc69-copy-ha-1 (priority 2, state master)
+   Node poc69-copy-ha-0 (priority 1, state slave)
+
+
+ HA-Process Info (master 138, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 413, state registered)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 411, state registered)
+   Copylogdb appdb@poc69-copy-ha-1:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-1 (pid 409, state registered)
+   Copylogdb appdb@poc69-copy-ha-0:/home/cubrid/CUBRID/databases/appdb_poc69-copy-ha-0 (pid 407, state registered)
+   Server appdb (pid 147, state registered_and_standby)
+
+=== 2026-11-21T01:05:09.709Z poc69-copy-ha-2 changemode
+The server 'appdb@localhost''s current HA running mode is standby.
+=== 2026-11-21T01:05:09.777Z poc69-copy-ha-2 count
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                    11
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 

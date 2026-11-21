@@ -1,0 +1,16 @@
+== case base
+  client base-a: 10 commits, 10 ack, 0 unknown; first start 01:07:21.669, last end 01:07:22.683
+    seconds: 0.04 0.04 0.12 0.01 0.06 0.01 0.02 0.04 0.01 0.02
+  ha-0: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case one-1
+  client one-1-a: 3 commits, 1 ack, 2 unknown; first start 01:07:54.056, last end 01:08:31.832
+    seconds: 1.04 36.54(unknown rc=1) 0.01(unknown rc=1)
+  client one-1-b: 1 commits, 0 ack, 1 unknown; first start 01:07:59.061, last end 01:08:31.761
+    seconds: 32.70(unknown rc=1)
+  ha-0: 11 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 11 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 11 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True

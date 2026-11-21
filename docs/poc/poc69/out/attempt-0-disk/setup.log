@@ -1,0 +1,145 @@
+setup start 2026-11-21T00:00:03.323Z
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+## poc69-copy-ha-0 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+## poc69-copy-ha-1 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+## poc69-copy-ha-2 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc69-copy-ha-0:poc69-copy-ha-1:poc69-copy-ha-2
+ha_db_list=appdb
+ha_port_id=59969
+heartbeat start rc=0
+heartbeat start rc=0
+heartbeat start rc=0
+2026-11-21T00:06:16.362Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:06:26.525Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:06:36.686Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:06:46.805Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:06:56.938Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:07.090Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:17.197Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:27.281Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:37.433Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:47.557Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:07:57.689Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:07.838Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:17.997Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:28.110Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:38.237Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:48.357Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:08:58.514Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:08.621Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:18.786Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:28.929Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:39.021Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:49.138Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:09:59.289Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:10:09.453Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:10:19.605Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:10:29.765Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:10:40.061Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:10:50.149Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:00.279Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:10.417Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:20.516Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:30.649Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:40.746Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:11:50.910Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:01.077Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:11.221Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:21.401Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:31.785Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:41.893Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:12:52.017Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:02.137Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:12.285Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:22.409Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:32.569Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:42.682Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:13:52.841Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:02.994Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:13.089Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:23.184Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:33.322Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:43.538Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:14:53.645Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:03.738Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:13.900Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:24.041Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:34.126Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:44.249Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:15:54.420Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:04.525Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:14.653Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:24.798Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:34.921Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:45.093Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:16:59.666Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:17:10.857Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:17:20.957Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:17:31.085Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:17:41.285Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:17:51.373Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:01.450Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:11.581Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:21.678Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:31.770Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:41.881Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:18:51.969Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:02.075Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:12.163Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:22.257Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:32.373Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:42.461Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:19:52.549Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:02.641Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:12.757Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:23.482Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:35.688Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:45.781Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:20:55.865Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:05.962Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:16.060Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:26.159Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:36.233Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:46.365Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:21:56.436Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:06.866Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:17.229Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:27.333Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:37.420Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:47.495Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:22:58.273Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:08.353Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:18.473Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:28.553Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:38.623Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:48.713Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:23:58.801Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:09.270Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:19.365Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:29.457Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:39.530Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:49.841Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:24:59.929Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:25:10.000Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:25:20.101Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:25:30.267Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:25:40.357Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:25:50.448Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:26:00.533Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:26:10.655Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:26:20.749Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+2026-11-21T00:26:30.837Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is to-be-active. 
+
+In the command from line 1,
+
+ERROR: Attempted to update the database when updates are disabled. 
+

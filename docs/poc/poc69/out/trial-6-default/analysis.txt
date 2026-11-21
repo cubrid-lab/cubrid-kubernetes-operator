@@ -1,0 +1,42 @@
+== case base
+  client base-a: 10 commits, 10 ack, 0 unknown; first start 01:11:22.977, last end 01:11:24.064
+    seconds: 0.03 0.04 0.02 0.17 0.02 0.02 0.02 0.01 0.15 0.01
+  ha-0: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 10 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case all-1
+  client all-1-a: 15 commits, 15 ack, 0 unknown; first start 01:11:55.273, last end 01:12:01.075
+    seconds: 1.02 3.56 0.04 0.04 0.02 0.02 0.01 0.02 0.01 0.01 0.01 0.01 0.01 0.02 0.01
+  ha-0: 25 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 25 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 25 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case one-1
+  client one-1-a: 15 commits, 15 ack, 0 unknown; first start 01:13:08.828, last end 01:13:14.276
+    seconds: 1.02 2.99 0.04 0.04 0.04 0.02 0.04 0.07 0.02 0.02 0.01 0.02 0.01 0.01 0.01
+  ha-0: 40 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 40 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 40 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case all-long
+  client all-long-a: 20 commits, 20 ack, 0 unknown; first start 01:14:22.261, last end 01:15:23.590
+    seconds: 1.04 0.54 0.10 0.04 0.04 0.01 0.04 0.03 0.01 0.04 0.04 0.01 0.04 0.04 0.04 0.03 0.04 0.04 0.04 0.03
+  ha-0: 60 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 60 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 60 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case all-2
+  client all-2-a: 15 commits, 15 ack, 0 unknown; first start 01:16:38.998, last end 01:16:45.100
+    seconds: 5.00 0.02 0.02 0.01 0.01 0.01 0.02 0.03 0.01 0.02 0.01 0.01 0.01 0.04 0.02
+  ha-0: 75 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 75 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 75 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
+== case one-2
+  client one-2-a: 15 commits, 15 ack, 0 unknown; first start 01:17:58.313, last end 01:18:04.606
+    seconds: 1.03 3.58 0.04 0.01 0.03 0.03 0.01 0.02 0.02 0.01 0.01 0.04 0.03 0.01 0.01
+  ha-0: 90 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-1: 90 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  ha-2: 90 rows; acknowledged missing 0 []; held of unknown outcome []; held never attempted []
+  members hold identical ids: True
