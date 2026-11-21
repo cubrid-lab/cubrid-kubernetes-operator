@@ -120,8 +120,16 @@ digests for the summary, JUnit and listed scenario files, and shows the
 recorded verdict alongside the verdict supported by the local evidence.
 Rows retain their run's lane and level. The run table identifies filtered
 and unfinished runs, missing bundles or files, mismatched revisions and
-images, and lanes the evidence reader could not validate. Related evidence
-must stay in its own run directory.
+images, and lanes the evidence reader could not validate. The separate
+**v0.1 scope** column labels requirements as mandatory pass, mandatory
+measurement and safety review, v0.2 deferred, conditional or unmapped.
+It **does not** change any raw or independently judged result, nor does
+a measured-only classification make a failed S04/S07/S08 or graceful S03
+run eligible for release automatically. A reviewer must establish the
+scenario's required safety, recovery, identity and SQL evidence by hand,
+and only then record the separate release-scope verdict in the indexed
+candidate review. Unknown/unmapped variants need a maintainer decision,
+not a default pass. Related evidence stays in its original run directory.
 
 Use GitHub Actions run or artifact URLs in this repository for `source`.
 The report omits raw log content, archive locations, and local paths. The
