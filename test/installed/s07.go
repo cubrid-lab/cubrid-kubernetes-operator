@@ -295,8 +295,11 @@ type s07Probe struct {
 }
 
 // s07Session is what happened to the one connection s07OpenClient held from
-// before the fault. It is reported, not judged: the contract sets no bound
-// on it. Times are on the client's clock.
+// before the fault. The interruption time has no numeric bound. An
+// acknowledgement after observed path closure fails only when the run also
+// observed that quarantine remained in force without an accepted release;
+// otherwise its timing cannot distinguish pre-release from legitimate
+// post-release writes and remains inconclusive. Times are on the client's clock.
 type s07Session struct {
 	Acknowledged            int        `json:"acknowledged"`
 	AcknowledgedAfterFault  int        `json:"acknowledgedAfterFault"`
@@ -718,6 +721,18 @@ func s07NeverEvents(rec *s07Record) []string {
 	if r := rec.ManualRelease; r != nil {
 		never = append(never, r.NeverEvents...)
 	}
+	// The established client's counter includes every acknowledgement after
+	// the path was first observed closed, including legitimate writes after a
+	// release. Count it as a never-event only when the same run also observed
+	// that quarantine was still in force at the end and saw no release.
+	// With a release or unread history, the timing remains inconclusive.
+	if s := rec.Session; s != nil && s.ReadError == "" && s.AcknowledgedAfterClosed > 0 &&
+		rec.RWPodsGoneAt != nil && rec.RWEndpointsEmptyAt != nil &&
+		rec.ReleaseSeenAt == nil && rec.QuarantineAtEnd != "" {
+		never = append(never, fmt.Sprintf("%d established-session write(s) were acknowledged after the managed "+
+			"-rw path was observed closed while the quarantine remained in force without an accepted release",
+			s.AcknowledgedAfterClosed))
+	}
 	// Writes the run's own manual release accepted as lost are reported, not
 	// counted here: the release records that acceptance.
 	if d := rec.Data; d != nil && d.Read && rec.HealthyAtEnd {
@@ -821,9 +836,12 @@ func s07Blocked(rec *s07Record) string {
 		return fmt.Sprintf("the control was not observed: after the grace the run read the cluster %d time(s) and "+
 			"saw one reachable active master in %d complete sweep(s), and needs two of each",
 			rec.ClusterReadsAfterGrace, rec.OneMasterSweepsAfterGrace)
+	case rec.Session != nil && rec.Session.ReadError != "":
+		return "the established-session SQL history could not be read: " + rec.Session.ReadError
 	case rec.Session != nil && rec.Session.AcknowledgedAfterClosed > 0:
-		return fmt.Sprintf("the already-open connection had %d write(s) acknowledged after the run saw every "+
-			"read-write Broker Pod gone and no -rw endpoint: an anomaly the run cannot explain",
+		return fmt.Sprintf("the established session had %d acknowledged write(s) after observed -rw path "+
+			"closure, but an observed release or incomplete quarantine evidence prevents attributing them "+
+			"to the closed interval; preserve the client timestamps and do not count this as a pass",
 			rec.Session.AcknowledgedAfterClosed)
 	case rec.ManualRelease != nil && rec.ManualRelease.OtherRelease != "":
 		return "the run's manual release was cut short: the quarantine was " + rec.ManualRelease.OtherRelease +
