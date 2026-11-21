@@ -397,8 +397,12 @@ the rules hold or `-data-check-within` passes. Any other violation, such as a
 rolled-back row or wrong values, fails the run at once. The last report read
 is kept in every case.
 
-**Lost sessions.** A `csql` read on a member, of the ledger here or of the
-marker table in S11 and S12, whose output holds both `ERROR CODE = -199` and
+**Lost sessions.** A `csql` read on a member connects to that member's
+server over TCP by its own hostname (`appdb@$(hostname)`), not through the
+local Unix socket that `appdb@localhost` uses: on the VM lab's members, reads
+over that socket lost their session after printing the whole result about
+once in forty, and none over TCP did (POC-70). A read, of the ledger here or
+of the marker table in S11 and S12, whose output still holds both `ERROR CODE = -199` and
 `ERROR CODE = -111` lost its session to the server (#238, POC-36). The run
 makes that read once more and takes the second answer as the read's: a
 second loss, or any other error, is handled as any `csql` error is, and the
