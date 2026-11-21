@@ -1,0 +1,6 @@
+2026-11-21T05:38:42.095Z csql-read-check-1 heartbeat says slave with a standby server
+2026-11-21T05:39:17.273Z csql-read-check-2 heartbeat says slave with a standby server
+2026-11-21T05:39:19.824Z csql-read-check-0 is master with an active server
+2026-11-21T05:39:20.214Z wrote read_check on csql-read-check-0
+2026-11-21T05:39:21.296Z csql-read-check-1 returned all 20 rows; starting its batch
+2026-11-21T05:39:22.472Z csql-read-check-2 returned all 20 rows; starting its batch

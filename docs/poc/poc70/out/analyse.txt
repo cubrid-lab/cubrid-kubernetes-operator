@@ -1,0 +1,191 @@
+--- exec/csql-read-check-1 (one kubectl exec per read): 200 reads, 2026-11-21T05:43:34.090Z to 2026-11-21T05:44:27.304Z
+  tcp: exit!=0=0, incomplete=0, lost=0, reads=100
+  unix: exit!=0=0, incomplete=0, lost=0, reads=100
+  cub_server before ('242', '346246812', '2026-11-21T05:38:40Z') after ('242', '346246812', '2026-11-21T05:38:40Z'): unchanged
+--- exec/csql-read-check-2 (one kubectl exec per read): 200 reads, 2026-11-21T05:43:34.090Z to 2026-11-21T05:44:27.796Z
+  tcp: exit!=0=0, incomplete=0, lost=0, reads=100
+  unix: exit!=0=0, incomplete=0, lost=5, reads=100
+  cub_server before ('600', '346251525', '2026-11-21T05:39:15Z') after ('600', '346251525', '2026-11-21T05:39:15Z'): unchanged
+--- fresh/csql-read-check-0: 800 reads, 2026-11-21T05:39:21.137351Z to 2026-11-21T05:40:31.612026Z
+  tcp: codes -971=400, exit!=0=0, incomplete=0, lost=0, only -199=0, reads=400
+  unix: codes -971=392, codes -971,-199,-111=8, exit!=0=0, incomplete=0, lost=8, only -199=0, reads=400
+  ! i=52 unix 2026-11-21T05:39:25.658799Z (+4.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=17 ms
+  ! i=176 unix 2026-11-21T05:39:36.510352Z (+15.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=199 unix 2026-11-21T05:39:38.526921Z (+17.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=21 ms
+  ! i=200 unix 2026-11-21T05:39:38.622021Z (+17.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=18 ms
+  ! i=239 unix 2026-11-21T05:39:42.005685Z (+20.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=443 unix 2026-11-21T05:40:00.158396Z (+39.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=21 ms
+  ! i=524 unix 2026-11-21T05:40:07.422966Z (+46.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=796 unix 2026-11-21T05:40:31.305824Z (+70.2 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  cub_server before ('182', '12189871', '2026-11-21T05:38:11Z') after ('182', '12189871', '2026-11-21T05:38:11Z'): unchanged
+  server error log during the batch: {'-982': 5, '-1066': 3}
+  server entries for tcp reads that were not lost: -1066,-982: 3
+  server entries for tcp reads that were not lost: -982: 1
+  server entries for tcp reads that were not lost: no server entry: 396
+  server entries for unix reads that were lost: no server entry: 8
+  server entries for unix reads that were not lost: -982: 1
+  server entries for unix reads that were not lost: no server entry: 391
+  server entries for csql pids not among the batch's reads: 0
+--- fresh/csql-read-check-1: 800 reads, 2026-11-21T05:39:22.287739Z to 2026-11-21T05:40:36.128011Z
+  tcp: codes -971=400, exit!=0=0, incomplete=0, lost=0, only -199=0, reads=400
+  unix: codes -971=396, codes -971,-199,-111=4, exit!=0=0, incomplete=0, lost=4, only -199=0, reads=400
+  ! i=200 unix 2026-11-21T05:39:40.965550Z (+18.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=26 ms
+  ! i=515 unix 2026-11-21T05:40:09.836646Z (+47.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=555 unix 2026-11-21T05:40:13.545113Z (+51.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=568 unix 2026-11-21T05:40:14.730828Z (+52.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=17 ms
+  cub_server before ('242', '346246812', '2026-11-21T05:38:40Z') after ('242', '346246812', '2026-11-21T05:38:40Z'): unchanged
+  server error log during the batch: {'-1066': 5, '-982': 6}
+  server entries for tcp reads that were not lost: -1066,-982: 2
+  server entries for tcp reads that were not lost: no server entry: 398
+  server entries for unix reads that were lost: no server entry: 4
+  server entries for unix reads that were not lost: -1066,-982: 2
+  server entries for unix reads that were not lost: -982: 1
+  server entries for unix reads that were not lost: no server entry: 393
+  server entries for csql pids not among the batch's reads: 0
+--- fresh/csql-read-check-2: 800 reads, 2026-11-21T05:39:23.407826Z to 2026-11-21T05:40:41.517817Z
+  tcp: codes -971=400, exit!=0=0, incomplete=0, lost=0, only -199=0, reads=400
+  unix: codes -971=382, codes -971,-199,-111=18, exit!=0=0, incomplete=0, lost=18, only -199=0, reads=400
+  ! i=59 unix 2026-11-21T05:39:29.318213Z (+5.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=164 unix 2026-11-21T05:39:39.193753Z (+15.8 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=183 unix 2026-11-21T05:39:41.044553Z (+17.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=20 ms
+  ! i=247 unix 2026-11-21T05:39:47.202380Z (+23.8 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=30 ms
+  ! i=268 unix 2026-11-21T05:39:49.205077Z (+25.8 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=58 ms
+  ! i=288 unix 2026-11-21T05:39:51.429716Z (+28.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=27 ms
+  ! i=339 unix 2026-11-21T05:39:56.338100Z (+32.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  ! i=352 unix 2026-11-21T05:39:57.546684Z (+34.1 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=23 ms
+  ! i=380 unix 2026-11-21T05:40:00.167979Z (+36.8 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=27 ms
+  ! i=388 unix 2026-11-21T05:40:00.946257Z (+37.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=23 ms
+  ! i=395 unix 2026-11-21T05:40:01.618326Z (+38.2 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=20 ms
+  ! i=427 unix 2026-11-21T05:40:04.912986Z (+41.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=28 ms
+  ! i=496 unix 2026-11-21T05:40:11.570107Z (+48.2 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=24 ms
+  ! i=532 unix 2026-11-21T05:40:14.929094Z (+51.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=18 ms
+  ! i=543 unix 2026-11-21T05:40:16.103504Z (+52.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=20 ms
+  ! i=596 unix 2026-11-21T05:40:21.342936Z (+57.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=27 ms
+  ! i=727 unix 2026-11-21T05:40:34.382597Z (+71.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=20 ms
+  ! i=768 unix 2026-11-21T05:40:38.334186Z (+74.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=19 ms
+  cub_server before ('600', '346251525', '2026-11-21T05:39:15Z') after ('600', '346251525', '2026-11-21T05:39:15Z'): unchanged
+  server error log during the batch: {'-982': 13, '-1066': 8}
+  server entries for tcp reads that were not lost: -1066,-982: 3
+  server entries for tcp reads that were not lost: -982: 4
+  server entries for tcp reads that were not lost: no server entry: 393
+  server entries for unix reads that were lost: no server entry: 18
+  server entries for unix reads that were not lost: -1066,-982: 5
+  server entries for unix reads that were not lost: -982: 1
+  server entries for unix reads that were not lost: no server entry: 376
+  server entries for csql pids not among the batch's reads: 0
+--- ha/ha-1: 800 reads, 2026-11-21T05:34:21.930056Z to 2026-11-21T05:35:42.619274Z
+  tcp: codes -971=400, exit!=0=0, incomplete=0, lost=0, only -199=0, reads=400
+  unix: codes -971=389, codes -971,-199,-111=11, exit!=0=0, incomplete=0, lost=11, only -199=0, reads=400
+  ! i=76 unix 2026-11-21T05:34:29.462399Z (+7.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=26 ms
+  ! i=112 unix 2026-11-21T05:34:32.962397Z (+11.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=37 ms
+  ! i=236 unix 2026-11-21T05:34:45.389906Z (+23.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=28 ms
+  ! i=343 unix 2026-11-21T05:34:56.419841Z (+34.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=28 ms
+  ! i=351 unix 2026-11-21T05:34:57.216826Z (+35.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=37 ms
+  ! i=392 unix 2026-11-21T05:35:01.290132Z (+39.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=27 ms
+  ! i=520 unix 2026-11-21T05:35:14.409000Z (+52.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=25 ms
+  ! i=535 unix 2026-11-21T05:35:15.876807Z (+53.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=27 ms
+  ! i=607 unix 2026-11-21T05:35:23.243141Z (+61.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=35 ms
+  ! i=639 unix 2026-11-21T05:35:26.526280Z (+64.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=26 ms
+  ! i=703 unix 2026-11-21T05:35:32.809217Z (+70.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=38 ms
+  cub_server before ('39', '344719127', '2026-11-21T01:23:51Z') after ('39', '344719127', '2026-11-21T01:23:51Z'): unchanged
+  server error log during the batch: {'-1066': 20, '-982': 19}
+  server entries for tcp reads that were not lost: -1066,-982: 6
+  server entries for tcp reads that were not lost: no server entry: 394
+  server entries for unix reads that were lost: no server entry: 11
+  server entries for unix reads that were not lost: -1066: 1
+  server entries for unix reads that were not lost: -1066,-982: 13
+  server entries for unix reads that were not lost: no server entry: 375
+  server entries for csql pids not among the batch's reads: 0
+--- ha/ha-2: 800 reads, 2026-11-21T05:35:44.438043Z to 2026-11-21T05:37:01.808942Z
+  tcp: codes -971=400, exit!=0=0, incomplete=0, lost=0, only -199=0, reads=400
+  unix: codes -971=389, codes -971,-199,-111=11, exit!=0=0, incomplete=0, lost=11, only -199=0, reads=400
+  ! i=55 unix 2026-11-21T05:35:49.695746Z (+5.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=26 ms
+  ! i=80 unix 2026-11-21T05:35:52.326912Z (+7.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=41 ms
+  ! i=104 unix 2026-11-21T05:35:54.727457Z (+10.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=35 ms
+  ! i=152 unix 2026-11-21T05:35:59.303549Z (+14.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=28 ms
+  ! i=232 unix 2026-11-21T05:36:07.027031Z (+22.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=29 ms
+  ! i=384 unix 2026-11-21T05:36:21.521244Z (+37.1 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=27 ms
+  ! i=515 unix 2026-11-21T05:36:34.172777Z (+49.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=29 ms
+  ! i=531 unix 2026-11-21T05:36:35.719255Z (+51.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=30 ms
+  ! i=600 unix 2026-11-21T05:36:42.307908Z (+57.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=30 ms
+  ! i=639 unix 2026-11-21T05:36:46.057959Z (+61.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=24 ms
+  ! i=699 unix 2026-11-21T05:36:51.953158Z (+67.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=199 B connect-to-pair=36 ms
+  cub_server before ('39', '344714598', '2026-11-21T01:23:17Z') after ('39', '344714598', '2026-11-21T01:23:17Z'): unchanged
+  server error log during the batch: {'-1066': 27, '-982': 32}
+  server entries for tcp reads that were not lost: -1066,-982: 13
+  server entries for tcp reads that were not lost: -982: 2
+  server entries for tcp reads that were not lost: no server entry: 385
+  server entries for unix reads that were lost: no server entry: 11
+  server entries for unix reads that were not lost: -1066: 1
+  server entries for unix reads that were not lost: -1066,-982: 12
+  server entries for unix reads that were not lost: -982: 2
+  server entries for unix reads that were not lost: no server entry: 374
+  server entries for csql pids not among the batch's reads: 0
+--- shim/csql-read-check-0: 200 reads, 2026-11-21T05:41:21.198145Z to 2026-11-21T05:41:41.324564Z
+  tcp: codes -971=100, exit!=0=0, incomplete=0, lost=0, lost=False POLLHUP-unregister=False=100, only -199=0, reads=100, shim POLLHUP seen=0, shim POLLHUP with unregister outstanding=0, shim connect families 2=100
+  unix: codes -971=88, codes -971,-199,-111=12, exit!=0=0, incomplete=0, lost=12, lost=False POLLHUP-unregister=False=88, lost=True POLLHUP-unregister=True=12, only -199=0, reads=100, shim POLLHUP seen=12, shim POLLHUP with unregister outstanding=12, shim connect families 1=100
+  unix: unregister send to POLLHUP, ms: n=12 min=0.009 median=0.106 max=0.233
+  ! i=0 unix 2026-11-21T05:41:21.198145Z (+0.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=33 ms
+  ! i=7 unix 2026-11-21T05:41:21.941791Z (+0.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=25 ms
+  ! i=39 unix 2026-11-21T05:41:25.123401Z (+3.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=26 ms
+  ! i=43 unix 2026-11-21T05:41:25.515336Z (+4.3 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=24 ms
+  ! i=60 unix 2026-11-21T05:41:27.186542Z (+6.0 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=67 unix 2026-11-21T05:41:27.877298Z (+6.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=75 unix 2026-11-21T05:41:28.652778Z (+7.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=25 ms
+  ! i=79 unix 2026-11-21T05:41:29.120099Z (+7.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=123 unix 2026-11-21T05:41:33.564817Z (+12.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=21 ms
+  ! i=155 unix 2026-11-21T05:41:36.796741Z (+15.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=30 ms
+  ! i=167 unix 2026-11-21T05:41:37.984742Z (+16.8 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=23 ms
+  ! i=196 unix 2026-11-21T05:41:40.943513Z (+19.7 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=29 ms
+  cub_server before ('182', '12189871', '2026-11-21T05:38:11Z') after ('182', '12189871', '2026-11-21T05:38:11Z'): unchanged
+  server error log during the batch: {'-1066': 1}
+  server entries for tcp reads that were not lost: -1066: 1
+  server entries for tcp reads that were not lost: no server entry: 99
+  server entries for unix reads that were lost: no server entry: 12
+  server entries for unix reads that were not lost: no server entry: 88
+  server entries for csql pids not among the batch's reads: 0
+--- shim/csql-read-check-1: 200 reads, 2026-11-21T05:41:43.475874Z to 2026-11-21T05:42:04.230798Z
+  tcp: codes -971=100, exit!=0=0, incomplete=0, lost=0, lost=False POLLHUP-unregister=False=100, only -199=0, reads=100, shim POLLHUP seen=0, shim POLLHUP with unregister outstanding=0, shim connect families 2=100
+  unix: codes -971=93, codes -971,-199,-111=7, exit!=0=0, incomplete=0, lost=7, lost=False POLLHUP-unregister=False=93, lost=True POLLHUP-unregister=True=7, only -199=0, reads=100, shim POLLHUP seen=7, shim POLLHUP with unregister outstanding=7, shim connect families 1=100
+  unix: unregister send to POLLHUP, ms: n=7 min=0.009 median=0.105 max=0.373
+  ! i=15 unix 2026-11-21T05:41:45.018050Z (+1.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=27 ms
+  ! i=35 unix 2026-11-21T05:41:47.040866Z (+3.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=44 unix 2026-11-21T05:41:47.921034Z (+4.4 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=24 ms
+  ! i=55 unix 2026-11-21T05:41:49.033725Z (+5.6 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=25 ms
+  ! i=111 unix 2026-11-21T05:41:55.021045Z (+11.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=27 ms
+  ! i=159 unix 2026-11-21T05:42:00.004308Z (+16.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=23 ms
+  ! i=168 unix 2026-11-21T05:42:00.976856Z (+17.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=26 ms
+  cub_server before ('242', '346246812', '2026-11-21T05:38:40Z') after ('242', '346246812', '2026-11-21T05:38:40Z'): unchanged
+  server error log during the batch: no entries
+  server entries for tcp reads that were not lost: no server entry: 100
+  server entries for unix reads that were lost: no server entry: 7
+  server entries for unix reads that were not lost: no server entry: 93
+  server entries for csql pids not among the batch's reads: 0
+--- shim/csql-read-check-2: 200 reads, 2026-11-21T05:42:06.208850Z to 2026-11-21T05:42:27.626259Z
+  tcp: codes -971=100, exit!=0=0, incomplete=0, lost=0, lost=False POLLHUP-unregister=False=100, only -199=0, reads=100, shim POLLHUP seen=0, shim POLLHUP with unregister outstanding=0, shim connect families 2=100
+  unix: codes -971=92, codes -971,-199,-111=8, exit!=0=0, incomplete=0, lost=8, lost=False POLLHUP-unregister=False=92, lost=True POLLHUP-unregister=True=8, only -199=0, reads=100, shim POLLHUP seen=8, shim POLLHUP with unregister outstanding=8, shim connect families 1=100
+  unix: unregister send to POLLHUP, ms: n=8 min=0.009 median=0.102 max=0.137
+  ! i=31 unix 2026-11-21T05:42:09.452945Z (+3.2 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  ! i=47 unix 2026-11-21T05:42:11.270210Z (+5.1 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=25 ms
+  ! i=51 unix 2026-11-21T05:42:11.676238Z (+5.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=24 ms
+  ! i=79 unix 2026-11-21T05:42:14.665982Z (+8.5 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=29 ms
+  ! i=83 unix 2026-11-21T05:42:15.095435Z (+8.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=28 ms
+  ! i=100 unix 2026-11-21T05:42:17.096030Z (+10.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=82 ms
+  ! i=176 unix 2026-11-21T05:42:25.145508Z (+18.9 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=32 ms
+  ! i=188 unix 2026-11-21T05:42:26.409934Z (+20.2 s) rc=0 lost=True complete=True codes=-971,-199,-111 stdout=900 B connect-to-pair=22 ms
+  cub_server before ('600', '346251525', '2026-11-21T05:39:15Z') after ('600', '346251525', '2026-11-21T05:39:15Z'): unchanged
+  server error log during the batch: no entries
+  server entries for tcp reads that were not lost: no server entry: 100
+  server entries for unix reads that were lost: no server entry: 8
+  server entries for unix reads that were not lost: no server entry: 92
+  server entries for csql pids not among the batch's reads: 0
+--- csql connect notice to the -199 line in lost reads, ms (csql's stamps): n=79 min=17 median=25 max=82
+--- totals: lost sessions in reads, with the 95 % Wilson interval of the rate
+  exec (kubectl exec per read) tcp: 0 in 200 (0.00 %, 0.00 to 1.88 %)
+  exec (kubectl exec per read) unix: 5 in 200 (2.50 %, 1.07 to 5.72 %)
+  fresh tcp: 0 in 1200 (0.00 %, 0.00 to 0.32 %)
+  fresh unix: 30 in 1200 (2.50 %, 1.76 to 3.55 %)
+  ha tcp: 0 in 800 (0.00 %, 0.00 to 0.48 %)
+  ha unix: 22 in 800 (2.75 %, 1.82 to 4.13 %)
+  shim tcp: 0 in 300 (0.00 %, 0.00 to 1.26 %)
+  shim unix: 27 in 300 (9.00 %, 6.26 to 12.78 %)

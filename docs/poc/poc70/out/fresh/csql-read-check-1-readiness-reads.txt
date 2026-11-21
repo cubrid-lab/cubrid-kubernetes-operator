@@ -1,0 +1,626 @@
+--- 2026-11-21T05:38:42.099Z
+
+Time: 11/21/26 05:38:42.359 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 521) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:42.393 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 1, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:42.393 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 1, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:43.405Z
+
+Time: 11/21/26 05:38:43.635 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 536) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:43.666 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:43.666 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:44.680Z
+
+Time: 11/21/26 05:38:44.887 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 546) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:44.906 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:44.907 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:45.913Z
+
+Time: 11/21/26 05:38:46.111 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 556) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:46.129 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:46.129 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:47.136Z
+
+Time: 11/21/26 05:38:47.374 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 562) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:47.403 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:47.403 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:48.410Z
+
+Time: 11/21/26 05:38:48.640 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 568) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:48.659 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:48.659 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:49.664Z
+
+Time: 11/21/26 05:38:49.891 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 574) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:49.910 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:49.910 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:50.922Z
+
+Time: 11/21/26 05:38:51.180 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 605) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:51.199 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:51.199 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:52.215Z
+
+Time: 11/21/26 05:38:52.469 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 617) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:52.496 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:52.496 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:53.503Z
+
+Time: 11/21/26 05:38:53.737 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 632) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:53.756 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:53.756 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+
+Time: 11/21/26 05:38:53.758 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 3, EID = 4
+Server no longer responding.... Invalid argument
+
+Time: 11/21/26 05:38:53.758 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 3, EID = 5
+Your transaction has been aborted by the system due to server failure or mode change.
+command terminated with exit code 1
+--- 2026-11-21T05:38:54.763Z
+
+Time: 11/21/26 05:38:54.978 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 638) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:54.996 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:54.996 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:56.008Z
+
+Time: 11/21/26 05:38:56.200 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 666) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:56.218 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:56.218 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:57.231Z
+
+Time: 11/21/26 05:38:57.469 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 672) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:57.487 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:57.487 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:58.491Z
+
+Time: 11/21/26 05:38:58.753 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 678) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:38:58.772 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:38:58.772 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:38:59.811Z
+
+Time: 11/21/26 05:39:00.014 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 684) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:00.033 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:00.033 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:01.040Z
+
+Time: 11/21/26 05:39:01.234 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 694) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:01.253 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:01.253 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:02.265Z
+
+Time: 11/21/26 05:39:02.469 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 701) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:02.487 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:02.487 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:03.493Z
+
+Time: 11/21/26 05:39:03.722 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 707) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:03.742 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:03.742 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:04.748Z
+
+Time: 11/21/26 05:39:04.968 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 713) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:04.986 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:04.986 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:05.997Z
+
+Time: 11/21/26 05:39:06.197 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 723) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:06.220 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:06.220 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:07.228Z
+
+Time: 11/21/26 05:39:07.449 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 742) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:07.468 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:07.468 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:08.480Z
+
+Time: 11/21/26 05:39:08.672 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 747) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:08.690 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:08.690 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:09.702Z
+
+Time: 11/21/26 05:39:09.898 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 753) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:09.916 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:09.916 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:10.926Z
+
+Time: 11/21/26 05:39:11.126 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 763) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:11.145 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:11.146 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:12.161Z
+
+Time: 11/21/26 05:39:12.380 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 769) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:12.407 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:12.407 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:13.418Z
+
+Time: 11/21/26 05:39:13.607 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 775) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:13.625 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:13.625 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:14.636Z
+
+Time: 11/21/26 05:39:14.872 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 781) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:14.890 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:14.890 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:15.901Z
+
+Time: 11/21/26 05:39:16.137 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 791) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:16.160 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:16.160 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:17.181Z
+
+Time: 11/21/26 05:39:17.437 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 810) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:17.456 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:17.456 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:18.471Z
+
+Time: 11/21/26 05:39:18.697 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 816) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:18.808 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:18.808 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:19.820Z
+
+Time: 11/21/26 05:39:20.019 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 822) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:20.042 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:20.042 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:21.046Z
+
+Time: 11/21/26 05:39:21.265 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 833) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.002000 sec) Committed. (0.000000 sec) 

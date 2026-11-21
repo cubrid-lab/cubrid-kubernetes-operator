@@ -1,0 +1,13 @@
+NAME                                             READY   STATUS    RESTARTS   AGE    IP            NODE                  NOMINATED NODE   READINESS GATES
+pod/csql-read-check-0                            1/1     Running   0          7m7s   10.42.3.126   cubrid-k8s-worker-3   <none>           <none>
+pod/csql-read-check-1                            1/1     Running   0          7m7s   10.42.1.90    cubrid-k8s-worker-1   <none>           <none>
+pod/csql-read-check-2                            1/1     Running   0          7m7s   10.42.2.44    cubrid-k8s-worker-2   <none>           <none>
+pod/csql-read-check-broker-ro-69678cf7bd-kz54r   1/1     Running   0          7m7s   10.42.2.43    cubrid-k8s-worker-2   <none>           <none>
+pod/csql-read-check-broker-ro-69678cf7bd-p2zjm   1/1     Running   0          7m7s   10.42.3.123   cubrid-k8s-worker-3   <none>           <none>
+pod/csql-read-check-broker-rw-7b5cff477b-grjmv   1/1     Running   0          7m7s   10.42.1.89    cubrid-k8s-worker-1   <none>           <none>
+pod/csql-read-check-broker-rw-7b5cff477b-q7bwj   1/1     Running   0          7m7s   10.42.3.124   cubrid-k8s-worker-3   <none>           <none>
+
+NAME                                           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE    VOLUMEMODE
+persistentvolumeclaim/data-csql-read-check-0   Bound    pvc-de0c9a93-11bd-48ea-8865-91bc79d35adb   2Gi        RWO            local-path     <unset>                 7m7s   Filesystem
+persistentvolumeclaim/data-csql-read-check-1   Bound    pvc-a3a63f97-9a97-48fd-a387-b3d2d7515edd   2Gi        RWO            local-path     <unset>                 7m7s   Filesystem
+persistentvolumeclaim/data-csql-read-check-2   Bound    pvc-3f38def3-957c-4a93-8144-2a93926026c8   2Gi        RWO            local-path     <unset>                 7m7s   Filesystem

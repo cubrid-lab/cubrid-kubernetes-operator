@@ -1,0 +1,6 @@
+
+Time: 11/21/26 05:41:34.311 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/session/session.c, line 2842 ERROR CODE = -1066, Tran = 5, CLIENT = csql-read-check-0:csql(21752), EID = 980
+Session expired.
+
+*** The previous error message is the last one. ***
+

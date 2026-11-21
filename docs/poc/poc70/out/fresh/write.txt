@@ -1,0 +1,6 @@
+
+Time: 11/21/26 05:39:20.059 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 1437) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Execute OK. (0.025000 sec) Committed. (0.016001 sec) 
+20 rows affected. (0.073001 sec) Committed. (0.000000 sec) 
+Execute OK. (0.002000 sec) 

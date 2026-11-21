@@ -6756,3 +6756,124 @@ missing-evidence rules and all backup acceptance under #291 remain unchanged.
 **Consequences.**
 - **#1035:** the default timeout lets the master acknowledge commits that no slave has after a single 4 to 5 s delay per stalled copier, with no change in heartbeat state, which fits the VM-lab loss; `-1` makes commits wait instead, and in this setup the waiting master was demoted within about 40 s, with blocked clients told nothing certain and their rows, already read by others, gone. Both settings wait for one stalled slave while the other copies. Neither result decides the ADR-0005 durability contract: whether to set the parameter, detect a stalled copy or document the limit is for the maintainers.
 - **#1034:** no member diverged in these trials, which had no power loss and no copy of a returning old master's leftover log.
+
+## POC-70 — whether csql's `-199`/`-111` pair comes over the local Unix socket only, or over TCP too, on long-running and freshly seeded members of the VM lab, with the installed Operator, 11.4.7.1995 (#238) — **observation: of 2,000 reads per transport on five members, interleaved, 52 over the Unix socket (`appdb@localhost`) printed the pair and none over TCP (`appdb@<member hostname>`); every one exited 0 with the full result and `Committed.`, the server's pid and start time did not change on any member, and the server logged nothing for any lost read; the rate was about the same on two slaves whose servers were 4 hours old (11 and 11 in 400) as on a freshly seeded cluster (8, 4 and 18 in 400), and was not higher in a seeded slave's first 30 s; with POC-54's shim loaded in logging mode, all 27 lost reads, and none of the 573 others, saw POLLHUP while csql's last request (`NET_SERVER_BO_UNREGISTER_CLIENT`) was outstanding, 0.009 to 0.373 ms after its send; so the client-side hang-up at csql's last request on the Unix socket happens on lab members without any fault and without a young server**
+
+**Question (#238).** The leading hypothesis for the pair on lab members is POC-54 and POC-55's route:
+- the server answers csql's last request, unregister, and closes the connection;
+- csql sees `POLLIN|POLLHUP` and gives up before it reads the reply;
+- it then prints the pair and exits 0.
+
+POC-55 produced this without a fault only on a local server a few seconds old. It saw it over the Unix socket that `localhost` uses, and never over TCP. POC-36 measured 7 aborted reads in 200 on a lab slave.
+
+This POC tests three predictions on the lab:
+- If losses come only over the Unix socket, with the server unchanged, that supports the hypothesis.
+- If losses come over TCP too, that refutes it.
+- If losses bunch right after seeding, that supports the pattern of a restored or fresh member.
+
+**Environment (2026-11-21 05:31Z to 05:45Z).**
+- **Lab:** the VM lab (`vm-lab`, kube-system UID `ddc0876e-c844-47ab-82c5-0f11d3985707`), k3s `v1.37.2+k3s1`, three workers.
+- **Operator and image:** the installed Operator `b6486c5`, with manager `sha256:a9bdf926f210056bcf260ab997ae977a292784c7920103814f7c5b26c19c4506` and Instance Manager `sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02`, on every member. Engine `CUBRID 11.4.7 (11.4.7.1995-f39ab8c)`.
+- **Lab rules:** the campaign Lease was held from 05:31:18 to 05:45:16 UTC, and the run was announced on #122. There was no fault injection and no VM power action.
+
+The targets:
+- **`cubrid-test/ha`, read only.** Its slaves `ha-1` (worker-2) and `ha-2` (worker-1). Both servers had started at 01:23 UTC, so they were about 4 h 11 min old. Their Pods had 0 restarts. The query read the catalog, so nothing in `ha` was written, restarted or reconfigured.
+- **A new cluster `csql-read-check`** in its own namespace. It had three members, one per worker, and was made as `test/installed/ha.go` makes its cluster: Required member spread, 640Mi and 150m requests, and 2Gi `local-path` volumes. It was seeded through the object store under `lab-runs/csql-read-check-20261121t0537z`.
+  - It was created at 05:37:34.
+  - The slave `-1` was restored from the seed and logged `Server status is UP` at 05:38:41.9 (worker-1).
+  - The slave `-2` was restored and logged it at 05:39:16.9 (worker-2).
+  - The master `-0` became `active` at 05:39:19 (worker-3).
+  - The cluster was `Ready` at 05:39:49.
+  - A table `read_check` (`id int primary key`, 20 rows) was written on the master at 05:39:20.
+
+**Method.** `docs/poc/poc70/README.md` is the full record, with the scripts and the raw output under `out/`. `analyse.py` recomputes every count below.
+- **The reads.** One `kubectl exec` per batch ran a bash loop in the member's `cubrid` container. It ran from `/`, as uid 1000, as the harness's `csqlRead` does. Each round ran `csql -u dba appdb@localhost -c '<select>'` and `csql -u dba appdb@$(hostname) -c '<select>'`, and alternated which went first.
+- **What each read records:** UTC time, transport, exit status, stdout and stderr kept apart with their sizes, the `-199` and `-111` lines, every `CODE` printed, and whether the full result was printed (the row-count line and `Committed.`). The full output was kept for every lost or unusual read.
+- **Before and after each batch:** the pid and start time of `cub_server` and `cub_master` (from `/proc`, as the image has no `ps`), `cubrid heartbeat status`, `cubrid changemode`, and the tail of `appdb.err`. The `appdb.err` and `appdb.access` lines written during the batch were kept too.
+- **`ha`:** 400 rounds on `ha-1`, then on `ha-2`, from 05:34:21 to 05:37:01.
+- **New cluster:** each member's batch of 400 rounds began as soon as it was ready, from 05:39:21 to 05:40:41:
+  - the master right after the write;
+  - each slave once its own heartbeat view said `slave` with a standby server and it returned all 20 rows.
+  - The slaves' batches began 40.4 s (`-1`) and 6.5 s (`-2`) after their `Server status is UP`. `-1` had waited 39 s for the table, which was written after it joined.
+- **Transport check.** POC-54's `shim.c` was built on the runner. It needs only `GLIBC_2.2.5` to `GLIBC_2.4`, and loads on the image's glibc 2.28. It was copied only into the new cluster's members. It ran 100 rounds on each, in logging mode only (no delay, no hidden POLLHUP), from 05:41:21 to 05:42:27. Its log gives the family of csql's `connect` and what each `poll` returned.
+- **Harness-style reads.** 100 rounds on each new slave, one `kubectl exec` per csql run with the output combined, as `csqlRead` makes them, from 05:43:34 to 05:44:27.
+
+**Is it TCP?** The shim answered this in all 600 runs:
+- `appdb@localhost` connected with `AF_UNIX` to `/tmp/CUBRID1523`.
+- `appdb@<hostname>` connected with `AF_INET` to the Pod's own address, port 1523.
+
+csql's notice names `host 'localhost'` and `host '<pod>'` respectively, on the same port. So that text alone does not tell the transport.
+
+**Results, no shim, one loop per batch.**
+
+| Member | Server age during the reads | Unix socket: lost / reads | TCP: lost / reads | `cub_server` before and after |
+|---|---|---:|---:|---|
+| `ha-1` (slave) | about 4 h 11 min | **11 / 400** | **0 / 400** | pid 39, same start |
+| `ha-2` (slave) | about 4 h 12 min | **11 / 400** | **0 / 400** | pid 39, same start |
+| `csql-read-check-0` (new master) | 70 to 140 s; `active` for 2 to 72 s | **8 / 400** | **0 / 400** | pid 182, same start |
+| `csql-read-check-1` (seeded slave) | 41 to 116 s | **4 / 400** | **0 / 400** | pid 242, same start |
+| `csql-read-check-2` (seeded slave) | 7 to 86 s | **18 / 400** | **0 / 400** | pid 600, same start |
+| all | | **52 / 2,000** (2.6 %, 2.0 to 3.4 %) | **0 / 2,000** (at most 0.19 %) | |
+
+The intervals are 95 % Wilson intervals.
+
+- **Every lost read had the same shape:**
+  - exit 0;
+  - the complete result and `Committed.` on stdout;
+  - on stderr, the `-971` connect notice, then `-199` (`network_cl.c:177`, `Server no longer responding.... Invalid argument`) and `-111` (`transaction_cl.c:600`), with nothing else.
+
+  These are the lines #238 records. csql's own stamps put the `-199` 17 to 82 ms after its connect notice, median 25 (79 lost reads, shim included). No TCP read printed any code beyond `-971`. No read of either transport exited non-zero or printed an incomplete result.
+- **If losses happened equally on both transports,** the chance that all 52 would fall on the Unix socket is about 1.6 × 10⁻¹⁶ (hypergeometric).
+- **Nothing in the server's log.** No lost read had any entry in its member's `appdb.err`, which names each client's csql pid. `-982 Set interrupt` and `-1066 Session expired` were logged for 74 reads that were not lost: 35 over TCP and 39 over the socket. They were never logged for a lost one. So the lines POC-36 saw on lab slaves are a separate event, not the server's side of the pair.
+- **Not bunched after seeding.** On `csql-read-check-2`, 3 of the 123 socket reads in the server's first 30 s after `UP` were lost, and 15 of the 277 after. The rate differed between members, from 4 to 18 in 400, but not in order of server age: the 4-hour servers were in the middle. Why `-1` and `-2` differed (4 and 18 in 400) was not looked at.
+- **Two in a row.** Once, on the master, two consecutive socket reads 0.1 s apart were lost (rounds 99 and 100). At a rate of about 2.6 % that is expected now and then, and needs no other cause.
+
+**Results with the shim, logging only, new cluster.**
+
+| Member | Unix: lost / reads | Unix: POLLHUP with unregister outstanding | TCP: lost / reads | TCP: any POLLHUP |
+|---|---:|---:|---:|---:|
+| `csql-read-check-0` | 12 / 100 | 12 | 0 / 100 | 0 |
+| `csql-read-check-1` | 7 / 100 | 7 | 0 / 100 | 0 |
+| `csql-read-check-2` | 8 / 100 | 8 | 0 / 100 | 0 |
+
+- **The POLLHUP route, in every lost read.** Each of the 27 lost reads saw POLLHUP while the unregister request (function code 4) was outstanding, 0.009 to 0.373 ms after its send, median 0.10 to 0.11 ms per member. None of the 273 other socket reads saw POLLHUP at all, and no TCP read did.
+- **The shim raised the rate:** 27 in 300 (9.0 %, 6.3 to 12.8 %) against 30 in 1,200 on the same members without it. POC-55 suspected the same.
+
+**Results, harness-style reads (one `kubectl exec` each), new slaves.**
+- Unix socket: 5 in 200 lost (0 on `-1`, 5 on `-2`).
+- TCP: 0 in 200.
+- The servers did not change.
+
+Separately, the slave watchers read `-1` 32 times and `-2` 5 times this way, over the Unix socket, before their batches. One of these reads on `-1`, at 05:38:53, printed the pair. It came after `-493 Unknown class "dba.read_check"`, which the read got because the table had not arrived yet, and it exited 1.
+
+**What was shown, on this lab and image.**
+- **The pair comes over the Unix socket and not over TCP.** Over the socket: 57 in 2,200 reads without the shim, at 2.0 to 3.3 %. Over TCP: 0 in 2,500 reads in all, at most 0.15 %. Both were run on the same members, interleaved, with servers whose identity did not change.
+- **It happens on 4-hour-old slaves as often as on freshly seeded members.** So a young server is not needed, unlike in POC-55's local runs. POC-36's local Docker pair, 0 in 2,400 reads, had not produced it either.
+- **When the shim was loaded, the mechanism was POC-54's in every lost read:** the server's hang-up was seen on csql's last request.
+- **The predictions:**
+  - Losses only on the socket, with an unchanged server: supported.
+  - Losses over TCP: none seen. In 2,500 reads this bounds the TCP rate; it does not prove the rate is zero.
+  - Bunching right after seeding: not supported.
+
+**What was not shown.**
+- **Why the server's close reaches csql before its reply on these members,** but did not on a settled local server (POC-55: 0 of 300 with the shim; POC-36: 0 of 2,400 in a local HA pair). Kubernetes, the container's CPU share, the kernel and node load are candidates, and none was tested.
+- **Why the rate differed between members.**
+- **That the S12 sightings on `ha-restore-2` and `ha-0` were this event.** They fit it by shape, transport and timing. Their servers were not observed this way.
+- **TCP under load or on other members.** Only these five members were read, for a few minutes each.
+
+**Limits.**
+- Each member was read once, for 1 to 2 minutes, on one afternoon. The new cluster's members ran on all three workers next to `ha`, `demo` and `logsize`.
+- The main loop ran inside the container, not one `kubectl exec` per read as the harness does. The harness-style arm was smaller: 400 reads.
+- The `ha` and new-cluster queries differ: a two-row catalog read and a 20-row table read. Both are small.
+- A rate measured here is this lab's on that day, not a property of CUBRID.
+
+**Consequences (proposed, none made).**
+- **#238.** The leading hypothesis now has lab evidence: a client-side hang-up at csql's last request on the Unix socket, with no server fault. The pair on `appdb@localhost` reads therefore says nothing about the server, as POC-55 concluded. Any acceptance rule must still use a separate check, such as the server's pid and start time.
+- **Reads over TCP.** Reading members through `appdb@<pod hostname>` instead of `appdb@localhost` would have avoided all 57 losses seen here. That is a test-harness change (`csqlRead` in `test/installed/ha.go`) for the maintainers to decide on. It is not made here, and a TCP read is not proof that a session can never be lost.
+- **POC-36's lines.** The `-982`/`-1066` lines on lab slaves should not be read as the server's record of these losses.
+
+**Cleanup.**
+- The namespace `csql-read-check` was deleted at 05:45:05 UTC, and its three PersistentVolumes (reclaim policy `Delete`) went with it.
+- The seed objects under `cubrid-seed/lab-runs/csql-read-check-20261121t0537z` were left in place, as installed-harness runs leave theirs.
+- In `ha`, only `reads.sh`'s temporary files under `/tmp` were written, and the script removed them.
+- The Lease was released with one SIGTERM to `bin/lab`.

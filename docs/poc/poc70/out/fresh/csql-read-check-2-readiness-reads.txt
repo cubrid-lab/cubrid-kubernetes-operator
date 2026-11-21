@@ -1,0 +1,107 @@
+--- 2026-11-21T05:39:17.274Z
+
+Time: 11/21/26 05:39:17.489 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 879) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:17.509 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 1, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:17.509 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 1, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:18.516Z
+
+Time: 11/21/26 05:39:18.695 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 894) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:18.716 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 3, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:18.716 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 3, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:19.729Z
+
+Time: 11/21/26 05:39:19.947 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 903) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:19.965 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 5, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:19.965 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 5, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:20.976Z
+
+Time: 11/21/26 05:39:21.183 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 913) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/21/26 05:39:21.203 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/parser/query_result.c, line 372 ERROR CODE = -493, Tran = 5, EID = 2
+Syntax: before '  order by id'
+Unknown class "dba.read_check". select id, note from [dba.read_check] order by 1
+
+Time: 11/21/26 05:39:21.203 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = 5, EID = 3
+before '  order by id'
+Unknown class "dba.read_check".
+
+In line 1, column 1,
+
+ERROR: before '  order by id'
+Unknown class "dba.read_check".
+
+command terminated with exit code 1
+--- 2026-11-21T05:39:22.215Z
+
+Time: 11/21/26 05:39:22.443 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'csql' (pid 919) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'row 1'             
+            2  'row 2'             
+            3  'row 3'             
+            4  'row 4'             
+            5  'row 5'             
+            6  'row 6'             
+            7  'row 7'             
+            8  'row 8'             
+            9  'row 9'             
+           10  'row 10'            
+           11  'row 11'            
+           12  'row 12'            
+           13  'row 13'            
+           14  'row 14'            
+           15  'row 15'            
+           16  'row 16'            
+           17  'row 17'            
+           18  'row 18'            
+           19  'row 19'            
+           20  'row 20'            
+
+20 rows selected. (0.003000 sec) Committed. (0.000000 sec) 

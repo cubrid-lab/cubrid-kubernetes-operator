@@ -1,0 +1,7 @@
+csql-read-check-0 cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-1 cubrid-k8s-worker-1 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-2 cubrid-k8s-worker-2 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-broker-ro-69678cf7bd-kz54r cubrid-k8s-worker-2 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-broker-ro-69678cf7bd-p2zjm cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-broker-rw-7b5cff477b-grjmv cubrid-k8s-worker-1 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
+csql-read-check-broker-rw-7b5cff477b-q7bwj cubrid-k8s-worker-3 ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:d08653919b22413171b43006af8669d4393be2af354f8e7df777f96385bb5f02
