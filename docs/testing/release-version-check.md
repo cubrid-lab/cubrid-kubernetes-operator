@@ -4,9 +4,10 @@
 anything, whether a release version may be drafted for the frozen candidate
 commit, whether a rerun may continue the draft an earlier run left behind, or
 whether the run must stop. It only reads the GitHub API. It never creates,
-edits or deletes a tag or a release, and no workflow calls it yet: the
-release workflow that will run it before drafting and again before publishing
-is still to be written under
+edits or deletes a tag or a release. The [release dry run](#release-dry-run)
+calls it with a read-only token; the publishing release workflow that will
+run it before drafting and again before publishing is still to be written
+under
 [issue #124](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/124).
 
 ## What it decides
@@ -72,3 +73,70 @@ license and API group gates, or that release-please opens its release PR with
 the GitHub App token so that CI runs on it. Those stay with issue #124, the
 [release candidate procedure](release-candidate-review.md) and the
 publication gates of #94.
+
+## Release dry run
+
+`.github/workflows/release-dry-run.yml` builds the artifacts of a proposed
+release without publishing anything. A maintainer starts it from `main`:
+
+```sh
+gh workflow run release-dry-run.yml --ref main -f sha=<full commit SHA on main> -f version=v0.1.0
+```
+
+It runs only on that manual dispatch and its token can only read the
+repository. In order, it:
+
+1. refuses a commit that is not a full 40-character SHA or a version that is
+   not `vMAJOR.MINOR.PATCH`, before anything is cloned;
+2. clones that commit and refuses it unless it is an ancestor of
+   `refs/remotes/origin/main`; no code from the commit runs before this;
+3. runs this check, taken from the workflow's own commit, and continues only
+   on `state=create`; a draft that a publishing rerun would resume also stops
+   it;
+4. builds the manager image and the Instance Manager image for linux/amd64
+   from the same Dockerfiles as `make docker-build` and
+   `make docker-build-instance-manager`, into OCI archives on the runner,
+   with no push, no registry login, no build cache and no build record
+   artifact, labelled with the commit time;
+5. builds the installer manifest with `make build-installer` for the
+   manager image the release would publish, and stops if that changed a
+   tracked file (the commit's generated files are stale);
+6. uploads `install.yaml`, `release-dry-run.json` (the commit, version, each
+   image's digest, image ID and archive checksum, the installer's SHA-256
+   and which Instance Manager image the installer makes the manager use)
+   and `SHA256SUMS` as the run's artifact;
+7. structurally parses the multi-document `install.yaml`: the one
+   controller-manager Deployment must run the built manager image and have
+   exactly one `--instance-manager-image` argument naming the built
+   Instance Manager image. A reference in another resource or annotation,
+   a missing/wrong flag, or duplicate arguments does not count. The run
+   records the result and fails after uploading the evidence when invalid.
+
+Step 7 fails every run today: `make build-installer` sets only the manager
+image. The structural validator (`hack/check-installer-image`) rejects the
+missing Instance Manager argument; an installed release would otherwise
+fall back to the mutable built-in `instance-manager:dev` tag, not the image
+built and recorded here. Its negative tests reject an image reference
+appearing only in another resource and duplicate or incorrect flags. The record and the job summary name the image
+that would be used. Until the installer sets the Instance Manager image, a
+dry run shows this gap instead of a candidate.
+
+Any failed step fails the job, and the job summary shows how far it got.
+It writes nothing outside the run (the Go setup's module cache is turned
+off too), so a rerun starts from the same state.
+
+Its limits:
+
+- **Drafts are invisible to it.** GitHub lists draft releases only to a
+  token that can push, and this job's token cannot. It therefore refuses an
+  existing tag or published release, but not a draft: with this token the
+  check's draft refusals (a draft for this or another commit, several
+  drafts) will in practice not trigger. The publishing workflow must run the
+  same check with its write token.
+- **The digests identify this build only.** The base images are mutable
+  tags, so a later build of the same commit can produce other digests. The
+  image archives are not kept.
+- The installer manifest names the manager image by tag, not by digest.
+- It does not exercise release-please, the GitHub App token, a draft
+  release, publication, or a failure or rerun on the publishing path. Those
+  stay with issue #124.
