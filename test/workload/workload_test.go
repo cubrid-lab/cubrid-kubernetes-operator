@@ -119,6 +119,38 @@ func TestReadHistory_Rejects(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+
+	// An outcome that carries a client, sequence or operation type different
+	// from its attempt cannot be credited to that attempt.
+	attempt := line(Attempted)
+	for name, answer := range map[string]string{
+		"an answer from another client":       `{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer with another sequence":     `{"client":"c1","seq":2,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer with another operation":    `{"client":"c1","seq":1,"op":"read","opId":"c1-1","event":"acknowledged"}`,
+		"a failed answer from another client": `{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"failed","error":"x"}`,
+		"an unknown answer with another op":   `{"client":"c1","seq":1,"op":"rollback","opId":"c1-1","event":"unknown","error":"x"}`,
+	} {
+		_, err := ReadHistory(strings.NewReader(attempt + answer + "\n"))
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if !strings.Contains(err.Error(), "line 2") || !strings.Contains(err.Error(), firstOp) {
+			t.Errorf("%s: error %q does not name the line and operation", name, err)
+		}
+	}
+}
+
+// An outcome line that omits client, sequence or operation type is accepted:
+// only a value that contradicts the attempt is rejected.
+func TestReadHistory_AcceptsOutcomeWithoutIdentityFields(t *testing.T) {
+	text := `{"client":"c1","seq":1,"op":"insert","opId":"c1-1","event":"attempted","amount":1,"note":"n"}` + "\n" +
+		`{"opId":"c1-1","event":"acknowledged"}` + "\n"
+	h, err := ReadHistory(strings.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Operations["c1-1"].Outcome; got != Acknowledged {
+		t.Errorf("outcome = %s, want %s", got, Acknowledged)
+	}
 }
 
 func TestCheck_Rules(t *testing.T) {

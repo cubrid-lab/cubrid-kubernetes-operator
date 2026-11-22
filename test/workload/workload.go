@@ -254,6 +254,15 @@ func ReadHistory(r io.Reader) (History, error) {
 				return History{}, fmt.Errorf("history line %d: operation %s is %s but was never attempted",
 					line, e.OpID, e.Event)
 			}
+			// The client writes client, seq and op on every line. An outcome
+			// that leaves one out (zero value) is not contradicting the
+			// attempt; one that names a different value is not its answer.
+			if (e.Client != "" && e.Client != op.Client) || (e.Seq != 0 && e.Seq != op.Seq) ||
+				(e.Op != "" && e.Op != op.Op) {
+				return History{}, fmt.Errorf("history line %d: operation %s is %s by client %q, sequence %d, operation %q, "+
+					"but was attempted by client %q, sequence %d, operation %q",
+					line, e.OpID, e.Event, e.Client, e.Seq, e.Op, op.Client, op.Seq, op.Op)
+			}
 			if answered[e.OpID] {
 				return History{}, fmt.Errorf("history line %d: operation %s has more than one outcome", line, e.OpID)
 			}
