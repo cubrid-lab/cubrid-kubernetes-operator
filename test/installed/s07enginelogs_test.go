@@ -405,8 +405,9 @@ func TestFinishS07KeepsTheEngineLogsOfAClusterThatDidNotSettle(t *testing.T) {
 	finish := func(capture bool) (*s07Record, evidence.Scenario) {
 		h := s07SnapshotRun(t)
 		h.rec.Client = &imageIdentity{Pod: clientPodName, Node: testClientNode}
-		open := s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "acknowledged")
-		ledger := s07LedgerAnswers(map[string][]workload.Row{m0: {s07Row("c-1")}, m1: {s07Row("c-1")}}, m2, "")
+		open := s07OpenHistory(s06Acknowledged)
+		rows := s07OpenRows(s06Acknowledged)
+		ledger := s07LedgerAnswers(map[string][]workload.Row{m0: rows, m1: rows}, m2, "")
 		s07ShortApplyInfoInterval(t)
 		engine := s07EngineFake{files: map[string][][2]string{m0: s07AllHALogs(m0)}, failing: m2,
 			readings: map[string]int{}}

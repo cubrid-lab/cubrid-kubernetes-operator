@@ -74,8 +74,13 @@ const (
 	// Service from before the fault and stops at its first error;
 	// s07ProbePrefix starts the client ID of each write through a new
 	// connection.
-	s07OpenClient  = "s07open"
-	s07ProbePrefix = "s07n"
+	s07OpenClient = "s07open"
+	// s07InFlightBeforeFault is how long before the fault the established
+	// client's last, unanswered operation may have started and still count
+	// as one the fault interrupted. The client runs one operation every
+	// 100 ms, so a live one has started another well within it.
+	s07InFlightBeforeFault = 5 * time.Second
+	s07ProbePrefix         = "s07n"
 	// The roles a sweep records for a member.
 	s07ActiveMaster = "active master"
 	s07Slave        = "slave"
@@ -312,6 +317,76 @@ type s07Session struct {
 	OpenAtEnd               bool       `json:"openAtEnd"`
 	ReadError               string     `json:"readError,omitempty"`
 	Diagnostics             string     `json:"diagnosticsFile,omitempty"`
+	// Events counts the complete events read, and AcknowledgedBeforeFault
+	// the acknowledgements before the fault, which show the session was
+	// established. IncompleteTailBytes counts the bytes after the last
+	// newline, an event the collector did not finish; RawFile keeps the file
+	// as read when there were any. Insufficient says why the history cannot
+	// support a verdict, or is empty.
+	Events                  int    `json:"events"`
+	AcknowledgedBeforeFault int    `json:"acknowledgedBeforeFault"`
+	IncompleteTailBytes     int    `json:"incompleteTailBytes,omitempty"`
+	RawFile                 string `json:"rawFile,omitempty"`
+	Insufficient            string `json:"insufficientEvidence,omitempty"`
+}
+
+// s07SessionProblem says why the established session's history cannot
+// support a verdict, or "". A run that proved nothing about that connection
+// must not pass by having seen no acknowledgement after the path closed: the
+// history must have been recorded and read, be complete and consistent,
+// belong to s07OpenClient, and show the s06Acknowledged acknowledgements the
+// run waits for before the fault.
+func s07SessionProblem(s *s07Session) string {
+	switch {
+	case s == nil:
+		return "no established-session SQL history was recorded: the run cannot show what happened to the " +
+			"connection held through the fault"
+	case s.ReadError != "":
+		return "the established-session SQL history could not be read: " + s.ReadError
+	case s.Insufficient != "":
+		return "the established-session SQL history is not sufficient evidence: " + s.Insufficient
+	case s.Events == 0 || s.AcknowledgedBeforeFault > s.Acknowledged:
+		return fmt.Sprintf("the established-session SQL history is not sufficient evidence: %d event(s), %d "+
+			"acknowledged, %d of them before the fault", s.Events, s.Acknowledged, s.AcknowledgedBeforeFault)
+	case s.AcknowledgedBeforeFault < s06Acknowledged:
+		return fmt.Sprintf("the established session had %d acknowledged operation(s) before the fault, not the %d "+
+			"that show it was established", s.AcknowledgedBeforeFault, s06Acknowledged)
+	}
+	return ""
+}
+
+// checkS07SessionEvents says why events, complete events of s07OpenClient's
+// history, are not a consistent history of that one client, or "". Beyond
+// workload.ReadHistory's rules, the client stops at its first error and runs
+// one operation at a time, so nothing may follow a failed or unknown outcome
+// and no operation may start before the previous one was answered; only the
+// last one may be unanswered, as when the client was stopped during it.
+func checkS07SessionEvents(text string, events []workload.Event) string {
+	if len(events) == 0 {
+		return "it holds no complete event"
+	}
+	if _, err := workload.ReadHistory(strings.NewReader(text)); err != nil {
+		return err.Error()
+	}
+	open, ended := "", ""
+	for i, e := range events {
+		switch {
+		case e.Client != s07OpenClient:
+			return fmt.Sprintf("event %d is of client %q, not %s", i+1, e.Client, s07OpenClient)
+		case ended != "":
+			return fmt.Sprintf("event %d (%s %s) follows the session's end at %s", i+1, e.Event, e.OpID, ended)
+		case e.Event == workload.Attempted && open != "":
+			return fmt.Sprintf("operation %s started before %s was answered", e.OpID, open)
+		case e.Event == workload.Attempted:
+			open = e.OpID
+		default:
+			open = ""
+			if e.Event == workload.Failed || e.Event == workload.Unknown {
+				ended = e.OpID
+			}
+		}
+	}
+	return ""
 }
 
 // s07Data is the post-recovery data check on every member, read directly.
@@ -727,7 +802,7 @@ func s07NeverEvents(rec *s07Record) []string {
 	// that the same quarantine generation was still in force at the end
 	// and saw no release. A new generation makes that history ambiguous.
 	// With a release or unread history, the timing remains inconclusive.
-	if s := rec.Session; s != nil && s.ReadError == "" && s.AcknowledgedAfterClosed > 0 &&
+	if s := rec.Session; s07SessionProblem(s) == "" && s.AcknowledgedAfterClosed > 0 &&
 		rec.RWPodsGoneAt != nil && rec.RWEndpointsEmptyAt != nil &&
 		rec.ReleaseSeenAt == nil && rec.QuarantineAtEnd != "" &&
 		len(rec.Generations) == 1 {
@@ -838,9 +913,9 @@ func s07Blocked(rec *s07Record) string {
 		return fmt.Sprintf("the control was not observed: after the grace the run read the cluster %d time(s) and "+
 			"saw one reachable active master in %d complete sweep(s), and needs two of each",
 			rec.ClusterReadsAfterGrace, rec.OneMasterSweepsAfterGrace)
-	case rec.Session != nil && rec.Session.ReadError != "":
-		return "the established-session SQL history could not be read: " + rec.Session.ReadError
-	case rec.Session != nil && rec.Session.AcknowledgedAfterClosed > 0:
+	case s07SessionProblem(rec.Session) != "":
+		return s07SessionProblem(rec.Session)
+	case rec.Session.AcknowledgedAfterClosed > 0:
 		return fmt.Sprintf("the established session had %d acknowledged write(s) after observed -rw path "+
 			"closure, but an observed release or incomplete quarantine evidence prevents attributing them "+
 			"to the closed interval; preserve the client timestamps and do not count this as a pass",
@@ -1009,7 +1084,9 @@ func s07Measurements(rec *s07Record) map[string]any {
 	m["newConnectionWrites"] = classes
 	m["operatorChange"] = cmpOr(rec.OperatorChange, "none seen")
 	m["establishedSession"] = evidence.Unknown
-	if s := rec.Session; s != nil && s.ReadError == "" {
+	m["establishedAcknowledgedAfterFault"] = evidence.Unknown
+	m["establishedAcknowledgedAfterPathClosed"] = evidence.Unknown
+	if s := rec.Session; s07SessionProblem(s) == "" {
 		m["establishedSession"] = "open at the end"
 		if !s.OpenAtEnd {
 			m["establishedSession"] = "ended by " + s.EndedBy
@@ -1528,7 +1605,19 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 		s.ReadError = err.Error()
 		return
 	}
+	raw := text
 	text = text[:strings.LastIndex(text, "\n")+1]
+	if tail := strings.TrimSpace(raw[len(text):]); tail != "" {
+		// The collector stopped inside an event. The complete events are
+		// still counted, but the run cannot know what the last one said.
+		s.IncompleteTailBytes = len(raw) - len(text)
+		file := s07File(rec.Variant, "established-session-raw.jsonl")
+		if h.write(file, []byte(raw)) == nil {
+			s.RawFile = file
+		}
+		s.Insufficient = fmt.Sprintf("it ends in an incomplete event (%d byte(s) after the last newline, kept in %s): "+
+			"the collector may have been interrupted", s.IncompleteTailBytes, cmpOr(s.RawFile, "no file"))
+	}
 	h.history.WriteString(text)
 	if err := h.write(haHistoryFile, []byte(h.history.String())); err != nil {
 		s.ReadError = err.Error()
@@ -1538,13 +1627,20 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 		s.ReadError = err.Error()
 		return
 	}
-	s.OpenAtEnd = true
+	s.Events = len(events)
+	if problem := checkS07SessionEvents(text, events); problem != "" && s.Insufficient == "" {
+		s.Insufficient = problem
+	}
+	s.OpenAtEnd = len(events) > 0
 	for _, e := range events {
 		t := e.T.UTC()
 		switch e.Event {
 		case workload.Acknowledged:
 			s.Acknowledged++
 			s.LastAcknowledgedAt = &t
+			if !t.After(faultAt) {
+				s.AcknowledgedBeforeFault++
+			}
 			if t.After(faultAt) {
 				s.AcknowledgedAfterFault++
 			}
@@ -1558,6 +1654,24 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 		}
 		if s.EndedAt == nil && (e.Event == workload.Failed || e.Event == workload.Unknown) {
 			s.EndedAt, s.EndedBy, s.OpenAtEnd = &t, e.Event+" "+e.OpID+": "+e.Error, false
+		}
+	}
+	// The session must still have been in use when the fault was issued: one
+	// that ended, or whose client went silent, before it cannot have had a
+	// write acknowledged after the path closed, so its history shows nothing
+	// about the fault. An operation still unanswered at the end may be one
+	// that hung through the fault, but only when it started at most
+	// s07InFlightBeforeFault before it; one started earlier means the client
+	// stopped, or hung, before the fault.
+	if last := len(events) - 1; s.Insufficient == "" && last >= 0 {
+		switch {
+		case s.EndedAt != nil && !s.EndedAt.After(faultAt):
+			s.Insufficient = "the session ended before the fault, at " + s.EndedAt.Format(time.RFC3339) +
+				" by " + s.EndedBy
+		case !events[last].T.After(faultAt) && (events[last].Event != workload.Attempted ||
+			events[last].T.Before(faultAt.Add(-s07InFlightBeforeFault))):
+			s.Insufficient = "its last event, at " + events[last].T.UTC().Format(time.RFC3339) +
+				", is before the fault: the client stopped before it"
 		}
 	}
 	if diagnostics, err := h.clientRun(ctx, "cat /tmp/"+s07OpenClient+".diag.jsonl"); err == nil {

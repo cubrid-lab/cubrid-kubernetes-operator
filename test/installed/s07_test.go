@@ -304,7 +304,9 @@ func s07Base(control bool) *s07Record {
 	rec := &s07Record{Variant: s07MasterIsolated, Control: control, Master: m0, LastResolvedPrimary: m0,
 		Target: imageIdentity{Pod: m0}, FaultIssuedAt: tp(0), FaultConfirmedAt: tp(5), HoldEndedAt: tp(125),
 		FaultRemovedAt: tp(140), CleanupSucceeded: true, SettledAt: tp(200), FinalMaster: m1,
-		Data: &s07Data{Read: true, OK: true}, HealthReadings: 5}
+		Data: &s07Data{Read: true, OK: true}, HealthReadings: 5,
+		Session: &s07Session{Events: 2 * s06Acknowledged, Acknowledged: s06Acknowledged,
+			AcknowledgedBeforeFault: s06Acknowledged, OpenAtEnd: true}}
 	if control {
 		rec.Variant, rec.Target = s07SlaveIsolated, imageIdentity{Pod: m2}
 		rec.FinalMaster = m0
@@ -367,7 +369,7 @@ func TestJudgeS07(t *testing.T) {
 		reason  string
 	}{
 		"a required quarantine closed the path within its limits": {false, testS07Limits, nil, evidence.Pass,
-			"quarantine"},
+			s07PassReason},
 		"the control started no quarantine": {true, testS07Limits, nil, evidence.Pass, "no quarantine started"},
 		"an unset quarantine limit is a baseline, never a pass": {false, s07Limits{Partition: time.Minute}, nil,
 			evidence.Blocked, faults.ReasonTimeLimitUnset},
@@ -383,7 +385,7 @@ func TestJudgeS07(t *testing.T) {
 		// quarantine_limit, and a cut held exactly partition_duration, pass;
 		// a nanosecond beyond either fails.
 		"new connections that stopped exactly at the VM-lab quarantine_limit pass": {false, s07VMLabLimits,
-			s07StoppedAfter(30 * time.Second), evidence.Pass, "quarantine"},
+			s07StoppedAfter(30 * time.Second), evidence.Pass, s07PassReason},
 		"new connections that stopped just after the VM-lab quarantine_limit fail": {false, s07VMLabLimits,
 			s07StoppedAfter(30*time.Second + time.Nanosecond), evidence.Fail, "quarantine_limit exceeded"},
 		"a partition held exactly the VM-lab partition_duration passes": {true, s07VMLabLimits,
@@ -429,29 +431,53 @@ func TestJudgeS07(t *testing.T) {
 		}, evidence.Blocked, "manager Pod"},
 		"an acknowledgement while one quarantine generation stayed closed is a safety failure": {false,
 			testS07Limits, func(r *s07Record) {
-				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
-				r.Generations = []string{"generation-1"}
+				r.Session.AcknowledgedAfterClosed = 1
+				r.Generations = []string{s07OneGeneration}
 			}, evidence.Fail, "without an accepted release"},
 		"an acknowledgement with changed quarantine generations remains inconclusive": {false,
 			testS07Limits, func(r *s07Record) {
-				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
-				r.Generations = []string{"generation-1", "generation-2"}
+				r.Session.AcknowledgedAfterClosed = 1
+				r.Generations = []string{s07OneGeneration, "generation-2"}
 			}, evidence.Blocked, "incomplete quarantine evidence"},
 		"an acknowledgement after closure with a recorded release is inconclusive": {false,
 			testS07Limits, func(r *s07Record) {
-				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				r.Session.AcknowledgedAfterClosed = 1
 				v := at(*r.FaultIssuedAt, 150)
 				r.ReleaseSeenAt = &v
 			}, evidence.Blocked, "prevents attributing them"},
 		"an acknowledgement without an end-of-run quarantine observation is inconclusive": {false,
 			testS07Limits, func(r *s07Record) {
-				r.Session = &s07Session{AcknowledgedAfterClosed: 1}
+				r.Session.AcknowledgedAfterClosed = 1
 				r.QuarantineAtEnd = ""
 			}, evidence.Blocked, "incomplete quarantine evidence"},
 		"an unread established-session history blocks qualification": {false,
 			testS07Limits, func(r *s07Record) {
 				r.Session = &s07Session{ReadError: "the client history file is missing"}
 			}, evidence.Blocked, "established-session SQL history could not be read"},
+		// The established session must be shown, not inferred from its
+		// absence: no acknowledgement after closure proves nothing about a
+		// connection the run has no history of.
+		"no established-session history blocks the trigger variant": {false, testS07Limits,
+			func(r *s07Record) { r.Session = nil }, evidence.Blocked, "no established-session SQL history was recorded"},
+		"no established-session history blocks the control": {true, testS07Limits,
+			func(r *s07Record) { r.Session = nil }, evidence.Blocked, "no established-session SQL history was recorded"},
+		"an empty established-session history blocks the trigger variant": {false, testS07Limits,
+			func(r *s07Record) { r.Session = &s07Session{OpenAtEnd: true} }, evidence.Blocked, s07NoEvents},
+		"an empty established-session history blocks the control": {true, testS07Limits,
+			func(r *s07Record) { r.Session = &s07Session{OpenAtEnd: true} }, evidence.Blocked, s07NoEvents},
+		"an established session with too few acknowledgements before the fault blocks": {false, testS07Limits,
+			func(r *s07Record) { r.Session.AcknowledgedBeforeFault = s06Acknowledged - 1 }, evidence.Blocked,
+			"not the 10 that show it was established"},
+		"counts that no history could hold block": {false, testS07Limits,
+			func(r *s07Record) { r.Session.Events = 0 }, evidence.Blocked, s07NoEvents},
+		"an insufficient established-session history blocks": {true, testS07Limits,
+			func(r *s07Record) { r.Session.Insufficient = "it ends in an incomplete event" }, evidence.Blocked,
+			"not sufficient evidence: it ends in an incomplete event"},
+		"an acknowledgement after closure in an insufficient history is not counted as a failure": {false,
+			testS07Limits, func(r *s07Record) {
+				r.Session.AcknowledgedAfterClosed, r.Session.Insufficient = 1, "event 3 is of client \"c\", not s07open"
+				r.Generations = []string{s07OneGeneration}
+			}, evidence.Blocked, "not sufficient evidence"},
 		"a step still running blocks": {false, testS07Limits, func(r *s07Record) { r.StillRunning = []string{"check"} },
 			evidence.Blocked, "still running"},
 		"no reading of the cluster after the data check is blocked": {false, testS07Limits,
@@ -538,6 +564,7 @@ func TestJudgeS07(t *testing.T) {
 func TestS07MeasurementsKeepUnknown(t *testing.T) {
 	rec := s07Base(true)
 	rec.Data = &s07Data{Read: true, AcknowledgedMissing: 3, MissingByMember: map[string]int{m0: 3}}
+	rec.Session = nil
 	m := s07Measurements(rec)
 	for _, name := range []string{"quarantineSeenWithin", "rwPodsGoneWithin", "quarantineWithin", "enforcedTime",
 		"releaseMethod", "establishedSession"} {
