@@ -51,12 +51,22 @@ func csqlRunner(ctx context.Context, namespace, pod, database string,
 	return watchedCSQL(ctx, namespace, pod, database, run, nil)
 }
 
+// csqlScript is the shell command the csql runner runs on a member: $0 is the
+// database name and $1 the SQL. It connects to the member's own server over
+// TCP, by the member's hostname, rather than through the local Unix socket
+// that "<db>@localhost" uses: over that socket csql sometimes printed its whole
+// result and then both errors of a lost session (-199, -111), and over TCP it
+// did not, with the same server before and after (POC-70, #238). On Kind the
+// pair failed S02 and other specs. The server answering is the same either way.
+// The record of a lost session stays, since TCP is not shown never to lose one.
+const csqlScript = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0@$(hostname)" -c "$1"`
+
 // watchedCSQL is csqlRunner that also hands the record of each pair to seen.
 func watchedCSQL(ctx context.Context, namespace, pod, database string, run func(*exec.Cmd) (string, error),
 	seen func(*lostSessionRecord)) sqlRunner {
 	return func(sql string) (string, error) {
 		out, err := run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "-c", "cubrid", "--",
-			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, database+"@localhost", sql))
+			"bash", "-c", csqlScript, database, sql))
 		csqlLedger.observe(pod, sql, out, func(record *lostSessionRecord) {
 			csqlLedger.capture(ctx, record, namespace, pod, database)
 			if seen != nil {

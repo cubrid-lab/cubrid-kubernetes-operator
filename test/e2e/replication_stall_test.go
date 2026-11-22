@@ -644,7 +644,7 @@ func openTransactionStep(r *haRun) {
     sleep %[4]d
   done
   echo 'COMMIT;'
-} | csql -u dba --no-auto-commit %[5]s@localhost`,
+} | csql -u dba --no-auto-commit "%[5]s@$(hostname)"`,
 			openTxRounds, openTxRows, table, int(openTxPause.Seconds()), r.database)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(openTxRounds)*openTxPause+2*time.Minute)
 		defer cancel()
@@ -1210,7 +1210,7 @@ export PATH="${CUBRID}/bin:${PATH}"
     printf 'INSERT INTO %[3]s (id, pad) VALUES %%s;\n' "$values"
     sleep %[4]d
   done
-} | csql -u dba %[5]s@localhost`,
+} | csql -u dba "%[5]s@$(hostname)"`,
 			stuckWriteRounds, stuckWriteRows, table, int(stuckWritePause.Seconds()), r.database)
 		type result struct {
 			out string
