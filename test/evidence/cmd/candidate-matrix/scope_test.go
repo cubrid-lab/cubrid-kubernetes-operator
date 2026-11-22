@@ -23,7 +23,13 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
-const s03Scenario = "S03"
+const (
+	s03Scenario    = "S03"
+	s04Scenario    = "S04"
+	s05Scenario    = "S05"
+	s07Scenario    = "S07"
+	unknownVariant = "not-a-real-variant"
+)
 
 func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 	tests := []struct {
@@ -37,10 +43,10 @@ func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 		{s03Scenario, "abrupt-first-member", scopeMustPass},
 		{s03Scenario, "abrupt", scopeMustPass},
 		{s03Scenario, "graceful", scopeMustMeasure},
-		{"S04", "power-off", scopeMustMeasure},
-		{"S05", "one-broker-pod", scopeMustPass},
+		{s04Scenario, "power-off", scopeMustMeasure},
+		{s05Scenario, "one-broker-pod", scopeMustPass},
 		{"S06", "restart", scopeMustPass},
-		{"S07", "higher-rank-isolated", scopeMustMeasure},
+		{s07Scenario, "higher-rank-isolated", scopeMustMeasure},
 		{"S08", "", scopeMustMeasure},
 		{"S09", "clean", scopeDeferred},
 		{"S10", "", scopeMustPass},
@@ -88,22 +94,22 @@ func TestV01ScopeDoesNotRejudgeHistoricalFailure(t *testing.T) {
 // than as a v0.1 requirement it does not match.
 func TestV01ScopeShowsUnregisteredVariantsAsUnmapped(t *testing.T) {
 	tests := []struct{ id, variant string }{
-		{"S05", "not-a-real-variant"},
-		{"S05", ""},
-		{"S07", "not-a-real-variant"},
-		{"S07", ""},
-		{"S04", "not-a-real-variant"},
-		{"S06", "not-a-real-variant"},
-		{"S11", "not-a-real-variant"},
-		{"S12", "not-a-real-variant"},
-		{"S13", "not-a-real-variant"},
-		{"S14", "not-a-real-variant"},
-		{"S15", "not-a-real-variant"},
+		{s05Scenario, unknownVariant},
+		{s05Scenario, ""},
+		{s07Scenario, unknownVariant},
+		{s07Scenario, ""},
+		{s04Scenario, unknownVariant},
+		{"S06", unknownVariant},
+		{"S11", unknownVariant},
+		{"S12", unknownVariant},
+		{"S13", unknownVariant},
+		{"S14", unknownVariant},
+		{"S15", unknownVariant},
 		{"S00", "abrupt"},
 		{"S01", "complete"},
 		{"LAB01", "restart"},
-		{"S05", "graceful"},
-		{"S07", "power-off"},
+		{s05Scenario, "graceful"},
+		{s07Scenario, "drain-master-node"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.id+"/"+tc.variant, func(t *testing.T) {
