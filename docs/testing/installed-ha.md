@@ -3612,8 +3612,9 @@ nothing of it is done.
    records the Pod's UID and the container's ID.
 2. **Filler.** Unless `-backup-graceful-stop-filler-mb` is 0, one command in
    the member's database container grows a table `gs_filler` with one
-   `CHAR(1000)` column through `csql -u dba appdb@localhost`, the way the
-   run reads members. It creates the table and inserts one row, then copies
+   `CHAR(1000)` column through `csql -u dba appdb@$(hostname)`, the way the
+   run reads members: over TCP by the Pod's own hostname, not the local Unix
+   socket that `appdb@localhost` uses (POC-70). It creates the table and inserts one row, then copies
    at most 65,536 rows of the table into itself per statement
    (`INSERT INTO gs_filler (pad) SELECT pad FROM gs_filler LIMIT <k>`), each
    committed on its own, until the target row count

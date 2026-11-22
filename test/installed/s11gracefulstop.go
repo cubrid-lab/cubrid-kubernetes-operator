@@ -1856,8 +1856,14 @@ func (h *haRun) createGracefulStop(ctx context.Context, rec *s11StandaloneCluste
 
 // fillerCSQL runs csql as dba on the member's database, the way the run
 // reads members (csqlRead), without csqlRead's second read: a statement that
-// writes is never sent again by it.
-const fillerCSQL = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`
+// writes is never sent again by it. $0 is the database name and $1 the
+// statement. Like csqlRead, it connects to the member's own server over TCP by
+// the Pod's own hostname, evaluated inside the Pod, rather than through the
+// local Unix socket that "localhost" uses: on the VM lab's members that socket
+// lost about one session in forty after printing the whole result, and TCP
+// lost none (POC-70, #238). The transport changes only how csql connects; the
+// statement is still sent once.
+const fillerCSQL = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0@$(hostname)" -c "$1"`
 
 // fillerCreate, fillerSeed and fillerCount are the filler's statements that
 // create its table, insert its first row and count its rows;
@@ -1891,7 +1897,7 @@ type fillerStatement struct {
 func (h *haRun) fillerSQL(ctx context.Context, sql string) fillerStatement {
 	sctx, cancel := context.WithTimeout(ctx, fillerStatementLimit)
 	defer cancel()
-	out, err := h.member(sctx, s11GracefulStopMember, "bash", "-c", fillerCSQL, databaseName+"@localhost", sql)
+	out, err := h.member(sctx, s11GracefulStopMember, "bash", "-c", fillerCSQL, databaseName, sql)
 	if errors.Is(sctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		err = errors.Join(err, fmt.Errorf("the statement did not end within %s", fillerStatementLimit))
 	}
