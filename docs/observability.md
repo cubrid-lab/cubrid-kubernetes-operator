@@ -1449,9 +1449,31 @@ over a target that already holds a database, and the claim's and volume's
 owner and the cluster UID have to be checked again.
 
 **Requesting a rebuild.** Replace the member's claim first, outside the
-Operator: check that nothing on the old claim is needed, then delete the
-member's Pod and its claim `data-<member>`; the StatefulSet creates an empty
-claim and a new Pod. Then read the token and set it with the member's name:
+Operator: check that nothing on the old claim is needed, then delete its claim
+`data-<member>` and the member's Pod, in this order, with the commands below;
+the StatefulSet creates an empty claim and a new Pod.
+
+```sh
+# Record the UID of the claim you checked; delete it only while it is still that
+# claim, and do not wait: it stays until its Pod is gone.
+CLAIM_UID="$(kubectl -n "$NS" get pvc data-<member> -o jsonpath='{.metadata.uid}')"
+# ... check that nothing on this claim is needed ...
+[ "$(kubectl -n "$NS" get pvc data-<member> -o jsonpath='{.metadata.uid}')" = "${CLAIM_UID}" ] \
+  && kubectl -n "$NS" delete pvc data-<member> --wait=false
+# Then delete the Pod. The StatefulSet creates an empty claim and a new Pod.
+kubectl -n "$NS" delete pod <member> --timeout=5m
+```
+
+**The order matters, and the delete is permanent.** If the Pod is deleted
+first, the StatefulSet recreates it on the old claim and the claim's deletion
+hangs (the end-to-end test `test/e2e/member_rebuild_test.go` deletes the claim
+first). With a `Delete` reclaim policy, as `local-path` has, deleting the claim
+destroys the volume for good, and a former primary's volume may hold the only
+copy of some writes. To save them first, export the volume as in
+[retained-volume recovery](operations/retained-volume-recovery.md); see also
+[what deleting a cluster does to its data](operations/data-retention.md).
+
+Then read the token and set it with the member's name:
 
 ```sh
 kubectl get cubridcluster <name> -o jsonpath='{range .status.memberRebuildOffers[*]}{.member} {.claimUID} {.source} {.token}{"\n"}{end}'
@@ -1620,8 +1642,10 @@ once for each new Pod of the member. `Degraded` is `True` with
 `RebuildFailed` meanwhile. The member is never released, and its claim is
 never offered again. A short window remains: the restore may start the
 member between the failure and the stop. To recover, check that nothing on
-the member's claim is needed, then delete the member's Pod and its claim
-`data-<member>` so that the StatefulSet creates an empty one, wait for a
+the member's claim is needed, then delete the claim `data-<member>` and the
+member's Pod, in that order and with the commands and the warning under
+[Requesting a rebuild](#rebuilding-a-member), so that the StatefulSet creates
+an empty one, wait for a
 new offer for the member, and request a new rebuild. `Degraded` is removed
 once the member runs on another claim. The stop is sent only while the
 member's Pod and claim, read from the API server right before it, are the
