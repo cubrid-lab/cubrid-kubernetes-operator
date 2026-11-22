@@ -129,8 +129,14 @@ The image is in `$OLD-recreated.yaml` under the StatefulSet's `cubrid`
 container, or in `kubectl -n "$NS" get pods -o yaml` output saved before
 step 2.
 
-Export the database in stand-alone mode (`-S`), which reads the volume
-directly:
+Export the database in stand-alone mode (`-S`). Whether `cubrid unloaddb -S`
+writes to the volume is not established, and opening a database stand-alone
+with `csql -S` did change the data volume and the active log of an HA slave
+(POC-65, #894). No copy or snapshot procedure is documented or verified here:
+the verified lab run used the claim itself, and the commands below mount the
+original claim (`$SRC`). Running on the original claim is a risk you accept
+case by case. A VolumeSnapshot clone of the claim, if your CSI driver supports
+it, is an unverified option:
 
 ```sh
 kubectl -n "$NS" exec retained-export -- bash -c \
@@ -168,14 +174,18 @@ done
 On an HA database, `cubrid loaddb` in client mode (`-C`) loads only rows. It
 refuses a schema file with `In loaddb CS (-C, --CS-mode) in HA mode, only
 OBJECT loading is possible.` So load the schema with `csql` first, then the
-rows, then the indexes and triggers if those files exist:
+rows, then the indexes and triggers if those files exist. `csql` connects
+over TCP by the Pod's hostname (`<db>@$(hostname)`), not the local socket
+(`<db>@localhost`): over the local socket, `csql` lost its session after
+printing the whole result on lab members (POC-70, #238), and a lost session
+during a schema load leaves its outcome unknown.
 
 ```sh
 kubectl -n "$NS" exec "$M" -c cubrid -- bash -c '
   cd /tmp/load && export PATH="$CUBRID/bin:$PATH"
-  csql -u dba -i '"$DB"'_schema '"$DB"'@localhost
-  cubrid loaddb -u dba -C -d '"$DB"'_objects '"$DB"'
-  for f in '"$DB"'_indexes '"$DB"'_trigger; do [ -s "$f" ] && csql -u dba -i "$f" '"$DB"'@localhost; done'
+  csql -u dba -i '"$DB"'_schema "'"$DB"'@$(hostname)" &&
+  cubrid loaddb -u dba -C -d '"$DB"'_objects '"$DB"' &&
+  for f in '"$DB"'_indexes '"$DB"'_trigger; do [ -s "$f" ] && csql -u dba -i "$f" "'"$DB"'@$(hostname)"; done'
 ```
 
 `loaddb` reports `Total <n> object(s) inserted, 0 object(s) failed.`
@@ -188,7 +198,7 @@ the key) on every member of `$NEW` with the export's `_unloaddb.log`:
 ```sh
 for p in $(kubectl -n "$NS" get pods -o name | grep "/$NEW-[0-9]*$"); do
   kubectl -n "$NS" exec "${p#pod/}" -c cubrid -- bash -c \
-    'PATH="$CUBRID/bin:$PATH" csql -u dba -c "SELECT COUNT(*) FROM <table>;" '"$DB"'@localhost'
+    'PATH="$CUBRID/bin:$PATH" csql -u dba -c "SELECT COUNT(*) FROM <table>;" "'"$DB"'@$(hostname)"'
 done
 ```
 

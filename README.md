@@ -152,11 +152,12 @@ not guarantees of zero data loss or general CUBRID HA safety:
   unnecessary quarantine are published as measured limitations ([#938](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/938)),
   without converting other safety failures to passes.
 - **Recovery:** explicitly authorized rebuild onto verified replacement storage
-  (S10) remains mandatory. Automatic rejoin/adoption of potentially divergent
+  (S10, [rebuilding a member](./docs/observability.md#rebuilding-a-member))
+  remains mandatory. Automatic rejoin/adoption of potentially divergent
   retained data (S09) and automatic adoption of old HA PVCs on cluster
   recreation ([#798](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/798))
   are deferred to v0.2. Preserve original volumes and follow the reviewed
-  [manual recovery procedure](./docs/operations/retained-volume-recovery.md);
+  [manual export procedure for retained volumes](./docs/operations/retained-volume-recovery.md);
   an accepted rebuild request alone does not authorize deleting data.
 - **API group:** `database.cubrid.io` is not proven owned by this project
   ([#20](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/20)).
@@ -178,8 +179,9 @@ alignment gaps are tracked in the scenario contract.
   ([docs/operations/dba-password.md](./docs/operations/dba-password.md)).
   Every other database is created with an empty DBA password (#801), so
   every client the Broker NetworkPolicy admits can connect to it as `dba`.
-  Changing the password later is not supported, and on an HA cluster a
-  changed Secret value is not reported.
+  Changing the password later is not supported; the Operator reports a
+  changed Secret value as `DBAPasswordRotationUnsupported` (on an HA cluster
+  it asks only the primary) and does not apply it.
 - **No traffic is encrypted:** not between clients and Brokers, Brokers and
   the database, members, or the Operator and the Instance Manager. The
   Instance Manager requires a bearer token.
