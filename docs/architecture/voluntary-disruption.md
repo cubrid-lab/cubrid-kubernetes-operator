@@ -148,7 +148,7 @@ help: it has already spent its one allowed disruption.
 A blocked drain reports `Cannot evict pod as it would violate the pod's
 disruption budget` and retries. It ends when the reason ends:
 
-1. **Find what is unavailable:** `kubectl get pdb` for the allowed count, then
+1. **Find what is unavailable:** `kubectl -n <namespace> get pdb` for the allowed count, then
    `kubectl -n <namespace> get cubridcluster <name> -o yaml` for `MemberPlacement`, `HAReady`
    and `Ready`.
 2. **Make the member ready.** Usually that means uncordoning the node that
