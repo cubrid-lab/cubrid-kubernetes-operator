@@ -109,10 +109,32 @@ start, when it is at least 8 bytes long, among the values its log never
 writes, as it does for its token and the object-storage keys; a shorter value
 is not registered, because replacing every occurrence of, say, `dba` or the
 database's name would garble ordinary lines and show the value by where the
-placeholder lands. It keeps what csql prints for the
+placeholder lands. So the redaction covers only a value of at least 8 bytes,
+and only the value the file held when the Instance Manager started. A value
+the kubelet writes into the mounted file later is not redacted, and neither is
+any value shorter than 8 bytes; this is safe only because no code path logs the
+value. It keeps what csql prints for the
 statement in a file that is unlinked before csql runs, so it is never under a
 name in `/tmp`. Anyone who can read Secrets in the namespace, or run commands
 in the DB container, can read the password.
+
+**Transport.** Traffic between clients and Brokers, and between Pods, is not
+encrypted ([README, Security limitations](../../README.md#security-limitations)).
+A `dba` login sent through a Broker therefore crosses the Pod network
+unencrypted.
+
+**Who may update the Secret.** Someone who may update the Secret but not read
+it can still test guesses: each new value is checked against the database
+about once per poll (5 minutes by default), and
+`DBAPasswordRotationUnsupported` appears when the value is not the database's
+password (see [Changing the password is not supported](#changing-the-password-is-not-supported)).
+On a standalone cluster a wrong value also stops the next start of the DB
+container ([Restarting after a changed value](#restarting-after-a-changed-value)).
+Grant `update` on Secrets only to those who may know the password.
+
+**Characters not yet tested.** Values containing `;`, `--`, `//` or `/*`
+were not part of the engine test set (POC-64, `docs/poc/poc64/values.py`);
+how the engine handles them is untested.
 
 ## Who can use a Secret through the cluster
 
