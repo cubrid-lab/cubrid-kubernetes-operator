@@ -137,9 +137,13 @@ On a standalone cluster a wrong value also stops the next start of the DB
 container ([Restarting after a changed value](#restarting-after-a-changed-value)).
 Grant `update` on Secrets only to those who may know the password.
 
-**Characters not yet tested.** Values containing `;`, `--`, `//` or `/*`
-were not part of the engine test set (POC-64, `docs/poc/poc64/values.py`);
-how the engine handles them is untested.
+**SQL comment and separator characters.** Seven values of 24 to 26 bytes
+containing `;`, `--`, `//`, `/*` or `*/` (one of them `';--`) were each set
+whole and accepted at login, and none appeared in the engine's logs or files
+(POC-73, in Docker on CUBRID 11.4.7.1995, standalone, each run once). No
+value there split the statement, so whether the engine would log a statement
+split by such a value is not observed. Values at the 31-byte limit and HA
+clusters were not tested.
 
 ## Who can use a Secret through the cluster
 
