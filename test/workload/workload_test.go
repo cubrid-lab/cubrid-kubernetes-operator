@@ -124,11 +124,13 @@ func TestReadHistory_Rejects(t *testing.T) {
 	// from its attempt cannot be credited to that attempt.
 	attempt := line(Attempted)
 	for name, answer := range map[string]string{
-		"an answer from another client":       `{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
-		"an answer with another sequence":     `{"client":"c1","seq":2,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
-		"an answer with another operation":    `{"client":"c1","seq":1,"op":"read","opId":"c1-1","event":"acknowledged"}`,
-		"a failed answer from another client": `{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"failed","error":"x"}`,
-		"an unknown answer with another op":   `{"client":"c1","seq":1,"op":"rollback","opId":"c1-1","event":"unknown","error":"x"}`,
+		"an answer from another client":    `{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer with another sequence":  `{"client":"c1","seq":2,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer with another operation": `{"client":"c1","seq":1,"op":"read","opId":"c1-1","event":"acknowledged"}`,
+		"a failed answer from another client": `{"client":"c2","seq":1,"op":"insert","opId":"c1-1",` +
+			`"event":"failed","error":"x"}`,
+		"an unknown answer with another op": `{"client":"c1","seq":1,"op":"rollback","opId":"c1-1",` +
+			`"event":"unknown","error":"x"}`,
 	} {
 		_, err := ReadHistory(strings.NewReader(attempt + answer + "\n"))
 		if err == nil {
