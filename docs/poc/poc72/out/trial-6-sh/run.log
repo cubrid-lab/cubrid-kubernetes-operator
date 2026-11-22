@@ -1,0 +1,530 @@
+trial out/trial-6-sh form=sh start 2026-11-22T01:32:47.355Z host: 18.71 18.97 17.99
+left: containers=[] networks=[]
+    - start-time        00/00/00 00:00:00.000
+
+setup end 2026-11-22T01:34:39.005Z
+=== 2026-11-22T01:34:59.009Z ha-2 processes (reference, not touched)
+pid=318 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+pid=320 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 -m sync appdb@poc72-ha-1 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-1/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-1/appdb_lgat
+pid=322 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgla__lock
+pid=324 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-1/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-1/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-1
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=2 applylogdb=2
+=== 2026-11-22T01:35:02.647Z before: ha-1 processes
+pid=317 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=321 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgla__lock
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=2 applylogdb=2
+=== 2026-11-22T01:35:02.834Z before: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 321, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.029
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-0:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 317, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 ] 
+    - registered-time   11/22/26 01:34:03.012
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+### 2026-11-22T01:35:02.920Z [sh] cubrid heartbeat copylogdb stop appdb poc72-ha-0
+@ cubrid heartbeat copylogdb
+@ copylogdb stop
+++ copylogdb stop: success
+++ cubrid heartbeat copylogdb: success
+### 2026-11-22T01:35:06.021Z rc=0
+=== 2026-11-22T01:35:06.021Z after copylogdb stop: ha-1 processes
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=321 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgla__lock
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=1 applylogdb=2
+=== 2026-11-22T01:35:06.181Z after copylogdb stop: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 321, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.029
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+### 2026-11-22T01:35:06.264Z [sh] cubrid heartbeat applylogdb stop appdb poc72-ha-0
+@ cubrid heartbeat applylogdb
+@ applylogdb stop
+++ applylogdb stop: success
+++ cubrid heartbeat applylogdb: success
+### 2026-11-22T01:35:09.362Z rc=0
+=== 2026-11-22T01:35:09.370Z after applylogdb stop: ha-1 processes
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=1 applylogdb=1
+=== 2026-11-22T01:35:09.532Z after applylogdb stop: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+=== 2026-11-22T01:35:39.622Z 30 s later, before start: ha-1 processes
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=1 applylogdb=1
+=== 2026-11-22T01:35:40.613Z 30 s later, before start: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+2026-11-22T01:35:41.532Z poc72-ha-0 count: 113
+2026-11-22T01:35:41.633Z poc72-ha-1 count: 44
+2026-11-22T01:35:41.692Z poc72-ha-2 count: 113
+### 2026-11-22T01:35:41.748Z [sh] cubrid heartbeat copylogdb start appdb poc72-ha-0
+@ cubrid heartbeat copylogdb
+@ copylogdb start
+++ copylogdb start: success
+++ cubrid heartbeat copylogdb: success
+### 2026-11-22T01:35:51.808Z rc=0
+### 2026-11-22T01:35:51.808Z [sh] cubrid heartbeat applylogdb start appdb poc72-ha-0
+@ cubrid heartbeat applylogdb
+@ applylogdb start
+++ applylogdb start: success
+++ cubrid heartbeat applylogdb: success
+### 2026-11-22T01:36:01.974Z rc=0
+=== 2026-11-22T01:36:16.995Z 15 s after start: ha-1 processes
+pid=1015 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 
+  cwd: /
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+pid=1024 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost 
+  cwd: /
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgla__lock
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=2 applylogdb=2
+=== 2026-11-22T01:36:17.762Z 15 s after start: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 1024, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:35:53.136
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-0:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 1015, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 ] 
+    - registered-time   11/22/26 01:35:42.812
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+=== 2026-11-22T01:36:48.361Z writes: 221 ack, 0 unknown, last id 221
+2026-11-22T01:36:48.787Z counts ha-0=221 ha-1=221 ha-2=221
+poc72-ha-0: 221 rows
+poc72-ha-1: 221 rows
+poc72-ha-2: 221 rows
+ha-0: acknowledged missing: 
+ha-0: rows not acknowledged: 
+ha-1: acknowledged missing: 
+ha-1: rows not acknowledged: 
+ha-2: acknowledged missing: 
+ha-2: rows not acknowledged: 
+id lists: identical on all members
+=== 2026-11-22T01:36:49.681Z final: ha-1 processes
+pid=1015 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 
+  cwd: /
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+pid=1024 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost 
+  cwd: /
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-0/appdb_lgla__lock
+pid=319 ppid=1 State: S (sleeping)
+  cmdline: cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgar_t
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+pid=323 ppid=1 State: S (sleeping)
+  cmdline: cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost 
+  cwd: /home/cubrid
+  env: CUBRID_DATABASES=/var/lib/cubrid/databases
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgat
+  fd: /var/lib/cubrid/databases/appdb_poc72-ha-2/appdb_lgla__lock
+copied-log directories on the data volume (/var/lib/cubrid/databases):
+  /var/lib/cubrid/databases/appdb_poc72-ha-0
+  /var/lib/cubrid/databases/appdb_poc72-ha-2
+copied-log directories on the container filesystem (/home/cubrid/CUBRID/databases):
+count: copylogdb=2 applylogdb=2
+=== 2026-11-22T01:36:49.856Z final: ha-1 heartbeat status -v
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 1024, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:35:53.136
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-0:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 1015, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 ] 
+    - registered-time   11/22/26 01:35:42.812
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 323, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 01:34:03.032
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 319, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 01:34:03.018
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 01:34:01.006
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+=== 2026-11-22T01:36:49.949Z ha-1 applyinfo of ha-0's copied log (data volume)
+
+ *** Applied Info. *** 
+Insert count                   : 221
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 1
+Commit count                   : 324
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 01:33:29.000 AM 11/22/2026 (1795311209)
+Vol creation time              : 01:33:29.000 AM 11/22/2026 (1795311209)
+EOF LSA                        : 159 | 1232
+Append LSA                     : 159 | 1232
+HA server state                : active
+HA promotion time              : 01:34:16.000 AM 11/22/2026 (1795311256)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+=== ha-1 CUBRID log files (copylogdb, applylogdb)
+bash: find: command not found
+bash: xargs: command not found
+left: containers=[] networks=[]
+trial end 2026-11-22T01:37:25.212Z

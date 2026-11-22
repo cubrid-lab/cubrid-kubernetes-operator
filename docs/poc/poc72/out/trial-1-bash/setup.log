@@ -1,0 +1,218 @@
+setup start 2026-11-22T00:47:22.114Z
+CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release build for Linux) (Nov 10 2026 13:45:55)
+CUBRID_DATABASES=/var/lib/cubrid/databases
+overlay / overlay rw,relatime,lowerdir=/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/23476/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22207/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22206/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22205/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22204/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22203/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22202/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/22199/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9654/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9653/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9652/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9651/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9650/fs:/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9649/fs,upperdir=/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/23480/fs,workdir=/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/23480/work,nouserxattr 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /dev tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0
+sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0
+cgroup /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot 0 0
+mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k,inode64 0 0
+/dev/mapper/ubuntu--vg--1-ubuntu--lv /usr/sbin/docker-init ext4 ro,relatime 0 0
+/dev/sda /etc/resolv.conf ext4 rw,relatime 0 0
+/dev/sda /etc/hostname ext4 rw,relatime 0 0
+/dev/sda /etc/hosts ext4 rw,relatime 0 0
+tmpfs /var/lib/cubrid tmpfs rw,nosuid,nodev,noexec,relatime,size=1536000k,mode=755,uid=1000,gid=1000,inode64 0 0
+/dev/sda /home/cubrid/CUBRID/databases ext4 rw,relatime 0 0
+proc /proc/bus proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/fs proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/irq proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/sys proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/sysrq-trigger proc ro,nosuid,nodev,noexec,relatime 0 0
+tmpfs /proc/acpi tmpfs ro,relatime,inode64 0 0
+tmpfs /proc/asound tmpfs ro,relatime,inode64 0 0
+tmpfs /proc/interrupts tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/kcore tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/keys tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/scsi tmpfs ro,relatime,inode64 0 0
+tmpfs /proc/timer_list tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /sys/devices/virtual/powercap tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/firmware tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu0/thermal_throttle tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu1/thermal_throttle tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu2/thermal_throttle tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu3/thermal_throttle tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu4/thermal_throttle tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/devices/system/cpu/cpu5/thermal_throttle tmpfs ro,relatime,inode64 0 0
+## poc72-ha-0 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc72-ha-0:poc72-ha-1:poc72-ha-2
+ha_db_list=appdb
+ha_port_id=59972
+## poc72-ha-1 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc72-ha-0:poc72-ha-1:poc72-ha-2
+ha_db_list=appdb
+ha_port_id=59972
+## poc72-ha-2 cubrid_ha.conf
+[common]
+ha_node_list=cubrid@poc72-ha-0:poc72-ha-1:poc72-ha-2
+ha_db_list=appdb
+ha_port_id=59972
+#db-name	vol-path		db-host		log-path		lob-base-path
+appdb		/var/lib/cubrid/databases/appdb	poc72-ha-0:poc72-ha-1:poc72-ha-2	/var/lib/cubrid/databases/appdb	file:/var/lib/cubrid/databases/appdb/lob
+heartbeat start rc=0
+heartbeat start rc=0
+heartbeat start rc=0
+2026-11-22T00:52:37.917Z ha-0 changemode: The server 'appdb@localhost''s current HA running mode is active. 
+Execute OK. (0.287997 sec) Committed. (0.000000 sec) 
+2026-11-22T00:52:38.575Z table t on poc72-ha-1
+2026-11-22T00:52:38.647Z table t on poc72-ha-2
+## 2026-11-22T00:52:38.648Z poc72-ha-0
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-0, state master)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 57, state master)
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 434, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 00:51:09.171
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-1:/var/lib/cubrid/databases/appdb_poc72-ha-1 (pid 432, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 -m sync appdb@poc72-ha-1 ] 
+    - registered-time   11/22/26 00:51:09.170
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 438, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:51:09.170
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-1 (pid 436, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:51:09.170
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 66, state registered_and_active)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 00:51:07.513
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-22T00:52:38.719Z poc72-ha-1
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-1, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 48, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 334, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:52:05.220
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-0:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 328, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 ] 
+    - registered-time   11/22/26 00:52:05.219
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-2:/var/lib/cubrid/databases/appdb_poc72-ha-2 (pid 330, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 ] 
+    - registered-time   11/22/26 00:52:05.219
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 332, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:52:05.219
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 57, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 00:52:02.298
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+## 2026-11-22T00:52:38.838Z poc72-ha-2
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc72-ha-2, state slave)
+   Node poc72-ha-2 (priority 3, state slave)
+    - score 3
+    - missed heartbeat 0
+   Node poc72-ha-1 (priority 2, state slave)
+    - score 2
+    - missed heartbeat 0
+   Node poc72-ha-0 (priority 1, state master)
+    - score -32767
+    - missed heartbeat 0
+
+
+ HA-Process Info (master 49, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-1 (pid 326, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:52:28.807
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 324, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost ] 
+    - registered-time   11/22/26 00:52:28.800
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-1:/var/lib/cubrid/databases/appdb_poc72-ha-1 (pid 322, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-1 -m sync appdb@poc72-ha-1 ] 
+    - registered-time   11/22/26 00:52:28.793
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Copylogdb appdb@poc72-ha-0:/var/lib/cubrid/databases/appdb_poc72-ha-0 (pid 320, state registered)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_admin] 
+    - argv      [cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 ] 
+    - registered-time   11/22/26 00:52:28.793
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+   Server appdb (pid 58, state registered_and_standby)
+    - exec-path [/home/cubrid/CUBRID/bin/cub_server] 
+    - argv      [cub_server appdb ] 
+    - registered-time   11/22/26 00:52:27.136
+    - deregistered-time 00/00/00 00:00:00.000
+    - shutdown-time     00/00/00 00:00:00.000
+    - start-time        00/00/00 00:00:00.000
+
+setup end 2026-11-22T00:52:38.926Z

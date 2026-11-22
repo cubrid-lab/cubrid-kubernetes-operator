@@ -1,0 +1,137 @@
+##### appdb@poc72-ha-0_copylogdb.err
+
+Time: 11/22/26 01:34:03.013 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 317) connected to database server 'appdb@poc72-ha-0' on the host 'poc72-ha-0' (port 1523).
+
+Time: 11/22/26 01:34:03.058 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/22/26 01:34:03.076 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'na' to 'to-be-active'. 
+
+Time: 11/22/26 01:34:16.646 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 4
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/22/26 01:35:03.200 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1735 ERROR CODE = -1037, Tran = 3, EID = 5
+log writer: log writer shut itself down by signal.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/22/26 01:35:42.957 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 1015) connected to database server 'appdb@poc72-ha-0' on the host 'poc72-ha-0' (port 1523).
+
+Time: 11/22/26 01:35:43.011 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 5, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/22/26 01:35:43.012 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 5, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'na' to 'active'. 
+
+*** The previous error message is the last one. ***
+
+##### appdb@localhost_applylogdb_appdb_poc72-ha-0.err
+
+Time: 11/22/26 01:34:03.029 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 321) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/22/26 01:34:03.276 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 2
+log applier: log applier started. required LSA: 145|10248. last committed LSA: 145|10344. last committed repl LSA: 145|10248.
+
+Time: 11/22/26 01:34:03.276 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'idle' to 'to-be-active'. 
+
+Time: 11/22/26 01:34:03.282 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 4
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|12408. 
+
+Time: 11/22/26 01:34:16.700 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 5
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/22/26 01:35:06.343 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8682 ERROR CODE = -1036, Tran = 2, EID = 6
+log applier: log applier shut itself down by signal.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/22/26 01:35:53.297 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 1024) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/22/26 01:35:53.548 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 2
+log applier: log applier started. required LSA: 149|7888. last committed LSA: 149|7848. last committed repl LSA: 149|7768.
+
+Time: 11/22/26 01:35:53.894 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'idle' to 'active'. 
+
+Time: 11/22/26 01:35:53.895 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 4
+HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 149|16296. 
+
+Time: 11/22/26 01:35:53.967 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 5
+HA generic: change log apply state from 'recovering' to 'working'. last committed LSA: 153|9496. 
+
+*** The previous error message is the last one. ***
+
+##### poc72-ha-1_master.err
+
+Time: 11/22/26 01:33:58.961 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 5256  CODE = -986, Tran = -1, EID = 1
+CUBRID heartbeat feature started. 
+
+Time: 11/22/26 01:33:59.963 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6620 ERROR CODE = -990, Tran = -1, EID = 2
+Command execution: activate. Failure. (CUBRID heartbeat feature already activated)
+
+Time: 11/22/26 01:34:01.006 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 3
+Process event: Registered as local process entries. Success (pid:57, state:registered_and_standby, args:cub_server appdb )
+
+Time: 11/22/26 01:34:03.012 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 4
+Process event: Registered as local process entries. Success (pid:317, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:34:03.018 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 5
+Process event: Registered as local process entries. Success (pid:319, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 )
+
+Time: 11/22/26 01:34:03.029 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 6
+Process event: Registered as local process entries. Success (pid:321, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:34:03.032 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 7
+Process event: Registered as local process entries. Success (pid:323, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:35:02.002 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 8
+Command execution: deregister. Success. (args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:35:06.339 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 9
+Command execution: deregister. Success. (args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:35:42.812 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 10
+Process event: Registered as local process entries. Success (pid:1015, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:35:53.261 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 11
+Process event: Registered as local process entries. Success (pid:1024, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+*** The previous error message is the last one. ***
+
+##### cubrid_utility.log
+26-11-22 01:33:57.564 (35) cubrid restoreslave -u -s master -m poc72-ha-0 -B /tmp/bk appdb
+26-11-22 01:33:58.879 (35) SUCCESS
+26-11-22 01:33:58.954 (47) cubrid heartbeat start
+26-11-22 01:34:12.025 (47) SUCCESS
+26-11-22 01:34:38.886 (341) cubrid heartbeat status -v
+26-11-22 01:34:38.910 (341) SUCCESS
+26-11-22 01:35:02.888 (549) cubrid heartbeat status -v
+26-11-22 01:35:02.915 (549) SUCCESS
+26-11-22 01:35:02.986 (554) cubrid heartbeat copylogdb stop appdb poc72-ha-0
+26-11-22 01:35:06.017 (554) SUCCESS
+26-11-22 01:35:06.228 (726) cubrid heartbeat status -v
+26-11-22 01:35:06.260 (726) SUCCESS
+26-11-22 01:35:06.328 (731) cubrid heartbeat applylogdb stop appdb poc72-ha-0
+26-11-22 01:35:09.352 (731) SUCCESS
+26-11-22 01:35:09.587 (866) cubrid heartbeat status -v
+26-11-22 01:35:09.617 (866) SUCCESS
+26-11-22 01:35:41.505 (997) cubrid heartbeat status -v
+26-11-22 01:35:41.528 (997) SUCCESS
+26-11-22 01:35:41.795 (1008) cubrid heartbeat copylogdb start appdb poc72-ha-0
+26-11-22 01:35:51.804 (1008) SUCCESS
+26-11-22 01:35:51.954 (1017) cubrid heartbeat applylogdb start appdb poc72-ha-0
+26-11-22 01:36:01.962 (1017) SUCCESS
+26-11-22 01:36:17.844 (1223) cubrid heartbeat status -v
+26-11-22 01:36:17.959 (1223) SUCCESS
+26-11-22 01:36:49.908 (1439) cubrid heartbeat status -v
+26-11-22 01:36:49.944 (1439) SUCCESS
+26-11-22 01:36:50.005 (1450) cubrid applyinfo -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -a appdb
+26-11-22 01:36:50.016 (1450) SUCCESS
