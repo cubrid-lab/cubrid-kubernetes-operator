@@ -24,7 +24,7 @@ evidence of a real VM failure or a safe manual split-brain recovery.
 | Managed write quarantine | The Operator scales the read-write Brokers to zero on a second active master or an unverified higher-ranked member or former primary, and releases the latter automatically. An administrator releases any quarantine by setting `database.cubrid.io/release-write-quarantine` to the current `status.writeQuarantine.releaseToken`, after fencing the recorded members and accepting that acknowledged writes may be lost; it is refused without exactly one active master ([manual release](../observability.md#manual-release)). Editing `status.writeQuarantine` by hand does not release it. Restrict `update`/`patch` on `cubridclusters` to administrators; the actor is in the API audit log. A member whose Node carries the administrator's `node.kubernetes.io/out-of-service:NoExecute` taint, added only after the VM was verified powered off, counts as fenced and releases the unverified-member case ([release on an out-of-service taint](../observability.md#release-on-an-out-of-service-taint)); before removing the taint, set `database.cubrid.io/return-to-service` to the member and wait for `status.writeQuarantine.enforcedTime` ([return to service](../observability.md#return-to-service)). Write refusal through `-rw` after a force-deleted master Pod was seen in one Kind run; the taint release and the return to service are unit/envtest only ([inventory](../../ROADMAP.md#implementation-and-validation-inventory)) | Kind and VM-lab runs (S07–S08); new/existing connection evidence #115 |
 | Backup and restore into a **new** cluster | S11/S12 installed-lab evidence, with documented unsuccessful/blocked variants | Repeat exact candidate-specific source, artifact, failure and data checks (#121/#126/#127) |
 | Retained-volume rejoin and PVC-loss rebuild | A member that holds suspect data stays held; explicit, token-approved replacement-storage rebuild (S10) is implemented and was run on the VM lab. Automatic rejoin of retained data (S09) and adoption of old volumes (#798) are not provided ([ROADMAP](../../ROADMAP.md#implementation-and-validation-inventory)) | Candidate-pinned S10 SQL and volume evidence, and an independent recovery procedure (#118) |
-| Voluntary node drain | [Accepted policy](../architecture/voluntary-disruption.md); PDB and Broker placement objects implemented with envtest coverage and VM-lab drain runs | The node drain lane (S15) ran on the VM lab, for a slave's node and the master's node, on a three-worker layout with no spare node (#614, #90); a candidate-pinned run is still required |
+| Voluntary node drain | [Accepted policy](../architecture/voluntary-disruption.md); PDB and Broker placement objects implemented with envtest coverage and VM-lab drain runs | The node drain lane (S15) ran on the VM lab, for a slave's node and the master's node: a cordon plus the Eviction API for the cluster's Pods, held about 12 s, on a three-worker layout with no spare node (#614, #90). A whole-node `kubectl drain`, a spare-node layout and a longer cordon were not run; a candidate-pinned run is still required |
 
 The status above is a **navigation summary**, not certification. The
 [ROADMAP inventory](../../ROADMAP.md#implementation-and-validation-inventory)
@@ -45,8 +45,12 @@ v0.1 claim and [ROADMAP.md](../../ROADMAP.md) holds the status of each item.
   5 s and acknowledges commits without that slave. If the master is then lost,
   those writes are missing on the promoted master. An induced copier stall
   followed by a VM power-off lost 13 acknowledged writes on the VM lab. The
-  Operator does not detect a stalled copier, and `Ready=True` or a healthy
-  role is not evidence that a commit was replicated. The issue is closed as a
+  Operator reports a slave (`ReplicationHealthy=False`, reason
+  `LogCopyStalled`, so `HAReady=False`) only after its copy of the master's
+  log has not grown for 60 s while pages wait, and it changes nothing. Commits
+  acknowledged before that report are exposed; in the #1035 run no condition
+  fired before the power-off. A healthy role or `Ready=True` is not evidence
+  that a commit was replicated. The issue is closed as a
   disclosed limit under the 2026-11-21 v0.1 scope decision
   ([scenario contract](../testing/scenario-contract.md#v01-candidate-acceptance--2026-11-21-decision)),
   not as a fix; the engine measurement is [POC-69](../poc/poc69/README.md).
@@ -56,15 +60,14 @@ v0.1 claim and [ROADMAP.md](../../ROADMAP.md) holds the status of each item.
   transaction that was in flight when the master's VM went down, with an
   unknown client outcome. The cluster stayed `Ready`, and the Operator did
   not report the divergence or repair it. The cause (an applier lock on the
-  slave) is a hypothesis that was not confirmed. The issue was closed on
-  2026-11-21 without a fix. Compare the members' data after a VM power loss
+  slave) is a hypothesis that was not confirmed. The induced copier-stall
+  reproduction left 697 acknowledged writes missing on one slave. No fix is in place and the cause is unconfirmed. Compare the members' data after a VM power loss
   before trusting a later failover.
 - **A graceful master Pod deletion can close the write path for tens of
   seconds ([#938](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/938)).**
   On Kind, CUBRID failed over in 1.9 s, but the Operator then started an
   unnecessary write quarantine on the restarted former master and `-rw`
-  refused writes for another 28 s. Seen once in 21 compared runs; the issue is
-  open.
+  refused writes for another 28 s. Seen once in 21 compared runs.
 - **A write quarantine closes only the managed `-rw` path.** It is not
   fencing of the database processes, and it cannot prevent native heartbeat
   promotion or the loss of writes acknowledged before it closed (up to 73 in
@@ -76,7 +79,9 @@ v0.1 claim and [ROADMAP.md](../../ROADMAP.md) holds the status of each item.
   node, and CSI behavior is untested.
 - **Automatic rejoin of retained data (S09) and adoption of old volumes by a
   recreated cluster ([#798](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/798)) are not provided.** A member that holds
-  suspect data stays held until an explicit S10 rebuild.
+  suspect data stays held until an explicit S10 rebuild. Before a rebuild
+  deletes a member's claim, export its volume as in
+  [retained-volume recovery](retained-volume-recovery.md).
 
 ## 1. Preflight — before touching a cluster
 
@@ -292,8 +297,10 @@ required by #125/#127.
   not VM failure, `kubectl delete pod`, or native CUBRID elections.
   Follow the [accepted maintenance policy and topology limits](voluntary-disruption.md).
   Check member placement, PDBs, and `HAReady` before a planned drain.
-  The drain was run on the VM lab with SQL evidence for the three-worker,
-  no-spare-node layout only (#614); see the [ROADMAP inventory](../../ROADMAP.md#implementation-and-validation-inventory).
+  The drain lane ran on the VM lab with SQL evidence: a cordon plus the
+  Eviction API for the cluster's Pods, held about 12 s, on a three-worker,
+  no-spare-node layout (#614). A whole-node `kubectl drain`, a spare-node
+  layout and a longer cordon were not run; see the [ROADMAP inventory](../../ROADMAP.md#implementation-and-validation-inventory).
 - **Uninstall/deletion:** distinguish deletion of controller resources
   from deletion of `CubridCluster`, PVCs, backups, and CRDs. Inventory
   reclaim policies and retained data first; `make uninstall` removes

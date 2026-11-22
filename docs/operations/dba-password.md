@@ -352,7 +352,8 @@ A Kind e2e step changes the Secret of an HA cluster after it became Ready,
 expects `DBAPasswordRotationUnsupported`, and `True` again once the value is
 put back; it restarts no member. On the VM lab, a changed value was reported as
 `DBAPasswordRotationUnsupported` and not applied, and the condition was `True`
-again once the original was put back (2026-11-22 UTC, #801).
+again once the original was put back (2026-11-22 UTC, #801; development
+build `b6486c5`, not a candidate).
 
 To undo such a change, put the database's current DBA password back in the
 Secret.
@@ -374,6 +375,7 @@ csql. A Kind e2e step changes the Secret of an HA cluster after it became
 Ready and expects `DBAPasswordRotationUnsupported`, then `True` once the
 password is put back; it restarts the Operator instead of waiting out the
 5-minute poll. The same check ran on the VM lab without a restart, on
-three-member HA clusters: the reason appeared 292 s after the change (#801). If csql does not prompt, the check answers that it cannot tell, and
+three-member HA clusters: the reason appeared 292 s after the change (#801; development build
+`b6486c5`, not a candidate). If csql does not prompt, the check answers that it cannot tell, and
 no change is reported. In one Kind run (2026-11-19 UTC, #1031) the only check after the value was put back answered
 that csql did not prompt; why csql exited without prompting is not known, since what csql prints is not kept.
