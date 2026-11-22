@@ -1,0 +1,52 @@
+== quote-semi-dash direct db=db_quotesemidad start 2026-11-22T18:28:02Z
+
+createdb-db_quotesemidad rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+direct-alter csql_rc=0 error_lines=0 output_holds_value=False output_bytes=54
+  csql| Execute OK. (0.000000 sec) Committed. (0.191999 sec) 
+direct-alter rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidad","event":"command","command":"csql -u dba -S db_quotesemidad -c SELECT 1","durationMs":4170,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidad","event":"command","command":"csql -u dba -S db_quotesemidad -c SELECT 1","durationMs":7128,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidad","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+== quote-semi-dash product db=db_quotesemidap start 2026-11-22T18:31:22Z
+
+createdb-db_quotesemidap rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap -c SELECT 1","durationMs":5052,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap","durationMs":3504,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap -c SELECT 1","durationMs":3590,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap -c SELECT 1","durationMs":7138,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap -c SELECT 1","durationMs":4609,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"command","command":"csql -u dba -S db_quotesemidap -c SELECT 1","durationMs":6017,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_quotesemidap","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+== quote-semi-dash PASS end 2026-11-22T18:34:29Z

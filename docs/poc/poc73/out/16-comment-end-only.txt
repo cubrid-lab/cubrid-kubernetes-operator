@@ -1,0 +1,52 @@
+== comment-end-only direct db=db_commentendod start 2026-11-22T18:34:29Z
+
+createdb-db_commentendod rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+direct-alter csql_rc=0 error_lines=0 output_holds_value=False output_bytes=54
+  csql| Execute OK. (0.000000 sec) Committed. (0.279993 sec) 
+direct-alter rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendod","event":"command","command":"csql -u dba -S db_commentendod -c SELECT 1","durationMs":4958,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendod","event":"command","command":"csql -u dba -S db_commentendod -c SELECT 1","durationMs":6207,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendod","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+== comment-end-only product db=db_commentendop start 2026-11-22T18:37:30Z
+
+createdb-db_commentendop rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop -c SELECT 1","durationMs":4834,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop","durationMs":5438,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop -c SELECT 1","durationMs":3974,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop -c SELECT 1","durationMs":6087,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop -c SELECT 1","durationMs":4289,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"command","command":"csql -u dba -S db_commentendop -c SELECT 1","durationMs":5884,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_commentendop","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+== comment-end-only PASS end 2026-11-22T18:40:35Z
