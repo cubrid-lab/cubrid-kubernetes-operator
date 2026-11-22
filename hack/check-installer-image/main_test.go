@@ -16,6 +16,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -24,6 +26,7 @@ const (
 	testManager  = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0"
 	testIM       = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
 	noDeployment = "0 controller-manager Deployments"
+	notParsed    = "not parsed as its own flag"
 	goodFlag     = "            - --instance-manager-image=" + testIM + "\n"
 )
 
@@ -127,6 +130,36 @@ spec:
 			want: "set in the manager's command"},
 		{name: "a longer flag name is another flag",
 			manifest: withArgs("--instance-manager-image-pull-policy=Always"), want: "sets no", absent: true},
+		// Go's flag package gives a string flag the next argument as its value,
+		// even when that argument looks like a flag, so the manager would not
+		// see --instance-manager-image here.
+		{name: "image flag consumed as another flag's value",
+			manifest: withArgs("--metrics-bind-address", "--instance-manager-image="+testIM),
+			want:     notParsed},
+		{name: "image flag consumed by a single-dash string flag",
+			manifest: withArgs("-watch-namespace", "--instance-manager-image="+testIM),
+			want:     notParsed},
+		{name: "string flag with an inline value, then the image flag",
+			manifest: withArgs("--metrics-bind-address=:8080", "--instance-manager-image="+testIM)},
+		{name: "boolean flag does not consume the image flag",
+			manifest: withArgs("--metrics-secure", "--instance-manager-image="+testIM)},
+		{name: "string flag with a separate value, then the image flag",
+			manifest: withArgs("--metrics-bind-address", ":8080", "--instance-manager-image="+testIM)},
+		{name: "invalid zap value is rejected like the manager does",
+			manifest: withArgs("--zap-log-level=bogus", "--instance-manager-image="+testIM),
+			want:     notParsed},
+		{name: "valid zap flags before the image flag",
+			manifest: withArgs("--zap-log-level=debug", "--zap-devel", "--instance-manager-image="+testIM)},
+		{name: "kubeconfig flag before the image flag",
+			manifest: withArgs("--kubeconfig=/k", "--instance-manager-image="+testIM)},
+		{name: "kubeconfig flag consumes the image flag",
+			manifest: withArgs("--kubeconfig", "--instance-manager-image="+testIM),
+			want:     "built-in default"},
+		{name: "unknown flag fails closed",
+			manifest: withArgs("--no-such-flag=1", "--instance-manager-image="+testIM),
+			want:     notParsed},
+		{name: "positional argument before the image flag",
+			manifest: withArgs("stray", "--instance-manager-image="+testIM), want: notParsed},
 		{name: "no manager container", manifest: strings.Replace(goodDeployment, "- name: manager", "- name: other", 1),
 			want: "0 manager containers"},
 		{name: "two manager containers", manifest: goodDeployment + `        - name: manager
@@ -208,6 +241,56 @@ func TestExitCode(t *testing.T) {
 	for _, c := range cases {
 		if got := exitCode(c.err); got != c.want {
 			t.Errorf("exitCode(%v) = %d; want %d", c.err, got, c.want)
+		}
+	}
+}
+
+// managerFlags is kept by hand, so it must name every flag cmd/main.go
+// registers with the same kind; otherwise a new flag would be rejected as
+// unknown, or a new string flag would not consume its value. The zap and
+// --kubeconfig flags come from controller-runtime and are not listed. A flag
+// registration this test cannot classify fails it, so a new form is never
+// skipped silently.
+func TestManagerFlagsMatchManagerMain(t *testing.T) {
+	src, err := os.ReadFile("../../cmd/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Var and TextVar targets are not typed here; a consuming flag is a string.
+	kinds := map[string]string{
+		"String": kindString, "Int": kindInt, "Bool": kindBool, "Duration": kindDuration,
+		"Func": kindString, "BoolFunc": kindBool, "Var": kindString, "TextVar": kindString,
+	}
+	// Calls that do not register a flag.
+	notRegistration := map[string]bool{"Parse": true, "Parsed": true, "Args": true, "NArg": true, "Arg": true,
+		"CommandLine": true}
+	call := regexp.MustCompile(`\bflag\.([A-Z]\w*)`)
+	// The name is the first argument, or the second after a target such as
+	// &x or &cfg.X (the Var forms).
+	named := regexp.MustCompile(
+		`^flag\.(String|Int|Bool|Duration|Func|BoolFunc|Var|TextVar)(?:Var)?\(\s*(?:&?[\w.]+\s*,\s*)?"([^"]+)"`)
+	found := map[string]string{}
+	for _, loc := range call.FindAllStringSubmatchIndex(string(src), -1) {
+		if notRegistration[string(src[loc[2]:loc[3]])] {
+			continue
+		}
+		m := named.FindStringSubmatch(string(src[loc[0]:]))
+		if m == nil {
+			t.Fatalf("cmd/main.go has a flag registration this test cannot classify: %.60q", src[loc[0]:])
+		}
+		found[m[2]] = kinds[m[1]]
+	}
+	if len(found) == 0 {
+		t.Fatal("found no flags in cmd/main.go")
+	}
+	for name, kind := range found {
+		if managerFlags[name] != kind {
+			t.Errorf("flag --%s is a %s flag in cmd/main.go but %q in managerFlags", name, kind, managerFlags[name])
+		}
+	}
+	for name := range managerFlags {
+		if _, ok := found[name]; !ok {
+			t.Errorf("managerFlags lists --%s, which cmd/main.go does not register", name)
 		}
 	}
 }

@@ -33,6 +33,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 const (
@@ -41,6 +43,12 @@ const (
 	exitFlagAbsent = 3
 
 	imageFlag = "instance-manager-image"
+
+	// Value kinds of the flags in managerFlags.
+	kindString   = "string"
+	kindInt      = "int"
+	kindDuration = "duration"
+	kindBool     = "bool"
 )
 
 // errFlagAbsent means the manager container does not set the Instance Manager
@@ -97,6 +105,73 @@ func imageFlagValues(args []string) ([]string, error) {
 	return values, nil
 }
 
+// managerFlags are the flags cmd/main.go defines itself, with their value
+// kinds: "bool" flags take no separate value, every other kind consumes the
+// next argument. A test checks the names and kinds against cmd/main.go. The
+// zap logging flags and --kubeconfig come from controller-runtime and are
+// registered from it in parsedImageFlag.
+var managerFlags = map[string]string{
+	"metrics-bind-address":              kindString,
+	"health-probe-bind-address":         kindString,
+	imageFlag:                           kindString,
+	"broker-max-appl-servers":           kindInt,
+	"cluster-max-concurrent-reconciles": kindInt,
+	"instance-manager-backup-timeout":   kindDuration,
+	"instance-manager-restore-timeout":  kindDuration,
+	"watch-namespace":                   kindString,
+	"operator-namespace":                kindString,
+	"leader-elect":                      kindBool,
+	"metrics-secure":                    kindBool,
+	"webhook-cert-path":                 kindString,
+	"webhook-cert-name":                 kindString,
+	"webhook-cert-key":                  kindString,
+	"webhook-port":                      kindInt,
+	"metrics-cert-path":                 kindString,
+	"metrics-cert-name":                 kindString,
+	"metrics-cert-key":                  kindString,
+	"enable-http2":                      kindBool,
+}
+
+// parsedImageFlag parses the manager's arguments the way its flag set does and
+// returns the Instance Manager image the manager would run with. A string
+// flag takes the next argument as its value even when that looks like a flag,
+// so a flag that Go's parser would consume is not set. An unknown flag, a bad
+// value or a positional argument (which ends flag parsing) is an error.
+//
+// The check is deliberately stricter than the manager: it rejects any
+// positional argument, even after a correctly parsed image flag. The flag
+// table comes from this tool's own commit, so a manifest built from another
+// commit with different flags is rejected, which is the safe direction.
+func parsedImageFlag(args []string) (string, int, error) {
+	fs := flag.NewFlagSet("manager", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	image, count := "", 0
+	for name, kind := range managerFlags {
+		switch {
+		case name == imageFlag:
+			fs.Func(name, "", func(v string) error { image = v; count++; return nil })
+		case kind == kindBool:
+			fs.Bool(name, false, "")
+		case kind == kindInt:
+			fs.Int(name, 0, "")
+		case kind == kindDuration:
+			fs.Duration(name, 0, "")
+		default:
+			fs.String(name, "", "")
+		}
+	}
+	(&zap.Options{}).BindFlags(fs)
+	config.RegisterFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return "", 0, fmt.Errorf("--%s is not parsed as its own flag: the manager's arguments do not parse: %w",
+			imageFlag, err)
+	}
+	if fs.NArg() > 0 {
+		return "", 0, fmt.Errorf("--%s is not parsed as its own flag: argument %q ends flag parsing", imageFlag, fs.Arg(0))
+	}
+	return image, count, nil
+}
+
 // checkManager checks one manager container.
 func checkManager(c map[string]any, managerImage, instanceManagerImage string) error {
 	image, present, err := unstructured.NestedString(c, "image")
@@ -136,6 +211,17 @@ func checkManager(c map[string]any, managerImage, instanceManagerImage string) e
 	case values[0] != instanceManagerImage:
 		return fmt.Errorf("the manager uses Instance Manager image %q, not the built image %q",
 			values[0], instanceManagerImage)
+	}
+	image, count, err := parsedImageFlag(args)
+	switch {
+	case err != nil:
+		return err
+	case count == 0:
+		return fmt.Errorf("--%s is not parsed as its own flag: the manager would fall back to its built-in default",
+			imageFlag)
+	case count != 1 || image != instanceManagerImage:
+		return fmt.Errorf("--%s is not parsed as its own flag: the manager would run with %q",
+			imageFlag, image)
 	}
 	return nil
 }
