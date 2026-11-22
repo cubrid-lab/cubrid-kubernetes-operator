@@ -296,14 +296,19 @@ func ReadHistory(r io.Reader) (History, error) {
 const ReadOnlyRefusal = "code -581:"
 
 // CheckReadOnlyRefusal judges a write sent through the read-only Service: the
-// history holds exactly one operation, and it failed with ReadOnlyRefusal.
-// Any other outcome, including a failure to reach the Broker at all, is not a
+// history holds exactly one operation, it is an insert (a read or a rollback
+// is not a write the read-only Broker could refuse), and it failed with
+// ReadOnlyRefusal. Any other outcome, including a failure to reach the Broker at all, is not a
 // refusal by the read-only Broker.
 func CheckReadOnlyRefusal(h History) error {
 	if len(h.Operations) != 1 {
 		return fmt.Errorf("want one write through the read-only Service, got %d", len(h.Operations))
 	}
 	for _, op := range h.Operations {
+		if op.Op != OpInsert {
+			return fmt.Errorf("operation %s through the read-only Service is %q, want a refused %q write",
+				op.OpID, op.Op, OpInsert)
+		}
 		if op.Outcome != Failed {
 			return fmt.Errorf("write %s through the read-only Service: outcome %s, want %s", op.OpID, op.Outcome, Failed)
 		}
