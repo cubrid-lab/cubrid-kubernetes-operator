@@ -1,7 +1,7 @@
 # Inspecting backups and restoring into a new cluster
 
 This is a proposed operator reference, reviewed against source commit
-`e036db2229be0fae057a17b928e48d953d555d7a`. These steps have not been run
+`a220ce4e614a20ee1d7b68a4cc4c81c9d8443961`. These steps have not been run
 against a release candidate or independently reproduced. The
 [validation inventory](../../ROADMAP.md#implementation-and-validation-inventory)
 records actual results; this page supplies no new Kind or VM evidence.
@@ -118,6 +118,10 @@ different retry rules. Do not treat every repeated reconcile as a new attempt.
 | `RecordedOperationMissing` | The member explicitly reports that the recorded ID is absent. The controller waits against a 30-minute bound from the persisted missing-since time, checked on each reconcile. This is different from an unreachable member. |
 | `RecordedOperationLost` | The missing-record bound expired. The workflow stops without issuing a replacement attempt; the earlier utility may still run or have left data. Inspect the member before starting anything else. |
 | Recovery `RestoreFailedRetrying`, `SeedBackupFailedRetrying`, `SeedRestoreFailedRetrying` | A failed operation or refused request consumes the relevant retry budget. Follow the new operation ID and retain the failed attempt's evidence. |
+| A backup whose cluster was deleted or replaced after the backup started: `ClusterDeleted`, `ClusterReplaced` | The backup ends `Failed`. The members that ran it are gone with the cluster, and a cluster of the same name created later is another cluster, so the backup is not continued on it. Check what the object store holds before starting a new backup. |
+| Backup `InvalidDestination` | `destination.type` is `ObjectStorage` but `destination.objectStorage` is missing. The backup ends `Failed` at once; correct the spec in a new backup. |
+| Backup `RecordedTargetNotEligible` | The member recorded as the backup's target no longer qualifies for its recorded role. The start is not sent again, and never to another member, since the earlier request may be running. The controller waits at most 30 minutes from the recorded target, after which the backup ends `Failed` with `RecordedTargetNotStarted` or `RecordedTargetUnverified`; work may still exist on the target. |
+| Backup `BackupWorkflowNotConfigured` | The controller has no role prober or backup client, as in a test environment. The backup stays `Pending`; a running Operator does not report it. |
 | Backup `UnsupportedDestination` | The backup's destination type has no execution path; the backup ends `Failed` at once. |
 | Backup `BackupFailed`, `ArtifactUnverified`, `RecordedTargetNotStarted`, or `RecordedTargetUnverified` | The backup ends `Failed`. The two `RecordedTarget*` reasons end a wait of at most 30 minutes for the recorded target. In the unverified-target case, work may still exist on the target. A new backup is a separate planned operation, not an automatic retry of this CR. |
 

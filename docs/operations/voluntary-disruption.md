@@ -26,6 +26,7 @@ still run when they cannot have them.
 
 [docs/architecture/voluntary-disruption.md](../architecture/voluntary-disruption.md)
 has the result for each topology and degraded state, and what to do about a
-blocked drain. No drain has been run against these budgets yet (#614).
+blocked drain. The drain was run on the VM lab for a three-worker layout with no spare node,
+for a slave's node and the master's node (#614); other layouts were not run.
 The generated PDBs follow ADR-0012, accepted in #613. Do not treat a green
 envtest as a real-node drain or SQL safety qualification.
