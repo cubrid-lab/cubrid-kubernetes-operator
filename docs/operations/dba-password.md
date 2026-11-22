@@ -124,10 +124,15 @@ A `dba` login sent through a Broker therefore crosses the Pod network
 unencrypted.
 
 **Who may update the Secret.** Someone who may update the Secret but not read
-it can still test guesses: each new value is checked against the database
-about once per poll (5 minutes by default), and
-`DBAPasswordRotationUnsupported` appears when the value is not the database's
-password (see [Changing the password is not supported](#changing-the-password-is-not-supported)).
+it can still test guesses. The `DBAPasswordRotationUnsupported` Condition tells
+them whether a guess matched the database's stored password: it appears when
+the value is not the password and is absent when it is. A new value is checked
+about once per poll (5 minutes by default) while a member can be asked; on an
+HA cluster that needs a resolved primary. A check that cannot tell is retried
+after about 30 seconds. The time the kubelet takes to update the mounted file
+(about a minute) also limits the rate. See
+[Changing the password is not supported](#changing-the-password-is-not-supported),
+which describes how a changed value is reported.
 On a standalone cluster a wrong value also stops the next start of the DB
 container ([Restarting after a changed value](#restarting-after-a-changed-value)).
 Grant `update` on Secrets only to those who may know the password.
