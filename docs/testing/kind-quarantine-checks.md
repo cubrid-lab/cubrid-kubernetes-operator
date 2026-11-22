@@ -21,7 +21,9 @@ lost (below).
 ## How the cluster is prepared
 
 1. The manager is deployed cluster-wide with `make install` and
-   `make deploy`.
+   `make deploy`. `make deploy` reads `IM_IMG` from the script's
+   environment, so the manager's `--instance-manager-image` is the same
+   Instance Manager image the cluster names in `spec.image`.
 2. A three-member HA cluster `qc` is created in namespace `qc-ha`, seeded
    through a mock object store in `qc-store`, as the E2E HA bootstrap does
    (`test/e2e/ha_bootstrap_test.go`). The namespace enforces Pod Security

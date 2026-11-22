@@ -88,7 +88,10 @@ The repository has `make install` (CRDs) and `make deploy IMG=...`
 Those targets use the active kubectl context; they are not a context-locking
 or atomic release installer. The default Instance Manager image is a
 development reference, so supplying only a manager image **does not** pin
-both runtime images. The Operator also needs its installed CRDs, RBAC,
+both runtime images: add `IM_IMG=<Instance Manager image>` to
+`make deploy` to set the manager's `--instance-manager-image`.
+(`make build-installer` always sets it, by default to
+`<registry>/instance-manager:<tag>` of `IMG=<registry>/manager:<tag>`.) The Operator also needs its installed CRDs, RBAC,
 NetworkPolicy admission, suitable storage and correctly configured image
 pull access. Do not copy the bare sample into a valued cluster and assume
 these prerequisites are met.

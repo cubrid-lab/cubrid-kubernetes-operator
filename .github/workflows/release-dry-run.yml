@@ -213,11 +213,14 @@ jobs:
       # build-installer regenerates the CRDs, RBAC and DeepCopy code first. A
       # commit whose generated files are stale would publish manifests that do
       # not match its source, so any change to a tracked file stops the run.
+      # IM_IMG names the Instance Manager image built above, so the manager's
+      # --instance-manager-image does not depend on make's default. A commit
+      # whose Makefile ignores IM_IMG still fails the requirement below.
       - name: Build the installer manifest
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          make build-installer IMG="$REGISTRY/manager:$VERSION"
+          make build-installer IMG="$REGISTRY/manager:$VERSION" IM_IMG="$REGISTRY/instance-manager:$VERSION"
           # The cloned version check is not part of the commit.
           changed=$(git status --porcelain -- . ':!.release-check')
           if [ -n "$changed" ]; then

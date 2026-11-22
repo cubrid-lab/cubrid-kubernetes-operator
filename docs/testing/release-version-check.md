@@ -105,8 +105,9 @@ repository. In order, it:
    clones with its `go.mod` and `go.sum`, so an older candidate without the
    checker is still checked;
 6. builds the installer manifest with `make build-installer` for the
-   manager image the release would publish, and stops if that changed a
-   tracked file (the commit's generated files are stale);
+   manager image and the Instance Manager image the release would publish
+   (`IMG` and `IM_IMG`), and stops if that changed a tracked file (the
+   commit's generated files are stale);
 7. runs the installer image check on `install.yaml` and writes
    `release-dry-run.json`: the commit, version, each image's digest, image
    ID and archive checksum, the installer's SHA-256, and which Instance
@@ -133,13 +134,27 @@ the check fails. It exits 3 when the manager sets no
 default image. Any other failure is recorded as "not verified" with the
 checker's reason.
 
-Step 9 fails every run today: `make build-installer` sets only the manager
-image, so the manager sets no `--instance-manager-image` and an installed
-release would run the mutable built-in default
+`make build-installer` appends exactly one
+`--instance-manager-image=<IM_IMG>` to the manager's `args` (`config/`
+itself sets none). Without `IM_IMG` it derives the image from `IMG`'s
+registry and tag: `IMG=<registry>/manager:<tag>` gives
+`<registry>/instance-manager:<tag>`; an `IMG` without a tag or pinned by
+digest stops it with a request to set `IM_IMG`. The dry run passes `IM_IMG`
+explicitly, so for a candidate commit that contains this Makefile step 9
+is expected to pass.
+
+A candidate commit older than that Makefile renders an installer without
+the flag: the manager would fall back to the mutable built-in default
 `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`, not
-the image built and recorded here. The record and the job summary say so.
-Until the installer sets the Instance Manager image, a dry run shows this
-gap instead of a candidate.
+the image built and recorded here, so step 9 fails and the record and the
+job summary say so. The first dry run on GitHub
+([44947969205](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/44947969205),
+commit `b94f1524`, 2026-11-21 UTC) failed this way.
+
+`make deploy`, which the E2E suite and the Kind checks run with `IMG`
+only, sets `--instance-manager-image` only when `IM_IMG` is given on the
+command line or in the environment; otherwise the deployed manager keeps
+its built-in default, as before.
 
 Any failed step fails the job, and the job summary shows how far it got.
 It writes nothing outside the run (the Go setup's module cache is turned

@@ -242,7 +242,9 @@ docker-push: container-tool ## Push the manager image.
 
 # A registry-qualified name: Docker and Podman store an unqualified one under
 # different registries, and a Pod would resolve it as docker.io/...
-IM_IMG ?= ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev
+# build-installer and deploy use IM_IMG only when it is given; see
+# installer-im-img below.
+IM_IMG ?=ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev
 .PHONY: docker-build-instance-manager
 docker-build-instance-manager: container-tool ## Build the derivative CUBRID + Instance Manager image (ADR-0003).
 	$(CONTAINER_TOOL) build -f build/instance-manager/Dockerfile -t ${IM_IMG} .
@@ -297,18 +299,54 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	$(CONTAINER_TOOL) buildx build --builder "$$builder" --push --platform=$(PLATFORMS) $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --tag ${IMG} -f "$$cross" .
 
 # Render config/default with the manager image set to ${IMG} through a throwaway
-# overlay under the ignored dist/ directory, so no tracked file is edited.
+# overlay under the ignored dist/ directory, so no tracked file is edited. When
+# the shell variable im is not empty, the overlay also appends exactly one
+# --instance-manager-image=$$im to the manager's args (#124); config/ itself
+# sets no such flag. The patch addresses the manager as the Deployment's only
+# container; hack/check-installer-image checks the result by container name.
 define kustomize-build-with-image
 overlay="$$(mktemp -d dist/overlay.XXXXXX)" && trap 'rm -rf "$$overlay"' EXIT && \
 	printf 'resources:\n- ../../config/default\n' > "$$overlay/kustomization.yaml" && \
 	(cd "$$overlay" && "$(KUSTOMIZE)" edit set image controller=${IMG}) && \
+	if [ -n "$$im" ]; then \
+		printf '%s\n' 'patches:' '- target:' '    kind: Deployment' \
+			'    labelSelector: control-plane=controller-manager' '  patch: |-' \
+			'    - op: add' '      path: /spec/template/spec/containers/0/args/-' \
+			"      value: \"--instance-manager-image=$$im\"" >> "$$overlay/kustomization.yaml"; \
+	fi && \
 	"$(KUSTOMIZE)" build "$$overlay"
 endef
 
+# IM_IMG as given on the command line or in the environment; empty when only
+# its default above applies.
+im-img-given = $(if $(filter-out file default undefined,$(origin IM_IMG)),$(IM_IMG))
+
+# Set the shell variable im to the Instance Manager image the installer makes
+# the manager use: IM_IMG when given, otherwise the image of IMG's registry and
+# tag, so IMG=<registry>/manager:<tag> gives <registry>/instance-manager:<tag>.
+# An IMG without a tag, or pinned by digest, names no such image, so IM_IMG is
+# then required. The reference may contain only the characters of an image
+# reference, none that YAML or the shell would interpret.
+define installer-im-img
+im='$(im-img-given)'; \
+	if [ -z "$$im" ]; then \
+		img='$(IMG)'; name="$${img##*/}"; \
+		case "$$name" in \
+		*@*|*:*:*|*:|:*) echo "Could not derive the Instance Manager image from IMG=$$img; set IM_IMG" >&2; exit 1 ;; \
+		*:*) ;; \
+		*) echo "Could not derive the Instance Manager image from IMG=$$img, which has no tag; set IM_IMG" >&2; exit 1 ;; \
+		esac; \
+		case "$$img" in */*) im="$${img%/*}/instance-manager:$${name##*:}" ;; *) im="instance-manager:$${name##*:}" ;; esac; \
+	fi; \
+	case "$$im" in *[!A-Za-z0-9._/:@-]*) echo "Invalid Instance Manager image reference in IM_IMG: $$im" >&2; exit 1 ;; esac
+endef
+
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment; IM_IMG defaults to IMG's registry and tag.
 	mkdir -p dist
-	$(call kustomize-build-with-image) > dist/install.yaml
+	@$(installer-im-img); \
+	echo "Rendering dist/install.yaml with manager ${IMG} and Instance Manager $$im"; \
+	$(kustomize-build-with-image) > dist/install.yaml
 
 ##@ Deployment
 
@@ -327,9 +365,11 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	if [ -n "$$out" ]; then printf '%s\n' "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config; sets --instance-manager-image only when IM_IMG is given.
 	mkdir -p dist
-	$(call kustomize-build-with-image) | "$(KUBECTL)" apply -f -
+	im='$(im-img-given)'; \
+	case "$$im" in *[!A-Za-z0-9._/:@-]*) echo "Invalid Instance Manager image reference in IM_IMG: $$im" >&2; exit 1 ;; esac; \
+	$(kustomize-build-with-image) | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.

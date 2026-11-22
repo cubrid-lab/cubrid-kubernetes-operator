@@ -506,6 +506,26 @@ func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 	}
 }
 
+// The installer step passes make build-installer the Instance Manager image
+// this run builds and the record checks for, not an image derived or defaulted
+// elsewhere (#124).
+func TestDryRunBuildsTheInstallerWithTheBuiltInstanceManagerImage(t *testing.T) {
+	_, _, j := readDryRun(t)
+	const ref = "$REGISTRY/instance-manager:$VERSION"
+	installer := j.Steps[stepIndex(t, j, "Build the installer manifest")].Run
+	if !strings.Contains(installer, `make build-installer IMG="$REGISTRY/manager:$VERSION" IM_IMG="`+ref+`"`) {
+		t.Errorf("the installer is not built with IM_IMG=%s:\n%s", ref, installer)
+	}
+	if tags := j.Steps[stepIndex(t, j, "Build the Instance Manager image without pushing")].With["tags"]; tags !=
+		"${{ env.REGISTRY }}/instance-manager:${{ inputs.version }}" {
+		t.Errorf("the Instance Manager image is built as %v, not the image the installer names", tags)
+	}
+	if record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run; !strings.Contains(record,
+		`im_ref="`+ref+`"`) {
+		t.Error("the record checks for another Instance Manager image than the installer names")
+	}
+}
+
 // runRecordStep runs the record step with a checker built from this
 // repository on three installers: one that sets the built Instance Manager
 // image, one that sets none, and one that sets another image. The record
