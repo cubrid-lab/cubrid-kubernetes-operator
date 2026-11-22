@@ -26,6 +26,9 @@ still run when they cannot have them.
 
 [docs/architecture/voluntary-disruption.md](../architecture/voluntary-disruption.md)
 has the result for each topology and degraded state, and what to do about a
-blocked drain. No drain has been run against these budgets yet (#614).
+blocked drain. The drain lane ran on the VM lab for a three-worker layout with no spare node,
+for a slave's node and the master's node: a cordon plus the Eviction API for
+the cluster's Pods, held about 12 s (#614). A whole-node `kubectl drain`, a
+spare-node layout and a longer cordon were not run.
 The generated PDBs follow ADR-0012, accepted in #613. Do not treat a green
 envtest as a real-node drain or SQL safety qualification.
