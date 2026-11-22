@@ -125,8 +125,10 @@ func generate(out io.Writer, indexPath, runRoot string) error {
 	fmt.Fprintf(&matrix, "# Candidate evidence matrix\n\n"+
 		"- Candidate commit: `%s`\n- Operator image: `%s`\n- CUBRID image: `%s`\n\n",
 		manifest.Candidate.Commit, manifest.Candidate.Operator, manifest.Candidate.CUBRID)
-	matrix.WriteString("Run identities come from the index. Verdicts stay at their recorded level. " +
-		"Release approval requires the separate candidate review.\n\n")
+	matrix.WriteString("Run identities come from the index. Raw and judged verdicts stay unchanged. " +
+		"The v0.1 scope column classifies requirements; it is not a release acceptance verdict. " +
+		"Measured results always need independent SQL/safety review. A missing or failed " +
+		"mandatory observation cannot be approved by this matrix.\n\n")
 	matrix.WriteString("| Run | Level | Lane | Commit | Operator image | CUBRID image | Run status | Source |\n")
 	matrix.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	var rows strings.Builder
@@ -137,13 +139,13 @@ func generate(out io.Writer, indexPath, runRoot string) error {
 			displayIdentity(source.Environment.Operator, digestPattern),
 			displayIdentity(source.Environment.CUBRID, digestPattern), report.status, source.Source)
 		for _, result := range report.results {
-			fmt.Fprintf(&rows, "| %s | %s | %s | %s | %s | %s |\n",
-				source.ID, scenarioLabel(result.scenario), result.Variant, verdict(result.Recorded),
-				verdict(result.judged), result.status)
+			fmt.Fprintf(&rows, "| %s | %s | %s | %s | %s | %s | %s |\n",
+				source.ID, scenarioLabel(result.scenario), result.Variant, scopeOf(result.scenario),
+				verdict(result.Recorded), verdict(result.judged), result.status)
 		}
 	}
-	matrix.WriteString("\n| Run | Scenario | Variant | Recorded | Judged now | Evidence status |\n")
-	matrix.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	matrix.WriteString("\n| Run | Scenario | Variant | v0.1 scope | Recorded | Judged now | Evidence status |\n")
+	matrix.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
 	matrix.WriteString(rows.String())
 	_, err = io.WriteString(out, matrix.String())
 	return err

@@ -43,27 +43,30 @@ Use the [compatibility limits](../compatibility.md) and
 single-node or emulated run as the three-VM k3s `local-path` reference
 environment, and do not read any run as evidence of CSI behavior.
 
-## 2. Expand every mandatory scenario and variant
+## 2. Expand v0.1 required and measured scenarios by variant
 
 The table below is **only a navigation list of scenario families**. It has
-no results and does not enumerate variants. Expand each family into the
-required rows from
-[Required scenarios](scenario-contract.md#required-scenarios), preserving
-each lane's exact variant and validation level. A result from another
-lane or a lower level cannot fill a higher-level requirement.
+no results and does not enumerate variants. Expand the v0.1 must-pass and
+measured/safety-reviewed families into their exact variants using
+[Required scenarios](scenario-contract.md#required-scenarios) and the
+[2026-11-21 v0.1 release scope](../../ROADMAP.md#current-execution-gates--2026-11-21-scope-decision).
+S09 automatic retained-data rejoin is deferred to v0.2; S10 explicit rebuild
+remains required. Historical raw failures and scenario contracts are not
+reclassified by that release-scope decision. A result from another lane or
+a lower level cannot fill a higher-level requirement.
 
 | Scenario | What its evidence must establish | Contract level / boundary |
 |---|---|---|
 | S00 | Install, write/read and Pod recovery | Real database on Kind |
 | S01 | Three-member HA and RW/RO access | Real database on Kind |
 | S02 | Replication under acknowledged writes | Real database on Kind |
-| S03 | Primary Pod failure, reconnect, recovery and timing | Real database on Kind; expand all required variants |
-| S04 | Primary VM power failure and return | VM lab; a Kind fault is not a substitute |
+| S03 | Primary Pod failure, reconnect, recovery and timing | Real database on Kind; abrupt must-pass, graceful measure + safety review |
+| S04 | Primary VM power failure and return | VM lab; role/routing recovery required, timing and acknowledged-loss measured; Kind is not a substitute |
 | S05 | Broker failure, client results and HA stability | Real database on Kind; expand variants |
 | S06 | Operator interruption and continuity | Real database on Kind; expand variants |
-| S07 | Network partition and safe write-path behavior | VM lab for the verdict; Kind may be preliminary |
-| S08 | Replication lag followed by repeated failures | VM lab |
-| S09 | Rejoining former primary and preserved commits | Clean variant on Kind, applicable fault variants on VM lab |
+| S07 | Network partition and safe write-path behavior | VM lab; measure closure and prove no managed `-rw` acknowledgements after closure |
+| S08 | Replication lag followed by repeated failures | VM lab; same post-closure safety rule and measured recovery |
+| S09 | Automatic rejoin of retained data (v0.2) | Deferred; not a v0.1 release acceptance gate |
 | S10 | Rebuild after PVC loss without overwriting source | Real database on Kind |
 | S11 | Backup, interrupted/failed operations and artifact verification | Real database on Kind contract level; use required installed-lab paths |
 | S12 | Restore into a new cluster and dataset/convergence checks | Real database on Kind contract level; use required installed-lab paths |
@@ -81,7 +84,7 @@ an unexecuted fault `not_applicable` because a command did not select it.
 
 ## 3. Review one observed result at a time
 
-For **each exact required lane, scenario and variant**, the reviewer records
+For **each in-scope required or measured lane, scenario and variant**, the reviewer records
 the following alongside its run identity. Blank fields mean **not assessed**,
 not `pass`. Do not paste example run IDs or assume the test met its limits.
 
@@ -120,8 +123,16 @@ digests for the summary, JUnit and listed scenario files, and shows the
 recorded verdict alongside the verdict supported by the local evidence.
 Rows retain their run's lane and level. The run table identifies filtered
 and unfinished runs, missing bundles or files, mismatched revisions and
-images, and lanes the evidence reader could not validate. Related evidence
-must stay in its own run directory.
+images, and lanes the evidence reader could not validate. The separate
+**v0.1 scope** column labels requirements as mandatory pass, mandatory
+measurement and safety review, v0.2 deferred, conditional or unmapped.
+It **does not** change any raw or independently judged result, nor does
+a measured-only classification make a failed S04/S07/S08 or graceful S03
+run eligible for release automatically. A reviewer must establish the
+scenario's required safety, recovery, identity and SQL evidence by hand,
+and only then record the separate release-scope verdict in the indexed
+candidate review. Unknown/unmapped variants need a maintainer decision,
+not a default pass. Related evidence stays in its original run directory.
 
 Use GitHub Actions run or artifact URLs in this repository for `source`.
 The report omits raw log content, archive locations, and local paths. The
