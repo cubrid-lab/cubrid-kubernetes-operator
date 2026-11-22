@@ -144,6 +144,16 @@ spec:
 			manifest: withArgs("--metrics-secure", "--instance-manager-image="+testIM)},
 		{name: "string flag with a separate value, then the image flag",
 			manifest: withArgs("--metrics-bind-address", ":8080", "--instance-manager-image="+testIM)},
+		{name: "invalid zap value is rejected like the manager does",
+			manifest: withArgs("--zap-log-level=bogus", "--instance-manager-image="+testIM),
+			want:     "not parsed as its own flag"},
+		{name: "valid zap flags before the image flag",
+			manifest: withArgs("--zap-log-level=debug", "--zap-devel", "--instance-manager-image="+testIM)},
+		{name: "kubeconfig flag before the image flag",
+			manifest: withArgs("--kubeconfig=/k", "--instance-manager-image="+testIM)},
+		{name: "kubeconfig flag consumes the image flag",
+			manifest: withArgs("--kubeconfig", "--instance-manager-image="+testIM),
+			want:     "built-in default"},
 		{name: "unknown flag fails closed",
 			manifest: withArgs("--no-such-flag=1", "--instance-manager-image="+testIM),
 			want:     "not parsed as its own flag"},
@@ -236,16 +246,37 @@ func TestExitCode(t *testing.T) {
 
 // managerFlags is kept by hand, so it must name every flag cmd/main.go
 // registers with the same kind; otherwise a new flag would be rejected as
-// unknown, or a new string flag would not consume its value.
+// unknown, or a new string flag would not consume its value. The zap and
+// --kubeconfig flags come from controller-runtime and are not listed. A flag
+// registration this test cannot classify fails it, so a new form is never
+// skipped silently.
 func TestManagerFlagsMatchManagerMain(t *testing.T) {
 	src, err := os.ReadFile("../../cmd/main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	kinds := map[string]string{"String": "string", "Int": "int", "Bool": "bool", "Duration": "duration"}
+	// Var and TextVar targets are not typed here; a consuming flag is a string.
+	kinds := map[string]string{
+		"String": "string", "Int": "int", "Bool": "bool", "Duration": "duration",
+		"Func": "string", "BoolFunc": "bool", "Var": "string", "TextVar": "string",
+	}
+	// Calls that do not register a flag.
+	notRegistration := map[string]bool{"Parse": true, "Parsed": true, "Args": true, "NArg": true, "Arg": true,
+		"CommandLine": true}
+	call := regexp.MustCompile(`\bflag\.([A-Z]\w*)`)
+	// The name is the first argument, or the second after a target such as
+	// &x or &cfg.X (the Var forms).
+	named := regexp.MustCompile(
+		`^flag\.(String|Int|Bool|Duration|Func|BoolFunc|Var|TextVar)(?:Var)?\(\s*(?:&?[\w.]+\s*,\s*)?"([^"]+)"`)
 	found := map[string]string{}
-	re := regexp.MustCompile(`flag\.(String|Int|Bool|Duration)Var\(&\w+,\s*"([^"]+)"`)
-	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+	for _, loc := range call.FindAllStringSubmatchIndex(string(src), -1) {
+		if notRegistration[string(src[loc[2]:loc[3]])] {
+			continue
+		}
+		m := named.FindStringSubmatch(string(src[loc[0]:]))
+		if m == nil {
+			t.Fatalf("cmd/main.go has a flag registration this test cannot classify: %.60q", src[loc[0]:])
+		}
 		found[m[2]] = kinds[m[1]]
 	}
 	if len(found) == 0 {
@@ -257,7 +288,7 @@ func TestManagerFlagsMatchManagerMain(t *testing.T) {
 		}
 	}
 	for name := range managerFlags {
-		if _, ok := found[name]; !ok && !strings.HasPrefix(name, "zap-") {
+		if _, ok := found[name]; !ok {
 			t.Errorf("managerFlags lists --%s, which cmd/main.go does not register", name)
 		}
 	}

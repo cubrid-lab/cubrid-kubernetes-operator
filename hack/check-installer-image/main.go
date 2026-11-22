@@ -33,6 +33,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 const (
@@ -97,10 +99,11 @@ func imageFlagValues(args []string) ([]string, error) {
 	return values, nil
 }
 
-// managerFlags are the flags cmd/main.go registers (its own flags and the zap
-// logging flags) with their value kinds: "bool" flags take no separate value,
-// every other kind consumes the next argument. A test checks the names and
-// kinds against cmd/main.go.
+// managerFlags are the flags cmd/main.go defines itself, with their value
+// kinds: "bool" flags take no separate value, every other kind consumes the
+// next argument. A test checks the names and kinds against cmd/main.go. The
+// zap logging flags and --kubeconfig come from controller-runtime and are
+// registered from it in parsedImageFlag.
 var managerFlags = map[string]string{
 	"metrics-bind-address":              "string",
 	"health-probe-bind-address":         "string",
@@ -121,11 +124,6 @@ var managerFlags = map[string]string{
 	"metrics-cert-name":                 "string",
 	"metrics-cert-key":                  "string",
 	"enable-http2":                      "bool",
-	"zap-devel":                         "bool",
-	"zap-encoder":                       "string",
-	"zap-log-level":                     "string",
-	"zap-stacktrace-level":              "string",
-	"zap-time-encoding":                 "string",
 }
 
 // parsedImageFlag parses the manager's arguments the way its flag set does and
@@ -133,6 +131,11 @@ var managerFlags = map[string]string{
 // flag takes the next argument as its value even when that looks like a flag,
 // so a flag that Go's parser would consume is not set. An unknown flag, a bad
 // value or a positional argument (which ends flag parsing) is an error.
+//
+// The check is deliberately stricter than the manager: it rejects any
+// positional argument, even after a correctly parsed image flag. The flag
+// table comes from this tool's own commit, so a manifest built from another
+// commit with different flags is rejected, which is the safe direction.
 func parsedImageFlag(args []string) (string, int, error) {
 	fs := flag.NewFlagSet("manager", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -151,6 +154,8 @@ func parsedImageFlag(args []string) (string, int, error) {
 			fs.String(name, "", "")
 		}
 	}
+	(&zap.Options{}).BindFlags(fs)
+	config.RegisterFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return "", 0, fmt.Errorf("--%s is not parsed as its own flag: the manager's arguments do not parse: %w",
 			imageFlag, err)
@@ -205,6 +210,9 @@ func checkManager(c map[string]any, managerImage, instanceManagerImage string) e
 	switch {
 	case err != nil:
 		return err
+	case count == 0:
+		return fmt.Errorf("--%s is not parsed as its own flag: the manager would fall back to its built-in default",
+			imageFlag)
 	case count != 1 || image != instanceManagerImage:
 		return fmt.Errorf("--%s is not parsed as its own flag: the manager would run with %q",
 			imageFlag, image)
