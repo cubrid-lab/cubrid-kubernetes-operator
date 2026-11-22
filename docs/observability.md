@@ -1713,69 +1713,18 @@ already recorded keeps it, and is still started there.
    `Final LSA` equals it. On the master, `cubrid applyinfo -r localhost <db>`
    shows an `EOF LSA` on a later page. `cubrid heartbeat status` on the slave
    still lists its `Copylogdb` and `Applylogdb` as `registered`.
-2. **Restart the slave's copier and applier of the master's log only in
-   this form, through a non-login `bash -c`.** Record the readings of step 1
-   and `cubrid heartbeat status -v` on the slave first. `<master>` is the
-   master's name as `ha_node_list` in `cubrid_ha.conf` gives it (its Pod
-   name):
-
-   ```sh
-   kubectl exec <slave pod> -c <db container> -- bash -c 'cubrid heartbeat copylogdb stop <db> <master>'
-   kubectl exec <slave pod> -c <db container> -- bash -c 'cubrid heartbeat applylogdb stop <db> <master>'
-   kubectl exec <slave pod> -c <db container> -- bash -c 'cubrid heartbeat copylogdb start <db> <master>'
-   kubectl exec <slave pod> -c <db container> -- bash -c 'cubrid heartbeat applylogdb start <db> <master>'
-   ```
-
-   A non-login shell keeps the container's own `CUBRID_DATABASES`
-   (`/var/lib/cubrid/databases`, on the data volume). In POC-72
-   ([#985](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/985)),
-   on the pinned engine image in local Docker, this form ended the running
-   copier and applier and started one of each on
-   `/var/lib/cubrid/databases/<db>_<master>`. Afterwards every member held
-   every acknowledged row, in each of its 4 trials. That was a healthy
-   copier, stopped for 30 seconds, with `docker exec` standing in for
-   `kubectl exec`. A copier that is stuck, for example on a half-open
-   connection, and the commands on a cluster were not tested, so check the
-   result with step 3 every time. Two other forms are unsafe, and both exit
-   0, so the exit code proves nothing:
-   - **A login shell** (`bash -l`, `bash -lc`, `su -`) reads the image's
-     `~/.cubrid.sh`, which sets `CUBRID_DATABASES=/home/cubrid/CUBRID/databases`.
-     `stop` then answers `success` and stops nothing, and `start` adds a
-     second copier and applier on that directory, outside the data volume
-     (POC-67, and POC-72 in 2 of 2 trials). In POC-67 that slave silently
-     lacked 34 committed rows.
-   - **No shell** (`kubectl exec ... -- cubrid heartbeat ...`): `stop`
-     works, but each new process exits at once with error `-116`
-     (`databases.txt` cannot be accessed), `start` prints `fail`, and the
-     slave is left with no copier or applier of the master's log (POC-72,
-     2 of 2 trials).
-
-   Do not substitute manual signals or delete logs or PVCs as a workaround.
-3. **Confirm exactly one copier and one applier per peer, on the data
-   volume.** Run
-   `kubectl exec <slave pod> -c <db container> -- bash -c 'for p in /proc/[0-9]*; do tr "\0" " " < $p/cmdline; echo; done' | grep -E '^cub_admin (copylogdb|applylogdb) '`.
-   It prints exactly one `cub_admin copylogdb` line and one
-   `cub_admin applylogdb` line per peer. Each line carries
-   `-L /var/lib/cubrid/databases/<db>_<peer>`, and none carries
-   `/home/cubrid/CUBRID/databases`. In
-   `bash -c 'cubrid heartbeat status -v'` the master's `Copylogdb` and
-   `Applylogdb` entries are `registered`, show that same path, and carry new
-   pids. Then repeat step 1: the slave's `EOF LSA` moves on to the master's
-   and `Final LSA` follows it. Two processes for one peer, a path outside
-   `/var/lib/cubrid`, or a copy that still does not grow means the restart
-   did not work: do not restart again, and go on with step 5.
-4. **When a restart cannot help.** If the copy still does not grow after
-   the restart, or the copier's log on the slave
-   (`$CUBRID/log/<db>@<master>_copylogdb.err`) reports error `-1024`
-   ("failed to get log page(s)"), the master has already removed the
-   archive the copier needs. With the image's settings
-   (`ha_copy_log_max_archives=1`, `force_remove_log_archives=y`) the master
-   keeps no archive for a stalled copier. In POC-67, at about 810 MiB of log
-   an hour, the needed archive was gone 13 minutes into the stall, and the
-   copier failed with `-1024` on resume. A restart cannot bring the archive
-   back: the slave needs a rebuild ([Rebuilding a member](#rebuilding-a-member),
-   [ADR-0006](./adr/0006-node-join-rebuild.md)).
-5. **Preserve data and verify a recovery decision before reusing the
+2. **Do not restart `copylogdb` or `applylogdb` with the generic
+   `cubrid heartbeat ... stop/start` commands.** The historical POC-41
+   observed copier recovery after a restart in one test setup, but it did
+   not establish a safe command for this Operator's database container.
+   In POC-67 ([#985](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/985)),
+   a login shell reset `CUBRID_DATABASES`; `stop` reported success without
+   stopping the processes, and `start` created **second** copier/applier
+   processes using a path outside the expected data mount. That slave
+   silently lacked 34 rows committed on the master. Neither the exact
+   non-login-shell procedure nor safe in-place recovery has been verified.
+   Do not substitute manual signals or delete logs/PVCs as a workaround.
+3. **Preserve data and verify a recovery decision before reusing the
    slave.** Record `cubrid heartbeat status`, the master/slave
    `cubrid applyinfo` readings and the actual mounted log paths, keeping
    the original PVC/logs and failed SQL evidence. Compare primary keys and
@@ -1795,10 +1744,10 @@ between master and slaves for 90–110 seconds, in one lab and one engine
 build. Its recovery steps remain *historical observations*, not currently
 verified operating instructions. POC-67 additionally showed that a copier
 can miss required archives during a prolonged stall and that changing
-the shell environment can create duplicate processes. Step 2's command
-form is the one POC-72 verified (`docs/poc/poc72/README.md`). Any other form
-is unverified: collect evidence and use the reviewed recovery decision path
-instead.
+the shell environment can create duplicate processes. The safe command
+form is under investigation in #985. Until it is independently verified,
+collect evidence and use the reviewed recovery decision path rather than
+attempting an in-place copier/applier restart.
 
 After a network partition in which the cut member outranks the active master,
 CUBRID can leave that member as heartbeat master with its server
