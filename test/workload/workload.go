@@ -257,6 +257,14 @@ func ReadHistory(r io.Reader) (History, error) {
 			if answered[e.OpID] {
 				return History{}, fmt.Errorf("history line %d: operation %s has more than one outcome", line, e.OpID)
 			}
+			// The client writes client, seq and op on every line, so an
+			// outcome must repeat the attempt's values exactly. One that
+			// differs or leaves a field out is not that attempt's answer.
+			if e.Client != op.Client || e.Seq != op.Seq || e.Op != op.Op {
+				return History{}, fmt.Errorf("history line %d: operation %s outcome names client %q, sequence %d, "+
+					"operation %q; the attempt was client %q, sequence %d, operation %q",
+					line, e.OpID, e.Client, e.Seq, e.Op, op.Client, op.Seq, op.Op)
+			}
 			answered[e.OpID] = true
 			op.Outcome = e.Event
 			op.Error = e.Error
