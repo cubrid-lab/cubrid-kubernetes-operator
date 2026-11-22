@@ -20,6 +20,9 @@
 # acknowledged ids. Everything goes to <out>/run.log; the group is removed at the end.
 . "$(dirname "$0")/env.sh"
 OUT=$1; FORM=$2; D=$(dirname "$0")
+# A trial writes into a directory of its own: reusing one would mix one trial's process
+# snapshots with another's acknowledged ids.
+[ -e "$OUT" ] && { echo "refused: $OUT already exists; give each trial a new directory" >&2; exit 2; }
 mkdir -p "$OUT"
 exec > >(tee -a "$OUT/run.log") 2>&1
 echo "trial $OUT form=$FORM start $(utc) host: $(cut -d' ' -f1-3 /proc/loadavg)"
@@ -69,7 +72,7 @@ for i in $(seq 1 30); do
   [ -n "$c0" ] && [ "$c0" = "$c1" ] && [ "$c0" = "$c2" ] && break
   sleep 20
 done
-"$D/ids.sh" "$OUT" final
+"$D/ids.sh" "$OUT" final || echo "trial INCOMPLETE: a member's id query failed; its id list is not compared"
 awk -F'\t' '$4 == "ack" {print $1}' "$OUT/writes.tsv" | sort -n > "$OUT/acked.txt"
 for n in 0 1 2; do
   f="$OUT/ids-final-ha-$n.txt"

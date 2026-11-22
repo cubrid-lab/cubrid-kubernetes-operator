@@ -73,6 +73,9 @@ for t in sorted((t for t in os.listdir(sys.argv[1]) if t.startswith("trial-")), 
     acked = {int(l.split("\t")[0]) for l in open(os.path.join(d, "writes.tsv")) if l.rstrip("\n").endswith("\tack")}
     for n in (0, 1, 2):
         f = os.path.join(d, f"ids-final-ha-{n}.txt")
+        if os.path.exists(f + ".incomplete"):
+            print(f"  ha-{n}: id query incomplete; not compared")
+            continue
         if not os.path.exists(f):
             continue
         held = {int(x) for x in open(f).read().split()}
