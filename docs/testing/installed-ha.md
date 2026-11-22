@@ -1651,9 +1651,23 @@ What it judges, in this order:
    first seen after the cut was removed or naming another member, or one
    seen after the cut-off member answered as an active master; a control
    without at least two cluster readings and two complete sweeps showing one
-   reachable active master after the 30-second grace; a write acknowledged
-   on the already-open connection after the run saw the path closed, an
-   anomaly the run cannot explain; with `-partition-manual-release`, the
+   reachable active master after the 30-second grace; an established-session
+   history that does not show the session: none recorded, one that could
+   not be read, one with no complete event or that ends in an incomplete
+   event (an interrupted collector; the file is kept as read in
+   `established-session-raw.jsonl`), events of another client than
+   `s07open`, an inconsistent history (an outcome never attempted, two
+   outcomes of one operation, an operation started before the previous one
+   was answered, or an event after the session ended), a session that ended
+   before the fault or whose last event is before it and is not an operation
+   still unanswered that started at most five seconds before it (the client
+   starts one every 100 ms), or fewer than the ten acknowledgements before the fault
+   that the run waits for (the reason names which; the record's
+   `establishedSession` keeps the counts, and `insufficientEvidence` the
+   problem with the history itself); a write
+   acknowledged on the already-open connection after the run saw the path
+   closed while a release was seen or the quarantine evidence is incomplete;
+   with `-partition-manual-release`, the
    quarantine released by a token the run did not set during or after its
    release; a cluster that did not settle; a data
    check that could not read every member; and no reading of the cluster in
@@ -1699,9 +1713,10 @@ the new-connection writes counted by outcome (`acknowledged`, `failed`,
 `no answer`, `unknown-present`, `unknown-absent`, or `unknown` when not
 resolved); and for `s07open`
 `establishedSession`, `establishedAcknowledgedAfterFault` and
-`establishedAcknowledgedAfterPathClosed`, on the client's clock. The
-established session is reported, not judged: the contract sets no bound on
-it, and the pinned JDBC driver can reconnect internally under one Java
+`establishedAcknowledgedAfterPathClosed`, on the client's clock, or
+`unknown` when its history does not show the session (step 3 of what S07
+judges). The established session has no time bound in the contract, and
+the pinned JDBC driver can reconnect internally under one Java
 connection, so an open connection is not proof of one physical session. A
 time that was not seen is `unknown`. With `-partition-manual-release`, from
 setting the current token: `manualReleaseSeenWithin`,

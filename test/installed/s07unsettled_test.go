@@ -203,6 +203,32 @@ func s07LedgerEvent(id, kind string) string {
 		`,"op":"insert","opId":"` + id + `","event":"` + kind + `","amount":1,"note":"n"}` + "\n"
 }
 
+// s07OpenHistory is a history of s07OpenClient with n inserts acknowledged
+// before a fault issued at 2026-11-17T12:00:00Z, as the run waits for before
+// the fault, and one more still unanswered after it, and s07OpenRows the rows
+// of the acknowledged ones.
+func s07OpenHistory(n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		for _, kind := range []string{workload.Attempted, workload.Acknowledged} {
+			fmt.Fprintf(&b, `{"t":"2026-11-17T11:59:%02dZ","client":"%s","seq":%d,"op":"insert","opId":"%s-%d",`+
+				`"event":"%s","amount":1,"note":"n"}`+"\n", i, s07OpenClient, i, s07OpenClient, i, kind)
+		}
+	}
+	fmt.Fprintf(&b, `{"t":"2026-11-17T12:00:30Z","client":"%s","seq":%d,"op":"insert","opId":"%s-%d",`+
+		`"event":"attempted","amount":1,"note":"n"}`+"\n", s07OpenClient, n+1, s07OpenClient, n+1)
+	return b.String()
+}
+
+func s07OpenRows(n int) []workload.Row {
+	rows := make([]workload.Row, 0, n)
+	for i := 1; i <= n; i++ {
+		rows = append(rows, workload.Row{OpID: fmt.Sprintf("%s-%d", s07OpenClient, i), Client: s07OpenClient,
+			Seq: i, Amount: 1, Note: "n"})
+	}
+	return rows
+}
+
 // s07LedgerAnswers plays kubectl for a read of the ledger on each member: the
 // rows in rows, an error for a member in failing, and for a member in
 // hanging nothing until the read's context ends. Once the read's context has
@@ -389,8 +415,9 @@ func TestJudgeS07ReportsTheUnsettledSnapshotWithoutJudgingIt(t *testing.T) {
 func TestFinishS07ReadsTheRowsOfAClusterThatDidNotSettle(t *testing.T) {
 	h := s07SnapshotRun(t)
 	h.rec.Client = &imageIdentity{Pod: clientPodName, Node: testClientNode}
-	open := s07LedgerEvent("c-1", "attempted") + s07LedgerEvent("c-1", "acknowledged")
-	ledger := s07LedgerAnswers(map[string][]workload.Row{m0: {s07Row("c-1")}, m1: {s07Row("c-1")}}, m2, "")
+	open := s07OpenHistory(s06Acknowledged)
+	rows := s07OpenRows(s06Acknowledged)
+	ledger := s07LedgerAnswers(map[string][]workload.Row{m0: rows, m1: rows}, m2, "")
 	h.Command = func(ctx context.Context, args ...string) (string, error) {
 		if args[3] != clientPodName {
 			return ledger(ctx, args...)
@@ -421,7 +448,7 @@ func TestFinishS07ReadsTheRowsOfAClusterThatDidNotSettle(t *testing.T) {
 	if rec.Data != nil {
 		t.Errorf("the data check ran on a cluster that did not settle: %+v", rec.Data)
 	}
-	if got.Result != evidence.Blocked || !strings.Contains(got.Reason, m0+" holds 1 row(s), lacks 0") ||
+	if got.Result != evidence.Blocked || !strings.Contains(got.Reason, m0+" holds 10 row(s), lacks 0") ||
 		!strings.Contains(got.Reason, m2+" unreadable") {
 		t.Errorf("finished %s %q, want blocked with the snapshot named", got.Result, got.Reason)
 	}
