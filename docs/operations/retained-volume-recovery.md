@@ -132,8 +132,11 @@ step 2.
 Export the database in stand-alone mode (`-S`). Whether `cubrid unloaddb -S`
 writes to the volume is not established, and opening a database stand-alone
 with `csql -S` did change the data volume and the active log of an HA slave
-(POC-65, #894). If the claim may hold the only copy of some writes, run the
-export on a copy or a snapshot of the volume, not on the claim itself:
+(POC-65, #894). No copy or snapshot procedure is documented or verified here:
+the verified lab run used the claim itself, and the commands below mount the
+original claim (`$SRC`). Running on the original claim is a risk you accept
+case by case. A VolumeSnapshot clone of the claim, if your CSI driver supports
+it, is an unverified option:
 
 ```sh
 kubectl -n "$NS" exec retained-export -- bash -c \
@@ -180,8 +183,8 @@ during a schema load leaves its outcome unknown.
 ```sh
 kubectl -n "$NS" exec "$M" -c cubrid -- bash -c '
   cd /tmp/load && export PATH="$CUBRID/bin:$PATH"
-  csql -u dba -i '"$DB"'_schema "'"$DB"'@$(hostname)"
-  cubrid loaddb -u dba -C -d '"$DB"'_objects '"$DB"'
+  csql -u dba -i '"$DB"'_schema "'"$DB"'@$(hostname)" &&
+  cubrid loaddb -u dba -C -d '"$DB"'_objects '"$DB"' &&
   for f in '"$DB"'_indexes '"$DB"'_trigger; do [ -s "$f" ] && csql -u dba -i "$f" "'"$DB"'@$(hostname)"; done'
 ```
 

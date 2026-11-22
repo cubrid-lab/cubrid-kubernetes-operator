@@ -251,8 +251,10 @@ required by #125/#127.
   CRDs, and deleting a CRD deletes every `CubridCluster` and `CubridBackup`
   in the whole Kubernetes cluster, in every namespace.** The Operator sets no
   finalizer on them, so nothing holds the deletion back. Their child objects
-  are then garbage-collected, and the claims follow their retention policy.
-  `make undeploy` does the same, because `config/default` includes `../crd`.
+  are then garbage-collected, and each claim follows `spec.storage.retentionPolicy`,
+  then the volume's reclaim policy.
+  `make undeploy` does the same, because `config/default` includes `../crd`,
+  and so does `kubectl delete -f` of an installer bundle built by `make build-installer` (for example `dist/install.yaml`), which also contains the CRDs.
   Neither archives database contents. Do not execute either as a generic
   cleanup step on a cluster that holds data.
   [What deleting a cluster does to its data](data-retention.md) separates
