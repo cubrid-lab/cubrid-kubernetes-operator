@@ -254,17 +254,16 @@ func ReadHistory(r io.Reader) (History, error) {
 				return History{}, fmt.Errorf("history line %d: operation %s is %s but was never attempted",
 					line, e.OpID, e.Event)
 			}
-			// The client writes client, seq and op on every line. An outcome
-			// that leaves one out (zero value) is not contradicting the
-			// attempt; one that names a different value is not its answer.
-			if (e.Client != "" && e.Client != op.Client) || (e.Seq != 0 && e.Seq != op.Seq) ||
-				(e.Op != "" && e.Op != op.Op) {
-				return History{}, fmt.Errorf("history line %d: operation %s is %s by client %q, sequence %d, operation %q, "+
-					"but was attempted by client %q, sequence %d, operation %q",
-					line, e.OpID, e.Event, e.Client, e.Seq, e.Op, op.Client, op.Seq, op.Op)
-			}
 			if answered[e.OpID] {
 				return History{}, fmt.Errorf("history line %d: operation %s has more than one outcome", line, e.OpID)
+			}
+			// The client writes client, seq and op on every line, so an
+			// outcome must repeat the attempt's values exactly. One that
+			// differs or leaves a field out is not that attempt's answer.
+			if e.Client != op.Client || e.Seq != op.Seq || e.Op != op.Op {
+				return History{}, fmt.Errorf("history line %d: operation %s outcome names client %q, sequence %d, "+
+					"operation %q; the attempt was client %q, sequence %d, operation %q",
+					line, e.OpID, e.Client, e.Seq, e.Op, op.Client, op.Seq, op.Op)
 			}
 			answered[e.OpID] = true
 			op.Outcome = e.Event

@@ -137,18 +137,39 @@ func TestReadHistory_Rejects(t *testing.T) {
 			t.Errorf("%s: error %q does not name the line and operation", name, err)
 		}
 	}
+
+	// An outcome must repeat the attempt's identity: a missing field is not a
+	// match, and sequence 0 is a value, not an absent field.
+	for name, answer := range map[string]string{
+		"an answer with sequence 0":      `{"client":"c1","seq":0,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer without a sequence":   `{"client":"c1","op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer without a client":     `{"seq":1,"op":"insert","opId":"c1-1","event":"acknowledged"}`,
+		"an answer without an operation": `{"client":"c1","seq":1,"opId":"c1-1","event":"acknowledged"}`,
+		"only an opId and an event":      `{"opId":"c1-1","event":"acknowledged"}`,
+	} {
+		if _, err := ReadHistory(strings.NewReader(attempt + answer + "\n")); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	// A second outcome with another identity is reported as a second outcome.
+	_, err := ReadHistory(strings.NewReader(attempt + line(Acknowledged) +
+		`{"client":"c2","seq":1,"op":"insert","opId":"c1-1","event":"failed"}` + "\n"))
+	if err == nil || !strings.Contains(err.Error(), "more than one outcome") {
+		t.Errorf("a second outcome with another client: error = %v, want more than one outcome", err)
+	}
 }
 
-// An outcome line that omits client, sequence or operation type is accepted:
-// only a value that contradicts the attempt is rejected.
-func TestReadHistory_AcceptsOutcomeWithoutIdentityFields(t *testing.T) {
-	text := `{"client":"c1","seq":1,"op":"insert","opId":"c1-1","event":"attempted","amount":1,"note":"n"}` + "\n" +
-		`{"opId":"c1-1","event":"acknowledged"}` + "\n"
+// A sequence of 0 is a legitimate value, so an attempt and outcome that both
+// carry it are a match.
+func TestReadHistory_SequenceZero(t *testing.T) {
+	text := `{"client":"c1","seq":0,"op":"insert","opId":"c1-0","event":"attempted","amount":1,"note":"n"}` + "\n" +
+		`{"client":"c1","seq":0,"op":"insert","opId":"c1-0","event":"acknowledged"}` + "\n"
 	h, err := ReadHistory(strings.NewReader(text))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := h.Operations["c1-1"].Outcome; got != Acknowledged {
+	if got := h.Operations["c1-0"].Outcome; got != Acknowledged {
 		t.Errorf("outcome = %s, want %s", got, Acknowledged)
 	}
 }
