@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -79,5 +80,54 @@ func TestV01ScopeDoesNotRejudgeHistoricalFailure(t *testing.T) {
 		rec.Recorded != before.Recorded || rec.Judged != before.Judged ||
 		verdict(rec.Recorded) != "FAIL" || verdict(rec.Judged) != "FAIL" {
 		t.Fatal("the v0.1 scope mapping changed a historical failed verdict")
+	}
+}
+
+// A family the registry holds results for accepts only the variants it
+// registers. A mistyped or inapplicable variant is shown as unmapped rather
+// than as a v0.1 requirement it does not match.
+func TestV01ScopeShowsUnregisteredVariantsAsUnmapped(t *testing.T) {
+	tests := []struct{ id, variant string }{
+		{"S05", "not-a-real-variant"},
+		{"S05", ""},
+		{"S07", "not-a-real-variant"},
+		{"S07", ""},
+		{"S04", "not-a-real-variant"},
+		{"S06", "not-a-real-variant"},
+		{"S11", "not-a-real-variant"},
+		{"S12", "not-a-real-variant"},
+		{"S13", "not-a-real-variant"},
+		{"S14", "not-a-real-variant"},
+		{"S15", "not-a-real-variant"},
+		{"S00", "abrupt"},
+		{"S01", "complete"},
+		{"LAB01", "restart"},
+		{"S05", "graceful"},
+		{"S07", "power-off"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id+"/"+tc.variant, func(t *testing.T) {
+			if got := scopeOf(scenario{ID: tc.id, Variant: tc.variant}); got != scopeUnmapped {
+				t.Errorf("scopeOf(%s/%s) = %q, want %q", tc.id, tc.variant, got, scopeUnmapped)
+			}
+		})
+	}
+}
+
+// Every variant the registry holds keeps a v0.1 category.
+func TestV01ScopeMapsEveryRegisteredVariant(t *testing.T) {
+	for _, level := range []string{evidence.LevelKind, evidence.LevelVMLab} {
+		for _, key := range evidence.RegisteredKeys(level) {
+			resolved, err := evidence.ResolveKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, alias := range resolved.Aliases {
+				id, variant, _ := strings.Cut(alias, "/")
+				if got := scopeOf(scenario{ID: id, Variant: variant}); got == scopeUnmapped {
+					t.Errorf("registered result %q (%s) is shown as unmapped", alias, key)
+				}
+			}
+		}
 	}
 }
