@@ -163,7 +163,8 @@ func (in rebuildInput) answer(m string) RoleObservation {
 // A member's earlier record that a later claim replaces is appended to
 // former, in.FormerDataClaims, and never removed from it: that claim and
 // volume held the database, and may hold the only copy of writes no other
-// member has (ADR-0006). Once former holds maxFormerDataClaims records, a
+// member has (ADR-0006). A record already in former, such as the claim of a
+// failed rebuild, is not added again. Once former holds maxFormerDataClaims records, a
 // later claim is not recorded and the earlier record stays; no rebuild is
 // offered then (rebuildRefusal).
 func recordDataClaims(in rebuildInput) (claims, former []databasev1alpha1.MemberDataClaim) {
@@ -185,7 +186,10 @@ func recordDataClaims(in rebuildInput) (claims, former []databasev1alpha1.Member
 			out = append(out, record)
 		case out[i] == record:
 		case len(former) < maxFormerDataClaims:
-			former = append(former, out[i])
+			// A failed rebuild may already have added the earlier record.
+			if !slices.Contains(former, out[i]) {
+				former = append(former, out[i])
+			}
 			out[i] = record
 		}
 	}

@@ -756,6 +756,28 @@ func TestRecordDataClaimsKeepsFormerRecords(t *testing.T) {
 	}
 }
 
+// A failed rebuild adds the claim it restored into to the former records, and
+// that claim can also be the member's record: during catch-up the member ran
+// the database on it. When the administrator then replaces the claim and the
+// member runs on the new one, the record that moves over is already a former
+// record, so it is not added a second time. A duplicate keeps nothing more,
+// and each one brings the full list, after which no rebuild is offered, one
+// rebuild closer (VM-lab run of 2026-11-22, #118).
+func TestRecordDataClaimsKeepsAFailedRebuildClaimOnce(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	in := rebuildScenario(now)
+	in.Observations[rbM2] = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now}
+	failed := databasev1alpha1.MemberDataClaim{Name: rbM2, ClaimUID: rbClaim2Old, VolumeName: rbPV2Old}
+	in.FormerDataClaims = []databasev1alpha1.MemberDataClaim{failed}
+	claims, former := recordDataClaims(in)
+	if dataClaimOf(claims, rbM2) != rbClaim2New {
+		t.Fatalf("the later claim is the member's record, got %+v", claims)
+	}
+	if len(former) != 1 || former[0] != failed {
+		t.Fatalf("the failed rebuild's claim is kept once in the former records, got %+v", former)
+	}
+}
+
 // A volume that an earlier record of any member held is never offered as
 // a replacement. The second member was rebuilt onto a new claim and volume
 // and runs on them; then the third member's storage is replaced, and the
