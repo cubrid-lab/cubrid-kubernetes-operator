@@ -109,10 +109,41 @@ start, when it is at least 8 bytes long, among the values its log never
 writes, as it does for its token and the object-storage keys; a shorter value
 is not registered, because replacing every occurrence of, say, `dba` or the
 database's name would garble ordinary lines and show the value by where the
-placeholder lands. It keeps what csql prints for the
+placeholder lands. So the redaction covers only a value of at least 8 bytes,
+and only the value the file held when the Instance Manager started. A value
+the kubelet writes into the mounted file later is not redacted, and neither is
+any value shorter than 8 bytes; this is safe only because no code path logs the
+value. It keeps what csql prints for the
 statement in a file that is unlinked before csql runs, so it is never under a
 name in `/tmp`. Anyone who can read Secrets in the namespace, or run commands
 in the DB container, can read the password.
+
+**Transport.** Traffic between clients and Brokers, and between Pods, is not
+encrypted ([README, Security limitations](../../README.md#security-limitations)).
+A `dba` login sent through a Broker therefore crosses the Pod network
+unencrypted.
+
+**Who may update the Secret.** Someone who may update the Secret but not read
+it can still test guesses. The `DBAPasswordRotationUnsupported` Condition tells
+them whether a guess matched the database's stored password: it appears when
+the value is not the password and is absent when it is. A new value is checked
+about once per poll (5 minutes by default) while a member can be asked; on an
+HA cluster that needs a resolved primary. A check that cannot tell is retried
+after about 30 seconds. The time the kubelet takes to update the mounted file
+(about a minute) also limits the rate. See
+[Changing the password is not supported](#changing-the-password-is-not-supported),
+which describes how a changed value is reported.
+On a standalone cluster a wrong value also stops the next start of the DB
+container ([Restarting after a changed value](#restarting-after-a-changed-value)).
+Grant `update` on Secrets only to those who may know the password.
+
+**SQL comment and separator characters.** Seven values of 24 to 26 bytes
+containing `;`, `--`, `//`, `/*` or `*/` (one of them `';--`) were each set
+whole and accepted at login, and none appeared in the engine's logs or files
+(POC-73, in Docker on CUBRID 11.4.7.1995, standalone, each run once). No
+value there split the statement, so whether the engine would log a statement
+split by such a value is not observed. Values at the 31-byte limit and HA
+clusters were not tested.
 
 ## Who can use a Secret through the cluster
 
