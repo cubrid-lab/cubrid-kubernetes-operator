@@ -97,6 +97,70 @@ func imageFlagValues(args []string) ([]string, error) {
 	return values, nil
 }
 
+// managerFlags are the flags cmd/main.go registers (its own flags and the zap
+// logging flags) with their value kinds: "bool" flags take no separate value,
+// every other kind consumes the next argument. A test checks the names and
+// kinds against cmd/main.go.
+var managerFlags = map[string]string{
+	"metrics-bind-address":              "string",
+	"health-probe-bind-address":         "string",
+	imageFlag:                           "string",
+	"broker-max-appl-servers":           "int",
+	"cluster-max-concurrent-reconciles": "int",
+	"instance-manager-backup-timeout":   "duration",
+	"instance-manager-restore-timeout":  "duration",
+	"watch-namespace":                   "string",
+	"operator-namespace":                "string",
+	"leader-elect":                      "bool",
+	"metrics-secure":                    "bool",
+	"webhook-cert-path":                 "string",
+	"webhook-cert-name":                 "string",
+	"webhook-cert-key":                  "string",
+	"webhook-port":                      "int",
+	"metrics-cert-path":                 "string",
+	"metrics-cert-name":                 "string",
+	"metrics-cert-key":                  "string",
+	"enable-http2":                      "bool",
+	"zap-devel":                         "bool",
+	"zap-encoder":                       "string",
+	"zap-log-level":                     "string",
+	"zap-stacktrace-level":              "string",
+	"zap-time-encoding":                 "string",
+}
+
+// parsedImageFlag parses the manager's arguments the way its flag set does and
+// returns the Instance Manager image the manager would run with. A string
+// flag takes the next argument as its value even when that looks like a flag,
+// so a flag that Go's parser would consume is not set. An unknown flag, a bad
+// value or a positional argument (which ends flag parsing) is an error.
+func parsedImageFlag(args []string) (string, int, error) {
+	fs := flag.NewFlagSet("manager", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	image, count := "", 0
+	for name, kind := range managerFlags {
+		switch {
+		case name == imageFlag:
+			fs.Func(name, "", func(v string) error { image = v; count++; return nil })
+		case kind == "bool":
+			fs.Bool(name, false, "")
+		case kind == "int":
+			fs.Int(name, 0, "")
+		case kind == "duration":
+			fs.Duration(name, 0, "")
+		default:
+			fs.String(name, "", "")
+		}
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", 0, fmt.Errorf("--%s is not parsed as its own flag: the manager's arguments do not parse: %w",
+			imageFlag, err)
+	}
+	if fs.NArg() > 0 {
+		return "", 0, fmt.Errorf("--%s is not parsed as its own flag: argument %q ends flag parsing", imageFlag, fs.Arg(0))
+	}
+	return image, count, nil
+}
+
 // checkManager checks one manager container.
 func checkManager(c map[string]any, managerImage, instanceManagerImage string) error {
 	image, present, err := unstructured.NestedString(c, "image")
@@ -136,6 +200,14 @@ func checkManager(c map[string]any, managerImage, instanceManagerImage string) e
 	case values[0] != instanceManagerImage:
 		return fmt.Errorf("the manager uses Instance Manager image %q, not the built image %q",
 			values[0], instanceManagerImage)
+	}
+	image, count, err := parsedImageFlag(args)
+	switch {
+	case err != nil:
+		return err
+	case count != 1 || image != instanceManagerImage:
+		return fmt.Errorf("--%s is not parsed as its own flag: the manager would run with %q",
+			imageFlag, image)
 	}
 	return nil
 }

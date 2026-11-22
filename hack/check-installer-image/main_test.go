@@ -16,6 +16,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -127,6 +129,26 @@ spec:
 			want: "set in the manager's command"},
 		{name: "a longer flag name is another flag",
 			manifest: withArgs("--instance-manager-image-pull-policy=Always"), want: "sets no", absent: true},
+		// Go's flag package gives a string flag the next argument as its value,
+		// even when that argument looks like a flag, so the manager would not
+		// see --instance-manager-image here.
+		{name: "image flag consumed as another flag's value",
+			manifest: withArgs("--metrics-bind-address", "--instance-manager-image="+testIM),
+			want:     "not parsed as its own flag"},
+		{name: "image flag consumed by a single-dash string flag",
+			manifest: withArgs("-watch-namespace", "--instance-manager-image="+testIM),
+			want:     "not parsed as its own flag"},
+		{name: "string flag with an inline value, then the image flag",
+			manifest: withArgs("--metrics-bind-address=:8080", "--instance-manager-image="+testIM)},
+		{name: "boolean flag does not consume the image flag",
+			manifest: withArgs("--metrics-secure", "--instance-manager-image="+testIM)},
+		{name: "string flag with a separate value, then the image flag",
+			manifest: withArgs("--metrics-bind-address", ":8080", "--instance-manager-image="+testIM)},
+		{name: "unknown flag fails closed",
+			manifest: withArgs("--no-such-flag=1", "--instance-manager-image="+testIM),
+			want:     "not parsed as its own flag"},
+		{name: "positional argument before the image flag",
+			manifest: withArgs("stray", "--instance-manager-image="+testIM), want: "not parsed as its own flag"},
 		{name: "no manager container", manifest: strings.Replace(goodDeployment, "- name: manager", "- name: other", 1),
 			want: "0 manager containers"},
 		{name: "two manager containers", manifest: goodDeployment + `        - name: manager
@@ -208,6 +230,35 @@ func TestExitCode(t *testing.T) {
 	for _, c := range cases {
 		if got := exitCode(c.err); got != c.want {
 			t.Errorf("exitCode(%v) = %d; want %d", c.err, got, c.want)
+		}
+	}
+}
+
+// managerFlags is kept by hand, so it must name every flag cmd/main.go
+// registers with the same kind; otherwise a new flag would be rejected as
+// unknown, or a new string flag would not consume its value.
+func TestManagerFlagsMatchManagerMain(t *testing.T) {
+	src, err := os.ReadFile("../../cmd/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]string{"String": "string", "Int": "int", "Bool": "bool", "Duration": "duration"}
+	found := map[string]string{}
+	re := regexp.MustCompile(`flag\.(String|Int|Bool|Duration)Var\(&\w+,\s*"([^"]+)"`)
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		found[m[2]] = kinds[m[1]]
+	}
+	if len(found) == 0 {
+		t.Fatal("found no flags in cmd/main.go")
+	}
+	for name, kind := range found {
+		if managerFlags[name] != kind {
+			t.Errorf("flag --%s is a %s flag in cmd/main.go but %q in managerFlags", name, kind, managerFlags[name])
+		}
+	}
+	for name := range managerFlags {
+		if _, ok := found[name]; !ok && !strings.HasPrefix(name, "zap-") {
+			t.Errorf("managerFlags lists --%s, which cmd/main.go does not register", name)
 		}
 	}
 }
