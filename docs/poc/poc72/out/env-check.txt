@@ -1,0 +1,110 @@
+## 2026-11-22T02:01:34.409Z docker exec -u cubrid poc72-envcheck env
+CUBRID_BACKUPDB=/home/cubrid/CUBRID/backupdb
+CUBRID_COMPONENTS=ALL
+CUBRID_DATABASES=/var/lib/cubrid/databases
+CUBRID_DB=cubdb
+CUBRID=/home/cubrid/CUBRID
+CUBRID_LOCALE=en_US
+CUBRID_USER_PATH=/home/cubrid
+CUBRID_VERSION=11.4-latest
+CUBRID_VOLUME_SIZE=100M
+GOSU_VERSION=1.19
+HOME=/home/cubrid
+HOSTNAME=28ebf744f730
+LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib
+PATH=/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+VERSION_PATH=11.4_latest
+## docker exec -u cubrid poc72-envcheck bash -c env
+CUBRID_BACKUPDB=/home/cubrid/CUBRID/backupdb
+CUBRID_COMPONENTS=ALL
+CUBRID_DATABASES=/var/lib/cubrid/databases
+CUBRID_DB=cubdb
+CUBRID=/home/cubrid/CUBRID
+CUBRID_LOCALE=en_US
+CUBRID_USER_PATH=/home/cubrid
+CUBRID_VERSION=11.4-latest
+CUBRID_VOLUME_SIZE=100M
+GOSU_VERSION=1.19
+HOME=/home/cubrid
+HOSTNAME=28ebf744f730
+LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib
+PATH=/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PWD=/
+SHLVL=1
+_=/usr/bin/env
+VERSION_PATH=11.4_latest
+## docker exec -u cubrid poc72-envcheck sh -c env
+CUBRID_BACKUPDB=/home/cubrid/CUBRID/backupdb
+CUBRID_COMPONENTS=ALL
+CUBRID_DATABASES=/var/lib/cubrid/databases
+CUBRID_DB=cubdb
+CUBRID=/home/cubrid/CUBRID
+CUBRID_LOCALE=en_US
+CUBRID_USER_PATH=/home/cubrid
+CUBRID_VERSION=11.4-latest
+CUBRID_VOLUME_SIZE=100M
+GOSU_VERSION=1.19
+HOME=/home/cubrid
+HOSTNAME=28ebf744f730
+LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib
+PATH=/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PWD=/
+SHLVL=1
+_=/usr/bin/env
+VERSION_PATH=11.4_latest
+## docker exec -u cubrid poc72-envcheck bash -lc env
+CUBRID_BACKUPDB=/home/cubrid/CUBRID/backupdb
+CUBRID_COMPONENTS=ALL
+CUBRID_DATABASES=/home/cubrid/CUBRID/databases
+CUBRID_DB=cubdb
+CUBRID=/home/cubrid/CUBRID
+CUBRID_LOCALE=en_US
+CUBRID_USER_PATH=/home/cubrid
+CUBRID_VERSION=11.4-latest
+CUBRID_VOLUME_SIZE=100M
+DEBUGINFOD_URLS=https://debuginfod.centos.org/ 
+GOSU_VERSION=1.19
+HISTCONTROL=ignoredups
+HISTSIZE=1000
+HOME=/home/cubrid
+HOSTNAME=28ebf744f730
+LANG=C.UTF-8
+LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib:/home/cubrid/CUBRID/cci/lib:/home/cubrid/CUBRID/lib
+LESSOPEN=||/usr/bin/lesspipe.sh %s
+LOGNAME=cubrid
+MAIL=/var/spool/mail/cubrid
+MALLOC_TRIM_THRESHOLD_=0
+PATH=/home/cubrid/CUBRID/bin:/usr/sbin:/home/cubrid/.local/bin:/home/cubrid/bin:/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PWD=/
+SHLVL=1
+USER=cubrid
+_=/usr/bin/env
+VERSION_PATH=11.4_latest
+## differences, no shell against bash -c
+14a15,17
+> PWD=/
+> SHLVL=1
+> _=/usr/bin/env
+## differences, bash -c against bash -lc
+3c3
+< CUBRID_DATABASES=/var/lib/cubrid/databases
+---
+> CUBRID_DATABASES=/home/cubrid/CUBRID/databases
+9a10
+> DEBUGINFOD_URLS=https://debuginfod.centos.org/ 
+10a12,13
+> HISTCONTROL=ignoredups
+> HISTSIZE=1000
+13,14c16,22
+< LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib
+< PATH=/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+---
+> LANG=C.UTF-8
+> LD_LIBRARY_PATH=/home/cubrid/CUBRID/lib:/home/cubrid/CUBRID/cci/lib:/home/cubrid/CUBRID/lib
+> LESSOPEN=||/usr/bin/lesspipe.sh %s
+> LOGNAME=cubrid
+> MAIL=/var/spool/mail/cubrid
+> MALLOC_TRIM_THRESHOLD_=0
+> PATH=/home/cubrid/CUBRID/bin:/usr/sbin:/home/cubrid/.local/bin:/home/cubrid/bin:/home/cubrid/CUBRID/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+16a25
+> USER=cubrid

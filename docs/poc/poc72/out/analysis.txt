@@ -1,0 +1,199 @@
+## trial-1-bash
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 328 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 332 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 332 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1012 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1012 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  === 2026-11-22T00:54:47.603Z writes: 219 ack, 0 unknown, last id 219
+  id lists: identical on all members
+  ha-0: 219 rows; 0 of 219 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 219 rows; 0 of 219 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 219 rows; 0 of 219 acknowledged ids missing; 0 rows not acknowledged
+## trial-2-bash
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1002 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1002 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  === 2026-11-22T00:59:03.315Z writes: 227 ack, 0 unknown, last id 227
+  id lists: identical on all members
+  ha-0: 227 rows; 0 of 227 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 227 rows; 0 of 227 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 227 rows; 0 of 227 acknowledged ids missing; 0 rows not acknowledged
+## trial-3-direct
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: fail
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: fail
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 315 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 319 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 319 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [final] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  2026-11-22T01:01:50.364Z poc72-ha-0 count: 106
+  2026-11-22T01:01:50.418Z poc72-ha-1 count: 39
+  2026-11-22T01:01:50.477Z poc72-ha-2 count: 106
+  === 2026-11-22T01:02:56.162Z writes: 227 ack, 0 unknown, last id 227
+  id lists: DIFFER
+  ha-0: 227 rows; 0 of 227 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 39 rows; 188 of 227 acknowledged ids missing (ids 40 to 227, contiguous); 0 rows not acknowledged
+  ha-2: 227 rows; 0 of 227 acknowledged ids missing; 0 rows not acknowledged
+## trial-4-direct
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: fail
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: fail
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 319 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 323 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 323 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [final] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  2026-11-22T01:16:03.060Z poc72-ha-0 count: 107
+  2026-11-22T01:16:03.144Z poc72-ha-1 count: 39
+  2026-11-22T01:16:03.204Z poc72-ha-2 count: 107
+  === 2026-11-22T01:17:14.087Z writes: 238 ack, 0 unknown, last id 238
+  id lists: DIFFER
+  ha-0: 238 rows; 0 of 238 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 39 rows; 199 of 238 acknowledged ids missing (ids 40 to 238, contiguous); 0 rows not acknowledged
+  ha-2: 238 rows; 0 of 238 acknowledged ids missing; 0 rows not acknowledged
+## trial-5-sh
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 316 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 320 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 320 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  2026-11-22T01:31:15.319Z poc72-ha-0 count: 107
+  2026-11-22T01:31:15.392Z poc72-ha-1 count: 40
+  2026-11-22T01:31:15.461Z poc72-ha-2 count: 107
+  === 2026-11-22T01:32:25.457Z writes: 230 ack, 0 unknown, last id 230
+  id lists: identical on all members
+  ha-0: 230 rows; 0 of 230 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 230 rows; 0 of 230 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 230 rows; 0 of 230 acknowledged ids missing; 0 rows not acknowledged
+## trial-6-sh
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1015 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1024 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1015 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1024 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  2026-11-22T01:35:41.532Z poc72-ha-0 count: 113
+  2026-11-22T01:35:41.633Z poc72-ha-1 count: 44
+  2026-11-22T01:35:41.692Z poc72-ha-2 count: 113
+  === 2026-11-22T01:36:48.361Z writes: 221 ack, 0 unknown, last id 221
+  id lists: identical on all members
+  ha-0: 221 rows; 0 of 221 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 221 rows; 0 of 221 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 221 rows; 0 of 221 acknowledged ids missing; 0 rows not acknowledged
+## trial-7-login
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [30 s later, before start] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [15 s after start] count: copylogdb=3 applylogdb=3; copylogdb pid 1242 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 1268 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; on container fs: ['/home/cubrid/CUBRID/databases/appdb_poc72-ha-0']
+  [final] count: copylogdb=3 applylogdb=3; copylogdb pid 1242 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 1268 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; on container fs: ['/home/cubrid/CUBRID/databases/appdb_poc72-ha-0']
+  2026-11-22T01:40:42.880Z poc72-ha-0 count: 106
+  2026-11-22T01:40:42.936Z poc72-ha-1 count: 106
+  2026-11-22T01:40:42.996Z poc72-ha-2 count: 106
+  === 2026-11-22T01:41:48.878Z writes: 144 ack, 0 unknown, last id 144
+  id lists: identical on all members
+  ha-0: 144 rows; 0 of 144 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 144 rows; 0 of 144 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 144 rows; 0 of 144 acknowledged ids missing; 0 rows not acknowledged
+## trial-8-login
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [30 s later, before start] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [15 s after start] count: copylogdb=3 applylogdb=3; copylogdb pid 1237 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 1263 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; on container fs: ['/home/cubrid/CUBRID/databases/appdb_poc72-ha-0']
+  [final] count: copylogdb=3 applylogdb=3; copylogdb pid 1237 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 1263 -L /home/cubrid/CUBRID/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; on container fs: ['/home/cubrid/CUBRID/databases/appdb_poc72-ha-0']
+  2026-11-22T01:44:33.598Z poc72-ha-0 count: 97
+  2026-11-22T01:44:33.685Z poc72-ha-1 count: 97
+  2026-11-22T01:44:33.750Z poc72-ha-2 count: 97
+  === 2026-11-22T01:45:41.016Z writes: 140 ack, 0 unknown, last id 140
+  id lists: identical on all members
+  ha-0: 140 rows; 0 of 140 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 140 rows; 0 of 140 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 140 rows; 0 of 140 acknowledged ids missing; 0 rows not acknowledged
+## trial-9-bash
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 318 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 322 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1013 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1022 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1013 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1022 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  2026-11-22T01:49:13.987Z poc72-ha-0 count: 109
+  2026-11-22T01:49:14.075Z poc72-ha-1 count: 40
+  2026-11-22T01:49:14.134Z poc72-ha-2 count: 109
+  === 2026-11-22T01:50:20.038Z writes: 232 ack, 0 unknown, last id 232
+  id lists: identical on all members
+  ha-0: 232 rows; 0 of 232 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 232 rows; 0 of 232 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 232 rows; 0 of 232 acknowledged ids missing; 0 rows not acknowledged
+## trial-10-bash
+  cubrid heartbeat copylogdb stop: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb stop: rc=0 ++ cubrid heartbeat applylogdb: success
+  cubrid heartbeat copylogdb start: rc=0 ++ cubrid heartbeat copylogdb: success
+  cubrid heartbeat applylogdb start: rc=0 ++ cubrid heartbeat applylogdb: success
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1004 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1012 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1004 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1012 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  2026-11-22T01:53:13.362Z poc72-ha-0 count: 108
+  2026-11-22T01:53:13.451Z poc72-ha-1 count: 40
+  2026-11-22T01:53:13.566Z poc72-ha-2 count: 108
+  === 2026-11-22T01:54:20.063Z writes: 231 ack, 0 unknown, last id 231
+  id lists: identical on all members
+  ha-0: 231 rows; 0 of 231 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 231 rows; 0 of 231 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 231 rows; 0 of 231 acknowledged ids missing; 0 rows not acknowledged
+## trial-11-direct-pwd
+  [before] count: copylogdb=2 applylogdb=2; copylogdb pid 317 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after copylogdb stop] count: copylogdb=1 applylogdb=2; copylogdb of ha-0's log: none; applylogdb pid 321 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /home/cubrid
+  [after applylogdb stop] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [30 s later, before start] count: copylogdb=1 applylogdb=1; copylogdb of ha-0's log: none; applylogdb of ha-0's log: none
+  [15 s after start] count: copylogdb=2 applylogdb=2; copylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  [final] count: copylogdb=2 applylogdb=2; copylogdb pid 1011 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /; applylogdb pid 1020 -L /var/lib/cubrid/databases/appdb_poc72-ha-0 cwd /
+  2026-11-22T01:58:08.610Z poc72-ha-0 count: 110
+  2026-11-22T01:58:08.669Z poc72-ha-1 count: 42
+  2026-11-22T01:58:08.729Z poc72-ha-2 count: 110
+  === 2026-11-22T01:59:14.564Z writes: 233 ack, 0 unknown, last id 233
+  id lists: identical on all members
+  ha-0: 233 rows; 0 of 233 acknowledged ids missing; 0 rows not acknowledged
+  ha-1: 233 rows; 0 of 233 acknowledged ids missing; 0 rows not acknowledged
+  ha-2: 233 rows; 0 of 233 acknowledged ids missing; 0 rows not acknowledged

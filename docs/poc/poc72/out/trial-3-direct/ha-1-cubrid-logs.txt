@@ -1,0 +1,102 @@
+##### appdb@poc72-ha-0_copylogdb.err
+
+Time: 11/22/26 01:00:24.244 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 315) connected to database server 'appdb@poc72-ha-0' on the host 'poc72-ha-0' (port 1523).
+
+Time: 11/22/26 01:00:24.290 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/22/26 01:00:24.309 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'na' to 'to-be-active'. 
+
+Time: 11/22/26 01:00:37.632 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 4
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/22/26 01:01:13.756 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1735 ERROR CODE = -1037, Tran = 3, EID = 5
+log writer: log writer shut itself down by signal.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/22/26 01:01:51.586 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 853 ERROR CODE = -116, Tran = -1, EID = 1
+Database "appdb@poc72-ha-0" is unknown, or the file "databases.txt" cannot be accessed.
+
+*** The previous error message is the last one. ***
+
+##### appdb@localhost_applylogdb_appdb_poc72-ha-0.err
+
+Time: 11/22/26 01:00:24.256 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 319) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/22/26 01:00:24.501 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 3, EID = 2
+log applier: log applier started. required LSA: 145|10248. last committed LSA: 145|10344. last committed repl LSA: 145|10248.
+
+Time: 11/22/26 01:00:24.501 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'idle' to 'to-be-active'. 
+
+Time: 11/22/26 01:00:24.502 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 4
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|12408. 
+
+Time: 11/22/26 01:00:37.718 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 5
+HA generic: change the state of HA server (appdb@poc72-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/22/26 01:01:16.922 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8682 ERROR CODE = -1036, Tran = 3, EID = 6
+log applier: log applier shut itself down by signal.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/22/26 01:02:01.712 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 853 ERROR CODE = -116, Tran = -1, EID = 1
+Database "appdb@localhost" is unknown, or the file "databases.txt" cannot be accessed.
+
+*** The previous error message is the last one. ***
+
+##### poc72-ha-1_master.err
+
+Time: 11/22/26 01:00:20.197 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 5256  CODE = -986, Tran = -1, EID = 1
+CUBRID heartbeat feature started. 
+
+Time: 11/22/26 01:00:21.197 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6620 ERROR CODE = -990, Tran = -1, EID = 2
+Command execution: activate. Failure. (CUBRID heartbeat feature already activated)
+
+Time: 11/22/26 01:00:22.256 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 3
+Process event: Registered as local process entries. Success (pid:55, state:registered_and_standby, args:cub_server appdb )
+
+Time: 11/22/26 01:00:24.242 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 4
+Process event: Registered as local process entries. Success (pid:315, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:00:24.248 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 5
+Process event: Registered as local process entries. Success (pid:317, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 -m sync appdb@poc72-ha-2 )
+
+Time: 11/22/26 01:00:24.254 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 6
+Process event: Registered as local process entries. Success (pid:319, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:00:24.262 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 7
+Process event: Registered as local process entries. Success (pid:321, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-2 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:01:13.636 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 8
+Command execution: deregister. Success. (args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:01:16.919 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 9
+Command execution: deregister. Success. (args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:01:51.585 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 10
+Process event: Registered as local process entries. Success (pid:1011, state:registered, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:01:51.588 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4146 ERROR CODE = -989, Tran = -1, EID = 11
+Process event: Process failure detected. (pid:1011, args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:02:00.619 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 12
+Command execution: deregister. Success. (args:cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 -m sync appdb@poc72-ha-0 )
+
+Time: 11/22/26 01:02:01.712 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 13
+Process event: Registered as local process entries. Success (pid:1023, state:registered, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:02:01.713 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4146 ERROR CODE = -989, Tran = -1, EID = 14
+Process event: Process failure detected. (pid:1023, args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+Time: 11/22/26 01:02:10.717 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6435  CODE = -990, Tran = -1, EID = 15
+Command execution: deregister. Success. (args:cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc72-ha-0 --max-mem-size=500 appdb@localhost )
+
+*** The previous error message is the last one. ***
+
