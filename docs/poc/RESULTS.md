@@ -6979,3 +6979,32 @@ Separately, the slave watchers read `-1` 32 times and `-2` 5 times this way, ove
 
 **Consequences.**
 - **#985:** a runbook restart could be given in one verified form, `kubectl exec <pod> -c <container> -- bash -c 'cubrid heartbeat ...'`, together with a check of the processes and the rows afterwards, because the commands' exit code was 0 also when they failed. The login-shell and no-shell forms are unsafe on this image. `docs/observability.md` is not changed here: for v0.1 the maintainers decided on 2026-11-18 that the runbook gives no in-place restart, and #985 is a backlog issue. The proposed runbook text is on #985. Verifying the form with `kubectl exec` on a cluster, and on a copier that is stuck rather than healthy, remains open.
+
+## POC-73 — whether DBA password values with SQL comment or statement separator characters are set whole by the Instance Manager's statement, and whether a log records them, in Docker on 11.4.7.1995 (#801) — **observation: yes, set whole, and no log held them; seven values of 24 to 26 ASCII bytes with `a;b`, `x--y`, `p//q`, `/*c*/`, a trailing `--`, `';--` and `*/` alone were set by the Instance Manager's exact `ALTER USER dba PASSWORD '<value, single quotes doubled>';` on csql's stdin, both fed directly and through `apply-dba-password`; each value logged in on the pseudo-terminal and in client mode, and the value cut at its first special sequence, without its last character or with it changed was refused; csql printed only `Execute OK.` and `Committed.`; after the sets, logins and two failing `ALTER USER` statements per value, no value was found in `$CUBRID/log` (with the server error logs), the database root, `/tmp`, `/home/cubrid` or `/var/lib`**
+
+**Question (#801).** Open question 1 of the advisory security review of the DBA password path: POC-64 did not test values with `;`, `--`, `//`, `/*` or `*/`. With the statement exactly as `internal/instancemanager/dbapassword.go` builds it, is each such value stored whole, so that a login with it succeeds and a login with a cut value fails? Is the value then found in `$CUBRID/log`, the server's error log or csql's output? This is one engine build in Docker, not a general CUBRID guarantee.
+
+**Environment (2026-11-22 17:52:06Z to 18:47:22Z UTC).** Docker on a shared, loaded linux/amd64 host (load average about 14 to 16 on 6 CPUs). The image POC-64 used, the VM lab's Instance Manager image `sha256:2c3013ba9df919499135dc5fa5d1d43ea2b2641dba1828e8d9baa49009e61a89`, CUBRID 11.4.7.1995, with the Instance Manager binary built from `main` at `162039c8` (SHA-256 `8e255fc8…2997`) copied in; `no_backslash_escapes=yes` as the entrypoint pins it. Standalone databases only. No Kubernetes, no Operator, no HA, no VM lab.
+
+**Method.** `docs/poc/poc73/` (its `README.md` is the full record). For each value two new databases. On the first, two failing `ALTER USER` statements carrying the value (unknown user; a syntax error after the literal), then the product's statement fed by `direct.py`, which shows csql's output with the value masked, because the Instance Manager sends that output to an unlinked file. On the second, `instance-manager apply-dba-password`. On both, `check-dba-password` with the value and with three near values (cut before the first special sequence, last character removed, last character changed), and the empty login; on the second, a server start and the running manager's `GET /v1/dba-password`. Then POC-64's `grep -rlaF -f` of every value over the database root, `$CUBRID/log`, `/tmp`, `/home/cubrid` and `/var/lib`, each checked to hold files, with a positive control per value.
+
+**Results.**
+
+| Value holds | Bytes | direct statement (csql exit, ERROR lines) | value logs in, both databases | cut / prefix / changed value | `apply-dba-password` | client mode |
+|---|---|---|---|---|---|---|
+| `a;b` | 26 | 0, 0 | yes | refused (exit 3) each | 0, `dba_password_applied` | `Matches` |
+| `x--y` | 25 | 0, 0 | yes | refused each | same | `Matches` |
+| `p//q` | 25 | 0, 0 | yes | refused each | same | `Matches` |
+| `/*c*/` | 24 | 0, 0 | yes | refused each | same | `Matches` |
+| ends in `--` | 25 | 0, 0 | yes | refused each | same | `Matches` |
+| `';--` | 25 | 0, 0 | yes | refused each | same | `Matches` |
+| `*/` alone | 24 | 0, 0 | yes | refused each | same | `Matches` |
+
+- **No value failed:** no statement error, no wrong stored password, no login mismatch.
+- **csql output:** for the product's statement, `Execute OK.` and `Committed.` with timings for every value, without the value; each of the 14 failing statements printed one ERROR line without the value and set no password.
+- **Logs and disk:** the five paths (database root, `$CUBRID/log`, `/tmp`, `/home/cubrid`, `/var/lib`) held 100, 145, 12, 678 and 40 regular files; `$CUBRID/log` held the seven started servers' error logs under `log/server/`, `cub_server.err`, `cub_client.err`, the `createdb` error logs, `cubrid_utility.log` and the PL server logs. All 35 searches found no value with no scan error, and all 7 positive controls were found.
+
+**What this does not show.** What the engine logs for a statement that it does split or end early: none did here, and only the two kinds of failing statements above were seen not to log the value. `-C` ALTERs, HA and its copied logs, the Brokers, non-ASCII values with these characters, `no_backslash_escapes=no`, other builds or locales, Kind or the VM lab. One run of each case.
+
+**Consequences.**
+- **#801:** open question 1 of the advisory security review has a local answer for these seven values on this build: they are set whole and confirmed, and no searched log holds them. No product change follows from this POC.

@@ -1,0 +1,52 @@
+== trailing-dashes direct db=db_trailingdasd start 2026-11-22T18:21:38Z
+
+createdb-db_trailingdasd rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+direct-alter csql_rc=0 error_lines=0 output_holds_value=False output_bytes=54
+  csql| Execute OK. (0.000000 sec) Committed. (0.255998 sec) 
+direct-alter rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasd","event":"command","command":"csql -u dba -S db_trailingdasd -c SELECT 1","durationMs":4451,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasd","event":"command","command":"csql -u dba -S db_trailingdasd -c SELECT 1","durationMs":5961,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasd","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+== trailing-dashes product db=db_trailingdasp start 2026-11-22T18:24:36Z
+
+createdb-db_trailingdasp rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp -c SELECT 1","durationMs":4450,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp","durationMs":3726,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp -c SELECT 1","durationMs":3218,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp -c SELECT 1","durationMs":6005,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp -c SELECT 1","durationMs":5066,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"command","command":"csql -u dba -S db_trailingdasp -c SELECT 1","durationMs":8308,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_trailingdasp","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+== trailing-dashes PASS end 2026-11-22T18:28:02Z

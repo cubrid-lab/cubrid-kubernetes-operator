@@ -1,0 +1,266 @@
+start 2026-11-22T18:40:35Z
+path /home/cubrid/CUBRID/databases regular_files=100
+path /home/cubrid/CUBRID/log regular_files=145
+path /tmp regular_files=12
+path /home/cubrid regular_files=678
+path /var/lib regular_files=40
+files under $CUBRID/log:
+/home/cubrid/CUBRID/log:
+total 240
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:00 cub_client.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 17:53 cub_server.access
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 17:53 cub_server.err
+-rw-rw-r-- 1 cubrid cubrid  4140 Nov 22 18:40 cubrid_utility.log
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:14 db_blockcommend_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:16 db_blockcommend_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:17 db_blockcommenp_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:20 db_blockcommenp_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:34 db_commentendod_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:36 db_commentendod_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:37 db_commentendop_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:39 db_commentendop_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:01 db_doubledashd_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14134 Nov 22 18:03 db_doubledashd_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:04 db_doubledashp_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14134 Nov 22 18:06 db_doubledashp_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:08 db_doubleslashd_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:09 db_doubleslashd_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:11 db_doubleslashp_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:12 db_doubleslashp_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:28 db_quotesemidad_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:30 db_quotesemidad_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:31 db_quotesemidap_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:33 db_quotesemidap_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 17:53 db_semicolond_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14133 Nov 22 17:55 db_semicolond_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 17:57 db_semicolonp_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14133 Nov 22 17:59 db_semicolonp_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:21 db_trailingdasd_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:23 db_trailingdasd_createdb.err
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:24 db_trailingdasp_createdb.access
+-rw-rw-r-- 1 cubrid cubrid 14135 Nov 22 18:26 db_trailingdasp_createdb.err
+drwxr-xr-x 2 cubrid cubrid  4096 Nov 22 18:39 pl
+-rw-rw-r-- 1 cubrid cubrid     0 Nov 22 18:00 poc-dbapw-sqlchars_master.err
+drwxrwxr-x 2 cubrid cubrid  4096 Nov 22 18:40 server
+
+/home/cubrid/CUBRID/log/pl:
+total 116
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:16 db_blockcommend_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:16 db_blockcommend_pl.err
+-rw-r--r-- 1 cubrid cubrid 3996 Nov 22 18:17 db_blockcommend_pl.log
+-rw------- 1 cubrid cubrid  333 Nov 22 18:17 db_blockcommend_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 18:17 db_blockcommend_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:16 db_blockcommend_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:20 db_blockcommenp_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:20 db_blockcommenp_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4662 Nov 22 18:21 db_blockcommenp_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:20 db_blockcommenp_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:36 db_commentendod_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:36 db_commentendod_pl.err
+-rw-r--r-- 1 cubrid cubrid 4329 Nov 22 18:37 db_commentendod_pl.log
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:36 db_commentendod_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:39 db_commentendop_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:39 db_commentendop_pl.err
+-rw-rw-r-- 1 cubrid cubrid 3663 Nov 22 18:40 db_commentendop_pl.log
+-rw------- 1 cubrid cubrid  999 Nov 22 18:40 db_commentendop_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 18:39 db_commentendop_pl.log.1.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:39 db_commentendop_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:03 db_doubledashd_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:03 db_doubledashd_pl.err
+-rw-r--r-- 1 cubrid cubrid 4329 Nov 22 18:04 db_doubledashd_pl.log
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:03 db_doubledashd_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:06 db_doubledashp_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:06 db_doubledashp_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4329 Nov 22 18:07 db_doubledashp_pl.log
+-rw-rw-r-- 1 cubrid cubrid  333 Nov 22 18:07 db_doubledashp_pl.log.1
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:07 db_doubledashp_pl.log.1.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:06 db_doubledashp_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:09 db_doubleslashd_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:09 db_doubleslashd_pl.err
+-rw-r--r-- 1 cubrid cubrid 3996 Nov 22 18:10 db_doubleslashd_pl.log
+-rw------- 1 cubrid cubrid  333 Nov 22 18:10 db_doubleslashd_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 18:10 db_doubleslashd_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:09 db_doubleslashd_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:12 db_doubleslashp_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:12 db_doubleslashp_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4662 Nov 22 18:14 db_doubleslashp_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:12 db_doubleslashp_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:30 db_quotesemidad_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:30 db_quotesemidad_pl.err
+-rw-r--r-- 1 cubrid cubrid 3996 Nov 22 18:31 db_quotesemidad_pl.log
+-rw------- 1 cubrid cubrid  333 Nov 22 18:31 db_quotesemidad_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 18:31 db_quotesemidad_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:30 db_quotesemidad_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:33 db_quotesemidap_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:33 db_quotesemidap_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4662 Nov 22 18:34 db_quotesemidap_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:33 db_quotesemidap_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 17:55 db_semicolond_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 17:55 db_semicolond_pl.err
+-rw-r--r-- 1 cubrid cubrid 3663 Nov 22 17:57 db_semicolond_pl.log
+-rw------- 1 cubrid cubrid  666 Nov 22 17:57 db_semicolond_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 17:56 db_semicolond_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 17:56 db_semicolond_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 17:59 db_semicolonp_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 17:59 db_semicolonp_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4662 Nov 22 18:01 db_semicolonp_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 17:59 db_semicolonp_pl.log.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:23 db_trailingdasd_pl.access
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:23 db_trailingdasd_pl.err
+-rw-r--r-- 1 cubrid cubrid 3996 Nov 22 18:24 db_trailingdasd_pl.log
+-rw------- 1 cubrid cubrid  333 Nov 22 18:23 db_trailingdasd_pl.log.1
+-rw------- 1 cubrid cubrid    0 Nov 22 18:23 db_trailingdasd_pl.log.1.lck
+-rw-r--r-- 1 cubrid cubrid    0 Nov 22 18:23 db_trailingdasd_pl.log.lck
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:26 db_trailingdasp_pl.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:26 db_trailingdasp_pl.err
+-rw-rw-r-- 1 cubrid cubrid 4662 Nov 22 18:27 db_trailingdasp_pl.log
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 22 18:26 db_trailingdasp_pl.log.lck
+
+/home/cubrid/CUBRID/log/server:
+total 140
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:21 db_blockcommenp_20261122_1821.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:21 db_blockcommenp_20261122_1821.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:21 db_blockcommenp_20261122_1821.event
+lrwxrwxrwx 1 cubrid cubrid  67 Nov 22 18:21 db_blockcommenp_latest.access -> /home/cubrid/CUBRID/log/server/db_blockcommenp_20261122_1821.access
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:21 db_blockcommenp_latest.err -> /home/cubrid/CUBRID/log/server/db_blockcommenp_20261122_1821.err
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:21 db_blockcommenp_latest.event -> /home/cubrid/CUBRID/log/server/db_blockcommenp_20261122_1821.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:40 db_commentendop_20261122_1840.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:40 db_commentendop_20261122_1840.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:40 db_commentendop_20261122_1840.event
+lrwxrwxrwx 1 cubrid cubrid  67 Nov 22 18:40 db_commentendop_latest.access -> /home/cubrid/CUBRID/log/server/db_commentendop_20261122_1840.access
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:40 db_commentendop_latest.err -> /home/cubrid/CUBRID/log/server/db_commentendop_20261122_1840.err
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:40 db_commentendop_latest.event -> /home/cubrid/CUBRID/log/server/db_commentendop_20261122_1840.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:08 db_doubledashp_20261122_1807.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:08 db_doubledashp_20261122_1807.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:07 db_doubledashp_20261122_1807.event
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:07 db_doubledashp_latest.access -> /home/cubrid/CUBRID/log/server/db_doubledashp_20261122_1807.access
+lrwxrwxrwx 1 cubrid cubrid  63 Nov 22 18:07 db_doubledashp_latest.err -> /home/cubrid/CUBRID/log/server/db_doubledashp_20261122_1807.err
+lrwxrwxrwx 1 cubrid cubrid  65 Nov 22 18:07 db_doubledashp_latest.event -> /home/cubrid/CUBRID/log/server/db_doubledashp_20261122_1807.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:14 db_doubleslashp_20261122_1814.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:14 db_doubleslashp_20261122_1814.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:14 db_doubleslashp_20261122_1814.event
+lrwxrwxrwx 1 cubrid cubrid  67 Nov 22 18:14 db_doubleslashp_latest.access -> /home/cubrid/CUBRID/log/server/db_doubleslashp_20261122_1814.access
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:14 db_doubleslashp_latest.err -> /home/cubrid/CUBRID/log/server/db_doubleslashp_20261122_1814.err
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:14 db_doubleslashp_latest.event -> /home/cubrid/CUBRID/log/server/db_doubleslashp_20261122_1814.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:34 db_quotesemidap_20261122_1834.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:34 db_quotesemidap_20261122_1834.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:34 db_quotesemidap_20261122_1834.event
+lrwxrwxrwx 1 cubrid cubrid  67 Nov 22 18:34 db_quotesemidap_latest.access -> /home/cubrid/CUBRID/log/server/db_quotesemidap_20261122_1834.access
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:34 db_quotesemidap_latest.err -> /home/cubrid/CUBRID/log/server/db_quotesemidap_20261122_1834.err
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:34 db_quotesemidap_latest.event -> /home/cubrid/CUBRID/log/server/db_quotesemidap_20261122_1834.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:01 db_semicolonp_20261122_1801.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:01 db_semicolonp_20261122_1801.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:01 db_semicolonp_20261122_1801.event
+lrwxrwxrwx 1 cubrid cubrid  65 Nov 22 18:01 db_semicolonp_latest.access -> /home/cubrid/CUBRID/log/server/db_semicolonp_20261122_1801.access
+lrwxrwxrwx 1 cubrid cubrid  62 Nov 22 18:01 db_semicolonp_latest.err -> /home/cubrid/CUBRID/log/server/db_semicolonp_20261122_1801.err
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:01 db_semicolonp_latest.event -> /home/cubrid/CUBRID/log/server/db_semicolonp_20261122_1801.event
+-rw-rw-r-- 1 cubrid cubrid 662 Nov 22 18:27 db_trailingdasp_20261122_1827.access
+-rw-rw-r-- 1 cubrid cubrid 434 Nov 22 18:28 db_trailingdasp_20261122_1827.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 22 18:27 db_trailingdasp_20261122_1827.event
+lrwxrwxrwx 1 cubrid cubrid  67 Nov 22 18:27 db_trailingdasp_latest.access -> /home/cubrid/CUBRID/log/server/db_trailingdasp_20261122_1827.access
+lrwxrwxrwx 1 cubrid cubrid  64 Nov 22 18:27 db_trailingdasp_latest.err -> /home/cubrid/CUBRID/log/server/db_trailingdasp_20261122_1827.err
+lrwxrwxrwx 1 cubrid cubrid  66 Nov 22 18:27 db_trailingdasp_latest.event -> /home/cubrid/CUBRID/log/server/db_trailingdasp_20261122_1827.event
+server and csql error logs:
+  /home/cubrid/CUBRID/log/cub_client.err bytes=0
+  /home/cubrid/CUBRID/log/cub_server.err bytes=0
+  /home/cubrid/CUBRID/log/db_blockcommend_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_blockcommenp_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_commentendod_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_commentendop_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_doubledashd_createdb.err bytes=14134
+  /home/cubrid/CUBRID/log/db_doubledashp_createdb.err bytes=14134
+  /home/cubrid/CUBRID/log/db_doubleslashd_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_doubleslashp_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_quotesemidad_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_quotesemidap_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_semicolond_createdb.err bytes=14133
+  /home/cubrid/CUBRID/log/db_semicolonp_createdb.err bytes=14133
+  /home/cubrid/CUBRID/log/db_trailingdasd_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/db_trailingdasp_createdb.err bytes=14135
+  /home/cubrid/CUBRID/log/pl/db_blockcommend_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_blockcommenp_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_commentendod_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_commentendop_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_doubledashd_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_doubledashp_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_doubleslashd_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_doubleslashp_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_quotesemidad_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_quotesemidap_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_semicolond_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_semicolonp_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_trailingdasd_pl.err bytes=0
+  /home/cubrid/CUBRID/log/pl/db_trailingdasp_pl.err bytes=0
+  /home/cubrid/CUBRID/log/poc-dbapw-sqlchars_master.err bytes=0
+  /home/cubrid/CUBRID/log/server/db_blockcommenp_20261122_1821.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_blockcommenp_latest.err bytes=64
+  /home/cubrid/CUBRID/log/server/db_commentendop_20261122_1840.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_commentendop_latest.err bytes=64
+  /home/cubrid/CUBRID/log/server/db_doubledashp_20261122_1807.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_doubledashp_latest.err bytes=63
+  /home/cubrid/CUBRID/log/server/db_doubleslashp_20261122_1814.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_doubleslashp_latest.err bytes=64
+  /home/cubrid/CUBRID/log/server/db_quotesemidap_20261122_1834.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_quotesemidap_latest.err bytes=64
+  /home/cubrid/CUBRID/log/server/db_semicolonp_20261122_1801.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_semicolonp_latest.err bytes=62
+  /home/cubrid/CUBRID/log/server/db_trailingdasp_20261122_1827.err bytes=434
+  /home/cubrid/CUBRID/log/server/db_trailingdasp_latest.err bytes=64
+  /home/cubrid/CUBRID/log/cubrid_utility.log bytes=4140
+  /home/cubrid/CUBRID/log/pl/db_blockcommend_pl.log bytes=3996
+  /home/cubrid/CUBRID/log/pl/db_blockcommenp_pl.log bytes=4662
+  /home/cubrid/CUBRID/log/pl/db_commentendod_pl.log bytes=4329
+  /home/cubrid/CUBRID/log/pl/db_commentendop_pl.log bytes=3663
+  /home/cubrid/CUBRID/log/pl/db_doubledashd_pl.log bytes=4329
+  /home/cubrid/CUBRID/log/pl/db_doubledashp_pl.log bytes=4329
+  /home/cubrid/CUBRID/log/pl/db_doubleslashd_pl.log bytes=3996
+  /home/cubrid/CUBRID/log/pl/db_doubleslashp_pl.log bytes=4662
+  /home/cubrid/CUBRID/log/pl/db_quotesemidad_pl.log bytes=3996
+  /home/cubrid/CUBRID/log/pl/db_quotesemidap_pl.log bytes=4662
+  /home/cubrid/CUBRID/log/pl/db_semicolond_pl.log bytes=3663
+  /home/cubrid/CUBRID/log/pl/db_semicolonp_pl.log bytes=4662
+  /home/cubrid/CUBRID/log/pl/db_trailingdasd_pl.log bytes=3996
+  /home/cubrid/CUBRID/log/pl/db_trailingdasp_pl.log bytes=4662
+block-comment positive_control=found
+block-comment /home/cubrid/CUBRID/databases files_holding_value=0
+block-comment /home/cubrid/CUBRID/log files_holding_value=0
+block-comment /tmp files_holding_value=0
+block-comment /home/cubrid files_holding_value=0
+block-comment /var/lib files_holding_value=0
+comment-end-only positive_control=found
+comment-end-only /home/cubrid/CUBRID/databases files_holding_value=0
+comment-end-only /home/cubrid/CUBRID/log files_holding_value=0
+comment-end-only /tmp files_holding_value=0
+comment-end-only /home/cubrid files_holding_value=0
+comment-end-only /var/lib files_holding_value=0
+double-dash positive_control=found
+double-dash /home/cubrid/CUBRID/databases files_holding_value=0
+double-dash /home/cubrid/CUBRID/log files_holding_value=0
+double-dash /tmp files_holding_value=0
+double-dash /home/cubrid files_holding_value=0
+double-dash /var/lib files_holding_value=0
+double-slash positive_control=found
+double-slash /home/cubrid/CUBRID/databases files_holding_value=0
+double-slash /home/cubrid/CUBRID/log files_holding_value=0
+double-slash /tmp files_holding_value=0
+double-slash /home/cubrid files_holding_value=0
+double-slash /var/lib files_holding_value=0
+quote-semi-dash positive_control=found
+quote-semi-dash /home/cubrid/CUBRID/databases files_holding_value=0
+quote-semi-dash /home/cubrid/CUBRID/log files_holding_value=0
+quote-semi-dash /tmp files_holding_value=0
+quote-semi-dash /home/cubrid files_holding_value=0
+quote-semi-dash /var/lib files_holding_value=0
+semicolon positive_control=found
+semicolon /home/cubrid/CUBRID/databases files_holding_value=0
+semicolon /home/cubrid/CUBRID/log files_holding_value=0
+semicolon /tmp files_holding_value=0
+semicolon /home/cubrid files_holding_value=0
+semicolon /var/lib files_holding_value=0
+trailing-dashes positive_control=found
+trailing-dashes /home/cubrid/CUBRID/databases files_holding_value=0
+trailing-dashes /home/cubrid/CUBRID/log files_holding_value=0
+trailing-dashes /tmp files_holding_value=0
+trailing-dashes /home/cubrid files_holding_value=0
+trailing-dashes /var/lib files_holding_value=0
+end 2026-11-22T18:47:22Z PASS

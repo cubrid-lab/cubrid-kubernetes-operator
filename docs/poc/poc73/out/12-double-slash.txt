@@ -1,0 +1,52 @@
+== double-slash direct db=db_doubleslashd start 2026-11-22T18:08:08Z
+
+createdb-db_doubleslashd rc=0
+failing-alter=nouser csql_rc=0 error_lines=1 output_holds_value=False
+failing-alter=syntax csql_rc=0 error_lines=1 output_holds_value=False
+failing-alters rc=0
+
+empty-login-after-failing-alters rc=0
+direct-alter csql_rc=0 error_lines=0 output_holds_value=False output_bytes=54
+  csql| Execute OK. (0.000000 sec) Committed. (0.363999 sec) 
+direct-alter rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashd","event":"command","command":"csql -u dba -S db_doubleslashd -c SELECT 1","durationMs":4125,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashd","event":"command","command":"csql -u dba -S db_doubleslashd -c SELECT 1","durationMs":5776,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashd","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+== double-slash product db=db_doubleslashp start 2026-11-22T18:11:02Z
+
+createdb-db_doubleslashp rc=0
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp -c SELECT 1","durationMs":5590,"exitCode":0}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp","durationMs":5829,"exitCode":0}
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp -c SELECT 1","durationMs":4442,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp -c SELECT 1","durationMs":7241,"exitCode":0}
+{"level":"INFO","msg":"Set the DBA password","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"dba_password_applied"}
+apply-dba-password rc=0
+{"level":"WARN","msg":"Command failed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp -c SELECT 1","durationMs":5573,"exitCode":1,"err":"exit status 1","outputTail":"ERROR: Incorrect or missing password."}
+{"level":"INFO","msg":"Ran command","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"command","command":"csql -u dba -S db_doubleslashp -c SELECT 1","durationMs":5908,"exitCode":0}
+{"level":"INFO","msg":"DBA password is already the requested one; it was not changed","component":"instance-manager","member":"poc-dbapw-sqlchars","database":"db_doubleslashp","event":"dba_password_already_set"}
+check-dba-password rc=0
+
+check-dba-password-with-changed-value rc=3
+
+check-dba-password-with-prefix-value rc=3
+
+check-dba-password-with-cut-value rc=3
+
+empty-login rc=1
+
+server-start rc=0
+client-mode-check answer={"state":"Matches"}
+
+manager-stop rc=0
+
+server-stop rc=0
+== double-slash PASS end 2026-11-22T18:14:21Z
