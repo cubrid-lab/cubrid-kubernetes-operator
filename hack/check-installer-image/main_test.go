@@ -26,6 +26,7 @@ const (
 	testManager  = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:v0.1.0"
 	testIM       = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:v0.1.0"
 	noDeployment = "0 controller-manager Deployments"
+	notParsed    = "not parsed as its own flag"
 	goodFlag     = "            - --instance-manager-image=" + testIM + "\n"
 )
 
@@ -134,10 +135,10 @@ spec:
 		// see --instance-manager-image here.
 		{name: "image flag consumed as another flag's value",
 			manifest: withArgs("--metrics-bind-address", "--instance-manager-image="+testIM),
-			want:     "not parsed as its own flag"},
+			want:     notParsed},
 		{name: "image flag consumed by a single-dash string flag",
 			manifest: withArgs("-watch-namespace", "--instance-manager-image="+testIM),
-			want:     "not parsed as its own flag"},
+			want:     notParsed},
 		{name: "string flag with an inline value, then the image flag",
 			manifest: withArgs("--metrics-bind-address=:8080", "--instance-manager-image="+testIM)},
 		{name: "boolean flag does not consume the image flag",
@@ -146,7 +147,7 @@ spec:
 			manifest: withArgs("--metrics-bind-address", ":8080", "--instance-manager-image="+testIM)},
 		{name: "invalid zap value is rejected like the manager does",
 			manifest: withArgs("--zap-log-level=bogus", "--instance-manager-image="+testIM),
-			want:     "not parsed as its own flag"},
+			want:     notParsed},
 		{name: "valid zap flags before the image flag",
 			manifest: withArgs("--zap-log-level=debug", "--zap-devel", "--instance-manager-image="+testIM)},
 		{name: "kubeconfig flag before the image flag",
@@ -156,9 +157,9 @@ spec:
 			want:     "built-in default"},
 		{name: "unknown flag fails closed",
 			manifest: withArgs("--no-such-flag=1", "--instance-manager-image="+testIM),
-			want:     "not parsed as its own flag"},
+			want:     notParsed},
 		{name: "positional argument before the image flag",
-			manifest: withArgs("stray", "--instance-manager-image="+testIM), want: "not parsed as its own flag"},
+			manifest: withArgs("stray", "--instance-manager-image="+testIM), want: notParsed},
 		{name: "no manager container", manifest: strings.Replace(goodDeployment, "- name: manager", "- name: other", 1),
 			want: "0 manager containers"},
 		{name: "two manager containers", manifest: goodDeployment + `        - name: manager
@@ -257,8 +258,8 @@ func TestManagerFlagsMatchManagerMain(t *testing.T) {
 	}
 	// Var and TextVar targets are not typed here; a consuming flag is a string.
 	kinds := map[string]string{
-		"String": "string", "Int": "int", "Bool": "bool", "Duration": "duration",
-		"Func": "string", "BoolFunc": "bool", "Var": "string", "TextVar": "string",
+		"String": kindString, "Int": kindInt, "Bool": kindBool, "Duration": kindDuration,
+		"Func": kindString, "BoolFunc": kindBool, "Var": kindString, "TextVar": kindString,
 	}
 	// Calls that do not register a flag.
 	notRegistration := map[string]bool{"Parse": true, "Parsed": true, "Args": true, "NArg": true, "Arg": true,

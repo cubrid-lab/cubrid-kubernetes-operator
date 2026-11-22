@@ -43,6 +43,12 @@ const (
 	exitFlagAbsent = 3
 
 	imageFlag = "instance-manager-image"
+
+	// Value kinds of the flags in managerFlags.
+	kindString   = "string"
+	kindInt      = "int"
+	kindDuration = "duration"
+	kindBool     = "bool"
 )
 
 // errFlagAbsent means the manager container does not set the Instance Manager
@@ -105,25 +111,25 @@ func imageFlagValues(args []string) ([]string, error) {
 // zap logging flags and --kubeconfig come from controller-runtime and are
 // registered from it in parsedImageFlag.
 var managerFlags = map[string]string{
-	"metrics-bind-address":              "string",
-	"health-probe-bind-address":         "string",
-	imageFlag:                           "string",
-	"broker-max-appl-servers":           "int",
-	"cluster-max-concurrent-reconciles": "int",
-	"instance-manager-backup-timeout":   "duration",
-	"instance-manager-restore-timeout":  "duration",
-	"watch-namespace":                   "string",
-	"operator-namespace":                "string",
-	"leader-elect":                      "bool",
-	"metrics-secure":                    "bool",
-	"webhook-cert-path":                 "string",
-	"webhook-cert-name":                 "string",
-	"webhook-cert-key":                  "string",
-	"webhook-port":                      "int",
-	"metrics-cert-path":                 "string",
-	"metrics-cert-name":                 "string",
-	"metrics-cert-key":                  "string",
-	"enable-http2":                      "bool",
+	"metrics-bind-address":              kindString,
+	"health-probe-bind-address":         kindString,
+	imageFlag:                           kindString,
+	"broker-max-appl-servers":           kindInt,
+	"cluster-max-concurrent-reconciles": kindInt,
+	"instance-manager-backup-timeout":   kindDuration,
+	"instance-manager-restore-timeout":  kindDuration,
+	"watch-namespace":                   kindString,
+	"operator-namespace":                kindString,
+	"leader-elect":                      kindBool,
+	"metrics-secure":                    kindBool,
+	"webhook-cert-path":                 kindString,
+	"webhook-cert-name":                 kindString,
+	"webhook-cert-key":                  kindString,
+	"webhook-port":                      kindInt,
+	"metrics-cert-path":                 kindString,
+	"metrics-cert-name":                 kindString,
+	"metrics-cert-key":                  kindString,
+	"enable-http2":                      kindBool,
 }
 
 // parsedImageFlag parses the manager's arguments the way its flag set does and
@@ -144,11 +150,11 @@ func parsedImageFlag(args []string) (string, int, error) {
 		switch {
 		case name == imageFlag:
 			fs.Func(name, "", func(v string) error { image = v; count++; return nil })
-		case kind == "bool":
+		case kind == kindBool:
 			fs.Bool(name, false, "")
-		case kind == "int":
+		case kind == kindInt:
 			fs.Int(name, 0, "")
-		case kind == "duration":
+		case kind == kindDuration:
 			fs.Duration(name, 0, "")
 		default:
 			fs.String(name, "", "")
