@@ -427,6 +427,17 @@ waive required failure evidence, or authorize a merge without maintainer directi
   maintainer reaches the lab is in
   [Reaching the multi-VM lab](./docs/testing/lab-access.md).
 
+## PR review outcomes
+
+Use the same decision labels for every PR, whether human-authored or AI-assisted:
+
+- **`APPROVE`** a reviewed, non-blocking change; optional suggestions can accompany approval instead of delaying it.
+- **`REQUEST_CHANGES`** for an actionable must-fix defect, with the affected code and required correction clearly identified.
+- **`COMMENT`** when asking a question or when a review is not yet decisive. The author cannot approve their own PR; never imply an AI review is an independent human approval.
+- Code approval and GitHub Actions **run approval** are separate. `action_required`, pending, failed or stale required CI checks do not permit merge, even if a code review is approved. Confirm final-head CI, resolved blocking findings, applicable independent/security/integration requirements and the maintainer's merge decision before merging.
+
+See [AGENTS.md — PR review outcomes](AGENTS.md#pr-review-outcomes-common-decision-rules). Existing repository-specific branch, release, security and required-review safeguards continue to apply.
+
 ## Unified PR Review Policy
 
 The same review process applies to human-only and AI-assisted
