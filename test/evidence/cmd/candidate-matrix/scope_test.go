@@ -105,6 +105,7 @@ func TestV01ScopeShowsUnregisteredVariantsAsUnmapped(t *testing.T) {
 		{"S13", unknownVariant},
 		{"S14", unknownVariant},
 		{"S15", unknownVariant},
+		{"S10", "slave"},
 		{"S00", "abrupt"},
 		{"S01", "complete"},
 		{"LAB01", "restart"},

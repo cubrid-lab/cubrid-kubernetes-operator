@@ -47,7 +47,7 @@ The automated checks pass only when every required variant is recorded by finish
 | S07 | slave-isolated | installed-ha-network-partition-slave-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
 | S07 | higher-rank-isolated | installed-ha-network-partition-higher-rank-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
 | S08 |  | - | MEASURE + SAFETY REVIEW | 0 | NO-GO | evidence not recorded: no registered result of this scenario exists, so no recorded run can prove it |
-| S10 |  | - | MUST PASS | 0 | NO-GO | evidence not recorded: no registered result of this scenario exists, so no recorded run can prove it |
+| S10 |  | ha-pvc-loss-rebuild | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | complete | installed-backup-complete | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | missing-destination | installed-backup-missing-destination | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | denied-credentials | installed-backup-denied-credentials | MUST PASS | 1 | GO | every record is Go (1) |
@@ -92,6 +92,7 @@ The automated checks pass only when every required variant is recorded by finish
 | candidate-kind-run | broker-failure-recovery-all-rw-pods (S05) | all-rw-brokers | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-kind-run | operator-failure-recovery-restart (S06) | restart | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-kind-run | operator-failure-recovery-absent-during-failover (S06) | absent-during-failover | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
+| candidate-kind-run | ha-pvc-loss-rebuild (S10) |  | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-kind-run | cluster-deletion-retention-retain (S13) | retain | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-kind-run | cluster-deletion-retention-delete (S13) | delete | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-kind-run | instance-manager-access-and-secret-protection (S14) |  | MUST PASS | PASS | PASS | GO | pass supported by its evidence |

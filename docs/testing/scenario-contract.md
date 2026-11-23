@@ -2740,6 +2740,25 @@ embedded S09 `clean` test must be disentangled before candidate acceptance.
 - **Data check:** all data rules on all three members, including rows written
   while the rebuild ran.
 - **Limits:** `rebuild_limit`.
+- **Kind result:** the member rebuild step of the Kind suite
+  (`test/e2e/member_rebuild_test.go`) records S10 without a variant. It
+  replaces a slave's data claim and Pod, and confirms the fault by a
+  claim with a new UID bound to a new volume, a new Pod, and a read-only
+  listing of the new Pod's database directory before the request that
+  shows neither the database's directory nor its `databases.txt` line. A
+  client keeps writing through the read-write Service from before the
+  request until the member answers as a slave again, and the step counts
+  the inserts answered between the rebuild's recorded acceptance and end.
+  It checks the data rules on all three members, including those rows,
+  and the rebuilt member's applier fail count. Of the never-events it
+  observes only that a request naming the master is refused, that the
+  rebuild names the requested slave, and that the master's and the other
+  slave's claims keep their UIDs; it does not observe whether the rebuilt
+  member was reported healthy before its data matched. With
+  `rebuild_limit` unset the result is `blocked` with `time_limit_unset`;
+  with it set, the result is also `blocked` when the listing could not be
+  made or no insert was acknowledged while the rebuild ran. The `kind`
+  lane does not require it.
 
 ### S11: backup, failure and restart
 
@@ -3373,7 +3392,7 @@ variable that holds a duration such as `45s` or `2m`:
 `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`,
 `E2E_QUARANTINED_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
 `E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT`,
-`E2E_OPERATOR_RESYNC_LIMIT` and `E2E_DELETE_LIMIT`. The value `0` or `unset` runs the scenario as a
+`E2E_OPERATOR_RESYNC_LIMIT`, `E2E_DELETE_LIMIT` and `E2E_REBUILD_LIMIT`. The value `0` or `unset` runs the scenario as a
 baseline, which is reported as `blocked`. A value that is not a duration,
 or is negative, stops the suite before it starts. The limit a scenario was
 judged by is in its entry of `summary.json`, with `unset` for one that has

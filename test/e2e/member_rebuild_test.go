@@ -32,6 +32,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -84,7 +85,7 @@ const memberRebuildLimit = 10 * time.Minute
 // nothing. The rebuild has to end Completed, the member has to answer as a
 // slave again with its ownership marker released, and every member and both
 // Services have to hold every acknowledged row, including the rows written
-// while the member was gone and after it was rebuilt.
+// while the member was gone, while it was rebuilt and after it was rebuilt.
 //
 // The rebuilt member's Instance Manager asks the source's Instance Manager
 // whether it is the active master before it restores and again before it
@@ -101,14 +102,31 @@ const memberRebuildLimit = 10 * time.Minute
 // member-rebuild/result.txt say which of the two the run took (#1058).
 //
 // The member's Pod and claim are replaced, and the step leaves the cluster
-// in the common starting state, which the next step verifies. It is not a
-// scenario of the contract and records nothing in the summary. It runs in
-// every full Kind run; E2E_LABEL_FILTER='ha-setup || member-rebuild' runs it
-// alone on a formed cluster.
+// in the common starting state, which the next step verifies. It records the
+// rebuild after the loss of a member's volume (scenario S10 of
+// docs/testing/scenario-contract.md) in the summary, judged by
+// rebuild_limit. That limit has no value yet, so the result is blocked with
+// time_limit_unset, and the kind lane does not require it. A client keeps
+// writing through the read-write Service while the rebuild runs, so the data
+// check includes rows written during it; with the limit set, the result is
+// still blocked when no such insert was acknowledged or when the new
+// volume's database directory could not be listed. It runs in every full
+// Kind run; E2E_LABEL_FILTER='ha-setup || member-rebuild' (or
+// ha-pvc-loss-rebuild) runs it alone on a formed cluster.
 func memberRebuildStep(r *haRun) {
 	const text = "rebuilds a slave that lost its storage on request, and the rebuilt member holds every acknowledged row"
-	It(text, Label("member-rebuild"), func() {
+	It(text, Label(evidence.KindLabels("S10", "member-rebuild")...), func() {
 		r.enter(nil)
+		result := evidence.Scenario{ID: "S10", Result: evidence.Fail, Reason: "a check of S10 failed; see the test output"}
+		// Recorded also when a check below fails.
+		defer func() { recordScenario(result) }()
+		operations := evidence.Operations{}
+		count := func(h workload.History) {
+			operations.Attempted += h.Counts[workload.Attempted]
+			operations.Acknowledged += h.Counts[workload.Acknowledged]
+			operations.Failed += h.Counts[workload.Failed]
+			operations.Unknown += h.Counts[workload.Unknown]
+		}
 		r.mu.Lock()
 		r.markers++
 		clients := fmt.Sprintf("rb%d", r.markers)
@@ -183,6 +201,7 @@ func memberRebuildStep(r *haRun) {
 		By("writing rows through the read-write Service before the storage is lost")
 		h, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"-before OPS=10")
 		Expect(err).NotTo(HaveOccurred())
+		count(h)
 		Expect(h.Counts[workload.Acknowledged]).To(BeNumerically(">", 0), "%v", h.Counts)
 
 		c, err := readCluster()
@@ -197,6 +216,23 @@ func memberRebuildStep(r *haRun) {
 		Expect(oldClaimUID).NotTo(BeEmpty(), "the claim %s", claim)
 		oldPodUID, err := podUID()
 		Expect(err).NotTo(HaveOccurred())
+		// The claims of the master and of the other slave are read before
+		// the loss and again after the data check: a rebuild that replaced
+		// or targeted one of them would change its UID.
+		otherClaims := func() map[string]string {
+			uids := map[string]string{}
+			for _, m := range r.members {
+				if m == member {
+					continue
+				}
+				uid, err := r.kubectlQuiet(context.Background(), "get", "pvc", "data-"+m, "-o", "jsonpath={.metadata.uid}")
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+				ExpectWithOffset(1, uid).NotTo(BeEmpty(), "the claim data-%s", m)
+				uids[m] = uid
+			}
+			return uids
+		}
+		otherClaimsBefore := otherClaims()
 
 		By("deleting the data claim and the Pod of " + member + ", as an administrator replacing lost storage")
 		// The claim is deleted first and stays until its Pod is gone; the
@@ -222,6 +258,52 @@ func memberRebuildStep(r *haRun) {
 			g.Expect(pod).NotTo(Equal(oldPodUID), "the Pod %s is replaced", member)
 			newClaimUID, newPodUID = uid, pod
 		}, 5*time.Minute, 3*time.Second).Should(Succeed())
+
+		By("listing the database directory of the new volume of " + member + " before any rebuild")
+		// The contract confirms the loss by a claim with a new UID that
+		// holds no database files. The new Pod's database directory is
+		// listed, read-only, before the rebuild is requested: the database
+		// has no directory there and no line in databases.txt. The container
+		// may not accept a command at first; when it accepts none within two
+		// minutes, the listing is not observed and the fault is not
+		// confirmed.
+		newVolume := "not observed: the database directory of the new Pod could not be listed"
+		listing := ""
+		const listScript = `d="$CUBRID_DATABASES"; db="$CUBRID_DB"; echo "directory: $d, database: $db"; ` +
+			`[ -n "$d" ] && [ -n "$db" ] || { echo "verdict: unknown"; exit 0; }; ls -lA "$d" 2>&1; ` +
+			`if [ -e "$d/$db" ] || grep -qs "^$db[[:space:]]" "$d/databases.txt"; ` +
+			`then echo "verdict: holds-database"; else echo "verdict: no-database"; fi`
+		listDeadline := time.Now().Add(2 * time.Minute)
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			out, err := r.kubectlQuiet(ctx, "exec", member, "-c", "cubrid", "--", "sh", "-c", listScript)
+			cancel()
+			if err == nil && strings.Contains(out, "verdict: no-database") {
+				newVolume, listing = "no database files", out
+				break
+			}
+			if err == nil && strings.Contains(out, "verdict: holds-database") {
+				newVolume, listing = "holds database files", out
+				break
+			}
+			if err == nil {
+				listing = out
+			}
+			if time.Now().After(listDeadline) {
+				break
+			}
+			time.Sleep(3 * time.Second)
+		}
+		listingFile := writeScenarioFile("member-rebuild/new-volume-before-rebuild.txt",
+			[]byte(newVolume+"\n"+listing))
+		_, _ = fmt.Fprintf(GinkgoWriter, "the new volume of %s before the rebuild: %s\n%s\n", member, newVolume, listing)
+		// The loss is confirmed by a claim with a new UID, bound to a new
+		// volume, a new Pod and, when it could be listed, a database
+		// directory without the database.
+		faultConfirmed := newVolume == "no database files"
+		result.FaultConfirmed = &faultConfirmed
+		Expect(newVolume).NotTo(Equal("holds database files"),
+			"the new claim of %s already holds the database before any rebuild", member)
 
 		releasedGeneration := ""
 		if outranksMaster {
@@ -298,6 +380,7 @@ func memberRebuildStep(r *haRun) {
 		By("writing rows while " + member + " has no database")
 		h, err = r.runWorkload(context.Background(), "CLIENT_ID="+clients+"-during OPS=10")
 		Expect(err).NotTo(HaveOccurred())
+		count(h)
 		Expect(h.Counts[workload.Acknowledged]).To(BeNumerically(">", 0), "%v", h.Counts)
 
 		By("waiting for the Operator to offer the rebuild of " + member)
@@ -345,6 +428,15 @@ func memberRebuildStep(r *haRun) {
 			// slave of the starting state normally is not one.
 			value += ":" + offer.Source
 		}
+		// The contract's data check includes rows written while the rebuild
+		// ran: a client keeps writing through the read-write Service from
+		// before the request until the member answers as a slave again, and
+		// its history joins the run's, so the data check below applies the
+		// data rules to its rows on every member.
+		By("starting a client that keeps writing through the read-write Service while " + member + " is rebuilt")
+		during := clients + "-rebuild"
+		r.startClient(during)
+		defer r.killClient(during)
 		requested := time.Now()
 		annotate(value)
 
@@ -394,16 +486,67 @@ func memberRebuildStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(annotations).NotTo(ContainSubstring(rebuildMemberAnnotation), "the consumed request is removed")
 		}, 3*time.Minute, 3*time.Second).Should(Succeed())
+		// What the fault left is undone once the member answers as a slave
+		// again on its new claim and the consumed request is removed.
+		cleanedUp := true
+		result.CleanupSucceeded = &cleanedUp
+
+		By("stopping the client that wrote while " + member + " was rebuilt")
+		events, history := r.stopClient(during)
+		count(history)
+		// The rebuild ran from its acceptance until its end, as the Operator
+		// recorded them. The API server keeps both to the second, so only
+		// inserts answered after the second that follows the acceptance and
+		// before the recorded end are counted as written while it ran.
+		writesWhileRebuilt := map[string]int{}
+		if done.EndTime != nil {
+			from, to := done.AcceptedTime.Add(time.Second), done.EndTime.Time
+			for _, e := range events {
+				if e.Op == workload.OpInsert && e.Event != workload.Attempted && e.T.After(from) && e.T.Before(to) {
+					writesWhileRebuilt[e.Event]++
+				}
+			}
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "inserts of client %s answered while the rebuild ran (%s to %v): %v\n",
+			during, done.AcceptedTime, done.EndTime, writesWhileRebuilt)
 
 		By("writing rows after the rebuild")
 		h, err = r.runWorkload(context.Background(), "CLIENT_ID="+clients+"-after OPS=10")
 		Expect(err).NotTo(HaveOccurred())
+		count(h)
 		Expect(h.Counts[workload.Acknowledged]).To(BeNumerically(">", 0), "%v", h.Counts)
 
 		By("checking every acknowledged row on every member and through both Services")
 		report := r.passingDataCheck("member-rebuild", 3*time.Minute)
+		// Measured against rebuild_limit, as an upper bound: it includes
+		// the rows written after the rebuild and the data check itself.
+		allRows := time.Since(requested)
 		Expect(report.Members).To(HaveKey(member))
 		files := r.evidenceFiles("member-rebuild", report)
+
+		By("checking that the applier of " + member + " has no failure")
+		failCount, err := r.failCount(context.Background(), member, master)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failCount).To(BeZero(), "fail count of the applier on the rebuilt member %s", member)
+
+		By("checking that the claims of the master and of the other slave were not replaced")
+		// A healthy member's data overwritten and the master's volume chosen
+		// as the target must never happen. What this step observes of them
+		// is that the rebuild named only the requested member and that the
+		// master's and the other slave's claims kept their UIDs; a restore
+		// into an unchanged claim would not show here, and the data check
+		// above is what shows their rows intact.
+		for m, uid := range otherClaims() {
+			if uid != otherClaimsBefore[m] {
+				result.NeverEvents = append(result.NeverEvents, fmt.Sprintf(
+					"the claim data-%s of a member that was not rebuilt was replaced (%s, then %s)",
+					m, otherClaimsBefore[m], uid))
+			}
+		}
+		Expect(result.NeverEvents).To(BeEmpty())
+		if listingFile != "" {
+			files = append(files, listingFile)
+		}
 		release := "not started, " + member + " is ranked below the master"
 		if outranksMaster {
 			release = "released manually, " + member + " outranks the master (quarantine " + releasedGeneration + ")"
@@ -418,5 +561,42 @@ func memberRebuildStep(r *haRun) {
 			files = append(files, f)
 		}
 		_, _ = fmt.Fprintf(GinkgoWriter, "%sevidence: %v\n", summary, files)
+
+		result = judged(evidence.Scenario{
+			ID:             "S10",
+			FaultConfirmed: &faultConfirmed, CleanupSucceeded: &cleanedUp,
+			Measurements: map[string]any{
+				"newVolumeBeforeRebuild":                      newVolume,
+				"offerPublishedAfterLoss":                     offeredAfter.Round(time.Millisecond).String(),
+				"rebuildRequestedToCompleted":                 rebuilt.Round(time.Millisecond).String(),
+				"rebuildRequestedToAllRowsChecked":            allRows.Round(time.Millisecond).String(),
+				"writeQuarantineReleasedManually":             outranksMaster,
+				"rebuiltMemberApplierFailCount":               failCount,
+				"rowsOnRebuiltMember":                         report.Members[member].Rows,
+				"acknowledgedMissing":                         report.AcknowledgedMissing,
+				"insertsAcknowledgedWhileRebuildRan":          writesWhileRebuilt[workload.Acknowledged],
+				"insertsFailedWhileRebuildRan":                writesWhileRebuilt[workload.Failed],
+				"insertsWithUnknownOutcomeWhileRebuildRan":    writesWhileRebuilt[workload.Unknown],
+				"requestNamingMasterRefused":                  true,
+				"requestWithWrongTokenIgnored":                true,
+				"rebuildTargetWasMaster":                      false,
+				"otherMembersClaimsReplaced":                  false,
+				"masterMoved":                                 false,
+				"rebuiltMemberReportedHealthyBeforeDataMatch": "not observed",
+			},
+			Operations: &operations,
+			Evidence:   files,
+		}, within(rebuildLimit, allRows))
+		// A time-limit pass is not a pass of S10 unless the fault and the
+		// rows written while the rebuild ran were observed.
+		if result.Result == evidence.Pass {
+			switch {
+			case !faultConfirmed:
+				result.Result, result.Reason = evidence.Blocked, "the fault is not confirmed: "+newVolume
+			case writesWhileRebuilt[workload.Acknowledged] == 0:
+				result.Result, result.Reason = evidence.Blocked, "no insert was acknowledged while the "+
+					"rebuild ran, so the data check includes no row written during it"
+			}
+		}
 	})
 }

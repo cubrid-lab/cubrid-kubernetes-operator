@@ -45,6 +45,7 @@ func kindSuiteSteps() [][]string {
 		KindLabels(dbLabel, haBootstrap, "S01"),
 		KindLabels(dbLabel, haBootstrap, s02Label),
 		KindLabels("S14"),
+		KindLabels(dbLabel, haBootstrap, "S10", "member-rebuild"),
 	}
 	for _, entry := range registry.entries {
 		family, variant, ok := strings.Cut(entry.Aliases[0], "/")

@@ -186,8 +186,12 @@ into the bundles. The rules, failing closed:
   `fail` stays `FAIL` and is No-Go: no recorded field shows that only a
   time limit failed, so a timing overrun cannot be told from another
   failure.
-- S08 and S10 have no registered result, so no run records their evidence
-  and they are always No-Go ("evidence not recorded").
+- S08 has no registered result, so no run records its evidence and it is
+  always No-Go ("evidence not recorded"). S10 has one registered result,
+  `ha-pvc-loss-rebuild` from the Kind member rebuild step. It is judged
+  by `rebuild_limit`, which has no value yet, so every run records it as
+  `blocked` (`time_limit_unset`) and it stays No-Go until a maintainer
+  sets that limit and a run passes it.
 - S09, S16 and S17 results are never required. A `pass` or `not_run` is
   **NOT COUNTED**; a `fail`, `blocked` or failed cleanup is **REVIEW
   REQUIRED**, because the contract keeps S09's held-member safety behavior.
@@ -200,7 +204,8 @@ Conditions/Events/metrics as separate requirements, repetitions, the
 24-hour soak, the real-fault review of VM runs, independent reproduction
 (#127) and release approval. The
 [sample report](../../test/evidence/cmd/candidate-matrix/testdata/verify-sample.md)
-comes from synthetic runs and is No-Go only because of S08 and S10.
+comes from synthetic runs, records a synthetic S10 pass, and is No-Go
+only because of S08.
 
 Review the original bundle and the scenario-specific
 [oracle](scenario-contract.md#oracle-correctness), not the green status

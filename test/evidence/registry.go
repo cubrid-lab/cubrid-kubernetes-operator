@@ -114,6 +114,7 @@ const (
 	standaloneText  = "Standalone database installation and real SQL"
 	brokerHAText    = "Three-member HA and read-write/read-only Broker access"
 	replicationText = "Normal HA replication"
+	rebuildText     = "Rebuild after persistent-volume data loss"
 	deletionText    = "Cluster deletion and data-retention policy"
 	accessText      = "Instance Manager network isolation, token-checked requests, service-account permissions " +
 		"and a search for leaked credentials"
@@ -178,7 +179,7 @@ var registry = scenarioRegistry{
 		{"S08", "ha-replication-lag-repeated-faults", "Replication lag under repeated faults",
 			"s08-replication-lag-followed-by-repeated-failures"},
 		{"S09", "ha-former-primary-rejoin", "Rejoin of a former primary member", "s09-former-primary-rejoins"},
-		{"S10", "ha-pvc-loss-rebuild", "Rebuild after persistent-volume data loss", "s10-rebuild-after-pvc-loss"},
+		{"S10", "ha-pvc-loss-rebuild", rebuildText, "s10-rebuild-after-pvc-loss"},
 		{"S11", "installed-backup", backupText, "s11-backup-failure-and-restart"},
 		{"S12", "installed-restore-new-cluster", restoreText, "s12-restore-into-a-new-cluster"},
 		{"S13", "cluster-deletion-retention", deletionText, "s13-deletion-and-retention"},
@@ -203,6 +204,10 @@ var registry = scenarioRegistry{
 		kindResult("operator-failure-recovery-restart", "S06/restart", operatorText+" - restart"),
 		kindResult("operator-failure-recovery-absent-during-failover", "S06/absent-during-failover",
 			operatorText+" - absent during failover"),
+		// S10 is recorded by the Kind member rebuild step and judged by
+		// rebuild_limit, which has no value yet, so the result is blocked and
+		// the kind lane does not require it until the limit is set.
+		kindResult("ha-pvc-loss-rebuild", "S10", rebuildText),
 		kindResult("cluster-deletion-retention-retain", "S13/retain", deletionText+" - retain"),
 		kindResult("cluster-deletion-retention-delete", "S13/delete", deletionText+" - delete"),
 		kindResult("instance-manager-access-and-secret-protection", "S14", accessText),

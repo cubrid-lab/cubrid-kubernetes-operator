@@ -37,12 +37,11 @@ import (
 // listed family whose scope is a v0.1 requirement must be recorded, and a
 // listed family without a registered result cannot be proven by any run.
 var v01Families = []string{"S00", "S01", "S02", "S03", "S04", "S05", "S06", "S07", s08Family,
-	s10Family, "S11", "S12", "S13", "S14", "S15"}
+	"S10", "S11", "S12", "S13", "S14", "S15"}
 
-// S08 and S10 are v0.1 families without a registered result.
 const (
+	// S08 is the v0.1 family without a registered result.
 	s08Family = "S08"
-	s10Family = "S10"
 	// acknowledgedMissing counts acknowledged writes a member lacks.
 	acknowledgedMissing = "acknowledgedMissing"
 	// afterPathClosed counts established-session writes acknowledged after
