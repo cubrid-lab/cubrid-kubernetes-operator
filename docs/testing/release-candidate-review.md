@@ -191,11 +191,10 @@ into the bundles. The rules, failing closed:
   A recorded S08 result is **NOT COUNTED** with that reason, and a `fail`,
   `blocked` or failed cleanup of it is **REVIEW REQUIRED**. The report lists
   the S08 coverage among the manual gates; the number of repetitions is not
-  yet decided. S10 has one registered result,
-  `ha-pvc-loss-rebuild` from the Kind member rebuild step. It is judged
-  by `rebuild_limit`, which has no value yet, so every run records it as
-  `blocked` (`time_limit_unset`) and it stays No-Go until a maintainer
-  sets that limit and a run passes it.
+  yet decided. S10 has two registered must-pass results, `ha-pvc-loss-rebuild`
+  (Kind) and `installed-ha-pvc-loss-rebuild` (VM lab). Each is judged like any
+  other must-pass result: a `blocked` result, such as one recorded while
+  `rebuild_limit` has no value, is No-Go.
 - S08, S09, S16 and S17 results are never required. A `pass` or `not_run` is
   **NOT COUNTED**; a `fail`, `blocked` or failed cleanup is **REVIEW
   REQUIRED**, because the contract keeps S09's held-member safety behavior.
