@@ -65,3 +65,18 @@ func TestPodSpecAddsNoResourcesWhenTheClusterSetsNone(t *testing.T) {
 		}
 	}
 }
+
+// Nothing in a database or Broker Pod calls the Kubernetes API, so neither
+// template mounts the namespace's default ServiceAccount token.
+func TestPodTemplatesDoNotMountTheServiceAccountToken(t *testing.T) {
+	r := &CubridClusterReconciler{}
+	specs := map[string]corev1.PodSpec{
+		appName:         r.podSpec(haCluster("no-api-token"), "registry.example/cubrid:test"),
+		componentBroker: r.brokerPodSpec(brokerTestCluster(), brokerModeRW, "registry.example/cubrid:test"),
+	}
+	for name, spec := range specs {
+		if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+			t.Errorf("%s Pod template automountServiceAccountToken = %v, want false", name, spec.AutomountServiceAccountToken)
+		}
+	}
+}

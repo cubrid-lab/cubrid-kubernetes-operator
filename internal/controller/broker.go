@@ -284,7 +284,10 @@ func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.Cubrid
 	noPrivEscalation := false
 	uid := cubridUID
 	port := brokerPort(mode)
+	noAPIToken := false
 	return corev1.PodSpec{
+		// Nothing in the Pod calls the Kubernetes API, so it gets no ServiceAccount token.
+		AutomountServiceAccountToken: &noAPIToken,
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsNonRoot: &runAsNonRoot,
 			// The image's cubrid user; the official image's default is root.
