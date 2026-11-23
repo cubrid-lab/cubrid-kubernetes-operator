@@ -1,0 +1,106 @@
+
+Time: 11/23/26 10:57:48.063 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 322) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/23/26 10:57:48.095 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 2
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-0/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:48.317 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 3, EID = 3
+log applier: log applier started. required LSA: 145|11152. last committed LSA: 145|11248. last committed repl LSA: 145|11152.
+
+Time: 11/23/26 10:57:48.325 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 4
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'idle' to 'active'. 
+
+Time: 11/23/26 10:57:48.328 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 5
+HA generic: change log apply state from 'unregistered' to 'recovering'. last committed LSA: 145|15800. 
+
+Time: 11/23/26 10:57:48.332 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 6
+HA generic: change log apply state from 'recovering' to 'working'. last committed LSA: 146|56. 
+
+Time: 11/23/26 11:00:10.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 3, EID = 7
+Server no longer responding.... Invalid argument
+
+Time: 11/23/26 11:00:10.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 3, EID = 8
+Your transaction has been aborted by the system due to server failure or mode change.
+
+Time: 11/23/26 11:00:10.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_info.c, line 150 ERROR CODE = -224, Tran = -1, EID = 9
+A database has not been restarted.
+
+Time: 11/23/26 11:00:10.791 - SYNTAX ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 1051 ERROR CODE = -492, Tran = -1, EID = 10
+before '   SET    log_record_time = ?,    last_access_time = SYS_DATET...'
+A database has not been restarted.
+
+Time: 11/23/26 11:00:10.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_vdb.c, line 3255 ERROR CODE = -224, Tran = -1, EID = 11
+A database has not been restarted.
+
+Time: 11/23/26 11:00:10.792 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_admin.c, line 1093 ERROR CODE = -224, Tran = -1, EID = 12
+A database has not been restarted.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:00:19.954 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 37731) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/23/26 11:00:19.976 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 1, EID = 2
+log applier: log applier started. required LSA: 159|11464. last committed LSA: 159|11280. last committed repl LSA: 159|11200.
+
+Time: 11/23/26 11:00:19.991 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 1, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'idle' to 'active'. 
+
+Time: 11/23/26 11:00:19.992 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 4
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 159|12672. 
+
+Time: 11/23/26 11:00:30.829 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 1, EID = 5
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'active' to 'dead'. 
+
+Time: 11/23/26 11:00:30.830 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 6
+HA generic: change log apply state from 'working' to 'done'. last committed LSA: 160|7616. 
+
+Time: 11/23/26 11:01:31.893 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 1, EID = 7
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'dead' to 'standby'. 
+
+Time: 11/23/26 11:01:31.897 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 8
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 167|136. 
+
+Time: 11/23/26 11:01:41.427 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 9
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 168|608. 
+
+Time: 11/23/26 11:01:53.359 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 10
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 169|2224. 
+
+Time: 11/23/26 11:02:03.385 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 11
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 170|1008. 
+
+Time: 11/23/26 11:02:05.889 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3451 ERROR CODE = -191, Tran = 1, EID = 12
+Cannot connect to server "appdb" on "localhost".
+
+Time: 11/23/26 11:02:05.889 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 1, EID = 13
+Server no longer responding.... Invalid argument
+
+Time: 11/23/26 11:02:05.889 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 1, EID = 14
+Your transaction has been aborted by the system due to server failure or mode change.
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:02:12.291 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 38275) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/23/26 11:02:12.330 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 1, EID = 2
+log applier: log applier started. required LSA: 170|1048. last committed LSA: 170|1048. last committed repl LSA: 160|7536.
+
+Time: 11/23/26 11:02:12.331 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 1, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'idle' to 'standby'. 
+
+Time: 11/23/26 11:02:12.333 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 4
+HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 170|5416. 
+
+Time: 11/23/26 11:02:13.337 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 5
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 171|1976. 
+
+Time: 11/23/26 11:02:22.256 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 1, EID = 6
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 172|368. 
+
+*** The previous error message is the last one. ***
+

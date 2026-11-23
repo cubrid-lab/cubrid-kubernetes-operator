@@ -1,0 +1,351 @@
+
+Time: 11/23/26 10:57:33.213 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 324) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/23/26 10:57:33.275 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 2
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:33.489 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 3
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:33.689 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 4
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:33.889 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 5
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:34.090 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 6
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:34.290 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 7
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:34.490 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 8
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:34.690 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 9
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:34.891 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 10
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:35.091 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 11
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:35.292 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 12
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:35.511 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 13
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:35.711 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 14
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:35.912 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 15
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:36.112 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 16
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:36.312 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 17
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:36.513 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 18
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:36.713 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 19
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:36.913 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 20
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:37.144 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 21
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:37.344 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 22
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:37.544 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 23
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:37.744 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 24
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:37.945 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 25
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:38.145 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 26
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:38.345 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 27
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:38.545 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 28
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:38.746 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 29
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:38.946 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 30
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:39.146 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 31
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:39.346 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 32
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:39.547 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 33
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:39.747 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 34
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:39.948 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 35
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:40.148 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 36
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:40.348 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 37
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:40.548 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 38
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:40.749 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 39
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:40.949 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 40
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:41.149 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 41
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:41.349 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 42
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:41.606 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 43
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:41.806 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 44
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:42.006 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 45
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:42.206 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 46
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:42.407 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 47
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:42.607 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 48
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:42.807 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 49
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:43.010 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 50
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:43.211 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 51
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:43.411 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 52
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:43.611 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 53
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:43.812 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 54
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:44.012 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 55
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:44.212 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 56
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:44.412 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 57
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:44.621 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 58
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:44.821 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 59
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:45.026 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 60
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:45.226 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 61
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:45.427 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 62
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:45.627 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 63
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:45.827 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 64
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:46.077 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 65
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:46.277 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 3, EID = 66
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-2/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:46.677 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 3, EID = 67
+log applier: log applier started. required LSA: 145|13112. last committed LSA: 145|13112. last committed repl LSA: 145|13112.
+
+Time: 11/23/26 10:57:46.678 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 68
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'idle' to 'standby'. 
+
+Time: 11/23/26 10:57:46.681 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 69
+HA generic: change log apply state from 'unregistered' to 'done'. last committed LSA: 145|13112. 
+
+Time: 11/23/26 10:57:48.388 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 70
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 146|912. 
+
+Time: 11/23/26 10:57:57.519 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 71
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 147|15248. 
+
+Time: 11/23/26 10:57:58.529 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 72
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 148|608. 
+
+Time: 11/23/26 10:58:07.855 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 73
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 148|16296. 
+
+Time: 11/23/26 10:58:13.974 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 74
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 150|600. 
+
+Time: 11/23/26 10:58:18.990 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 75
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 151|304. 
+
+Time: 11/23/26 10:58:24.512 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 76
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 152|1048. 
+
+Time: 11/23/26 10:58:29.329 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 77
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 153|1328. 
+
+Time: 11/23/26 10:58:34.247 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 78
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 154|1032. 
+
+Time: 11/23/26 10:58:39.264 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 79
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 155|736. 
+
+Time: 11/23/26 10:58:44.084 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 80
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 156|536. 
+
+Time: 11/23/26 10:58:47.293 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 81
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 156|16328. 
+
+Time: 11/23/26 10:58:52.605 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 82
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 158|712. 
+
+Time: 11/23/26 10:58:57.317 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 83
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 159|416. 
+
+Time: 11/23/26 10:59:02.128 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 84
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 160|120. 
+
+Time: 11/23/26 10:59:07.441 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 85
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 161|864. 
+
+Time: 11/23/26 10:59:12.151 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 86
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 162|576. 
+
+Time: 11/23/26 10:59:17.462 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 87
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 163|1896. 
+
+Time: 11/23/26 10:59:22.172 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 88
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 164|1600. 
+
+Time: 11/23/26 10:59:26.985 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 89
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 165|1304. 
+
+Time: 11/23/26 10:59:31.902 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 90
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 166|1584. 
+
+Time: 11/23/26 10:59:36.516 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 91
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 167|176. 
+
+Time: 11/23/26 10:59:41.330 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 92
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 168|456. 
+
+Time: 11/23/26 10:59:46.142 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 93
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 169|24. 
+
+Time: 11/23/26 10:59:51.161 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 94
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 170|1920. 
+
+Time: 11/23/26 10:59:56.079 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 95
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 171|1624. 
+
+Time: 11/23/26 11:00:01.197 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 96
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 172|1328. 
+
+Time: 11/23/26 11:00:06.118 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 97
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 173|1040. 
+
+Time: 11/23/26 11:00:10.828 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 98
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'standby' to 'dead'. 
+
+Time: 11/23/26 11:00:10.830 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 99
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 173|6568. 
+
+Time: 11/23/26 11:00:25.863 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 100
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'dead' to 'standby'. 
+
+Time: 11/23/26 11:00:25.867 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 101
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 175|272. 
+
+Time: 11/23/26 11:00:30.984 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 102
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 176|912. 
+
+Time: 11/23/26 11:00:37.403 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 103
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 177|2192. 
+
+Time: 11/23/26 11:00:47.131 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 104
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 178|544. 
+
+Time: 11/23/26 11:00:54.447 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 105
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 179|1712. 
+
+Time: 11/23/26 11:01:06.383 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 106
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 180|2144. 
+
+Time: 11/23/26 11:01:17.415 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 107
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 181|1464. 
+
+Time: 11/23/26 11:01:29.355 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 108
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 182|1896. 
+
+Time: 11/23/26 11:01:39.391 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 109
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 183|1832. 
+
+Time: 11/23/26 11:01:49.316 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 110
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 184|616. 
+
+Time: 11/23/26 11:02:01.445 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 111
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 185|2224. 
+
+Time: 11/23/26 11:02:05.861 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 112
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'standby' to 'dead'. 
+
+Time: 11/23/26 11:02:05.865 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 113
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 185|8320. 
+
+Time: 11/23/26 11:02:21.899 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 3, EID = 114
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'dead' to 'standby'. 
+
+Time: 11/23/26 11:02:21.900 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 115
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 187|2680. 
+
+Time: 11/23/26 11:02:22.907 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 3, EID = 116
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 188|8568. 
+
+*** The previous error message is the last one. ***
+

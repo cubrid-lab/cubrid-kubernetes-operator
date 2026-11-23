@@ -1,0 +1,10 @@
+acknowledged writes: 255, unknown outcome: 0
+after-change-poc74-ha-0              rows=215   acknowledged-expected=215   missing=0 [] extra=0 []
+after-change-poc74-ha-1              rows=215   acknowledged-expected=215   missing=0 [] extra=0 []
+after-change-poc74-ha-2              rows=215   acknowledged-expected=215   missing=0 [] extra=0 []
+after-failover-poc74-ha-0            rows=245   acknowledged-expected=245   missing=0 [] extra=0 []
+after-failover-poc74-ha-1            rows=245   acknowledged-expected=245   missing=0 [] extra=0 []
+after-failover-poc74-ha-2            rows=245   acknowledged-expected=245   missing=0 [] extra=0 []
+final-poc74-ha-0                     rows=255   acknowledged-expected=255   missing=0 [] extra=0 []
+final-poc74-ha-1                     rows=255   acknowledged-expected=255   missing=0 [] extra=0 []
+final-poc74-ha-2                     rows=255   acknowledged-expected=255   missing=0 [] extra=0 []

@@ -307,6 +307,10 @@ restore keeps the password of the database the backup was taken from. The
 maintainers decided on 2026-11-20 that changing the password of an initialized
 cluster is not part of v0.1; it is tracked as backlog work in #1012.
 
+A manual procedure for HA clusters is being evaluated; see
+[A manual change on an HA cluster (draft)](#a-manual-change-on-an-ha-cluster-draft).
+It has been tried only in local Docker and is not supported yet.
+
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
 ([HA clusters](#ha-clusters)), the Operator asks that member's Instance
@@ -335,6 +339,88 @@ A change is therefore reported within about 5 minutes, plus the time the
 kubelet takes to update the mounted file (up to its sync period, about a
 minute by default). An Operator that restarts keeps nothing about the check:
 it asks again at its next reconcile and reports the same state.
+
+### A manual change on an HA cluster (draft)
+
+> [!CAUTION]
+> **Draft, verified only in local Docker.** The steps below were tried on a
+> three-member CUBRID 11.4.7.1995 HA group in Docker, outside Kubernetes, with
+> `docker exec -it` standing in for `kubectl exec -it`
+> ([POC-74](../poc/poc74/README.md), two trials, #1012). They have **not** been
+> run on Kind or the VM lab, with the Operator, or with the Brokers, and they
+> are not a supported procedure. Do not rely on them for a production cluster.
+
+**Do not use `ALTER USER dba PASSWORD` on a running HA member.** CUBRID
+replicates `ALTER USER`, like every DDL statement, as its SQL text. In POC-74
+the new password was then in plain text in the master's transaction log, in
+every slave's copy of that log, and in the next backup. (The Instance Manager's
+own `ALTER USER` runs only before the database first starts, in standalone
+mode, where POC-74 and POC-73 found no such text.)
+
+What met #1012's constraints in Docker is CUBRID's `set_password` method, run
+**on every member**: on its own it is not replicated, so running it on the
+primary alone leaves the slaves with the old password.
+
+Before you start:
+
+- every member of the cluster is running and in its HA group, none is being
+  seeded or restored, and `status.currentPrimary` names the primary;
+- you know the current password; old backups keep it, and a restore from them
+  needs it in the Secret ([Restoring from a backup](#restoring-from-a-backup));
+- the new value follows [What the API accepts](#what-the-api-accepts), with
+  any single quote doubled in the statement below.
+
+Steps, as tried in Docker:
+
+1. On your workstation, write the statement into a file only you can read
+   (`umask 077`, with an editor, not on a command line, so it is not in your
+   shell's history):
+
+   ```sql
+   CALL find_user('dba') ON CLASS db_user TO u;
+   CALL set_password('<new password>') ON u;
+   ```
+
+2. Copy it into every member's DB container through standard input:
+   `kubectl exec -i <pod> -c <db container> -- bash -c 'umask 077; cat > /tmp/pwchange.sql' < pwchange.sql`.
+3. On the primary, start csql on a terminal and type the **current** password
+   at its `Enter Password :` prompt:
+   `kubectl exec -it <primary pod> -c <db container> -- bash -c 'exec csql -u dba <db>@localhost'`.
+   At the `csql>` prompt, enter `;read /tmp/pwchange.sql`, then `;run`. csql
+   answers `2 command(s) successfully processed.`; then `;exit`. `;read`
+   loads the file without showing it, so the new value is never typed or
+   shown.
+4. Right after, do the same on each other member, with
+   `bash -c 'exec csql --sysadm --write-on-standby -u dba <db>@localhost'`
+   (a standby refuses the change otherwise; the prompt is `sysadm>`). Until
+   every member is done, the members have different passwords, and a
+   failover in between would promote a member that still has the old one.
+5. Remove the file from every member:
+   `kubectl exec <pod> -c <db container> -- rm -f /tmp/pwchange.sql`, and
+   delete your local copy.
+6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'exec csql -u dba -c "SELECT 1" <db>@localhost'`
+   must accept the new password and answer `Incorrect or missing password.`
+   for the old one.
+7. Put the new value in the Secret. Until the kubelet updates the mounted
+   file, the Operator reports `DBAPasswordRotationUnsupported` for the old
+   value ([How a changed value is reported](#changing-the-password-is-not-supported)).
+   The Secret must hold the new value before any member is seeded again,
+   since a seed is checked against it.
+
+What POC-74 saw after these steps: the new password logged in on every member,
+also after a slave's processes were all restarted and after a failover, and
+the old one was refused; every row written before, during and after the
+change reached every member; the copiers logged no `-171`, also when they
+reconnected; no command line, terminal output, log or backup held the new
+value; `backupdb -C`, `applyinfo` and `heartbeat status` needed no password;
+and a backup taken before the change restored with the old password only.
+Sessions that were logged in before the change stayed logged in and kept
+working, so after a suspected compromise this change alone does not end them.
+
+Not covered by POC-74: the Brokers and the `-rw` and `-ro` Services, drivers,
+`kubectl exec` itself, a member that is down or being seeded during the change
+(it keeps the old password), a lagging slave, what `--write-on-standby` (an
+option not listed in csql's help) changes beyond the password, and the VM lab.
 
 ### Restarting after a changed value
 

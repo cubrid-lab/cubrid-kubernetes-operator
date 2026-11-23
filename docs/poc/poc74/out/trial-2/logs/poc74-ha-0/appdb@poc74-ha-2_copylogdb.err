@@ -1,0 +1,342 @@
+
+Time: 11/23/26 10:57:07.706 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 1
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:07.706 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 2
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:08.709 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 3
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:08.709 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 4
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:09.711 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 5
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:09.711 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 6
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:10.714 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 7
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:10.714 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 8
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:11.716 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 9
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:11.716 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 10
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:12.718 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 11
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:12.718 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 12
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:13.720 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 13
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:13.720 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 14
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:14.723 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 15
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:14.723 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 16
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:15.725 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 17
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:15.725 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 18
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:16.728 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 19
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:16.728 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 20
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:17.730 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 21
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:17.730 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 22
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:18.732 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 23
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:18.732 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 24
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:19.734 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 25
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:19.734 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 26
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:20.737 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 27
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:20.737 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 28
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:21.738 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 29
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:21.738 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 30
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:22.740 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 31
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:22.740 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 32
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:23.742 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 33
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:23.743 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 34
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:24.745 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 35
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:24.745 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 36
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:25.747 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 37
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:25.748 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 38
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:26.749 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 39
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:26.750 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 40
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:27.750 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 41
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:27.750 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 42
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:28.752 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 43
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:28.752 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 44
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:29.754 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 45
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:29.754 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 46
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:30.756 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 47
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:30.756 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 48
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:31.759 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 49
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:31.759 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 50
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:32.761 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 51
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:32.762 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 52
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:33.764 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 53
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:33.764 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 54
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:34.766 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 55
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:34.766 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 56
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:35.768 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 57
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:35.768 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 58
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:36.771 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 59
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:36.771 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 60
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:37.774 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 61
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:37.774 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 62
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:38.776 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 63
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:38.776 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 64
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:39.779 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 65
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:39.779 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 66
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:40.782 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 67
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:40.782 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 68
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:41.784 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 69
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:41.784 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 70
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:42.786 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 71
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:42.786 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 72
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:43.788 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 73
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 10:57:43.788 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 74
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:44.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 75
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 10:57:44.791 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 76
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:45.792 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 77
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 10:57:45.792 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 78
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 10:57:45.792 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 79
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 10:57:46.794 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 80
+Program 'copylogdb' (pid 350) connected to database server 'appdb@poc74-ha-2' on the host 'poc74-ha-2' (port 1523).
+
+Time: 11/23/26 10:57:46.823 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 2, EID = 81
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 10:57:46.869 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 2, EID = 82
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'na' to 'standby'. 
+
+Time: 11/23/26 11:00:10.744 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 2157 ERROR CODE = -199, Tran = 2, EID = 83
+Server no longer responding.
+
+Time: 11/23/26 11:00:10.744 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 2, EID = 84
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'standby' to 'dead'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:00:11.748 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 85
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 11:00:11.748 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 86
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 11:00:11.748 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 87
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 11:00:13.749 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 88
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 11:00:13.750 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/connection_cl.c, line 772 ERROR CODE = -353, Tran = -1, EID = 89
+Cannot make connection to master server on host "poc74-ha-2".... Operation now in progress
+
+Time: 11/23/26 11:00:13.750 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 90
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 11:00:17.753 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 91
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 11:00:17.754 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 92
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 11:00:17.754 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 93
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 11:00:25.758 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 94
+Program 'copylogdb' (pid 350) connected to database server 'appdb@poc74-ha-2' on the host 'poc74-ha-2' (port 1523).
+
+Time: 11/23/26 11:00:25.771 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 95
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:00:25.772 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 96
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'dead' to 'standby'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:00:37.017 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 44706) connected to database server 'appdb@poc74-ha-2' on the host 'poc74-ha-2' (port 1523).
+
+Time: 11/23/26 11:00:37.046 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:00:37.047 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'na' to 'standby'. 
+
+Time: 11/23/26 11:02:05.810 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 2157 ERROR CODE = -199, Tran = 3, EID = 4
+Server no longer responding.
+
+Time: 11/23/26 11:02:05.810 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 5
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'standby' to 'dead'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:02:06.815 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 6
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 11:02:06.817 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 7
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 11:02:06.817 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 8
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 11:02:08.820 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 9
+Cannot connect to server "appdb" on "poc74-ha-2".
+
+Time: 11/23/26 11:02:08.821 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 10
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2
+
+Time: 11/23/26 11:02:08.821 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 11
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-2:poc74-ha-2
+
+Time: 11/23/26 11:02:12.824 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 12
+Program 'copylogdb' (pid 44706) connected to database server 'appdb@poc74-ha-2' on the host 'poc74-ha-2' (port 1523).
+
+Time: 11/23/26 11:02:12.838 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 13
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:02:12.839 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 14
+HA generic: change the state of HA server (appdb@poc74-ha-2) from 'dead' to 'standby'. 
+
+*** The previous error message is the last one. ***
+

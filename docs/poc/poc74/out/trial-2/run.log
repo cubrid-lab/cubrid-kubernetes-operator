@@ -1,0 +1,414 @@
+run start 2026-11-23T10:58:07.204Z load: 21.97 25.17 29.21
+## 1. baseline
+poc74-ha-0: Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-2 (pid 354, state registered);Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-1 (pid 352, state registered);Copylogdb appdb@poc74-ha-2:/var/lib/cubrid/databases/appdb_poc74-ha-2 (pid 350, state registered);Copylogdb appdb@poc74-ha-1:/var/lib/cubrid/databases/appdb_poc74-ha-1 (pid 348, state registered);Server appdb (pid 88, state registered_and_active);
+poc74-ha-1: Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-2 (pid 324, state registered);Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-0 (pid 322, state registered);Copylogdb appdb@poc74-ha-2:/var/lib/cubrid/databases/appdb_poc74-ha-2 (pid 320, state registered);Copylogdb appdb@poc74-ha-0:/var/lib/cubrid/databases/appdb_poc74-ha-0 (pid 318, state registered);Server appdb (pid 58, state registered_and_standby);
+poc74-ha-2: Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-1 (pid 324, state registered);Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_poc74-ha-0 (pid 322, state registered);Copylogdb appdb@poc74-ha-1:/var/lib/cubrid/databases/appdb_poc74-ha-1 (pid 320, state registered);Copylogdb appdb@poc74-ha-0:/var/lib/cubrid/databases/appdb_poc74-ha-0 (pid 318, state registered);Server appdb (pid 58, state registered_and_standby);
+2026-11-23T10:58:07.506Z login base poc74-ha-0 p0: [base/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.604Z login base poc74-ha-0 p1: [base/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.677Z login base poc74-ha-0 p2: [base/poc74-ha-0/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.769Z login base poc74-ha-1 p0: [base/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.848Z login base poc74-ha-1 p1: [base/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.924Z login base poc74-ha-1 p2: [base/poc74-ha-1/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:07.999Z login base poc74-ha-2 p0: [base/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:08.078Z login base poc74-ha-2 p1: [base/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:08.153Z login base poc74-ha-2 p2: [base/poc74-ha-2/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+## 2026-11-23T10:58:08.227Z procs base poc74-ha-0
+## 2026-11-23T10:58:08.267Z procs base poc74-ha-1
+## 2026-11-23T10:58:08.307Z procs base poc74-ha-2
+## 2026-11-23T10:58:08.350Z -171 base poc74-ha-0: 
+## 2026-11-23T10:58:08.391Z -171 base poc74-ha-1: 
+## 2026-11-23T10:58:08.433Z -171 base poc74-ha-2: 
+2026-11-23T10:58:08.474Z plaintext base poc74-ha-0 p0: []
+2026-11-23T10:58:08.741Z plaintext base poc74-ha-1 p0: []
+2026-11-23T10:58:09.020Z plaintext base poc74-ha-2 p0: []
+backupdb -C with p0 rc=0
+## 2. writes and open sessions
+## 3. CALL set_password on the master only
+2026-11-23T10:58:40.679Z change set-password-master on poc74-ha-0: statement file -rw------- cubrid cubrid; start
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.7)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+csql> ;read /tmp/pwchange.sql
+
+The file has been read into the command buffer.
+csql> ;run
+
+=== <Result of CALL Command in Line 1> ===
+
+  Result              
+======================
+  db_user             
+
+Execute OK. (0.000000 sec) Committed. (0.000000 sec) 
+
+=== <Result of CALL Command in Line 2> ===
+
+  Result              
+======================
+  NULL                
+
+Execute OK. (0.004000 sec) Committed. (0.000000 sec) 
+
+2 command(s) successfully processed.
+csql> ;exit
+
+[change/set-password-master/poc74-ha-0] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:40.851Z change set-password-master on poc74-ha-0: end
+2026-11-23T10:58:40.851Z login after-master-only poc74-ha-0 p0: [after-master-only/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:40.932Z login after-master-only poc74-ha-0 p1: [after-master-only/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:41.034Z login after-master-only poc74-ha-1 p0: [after-master-only/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:41.124Z login after-master-only poc74-ha-1 p1: [after-master-only/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:41.204Z login after-master-only poc74-ha-2 p0: [after-master-only/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:58:41.293Z login after-master-only poc74-ha-2 p1: [after-master-only/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.381Z login after-master-only-60s poc74-ha-0 p0: [after-master-only-60s/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.464Z login after-master-only-60s poc74-ha-0 p1: [after-master-only-60s/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.560Z login after-master-only-60s poc74-ha-1 p0: [after-master-only-60s/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.644Z login after-master-only-60s poc74-ha-1 p1: [after-master-only-60s/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.723Z login after-master-only-60s poc74-ha-2 p0: [after-master-only-60s/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:41.807Z login after-master-only-60s poc74-ha-2 p1: [after-master-only-60s/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+## 4. CALL set_password on each slave (--sysadm --write-on-standby)
+2026-11-23T10:59:41.943Z change set-password-standby on poc74-ha-1: statement file -rw------- cubrid cubrid; start
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.7)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+sysadm> ;read /tmp/pwchange.sql
+
+The file has been read into the command buffer.
+sysadm> ;run
+
+=== <Result of CALL Command in Line 1> ===
+
+  Result              
+======================
+  db_user             
+
+Execute OK. (0.004000 sec) Committed. (0.000000 sec) 
+
+=== <Result of CALL Command in Line 2> ===
+
+  Result              
+======================
+  NULL                
+
+Execute OK. (0.000000 sec) Committed. (0.000000 sec) 
+
+2 command(s) successfully processed.
+sysadm> ;exit
+
+[change/set-password-standby/poc74-ha-1] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:42.115Z change set-password-standby on poc74-ha-1: end
+2026-11-23T10:59:42.159Z change set-password-standby on poc74-ha-2: statement file -rw------- cubrid cubrid; start
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.7)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+sysadm> ;read /tmp/pwchange.sql
+
+The file has been read into the command buffer.
+sysadm> ;run
+
+=== <Result of CALL Command in Line 1> ===
+
+  Result              
+======================
+  db_user             
+
+Execute OK. (0.004000 sec) Committed. (0.000000 sec) 
+
+=== <Result of CALL Command in Line 2> ===
+
+  Result              
+======================
+  NULL                
+
+Execute OK. (0.000000 sec) Committed. (0.000000 sec) 
+
+2 command(s) successfully processed.
+sysadm> ;exit
+
+[change/set-password-standby/poc74-ha-2] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:42.347Z change set-password-standby on poc74-ha-2: end
+2026-11-23T10:59:44.570Z argv change poc74-ha-0 p0: lines_with_password=0
+2026-11-23T10:59:44.610Z argv change poc74-ha-0 p1: lines_with_password=0
+2026-11-23T10:59:44.650Z argv change poc74-ha-0 p2: lines_with_password=0
+2026-11-23T10:59:44.651Z argv change poc74-ha-0: distinct_argv=135 csql_argv=110 SAMPLES=1555
+  csql argv on poc74-ha-0:   o=$(timeout 30 csql -u app --no-auto-commit appdb@localhost -c "INSERT INTO dba.t VALUES ($id,'w'); COMMIT;" 2>&1); rc=$?
+  csql argv on poc74-ha-0: csql -u dba appdb@localhost 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (56,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u dba -c SELECT 'login-' || 'ok' FROM db_root appdb@localhost 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (58,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (59,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (62,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (62,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (64,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (64,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (65,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (65,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (67,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (67,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (69,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (69,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (72,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (75,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (75,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (77,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (77,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (78,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (78,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (79,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (83,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (83,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (86,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (87,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (87,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (89,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (89,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (91,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (91,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (93,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (93,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (94,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (94,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (95,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (95,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (99,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (99,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (103,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (103,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (105,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (107,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (107,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (111,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (111,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (117,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (117,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (119,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (120,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (120,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (122,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (122,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (123,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (123,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (124,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (124,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (125,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (125,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (126,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (126,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (127,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (127,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (128,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (128,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (130,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (130,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (131,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (131,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (132,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (132,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (134,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (134,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (135,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (135,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (139,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (139,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (141,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (141,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (142,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (142,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (143,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (143,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (144,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (144,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (145,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (145,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (146,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (146,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (147,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (147,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (148,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (148,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (150,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (150,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (151,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (151,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (153,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (155,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (155,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (158,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (158,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (160,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (160,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (163,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (163,'w'); COMMIT; 
+  csql argv on poc74-ha-0: /usr/bin/coreutils --coreutils-prog-shebang=timeout /usr/bin/timeout 30 csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (166,'w'); COMMIT; 
+  csql argv on poc74-ha-0: csql -u app --no-auto-commit appdb@localhost -c INSERT INTO dba.t VALUES (166,'w'); COMMIT; 
+2026-11-23T10:59:44.902Z argv change poc74-ha-1 p0: lines_with_password=0
+2026-11-23T10:59:44.944Z argv change poc74-ha-1 p1: lines_with_password=0
+2026-11-23T10:59:44.993Z argv change poc74-ha-1 p2: lines_with_password=0
+2026-11-23T10:59:44.993Z argv change poc74-ha-1: distinct_argv=15 csql_argv=3 SAMPLES=1691
+  csql argv on poc74-ha-1: csql -u dba appdb@localhost 
+  csql argv on poc74-ha-1: csql -u dba -c SELECT 'login-' || 'ok' FROM db_root appdb@localhost 
+  csql argv on poc74-ha-1: csql --sysadm --write-on-standby -u dba appdb@localhost 
+2026-11-23T10:59:45.252Z argv change poc74-ha-2 p0: lines_with_password=0
+2026-11-23T10:59:45.293Z argv change poc74-ha-2 p1: lines_with_password=0
+2026-11-23T10:59:45.332Z argv change poc74-ha-2 p2: lines_with_password=0
+2026-11-23T10:59:45.333Z argv change poc74-ha-2: distinct_argv=12 csql_argv=1 SAMPLES=1754
+  csql argv on poc74-ha-2: csql -u dba -c SELECT 'login-' || 'ok' FROM db_root appdb@localhost 
+2026-11-23T10:59:45.547Z login after-every-member poc74-ha-0 p0: [after-every-member/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:45.620Z login after-every-member poc74-ha-0 p1: [after-every-member/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:45.696Z login after-every-member poc74-ha-1 p0: [after-every-member/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:45.771Z login after-every-member poc74-ha-1 p1: [after-every-member/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:45.848Z login after-every-member poc74-ha-2 p0: [after-every-member/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:59:45.923Z login after-every-member poc74-ha-2 p1: [after-every-member/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+## 2026-11-23T10:59:46.002Z procs after-change poc74-ha-0
+## 2026-11-23T10:59:46.043Z procs after-change poc74-ha-1
+## 2026-11-23T10:59:46.084Z procs after-change poc74-ha-2
+## 2026-11-23T10:59:46.131Z -171 after-change poc74-ha-0: 
+## 2026-11-23T10:59:46.172Z -171 after-change poc74-ha-1: 
+## 2026-11-23T10:59:46.213Z -171 after-change poc74-ha-2: 
+## 5. sessions opened before the change
+  hold-master: 1 row selected. (0.003999 sec) Committed. (0.000000 sec) 
+  hold-master: 1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+  hold-master: 1 row affected. (0.000000 sec) Committed. (0.000000 sec) 
+  hold-master: [hold/master] prompt_seen=True csql_prompts=4 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+  hold-slave: 1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+  hold-slave: 1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+  hold-slave: [hold/slave] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+## 6. writes stop
+2026-11-23T11:00:07.052Z writes: 216 ack, 0 unknown, ids 1 to 216
+2026-11-23T11:00:07.332Z wait_rows: every member has 217 rows after 0 s
+2026-11-23T11:00:07.384Z rows after-change poc74-ha-0: 217
+2026-11-23T11:00:07.438Z rows after-change poc74-ha-1: 217
+2026-11-23T11:00:07.491Z rows after-change poc74-ha-2: 217
+2026-11-23T11:00:07.493Z plaintext after-change poc74-ha-0 p0: []
+2026-11-23T11:00:07.765Z plaintext after-change poc74-ha-0 p1: []
+2026-11-23T11:00:08.031Z plaintext after-change poc74-ha-1 p0: []
+2026-11-23T11:00:08.294Z plaintext after-change poc74-ha-1 p1: []
+2026-11-23T11:00:08.557Z plaintext after-change poc74-ha-2 p0: []
+2026-11-23T11:00:08.819Z plaintext after-change poc74-ha-2 p1: []
+## 7. utilities that do not log in
+backupdb -C with p1 rc=0
+applyinfo rc=0
+heartbeat status rc=0
+2026-11-23T11:00:10.053Z plaintext after-backup poc74-ha-0 p0: []
+2026-11-23T11:00:10.321Z plaintext after-backup poc74-ha-0 p1: []
+## 8. all CUBRID processes of poc74-ha-2 stopped and started again
+heartbeat stop rc=0
+bash: pkill: command not found
+bash: ps: command not found
+cubrid processes left: 0
+heartbeat start rc=0
+2026-11-23T11:00:29.749Z batch on poc74-ha-0: 10 of 10 acknowledged
+2026-11-23T11:00:29.828Z wait_login poc74-ha-2 p1: accepted after 0 s
+2026-11-23T11:00:29.829Z login after-slave-restart poc74-ha-0 p0: [after-slave-restart/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:29.910Z login after-slave-restart poc74-ha-0 p1: [after-slave-restart/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:29.988Z login after-slave-restart poc74-ha-1 p0: [after-slave-restart/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:30.066Z login after-slave-restart poc74-ha-1 p1: [after-slave-restart/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:30.144Z login after-slave-restart poc74-ha-2 p0: [after-slave-restart/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:30.219Z login after-slave-restart poc74-ha-2 p1: [after-slave-restart/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:30.603Z wait_rows: every member has 227 rows after 0 s
+## 9. failover
+ha-0 heartbeat stop rc=0
+2026-11-23T11:00:33.074Z new master: poc74-ha-1 after 1 s
+2026-11-23T11:00:33.076Z login new-master poc74-ha-1 p0: [failover/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:33.185Z login new-master poc74-ha-1 p1: [failover/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:33.862Z batch on poc74-ha-1: 10 of 10 acknowledged
+ha-0 heartbeat start rc=0
+2026-11-23T11:00:46.183Z wait_login poc74-ha-0 p1: accepted after 0 s
+2026-11-23T11:00:46.187Z login after-failover poc74-ha-0 p0: [after-failover/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:46.453Z login after-failover poc74-ha-0 p1: [after-failover/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:46.594Z login after-failover poc74-ha-1 p0: [after-failover/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:46.684Z login after-failover poc74-ha-1 p1: [after-failover/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:46.763Z login after-failover poc74-ha-2 p0: [after-failover/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:46.838Z login after-failover poc74-ha-2 p1: [after-failover/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:47.427Z batch on poc74-ha-1: 10 of 10 acknowledged
+2026-11-23T11:00:47.876Z wait_rows: every member has 247 rows after 0 s
+2026-11-23T11:00:47.930Z rows after-failover poc74-ha-0: 247
+2026-11-23T11:00:47.983Z rows after-failover poc74-ha-1: 247
+2026-11-23T11:00:48.037Z rows after-failover poc74-ha-2: 247
+## 2026-11-23T11:00:48.039Z procs after-failover poc74-ha-0
+## 2026-11-23T11:00:48.080Z procs after-failover poc74-ha-1
+## 2026-11-23T11:00:48.122Z procs after-failover poc74-ha-2
+## 2026-11-23T11:00:48.163Z -171 after-failover poc74-ha-0: 
+## 2026-11-23T11:00:48.206Z -171 after-failover poc74-ha-1: 
+## 2026-11-23T11:00:48.249Z -171 after-failover poc74-ha-2: 
+## 10. ALTER USER on the master, for comparison
+2026-11-23T11:00:48.399Z master: poc74-ha-1
+2026-11-23T11:00:48.440Z change alter-user on poc74-ha-1: statement file -rw------- cubrid cubrid; start
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.7)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+csql> ;read /tmp/pwchange.sql
+
+The file has been read into the command buffer.
+csql> ;run
+Execute OK. (0.000000 sec) Committed. (0.000000 sec) 
+
+1 command(s) successfully processed.
+csql> ;exit
+
+[change/alter-user/poc74-ha-1] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:48.600Z change alter-user on poc74-ha-1: end
+2026-11-23T11:00:48.678Z wait_login poc74-ha-0 p2: accepted after 0 s
+2026-11-23T11:00:48.758Z wait_login poc74-ha-1 p2: accepted after 0 s
+2026-11-23T11:00:48.847Z wait_login poc74-ha-2 p2: accepted after 0 s
+2026-11-23T11:00:48.848Z login after-alter poc74-ha-0 p0: [after-alter/poc74-ha-0/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:48.925Z login after-alter poc74-ha-0 p1: [after-alter/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.002Z login after-alter poc74-ha-0 p2: [after-alter/poc74-ha-0/p2] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.092Z login after-alter poc74-ha-1 p0: [after-alter/poc74-ha-1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.165Z login after-alter poc74-ha-1 p1: [after-alter/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.245Z login after-alter poc74-ha-1 p2: [after-alter/poc74-ha-1/p2] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.324Z login after-alter poc74-ha-2 p0: [after-alter/poc74-ha-2/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.398Z login after-alter poc74-ha-2 p1: [after-alter/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:00:49.474Z login after-alter poc74-ha-2 p2: [after-alter/poc74-ha-2/p2] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+## 2026-11-23T11:01:09.556Z -171 after-alter poc74-ha-0: 
+## 2026-11-23T11:01:09.643Z -171 after-alter poc74-ha-1: 
+## 2026-11-23T11:01:09.682Z -171 after-alter poc74-ha-2: 
+backupdb -C with p2 rc=0
+2026-11-23T11:01:10.862Z plaintext after-alter poc74-ha-0 p0: []
+2026-11-23T11:01:11.126Z plaintext after-alter poc74-ha-0 p1: []
+2026-11-23T11:01:11.388Z plaintext after-alter poc74-ha-0 p2: [/var/lib/cubrid/databases/appdb_poc74-ha-1/appdb_lgat /var/lib/cubrid/databases/appdb_poc74-ha-1/appdb_lgar_t ]
+2026-11-23T11:01:11.637Z plaintext after-alter poc74-ha-1 p0: []
+2026-11-23T11:01:11.897Z plaintext after-alter poc74-ha-1 p1: []
+2026-11-23T11:01:12.159Z plaintext after-alter poc74-ha-1 p2: [/var/lib/cubrid/databases/appdb/appdb_lgat /tmp/bk-p2/appdb_bk0v000 ]
+2026-11-23T11:01:12.409Z plaintext after-alter poc74-ha-2 p0: []
+2026-11-23T11:01:12.677Z plaintext after-alter poc74-ha-2 p1: []
+2026-11-23T11:01:12.936Z plaintext after-alter poc74-ha-2 p2: [/var/lib/cubrid/databases/appdb_poc74-ha-1/appdb_lgat /var/lib/cubrid/databases/appdb_poc74-ha-1/appdb_lgar_t ]
+## 11. restores
+2026-11-23T11:01:41.272Z plaintext backup-bk-p0 poc74-restore p0: []
+2026-11-23T11:01:41.316Z plaintext backup-bk-p0 poc74-restore p1: []
+2026-11-23T11:01:41.361Z plaintext backup-bk-p0 poc74-restore p2: []
+restoredb bk-p0 rc=0
+2026-11-23T11:01:43.060Z restored bk-p0 login p0: [restore/bk-p0/p0] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:45.544Z restored bk-p0 login p1: [restore/bk-p0/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:48.111Z restored bk-p0 login p2: [restore/bk-p0/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:49.667Z plaintext backup-bk-p1 poc74-restore p0: []
+2026-11-23T11:01:49.710Z plaintext backup-bk-p1 poc74-restore p1: []
+2026-11-23T11:01:49.754Z plaintext backup-bk-p1 poc74-restore p2: []
+restoredb bk-p1 rc=0
+2026-11-23T11:01:51.255Z restored bk-p1 login p0: [restore/bk-p1/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:53.755Z restored bk-p1 login p1: [restore/bk-p1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:55.462Z restored bk-p1 login p2: [restore/bk-p1/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:01:57.048Z plaintext backup-bk-p2 poc74-restore p0: []
+2026-11-23T11:01:57.092Z plaintext backup-bk-p2 poc74-restore p1: []
+2026-11-23T11:01:57.135Z plaintext backup-bk-p2 poc74-restore p2: [/tmp/bk-p2/appdb_bk0v000 ]
+restoredb bk-p2 rc=0
+2026-11-23T11:01:58.815Z restored bk-p2 login p0: [restore/bk-p2/p0] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:02:01.296Z restored bk-p2 login p1: [restore/bk-p2/p1] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T11:02:02.786Z restored bk-p2 login p2: [restore/bk-p2/p2] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+run end 2026-11-23T11:02:04.414Z

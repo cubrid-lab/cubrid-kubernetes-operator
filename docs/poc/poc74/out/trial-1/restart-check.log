@@ -1,0 +1,70 @@
+restart-check start 2026-11-23T10:53:49.041Z
+2026-11-23T10:53:49.170Z master: poc74-ha-1
+## 1. CALL set_password on every member, logged in with p2
+[change-again/poc74-ha-0] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+[change-again/poc74-ha-1] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+[change-again/poc74-ha-2] prompt_seen=True csql_prompts=3 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.012Z login after-change-again poc74-ha-0 p1: [after-change-again/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.107Z login after-change-again poc74-ha-0 p2: [after-change-again/poc74-ha-0/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.182Z login after-change-again poc74-ha-1 p1: [after-change-again/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.260Z login after-change-again poc74-ha-1 p2: [after-change-again/poc74-ha-1/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.339Z login after-change-again poc74-ha-2 p1: [after-change-again/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:53:50.418Z login after-change-again poc74-ha-2 p2: [after-change-again/poc74-ha-2/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+## 2. restart of every CUBRID process of poc74-ha-2
+before:
+39216 start=103382838 cub_master 
+39225 start=103382943 cub_server appdb 
+39228 start=103382946 cub_pl appdb 
+39485 start=103383150 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 -m sync appdb@poc74-ha-0 
+39487 start=103383151 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 -m sync appdb@poc74-ha-1 
+39489 start=103383152 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 --max-mem-size=500 appdb@localhost 
+39491 start=103383152 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 --max-mem-size=500 appdb@localhost 
+heartbeat stop rc=0
+service stop rc=0
+left after stop:
+left after kill:
+(end of list)
+heartbeat start rc=0
+2026-11-23T10:54:06.460Z poc74-ha-2:  HA-Node Info (current poc74-ha-2, state slave)
+after start:
+39762 start=103398597 cub_master 
+39771 start=103398699 cub_server appdb 
+39774 start=103398702 cub_pl appdb 
+40031 start=103398903 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 -m sync appdb@poc74-ha-0 
+40033 start=103398904 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 -m sync appdb@poc74-ha-1 
+40035 start=103398929 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 --max-mem-size=500 appdb@localhost 
+40037 start=103398930 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 --max-mem-size=500 appdb@localhost 
+## 3. checks
+2026-11-23T10:54:06.582Z login after-restart poc74-ha-0 p1: [after-restart/poc74-ha-0/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:06.680Z login after-restart poc74-ha-0 p2: [after-restart/poc74-ha-0/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:06.792Z login after-restart poc74-ha-1 p1: [after-restart/poc74-ha-1/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:06.898Z login after-restart poc74-ha-1 p2: [after-restart/poc74-ha-1/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:06.971Z login after-restart poc74-ha-2 p1: [after-restart/poc74-ha-2/p1] prompt_seen=True csql_prompts=0 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:07.052Z login after-restart poc74-ha-2 p2: [after-restart/poc74-ha-2/p2] prompt_seen=True csql_prompts=0 rc=1 verdict=refused secret_echo=p0:0,p1:0,p2:0
+2026-11-23T10:54:07.636Z batch on poc74-ha-1: 10 of 10 acknowledged
+2026-11-23T10:54:07.840Z every member has 255 rows after 0 s
+2026-11-23T10:54:07.891Z rows final poc74-ha-0: 255
+2026-11-23T10:54:07.946Z rows final poc74-ha-1: 255
+2026-11-23T10:54:08.015Z rows final poc74-ha-2: 255
+## poc74-ha-0 copier and applier processes:
+46592 start=103384819 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 -m sync appdb@poc74-ha-1 
+46594 start=103384820 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-2 -m sync appdb@poc74-ha-2 
+46596 start=103384821 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 --max-mem-size=500 appdb@localhost 
+46598 start=103384822 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-2 --max-mem-size=500 appdb@localhost 
+## poc74-ha-1 copier and applier processes:
+318 start=103365277 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 -m sync appdb@poc74-ha-0 
+320 start=103365278 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-2 -m sync appdb@poc74-ha-2 
+322 start=103365279 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 --max-mem-size=500 appdb@localhost 
+324 start=103365279 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-2 --max-mem-size=500 appdb@localhost 
+## poc74-ha-2 copier and applier processes:
+40031 start=103398903 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 -m sync appdb@poc74-ha-0 
+40033 start=103398904 cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 -m sync appdb@poc74-ha-1 
+40035 start=103398929 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-0 --max-mem-size=500 appdb@localhost 
+40037 start=103398930 cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_poc74-ha-1 --max-mem-size=500 appdb@localhost 
+## 2026-11-23T10:54:08.195Z -171 poc74-ha-0: []
+## 2026-11-23T10:54:08.236Z -171 poc74-ha-1: []
+## 2026-11-23T10:54:08.277Z -171 poc74-ha-2: []
+2026-11-23T10:54:08.319Z plaintext p1 poc74-ha-0: []
+2026-11-23T10:54:08.582Z plaintext p1 poc74-ha-1: []
+2026-11-23T10:54:08.843Z plaintext p1 poc74-ha-2: []
+restart-check end 2026-11-23T10:54:09.104Z

@@ -1,0 +1,36 @@
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.7)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+csql> SELECT COUNT(*) FROM dba.t;
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                     0
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 
+
+1 command(s) successfully processed.
+csql> SELECT COUNT(*) FROM dba.t;
+
+=== <Result of SELECT Command in Line 1> ===
+
+              count(*)
+======================
+                   178
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+
+1 command(s) successfully processed.
+csql> INSERT INTO dba.t VALUES (900001,'held');
+1 row affected. (0.003999 sec) Committed. (0.000000 sec) 
+
+1 command(s) successfully processed.
+csql> ;exit
+
+[hold/master] prompt_seen=True csql_prompts=4 rc=0 verdict=accepted secret_echo=p0:0,p1:0,p2:0

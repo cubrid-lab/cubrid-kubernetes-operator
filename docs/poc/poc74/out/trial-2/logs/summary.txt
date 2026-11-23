@@ -1,0 +1,12 @@
+== poc74-ha-0 appdb@localhost_applylogdb_appdb_poc74-ha-1.err: 328 lines; codes:  2 CODE = -1038; 37 CODE = -1040; 1 CODE = -111; 1 CODE = -191; 1 CODE = -199; 119 CODE = -82; 2 CODE = -971;
+== poc74-ha-0 appdb@localhost_applylogdb_appdb_poc74-ha-2.err: 508 lines; codes:  2 CODE = -1038; 53 CODE = -1040; 1 CODE = -111; 1 CODE = -191; 1 CODE = -199; 193 CODE = -82; 2 CODE = -971;
+== poc74-ha-0 appdb@poc74-ha-1_copylogdb.err: 112 lines; codes:  2 CODE = -1039; 2 CODE = -1040; 2 CODE = -191; 22 CODE = -353; 25 CODE = -677; 2 CODE = -971;
+== poc74-ha-0 appdb@poc74-ha-2_copylogdb.err: 224 lines; codes:  4 CODE = -1039; 6 CODE = -1040; 6 CODE = -191; 2 CODE = -199; 39 CODE = -353; 49 CODE = -677; 4 CODE = -971;
+== poc74-ha-1 appdb@localhost_applylogdb_appdb_poc74-ha-0.err: 31 lines; codes:  1 CODE = -1038; 12 CODE = -1040; 1 CODE = -82; 1 CODE = -971;
+== poc74-ha-1 appdb@localhost_applylogdb_appdb_poc74-ha-2.err: 233 lines; codes:  1 CODE = -1038; 49 CODE = -1040; 65 CODE = -82; 1 CODE = -971;
+== poc74-ha-1 appdb@poc74-ha-0_copylogdb.err: 32 lines; codes:  2 CODE = -1039; 4 CODE = -1040; 2 CODE = -191; 1 CODE = -199; 4 CODE = -677; 2 CODE = -971;
+== poc74-ha-1 appdb@poc74-ha-2_copylogdb.err: 101 lines; codes:  3 CODE = -1039; 5 CODE = -1040; 4 CODE = -191; 2 CODE = -199; 13 CODE = -353; 19 CODE = -677; 3 CODE = -971;
+== poc74-ha-2 appdb@localhost_applylogdb_appdb_poc74-ha-0.err: 68 lines; codes:  3 CODE = -1038; 16 CODE = -1040; 2 CODE = -111; 1 CODE = -191; 2 CODE = -199; 3 CODE = -224; 1 CODE = -492; 1 CODE = -82; 3 CODE = -971;
+== poc74-ha-2 appdb@localhost_applylogdb_appdb_poc74-ha-1.err: 112 lines; codes:  3 CODE = -1038; 39 CODE = -1040; 2 CODE = -111; 1 CODE = -191; 2 CODE = -199; 3 CODE = -224; 1 CODE = -492; 3 CODE = -971;
+== poc74-ha-2 appdb@poc74-ha-0_copylogdb.err: 44 lines; codes:  4 CODE = -1039; 5 CODE = -1040; 2 CODE = -191; 1 CODE = -199; 4 CODE = -677; 4 CODE = -971;
+== poc74-ha-2 appdb@poc74-ha-1_copylogdb.err: 25 lines; codes:  3 CODE = -1039; 5 CODE = -1040; 3 CODE = -971;

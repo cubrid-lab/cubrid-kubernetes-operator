@@ -1,0 +1,42 @@
+
+Time: 11/23/26 10:57:48.058 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 320) connected to database server 'appdb@poc74-ha-1' on the host 'poc74-ha-1' (port 1523).
+
+Time: 11/23/26 10:57:48.103 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 4, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 10:57:48.152 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 4, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-1) from 'na' to 'standby'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:00:19.948 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 37729) connected to database server 'appdb@poc74-ha-1' on the host 'poc74-ha-1' (port 1523).
+
+Time: 11/23/26 11:00:20.003 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 4, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:00:20.003 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 4, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-1) from 'na' to 'standby'. 
+
+Time: 11/23/26 11:00:32.013 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 4, EID = 4
+HA generic: change the state of HA server (appdb@poc74-ha-1) from 'standby' to 'to-be-active'. 
+
+Time: 11/23/26 11:00:33.263 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 4, EID = 5
+HA generic: change the state of HA server (appdb@poc74-ha-1) from 'to-be-active' to 'active'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:02:12.286 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 38273) connected to database server 'appdb@poc74-ha-1' on the host 'poc74-ha-1' (port 1523).
+
+Time: 11/23/26 11:02:12.319 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 4, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:02:12.319 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 4, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-1) from 'na' to 'active'. 
+
+*** The previous error message is the last one. ***
+
