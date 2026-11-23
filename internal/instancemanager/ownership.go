@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ownershipMarker is a file in a database directory that names the operation
@@ -58,6 +59,51 @@ func markOwned(root *os.Root, database, opID string) error {
 		return fmt.Errorf("mark %s as owned by %s: %w", database, opID, err)
 	}
 	return nil
+}
+
+// markedOperations returns the values of the ownership markers below the
+// database root: the operations whose records reclaimIncomplete,
+// adoptRestored, ResumeCompletedRestores, releaseRebuild and the role answer
+// still judge a database directory by. The operation store never prunes
+// them (OperationStore.SetReferenced). Every entry that may be a directory
+// is looked at, also one whose name is no database's. A marker or a root
+// that cannot be read is an error, so that nothing is pruned while it is
+// not known which records are still named. Only a running operation writes
+// a marker, naming itself, so an operation that has ended is never named by
+// a marker written after this call.
+func (s *Server) markedOperations() (map[string]bool, error) {
+	ids := map[string]bool{}
+	root, err := os.OpenRoot(s.restoreRoots.Target)
+	if os.IsNotExist(err) {
+		return ids, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open the database root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("open the database root: %w", err)
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read the database root: %w", err)
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			continue
+		}
+		data, err := root.ReadFile(markerPath(e.Name()))
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read the ownership marker of %s: %w", e.Name(), err)
+		}
+		ids[strings.TrimSpace(string(data))] = true
+	}
+	return ids, nil
 }
 
 // clearOwned removes the marker: the database is complete.

@@ -47,6 +47,8 @@ const (
 	eventStoreWriteFailed = "operation_store_write_failed"
 	eventNotReady         = "not_ready"
 	eventRecordUnreadable = "operation_record_unreadable"
+	eventRecordPruned     = "operation_record_pruned"
+	eventPruneSkipped     = "operation_store_prune_skipped"
 
 	reasonNoToken    = "NoToken"
 	reasonWrongToken = "WrongToken"

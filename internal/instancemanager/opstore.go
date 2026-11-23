@@ -73,6 +73,21 @@ type OperationStore struct {
 	// read. The first successful read of one that has not ended fails it,
 	// as reconcileOnStart would have.
 	interrupted map[string]bool
+	// referenced returns the IDs of the operations that something outside
+	// the store still names (SetReferenced). Records are pruned only while
+	// it is set (pruneLocked).
+	referenced func() (map[string]bool, error)
+}
+
+// SetReferenced turns on the pruning of expired records (pruneLocked).
+// referenced returns the operation IDs that something outside the store
+// still names, such as the ownership marker of a database directory; their
+// records are never pruned. An error from it prunes nothing. It is called
+// with the store's lock held and must not call the store.
+func (s *OperationStore) SetReferenced(referenced func() (map[string]bool, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.referenced = referenced
 }
 
 // unreadableRecord is a record that could not be read, why, and whether
@@ -179,6 +194,10 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 			return nil, false, ErrOperationInProgress
 		}
 	}
+
+	// Only now, after the key was looked up: an expired record under the
+	// request's own key is answered above, never pruned and then re-run.
+	s.pruneLocked(ops, time.Now().UTC())
 
 	id, err := newOperationID()
 	if err != nil {
@@ -358,6 +377,101 @@ func (s *OperationStore) logWriteFailure(op *Operation, err error, level slog.Le
 	}
 	s.logger.Log(context.Background(), level, "Could not write the operation record", "event", eventStoreWriteFailed,
 		"operationID", op.ID, "kind", string(op.Kind), "state", string(op.State), "err", err.Error())
+}
+
+// operationRetention is the idempotency horizon of the store: how long a
+// record stays after its operation ended (Completed or Failed, counted from
+// its UpdatedAt) before it may be pruned. Within it, a repeat of the same
+// idempotency key is always answered with the recorded operation and never
+// runs it again, also across a restart, since the record is on disk.
+//
+// After it, the record is removed, and a request under the same key would
+// start a new operation. The horizon is therefore far longer than any time
+// for which the Operator may still send a key: it stops waiting for a
+// started or missing operation after backupTargetWait,
+// backupOperationMissingWait and recoveryOperationMissingWait (30 minutes
+// each, internal/controller), and a resource whose operation ended has its
+// result in its status and sends that key no more. Thirty days leave room
+// for an Operator that was down or a member that could not be reached for
+// weeks. A record is removed whole rather than replaced by a smaller
+// tombstone: a tombstone that answers a retried key with the original
+// outcome keeps most of the record, and would itself need a horizon.
+const operationRetention = 30 * 24 * time.Hour
+
+// removeOperationRecord removes one record file; tests replace it to stop a
+// pruning partway, as a crash would.
+var removeOperationRecord = os.Remove
+
+// pruneLocked removes the records of ops whose operation ended more than
+// operationRetention before now, and keeps every other record:
+//   - one that has not ended, whose end is kept in memory only (Settle) or
+//     that the start could not read (interrupted);
+//   - one without a usable UpdatedAt, or with one after now;
+//   - one that referenced names, such as the operation an ownership marker
+//     names: a database directory, a completed restore that is started again
+//     after a restart, or a member rebuild that waits for its release, is
+//     judged by that record, and without it is refused as unknown.
+//
+// Nothing is pruned when referenced is not set or fails. Records the latest
+// listing could not read are not in ops and are never pruned.
+//
+// Each record is removed with one unlink, then the directory is synced. A
+// crash at any point leaves every record either whole or absent, never
+// partly written; a record whose removal was not yet durable may come back,
+// and is pruned again later. No step writes another record, so a crash never
+// makes a key that is still within the horizon look new. A failure is logged
+// and stops the pruning; it never fails the request.
+func (s *OperationStore) pruneLocked(ops []*Operation, now time.Time) {
+	if s.referenced == nil {
+		return
+	}
+	var expired []*Operation
+	for _, op := range ops {
+		_, unwritten := s.unsettled[op.ID]
+		if !op.State.IsTerminal() || unwritten || s.interrupted[op.ID] ||
+			op.UpdatedAt.IsZero() || now.Sub(op.UpdatedAt) <= operationRetention {
+			continue
+		}
+		expired = append(expired, op)
+	}
+	if len(expired) == 0 {
+		return
+	}
+	referenced, err := s.referenced()
+	if err != nil {
+		s.logPruneSkipped(err)
+		return
+	}
+	removed := false
+	for _, op := range expired {
+		if referenced[op.ID] {
+			continue
+		}
+		if err := removeOperationRecord(filepath.Join(s.dir, op.ID+".json")); err != nil && !os.IsNotExist(err) {
+			s.logPruneSkipped(fmt.Errorf("remove the record of operation %s: %w", op.ID, err))
+			break
+		}
+		removed = true
+		if s.logger != nil {
+			s.logger.Info("Removed the record of an operation that ended before the idempotency horizon",
+				"event", eventRecordPruned, "operationID", op.ID, "kind", string(op.Kind),
+				"state", string(op.State), "updatedAt", op.UpdatedAt.Format(time.RFC3339))
+		}
+	}
+	if removed {
+		if err := syncOperationDir(s.dir); err != nil {
+			s.logPruneSkipped(fmt.Errorf("sync the operation directory: %w", err))
+		}
+	}
+}
+
+// logPruneSkipped records why expired records were kept for now.
+func (s *OperationStore) logPruneSkipped(err error) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.Warn("Kept expired operation records; the next request tries again", "event", eventPruneSkipped,
+		"err", err.Error())
 }
 
 // reasonRestarted is the failure reason of an operation that was running

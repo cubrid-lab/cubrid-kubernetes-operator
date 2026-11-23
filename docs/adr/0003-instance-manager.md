@@ -413,6 +413,21 @@ memory does not count: a manager that restarts first finds the operation
 unfinished and records it as `Failed`, and the same idempotency key still
 names that operation.
 
+Operation records are kept for an idempotency horizon of 30 days after their
+operation ended (#369). Within it a repeat of the same idempotency key is
+answered with the recorded operation and never runs it again, also after a
+restart. After it, the next start request removes the record, so a request
+under that key would start a new operation; the horizon is far longer than the
+Operator's 30-minute bounds on waiting for an operation it started or cannot
+find, and a resource whose operation ended sends its key no more. A record is
+never removed while its operation has not ended, while its end is kept in
+memory only, while it cannot be read, or while an ownership marker below the
+database root names it; while a marker cannot be read nothing is removed. Each
+record is removed with one unlink followed by a directory sync, so a crash
+leaves every record whole or absent. Every start request still reads every
+record, so that a record damaged on disk keeps blocking admission (#427); the
+horizon bounds how many there are.
+
 A request is checked before anything is done for it (#301). A body larger
 than 16 KiB is answered with 413 without being read to its end. `POST
 /v1/backup` is answered with 400, and no directory, operation or command is
