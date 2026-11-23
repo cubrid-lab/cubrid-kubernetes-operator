@@ -329,8 +329,9 @@ func TestGateIsNotSatisfiedByARenamedResult(t *testing.T) {
 // The Kind member rebuild step records S10 without a variant. The kind lane
 // does not require it, because rebuild_limit has no value and every run of it
 // is blocked: such a result leaves the lane's verdict alone, and a failure of
-// it fails the run as any recorded result does.
-func TestKindRebuildResultIsRecordedButNotRequired(t *testing.T) {
+// it fails the run as any recorded result does. This is the kind lane's own
+// gate; the release-candidate verifier still requires S10 at both levels.
+func TestKindRebuildResultIsNotRequiredByTheKindLane(t *testing.T) {
 	const s10, rebuildKey = "S10", "ha-pvc-loss-rebuild"
 	resolved, err := ResolveAlias(kindLaneName, LevelKind, s10)
 	if err != nil {

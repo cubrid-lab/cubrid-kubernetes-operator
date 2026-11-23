@@ -216,6 +216,8 @@ type haFixture struct {
 	dataClaims   bool
 	claimDeleted func(ctx context.Context, c client.WithWatch, pvc *corev1.PersistentVolumeClaim,
 		opts ...client.DeleteOption) error
+	// claimRead plays the API server before a read of a claim.
+	claimRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -435,6 +437,10 @@ func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key clien
 	case *appsv1.Deployment:
 		if f.deploymentRead != nil {
 			return f.deploymentRead(key)
+		}
+	case *corev1.PersistentVolumeClaim:
+		if f.claimRead != nil {
+			return f.claimRead(ctx, c, key)
 		}
 	}
 	return nil

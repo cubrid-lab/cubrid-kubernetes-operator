@@ -85,7 +85,37 @@ var (
 	s10RebuildBound = 10 * time.Minute
 	s10SlaveBound   = 3 * time.Minute
 	s10Slack        = time.Minute
+	// s10RebuildMargin is added to a set rebuild_limit for the rebuild's
+	// wait, so that the wait never ends before the limit could judge it.
+	s10RebuildMargin = 5 * time.Minute
 )
+
+// s10WriteTimes is s10Record.WriteTimes.
+const s10WriteTimes = "client answer times (client node clock) compared with acceptedTime and endTime of " +
+	"status.lastMemberRebuild (Operator, manager node clock, whole seconds); clock skew between the hosts is not " +
+	"measured or corrected"
+
+// s10RebuildWait bounds the wait for the rebuild: s10RebuildBound, or
+// rebuild_limit and s10RebuildMargin when that is longer.
+func (c HAConfig) s10RebuildWait() time.Duration {
+	if c.RebuildLimit > 0 {
+		return max(s10RebuildBound, c.RebuildLimit+s10RebuildMargin)
+	}
+	return s10RebuildBound
+}
+
+// s10Unobserved is a step whose outcome was not seen within its bound: S10 is
+// blocked, not failed, because nothing that was seen broke a rule.
+type s10Unobserved struct{ error }
+
+// s10ErrorResult is the result of a step that ended with err: blocked when
+// the step's outcome was not seen in time, failed otherwise.
+func s10ErrorResult(err error) evidence.Result {
+	if errors.As(err, new(s10Unobserved)) {
+		return evidence.Blocked
+	}
+	return evidence.Fail
+}
 
 // s10ListScript lists, read-only, the database directory of a member's
 // container and says whether it holds the database: a directory of the
@@ -146,9 +176,17 @@ type s10Record struct {
 	PodUIDBefore   string              `json:"podUIDBefore,omitempty"`
 	ClaimDeletedAt *time.Time          `json:"claimDeletedAt,omitempty"`
 	PodDeletedAt   *time.Time          `json:"podDeletedAt,omitempty"`
-	NewClaim       *s10Claim           `json:"newClaim,omitempty"`
-	NewPodUID      string              `json:"newPodUID,omitempty"`
-	NewVolume      string              `json:"newVolumeBeforeRebuild,omitempty"`
+	// PodNotDeleted says that the claim delete was accepted and the Pod
+	// delete was not: the claim stays Terminating while the Pod holds it.
+	PodNotDeleted bool `json:"claimDeletedPodNotDeleted,omitempty"`
+	// WriteTimes says how the client's answers were placed inside the
+	// rebuild: their times are the client node's clock, the rebuild's
+	// acceptance and end the Operator's, on other hosts, and the run does
+	// not correct for the difference.
+	WriteTimes string    `json:"whileRebuildWriteTimes"`
+	NewClaim   *s10Claim `json:"newClaim,omitempty"`
+	NewPodUID  string    `json:"newPodUID,omitempty"`
+	NewVolume  string    `json:"newVolumeBeforeRebuild,omitempty"`
 	// ReleasedQuarantine is the generation of the write quarantine the run
 	// released manually, when it released one.
 	ReleasedQuarantine string      `json:"releasedQuarantine,omitempty"`
@@ -194,7 +232,7 @@ func rebuildTarget(master string, slaves, members []string) (member string, outr
 // with a manual release, the client's start, the rebuild, the member's
 // return, the client's stop, the data check and the reads without a bound.
 func (c HAConfig) s10StepBounds() time.Duration {
-	return s10ReplaceBound + s10ListBound + s10OfferBound + s06ClientStart + s10RebuildBound + s10SlaveBound +
+	return s10ReplaceBound + s10ListBound + s10OfferBound + s06ClientStart + c.s10RebuildWait() + s10SlaveBound +
 		soakStopBound + c.DataCheckWithin + readSlack + s10Slack
 }
 
@@ -264,7 +302,7 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s10ID, &result)()
 	result = evidence.Scenario{ID: s10ID, Result: evidence.Fail, NeverEvents: []string{}}
 	measured := s10Measurements()
-	rec := s10Record{ClaimsBefore: map[string]s10Claim{}}
+	rec := s10Record{ClaimsBefore: map[string]s10Claim{}, WriteTimes: s10WriteTimes}
 	defer func() {
 		if rec.ClientStarted && !rec.ClientStopped {
 			// A client left writing would change the rows after the verdict.
@@ -291,7 +329,7 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 		result.Result, result.Reason = r, fmt.Sprintf(format, args...)
 		// A run that ended before S10 was judged is blocked, unless it had
 		// already seen something that must never happen.
-		if ctx.Err() != nil && r == evidence.Fail && len(result.NeverEvents) == 0 {
+		if ctx.Err() != nil && r != evidence.Pass && len(result.NeverEvents) == 0 {
 			result.Result, result.Reason = evidence.Blocked, "the run ended before S10 was judged: "+result.Reason
 		}
 		return result
@@ -306,7 +344,9 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 	}
 	member := rec.Member
 	measured["rebuildTargetWasMaster"] = false
-	if err := h.s10ReplaceStorage(ctx, &rec); err != nil {
+	err := h.s10ReplaceStorage(ctx, &rec)
+	measured["claimDeletedPodNotDeleted"] = rec.PodNotDeleted
+	if err != nil {
 		if errors.As(err, new(s10Unconfirmed)) {
 			return end(evidence.Blocked, "the fault is not confirmed: %v", err)
 		}
@@ -357,7 +397,7 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 		}
 	}
 	if err != nil {
-		return end(evidence.Fail, "%v", err)
+		return end(s10ErrorResult(err), "%v", err)
 	}
 	measured["rebuildRequestedToCompleted"] = time.Since(requested).Round(time.Millisecond).String()
 	if done.EndTime != nil {
@@ -367,7 +407,7 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 	moved, err := h.s10WaitSlave(ctx, &rec)
 	measured["masterMoved"] = moved
 	if err != nil {
-		return end(evidence.Fail, "%v", err)
+		return end(s10ErrorResult(err), "%v", err)
 	}
 	cleaned := true
 	result.CleanupSucceeded = &cleaned
@@ -490,9 +530,10 @@ func (h *haRun) s10Start(ctx context.Context, rec *s10Record) error {
 	if rec.Member == rec.Master {
 		return fmt.Errorf("the target %s is the master", rec.Member)
 	}
-	if !slices.ContainsFunc(cluster.Status.MemberDataClaims, func(d databasev1alpha1.MemberDataClaim) bool {
+	recorded := slices.IndexFunc(cluster.Status.MemberDataClaims, func(d databasev1alpha1.MemberDataClaim) bool {
 		return d.Name == rec.Member
-	}) {
+	})
+	if recorded < 0 {
 		return fmt.Errorf("status.memberDataClaims records no claim of %s holding the database", rec.Member)
 	}
 	for _, m := range h.members {
@@ -504,6 +545,13 @@ func (h *haRun) s10Start(ctx context.Context, rec *s10Record) error {
 			return fmt.Errorf("the claim %s is not a bound claim that is not being deleted: %+v", claim.Name, claim)
 		}
 		rec.ClaimsBefore[m] = claim
+	}
+	// The claim the run deletes must be the one the Operator saw holding
+	// the database, or the run would not be replacing lost storage.
+	want, live := cluster.Status.MemberDataClaims[recorded].ClaimUID, rec.ClaimsBefore[rec.Member].UID
+	if want != live {
+		return fmt.Errorf("status.memberDataClaims records the claim %s of %s, not its live claim %s; nothing was "+
+			"deleted", want, rec.Member, live)
 	}
 	pod := &corev1.Pod{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: rec.Member}, pod); err != nil {
@@ -538,6 +586,9 @@ func (h *haRun) s10ReplaceStorage(ctx context.Context, rec *s10Record) error {
 	if err := h.guard(ctx); err != nil {
 		return err
 	}
+	if err := h.s10StillTarget(ctx, rec); err != nil {
+		return fmt.Errorf("%w; nothing was deleted", err)
+	}
 	old := rec.ClaimsBefore[rec.Member]
 	claimUID, podUID := types.UID(old.UID), types.UID(rec.PodUIDBefore)
 	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: old.Name, Namespace: h.cfg.Namespace}}
@@ -548,7 +599,10 @@ func (h *haRun) s10ReplaceStorage(ctx context.Context, rec *s10Record) error {
 	rec.ClaimDeletedAt = &deleted
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: rec.Member, Namespace: h.cfg.Namespace}}
 	if err := h.Client.Delete(ctx, pod, client.Preconditions{UID: &podUID}); err != nil {
-		return fmt.Errorf("delete the Pod %s (UID %s) after its claim: %w", rec.Member, rec.PodUIDBefore, err)
+		rec.PodNotDeleted = true
+		rec.Unmet = fmt.Sprintf("claim %s deleted, Pod %s not deleted (%v); the claim is Terminating and the "+
+			"namespace needs attention", old.Name, rec.Member, err)
+		return errors.New(rec.Unmet)
 	}
 	gone := time.Now().UTC()
 	rec.PodDeletedAt = &gone
@@ -589,6 +643,30 @@ func (h *haRun) s10ReplaceStorage(ctx context.Context, rec *s10Record) error {
 	}
 }
 
+// s10StillTarget reads the roles and the target's Pod again right before the
+// delete: the master must be the one the target was chosen against, the
+// target must still answer as a slave, and its Pod must be the one recorded.
+func (h *haRun) s10StillTarget(ctx context.Context, rec *s10Record) error {
+	roles, unmet, err := h.roles(ctx)
+	switch {
+	case err != nil || unmet != "":
+		return fmt.Errorf("read the roles before the delete: %w", errors.Join(err, errors.New(unmet)))
+	case roles.Master != rec.Master:
+		return fmt.Errorf("the master is %s before the delete, not %s as when %s was chosen", roles.Master,
+			rec.Master, rec.Member)
+	case !slices.Contains(roles.Slaves, rec.Member):
+		return fmt.Errorf("%s no longer answers as a slave before the delete", rec.Member)
+	}
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: rec.Member}, pod); err != nil {
+		return fmt.Errorf("read the Pod %s before the delete: %w", rec.Member, err)
+	}
+	if string(pod.UID) != rec.PodUIDBefore {
+		return fmt.Errorf("the Pod %s has UID %s before the delete, not %s", rec.Member, pod.UID, rec.PodUIDBefore)
+	}
+	return nil
+}
+
 // s10ListNewVolume lists, read-only, the database directory of the new Pod
 // before any rebuild and keeps the listing. The container may not accept a
 // command at first; when it accepts none within s10ListBound, the listing is
@@ -623,12 +701,17 @@ func (h *haRun) s10ListNewVolume(ctx context.Context, member string) string {
 
 // s10WaitOffer waits for the Operator's offer for the target's new claim and
 // returns its token, which goes to the redactor and nowhere else. When the
-// target outranks the master, a WriteQuarantinedMemberUnverified quarantine
-// naming the target's new Pod is released first with its current token, as
-// the manual release documents; that is safe here, because the target's claim
-// was replaced by an empty one and no acknowledged write can be lost by it. A
-// quarantine with another reason is not released. An offer whose source is
-// not the master is an s10Wrong.
+// target outranks the master, a WriteQuarantinedMemberUnverified quarantine is
+// released first with its current token, as the manual release documents. A
+// manual release accepts, for every member the quarantine records, that writes
+// only that member acknowledged may be lost. The run accepts that only for the
+// target alone: its claim was replaced by an empty one, so it holds no write
+// to lose. A quarantine is therefore released only when it records exactly
+// one member, the target, with the target's new Pod UID; a quarantine that
+// records any other member, or has another reason, is not released and S10
+// is blocked. s10Start needs one master and two answering slaves, so the
+// target is never the last resolved primary. An offer whose source is not the
+// master is an s10Wrong.
 func (h *haRun) s10WaitOffer(ctx context.Context, rec *s10Record) (string, error) {
 	deadline := time.Now().Add(s10OfferBound)
 	lastSet := ""
@@ -649,13 +732,19 @@ func (h *haRun) s10WaitOffer(ctx context.Context, rec *s10Record) (string, error
 					"the quarantine of a member without storage", q.Reason,
 					databasev1alpha1.WriteQuarantinedMemberUnverified)
 			}
-			i := slices.IndexFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
-				return m.Name == rec.Member
-			})
-			// The release covers the Pods the quarantine records; a record
+			names := make([]string, 0, len(q.Members))
+			for _, m := range q.Members {
+				names = append(names, m.Name)
+			}
+			if len(q.Members) != 1 || q.Members[0].Name != rec.Member {
+				return "", fmt.Errorf("the write quarantine %s records the members %v; S10 releases a quarantine "+
+					"only when it records the target %s alone, and released nothing", q.GenerationID, names,
+					rec.Member)
+			}
+			// The release covers the Pod the quarantine records; a record
 			// made before the new Pod existed is revised, with a new token,
 			// once the Operator sees the new Pod.
-			if i < 0 || q.Members[i].PodUID != rec.NewPodUID || q.ReleaseToken == "" {
+			if q.Members[0].PodUID != rec.NewPodUID || q.ReleaseToken == "" {
 				unmet += ", not yet naming the new Pod of " + rec.Member + " with a release token"
 				break
 			}
@@ -755,7 +844,8 @@ func (h *haRun) setS10Annotation(ctx context.Context, key, value string) error {
 // added to the never-events by the caller through the returned rebuild.
 func (h *haRun) s10WaitRebuild(ctx context.Context, rec *s10Record, token string) (*databasev1alpha1.MemberRebuild,
 	error) {
-	deadline := time.Now().Add(s10RebuildBound)
+	bound := h.cfg.s10RebuildWait()
+	deadline := time.Now().Add(bound)
 	for {
 		cluster, err := h.s07OwnCluster(ctx)
 		unmet := "the rebuild has not ended"
@@ -784,7 +874,8 @@ func (h *haRun) s10WaitRebuild(ctx context.Context, rec *s10Record, token string
 		}
 		rec.Unmet = unmet
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return nil, fmt.Errorf("the rebuild of %s did not end within %s: %s", rec.Member, s10RebuildBound, unmet)
+			return nil, s10Unobserved{fmt.Errorf("the rebuild of %s was not seen to end within %s: %s", rec.Member,
+				bound, unmet)}
 		}
 		select {
 		case <-ctx.Done():
@@ -824,8 +915,8 @@ func (h *haRun) s10WaitSlave(ctx context.Context, rec *s10Record) (moved bool, _
 		}
 		rec.Unmet = unmet
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return false, fmt.Errorf("%s did not return as a slave with its new claim within %s: %s", rec.Member,
-				s10SlaveBound, unmet)
+			return false, s10Unobserved{fmt.Errorf("%s was not seen to return as a slave with its new claim within "+
+				"%s: %s", rec.Member, s10SlaveBound, unmet)}
 		}
 		select {
 		case <-ctx.Done():

@@ -1923,12 +1923,14 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   `blocked` with `time_limit_unset`, never a pass, as the Kind step is. It
   needs `-fault pvc-loss-rebuild`, and a negative value is refused.
 - `-timeout` must be longer than the bounds of S10's own steps, 36 minutes
-  and a half with the default `-data-check-within` of 2 minutes: 5 minutes for
-  the replacement of the claim and Pod, 2 for the listing, 10 for the offer
-  with a manual release, 2 for the client's start, 10 for the rebuild, 3 for
-  the member's return, 1 for the client's stop, the data check window with
+  and a half with the default `-data-check-within` of 2 minutes and
+  `rebuild_limit` unset: 5 minutes for the replacement of the claim and Pod,
+  2 for the listing, 10 for the offer with a manual release, 2 for the
+  client's start, the wait for the rebuild, 3 for the member's return, 1 for the client's stop, the data check window with
   30 seconds of reading, and a minute for the reads without a bound of their
-  own. LAB01's time comes on top; the run refuses a shorter `-timeout`
+  own. The wait for the rebuild is 10 minutes, or `rebuild_limit` and 5
+  minutes when that is longer, so that the wait never ends before the limit
+  could judge the rebuild. LAB01's time comes on top; the run refuses a shorter `-timeout`
   before it reads or creates anything in the cluster. The campaign Lease
   must cover the whole `-timeout`.
 
@@ -1939,16 +1941,24 @@ What the run does:
    with `cubrid heartbeat status` and picks the target as the Kind step does:
    the first slave ranked below the master (a higher ordinal); when every
    slave outranks the master, the first slave. **The master is never the
-   target.** The target must be recorded in `status.memberDataClaims`. The
-   run records the UID and volume of every member's claim `data-<member>`,
-   and the target's Pod UID. Anything missing blocks S10 before anything is
-   deleted.
-2. It deletes the target's claim, then its Pod, each in the run namespace
-   with the UID it recorded as a precondition, as the documented commands
-   do: the API server refuses to delete a claim or Pod that replaced the one
-   the run checked, and a refused claim delete deletes no Pod. **This lane is
-   the only one in which the harness deletes a claim**, and it never deletes
-   one outside its own namespace or of another member.
+   target.** The roles must show one master and two slaves, so the target
+   is never the last resolved primary. The run records the UID and volume of
+   every member's claim `data-<member>`, and the target's Pod UID. The claim
+   `status.memberDataClaims` records for the target must be its live claim.
+   Anything missing or different blocks S10 before anything is deleted.
+2. Right before the delete, it reads the roles and the target's Pod again:
+   the master must be unchanged, the target must still answer as a slave,
+   and its Pod must have the recorded UID; otherwise S10 is blocked and
+   nothing is deleted. It then deletes the target's claim, then its Pod, each
+   in the run namespace with the UID it recorded as a precondition, as the
+   documented commands do: the API server refuses to delete a claim or Pod
+   that replaced the one the run checked, and a refused claim delete deletes
+   no Pod. A claim delete that was accepted with a Pod delete that was not
+   blocks S10 with the reason "claim deleted, Pod not deleted; the claim is
+   Terminating and the namespace needs attention", and the measurement
+   `claimDeletedPodNotDeleted` is `true`. **This lane is the only one in
+   which the harness deletes a claim**, and it never deletes one outside its
+   own namespace or of another member.
 3. The fault is confirmed when, within 5 minutes, the claim has a new UID,
    is not being deleted and is bound to a new volume, and the Pod has a new
    UID, and when a read-only listing of the new Pod's database directory
@@ -1960,15 +1970,18 @@ What the run does:
    fault unconfirmed: the run goes on, and S10 is then `blocked`, not passed.
 4. When the target outranks the master, its loss starts a
    `WriteQuarantinedMemberUnverified` quarantine that does not end by itself,
-   and no rebuild is offered under it. The run releases it as the
-   [manual release](../observability.md#manual-release) documents: once the
-   quarantine names the target's new Pod, it sets the current release token
-   on its own cluster (the patch names the cluster's UID), and sets it again
-   when a revision replaces the token. It then needs
-   `status.lastWriteQuarantineRelease` to record that generation as released
-   manually, and the read-write Brokers available again. A quarantine with
-   another reason is not released, and S10 is blocked. This is safe here
-   only because the target's claim was replaced by an empty one.
+   and no rebuild is offered under it. A manual release accepts, for every
+   member the quarantine records, that writes only that member acknowledged
+   may be lost; the run accepts that only for the target, whose claim it
+   replaced by an empty one. It therefore releases the quarantine only when
+   it records exactly one member, the target, with its new Pod UID, as the
+   [manual release](../observability.md#manual-release) documents: it sets
+   the current release token on its own cluster (the patch names the
+   cluster's UID), and sets it again when a revision replaces the token. It
+   then needs `status.lastWriteQuarantineRelease` to record that generation
+   as released manually, and the read-write Brokers available again. A
+   quarantine that records any other member, or has another reason, is not
+   released, and S10 is blocked.
 5. It waits up to 10 minutes for the offer in
    `status.memberRebuildOffers` that names the target and its new claim. An
    offer whose source is not the master fails S10; no offer blocks it.
@@ -1977,17 +1990,23 @@ What the run does:
    `<member>:<token>` (with `:<source>` for an offer with `formerPrimary`)
    on its own cluster, the patch naming the cluster's UID.
 7. The rebuild recorded in `status.lastMemberRebuild` under that token must
-   end `Completed` within 10 minutes and name the target, the master as its
+   end `Completed` within the wait above and name the target, the master as its
    source and the new claim. A rebuild that names the master is recorded as
    an outcome that must never happen.
 8. Within 3 minutes the target must answer as a slave of the same master,
    with no ownership marker in `status.instances`, `Degraded` not `True`, its
    new claim in `status.memberDataClaims`, its lost claim in
    `status.formerDataClaims`, and the consumed request removed. A master that
-   moved fails S10.
+   moved fails S10. A rebuild or a return not seen within its wait blocks S10:
+   only a measured rebuild over `rebuild_limit`, a broken rule or an outcome
+   that must never happen fails it.
 9. The client is stopped, and its history joins the run's. The inserts
    answered after the second that follows the rebuild's recorded acceptance
-   and before its recorded end are counted as written while it ran.
+   and before its recorded end are counted as written while it ran. The
+   client's times are its node's clock and the rebuild's times the
+   Operator's, written on another host; the run does not measure or correct
+   the skew between them, and `S10/record.json` says so
+   (`whileRebuildWriteTimes`).
 10. The data rules must hold on every member and both Services over the
     whole history, the client's rows included; the rebuilt member's applier
     must have fail count `0` (`cubrid applyinfo` for the master's log); and

@@ -331,14 +331,22 @@ func memberRebuildStep(r *haRun) {
 							"this step releases only the quarantine of a member without storage",
 							q.Reason, databasev1alpha1.WriteQuarantinedMemberUnverified)).Now()
 					}
-					i := slices.IndexFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
-						return m.Name == member
-					})
-					g.Expect(i).To(BeNumerically(">=", 0), "the quarantine names %s: %+v", member, q.Members)
-					// The release covers the Pods the quarantine records; a
+					// A manual release accepts, for every member the
+					// quarantine records, that writes only that member
+					// acknowledged may be lost. The step accepts that only
+					// for the member whose storage it replaced, so it
+					// releases a quarantine that records that member alone
+					// and fails, releasing nothing, on any other. The master
+					// and a second slave answered when the member was chosen,
+					// so the member is never the last resolved primary.
+					if len(q.Members) != 1 || q.Members[0].Name != member {
+						StopTrying(fmt.Sprintf("the write quarantine records the members %+v; this step releases "+
+							"a quarantine only when it records %s alone, and released nothing", q.Members, member)).Now()
+					}
+					// The release covers the Pod the quarantine records; a
 					// record made before the new Pod existed is revised, with
 					// a new token, once the Operator sees the new Pod.
-					g.Expect(q.Members[i].PodUID).To(Equal(newPodUID), "the quarantine records the new Pod of %s", member)
+					g.Expect(q.Members[0].PodUID).To(Equal(newPodUID), "the quarantine records the new Pod of %s", member)
 					g.Expect(q.ReleaseToken).NotTo(BeEmpty(), "status.writeQuarantine.releaseToken")
 					// The token is new at each revision of the quarantine, so
 					// the current one is read and set again on each attempt.

@@ -19,6 +19,7 @@ package installed
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -62,7 +63,7 @@ func testS10Config(t *testing.T) HAConfig {
 	cfg.Level = evidence.LevelVMLab
 	cfg.Fault = FaultPVCLossRebuild
 	cfg.StablePeriod = time.Second
-	cfg.Timeout = time.Hour
+	cfg.Timeout = 3 * time.Hour
 	return cfg
 }
 
@@ -70,12 +71,14 @@ func testS10Config(t *testing.T) HAConfig {
 // that never ends ends the wait quickly.
 func shortS10Bounds(t *testing.T) {
 	t.Helper()
-	saved := []time.Duration{s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound}
-	s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound =
-		50*time.Millisecond, 50*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond
+	saved := []time.Duration{s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound,
+		s10RebuildMargin}
+	s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound, s10RebuildMargin =
+		50*time.Millisecond, 50*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond,
+		100*time.Millisecond
 	t.Cleanup(func() {
-		s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound =
-			saved[0], saved[1], saved[2], saved[3], saved[4]
+		s10ReplaceBound, s10ListBound, s10OfferBound, s10RebuildBound, s10SlaveBound, s10RebuildMargin =
+			saved[0], saved[1], saved[2], saved[3], saved[4], saved[5]
 	})
 }
 
@@ -101,6 +104,12 @@ type s10Fake struct {
 	failCount int
 	// onRequest runs when the rebuild is requested.
 	onRequest func()
+	// alsoQuarantined is a member the quarantine records beside the target.
+	alsoQuarantined string
+	// podDeleteFails refuses the Pod delete after the claim delete.
+	podDeleteFails bool
+	// degraded keeps Degraded True after the rebuild ended.
+	degraded bool
 
 	member, master     string
 	accepted           time.Time
@@ -207,6 +216,9 @@ func (s *s10Fake) deletePod(t *testing.T) func(context.Context, client.WithWatch
 		if err := c.Get(ctx, client.ObjectKeyFromObject(pod), old); err != nil {
 			return err
 		}
+		if s.podDeleteFails {
+			return errors.New("the API server is unavailable")
+		}
 		if err := c.Delete(ctx, pod, opts...); err != nil {
 			return err
 		}
@@ -258,6 +270,10 @@ func (s *s10Fake) operator(t *testing.T) func(context.Context, client.WithWatch,
 			cluster.Status.WriteQuarantine = &databasev1alpha1.WriteQuarantine{GenerationID: testQuarantine,
 				Reason: databasev1alpha1.WriteQuarantinedMemberUnverified, ReleaseToken: testReleaseToken,
 				Members: []databasev1alpha1.WriteQuarantineMember{{Name: s.member, PodUID: s.member + "-new"}}}
+			if s.alsoQuarantined != "" {
+				cluster.Status.WriteQuarantine.Members = append(cluster.Status.WriteQuarantine.Members,
+					databasev1alpha1.WriteQuarantineMember{Name: s.alsoQuarantined, PodUID: s.alsoQuarantined})
+			}
 		case annotations[rebuildMemberAnnotation] != "" && !s.finished:
 			value := annotations[rebuildMemberAnnotation]
 			s.requests = append(s.requests, value)
@@ -284,6 +300,10 @@ func (s *s10Fake) operator(t *testing.T) func(context.Context, client.WithWatch,
 				rebuild.State, rebuild.Message = s.state, "the restore failed"
 			}
 			cluster.Status.LastMemberRebuild = rebuild
+			if s.degraded {
+				cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{Type: "Degraded",
+					Status: metav1.ConditionTrue, Reason: testConditionReason})
+			}
 			delete(cluster.Annotations, rebuildMemberAnnotation)
 			for i, d := range cluster.Status.MemberDataClaims {
 				if d.Name == s.member {
@@ -657,5 +677,194 @@ func TestRunS10EndedDuringTheRebuildIsBlocked(t *testing.T) {
 	}
 	if f.kills == 0 {
 		t.Fatal("the client was not stopped")
+	}
+}
+
+// A quarantine that records a member beside the target is not released: the
+// release would accept losing that member's writes. S10 is blocked, and
+// nothing is released or requested.
+func TestRunS10DoesNotReleaseAQuarantineOfAnotherMember(t *testing.T) {
+	cfg := testS10Config(t)
+	cfg.RebuildLimit = time.Hour
+	f, fake := newS10Fixture(t, cfg, testMemberLast)
+	fake.alsoQuarantined = testHAPrimary
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed with another member quarantined")
+	}
+	_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+	if s10.Result != evidence.Blocked || !strings.Contains(s10.Reason, "only when it records the target") ||
+		fake.released || len(fake.requests) != 0 || s10.Measurements["writeQuarantineReleasedManually"] != false {
+		t.Fatalf("S10 = %+v, released %t, requests %v: want blocked with nothing released or requested", s10,
+			fake.released, fake.requests)
+	}
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := f.store.Get(t.Context(), client.ObjectKey{Namespace: cfg.Namespace, Name: haClusterName},
+		cluster); err == nil && cluster.Annotations[releaseWriteQuarantineAnnotation] != "" {
+		t.Fatal("a release token was set")
+	}
+}
+
+// Right before the delete the run reads the roles and the target's Pod
+// again: a moved master, a target that became master, or another Pod blocks
+// S10 with nothing deleted. So does a live claim that is not the one the
+// Operator recorded as holding the database.
+func TestRunS10DeletesNothingWhenTheTargetChangedBeforeTheDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(ctx context.Context, f *haFixture, c client.WithWatch)
+		reason string
+	}{
+		{"master moved", func(_ context.Context, f *haFixture, _ client.WithWatch) {
+			f.roles = map[string]string{testMemberHA0: roleMaster, testHAPrimary: roleSlave, testMemberLast: roleSlave}
+		}, "the master is " + testMemberHA0},
+		{"target became master", func(_ context.Context, f *haFixture, _ client.WithWatch) {
+			f.roles = map[string]string{testMemberHA0: roleSlave, testHAPrimary: roleSlave, testMemberLast: roleMaster}
+		}, "the master is " + testMemberLast},
+		{"Pod replaced", func(_ context.Context, f *haFixture, _ client.WithWatch) {
+			// s10Start reads the Pod after the claims; the second read is
+			// the one right before the delete.
+			reads := 0
+			f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+				if key.Name == testMemberLast {
+					if reads++; reads == 2 {
+						replacePod(ctx, t, c, testMemberLast)
+					}
+				}
+				return nil
+			}
+		}, "has UID " + testMemberLast + "-other"},
+	} {
+		cfg := testS10Config(t)
+		cfg.RebuildLimit = time.Hour
+		f, fake := newS10Fixture(t, cfg, testHAPrimary)
+		changed := false
+		f.claimRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+			// The last claim s10Start reads is the target's; the change
+			// lands between the choice and the delete.
+			if !changed && key.Name == dataVolumePrefix+testMemberLast {
+				changed = true
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				tc.change(ctx, f, c)
+			}
+			return nil
+		}
+		if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+			t.Fatalf("%s: RunHA() passed", tc.name)
+		}
+		_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+		if s10.Result != evidence.Blocked || !strings.Contains(s10.Reason, tc.reason) ||
+			!strings.Contains(s10.Reason, "nothing was deleted") || len(fake.deletes) != 0 {
+			t.Errorf("%s: S10 = %+v, deletes %v, want blocked naming %q with nothing deleted", tc.name, s10,
+				fake.deletes, tc.reason)
+		}
+	}
+}
+
+func TestRunS10DeletesNothingWhenTheLiveClaimIsNotTheRecordedOne(t *testing.T) {
+	cfg := testS10Config(t)
+	cfg.RebuildLimit = time.Hour
+	f, fake := newS10Fixture(t, cfg, testHAPrimary)
+	replaced := false
+	f.claimRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if replaced || key.Name != dataVolumePrefix+testMemberLast {
+			return nil
+		}
+		replaced = true
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := c.Get(ctx, key, pvc); err != nil {
+			return err
+		}
+		if err := c.Delete(ctx, pvc); err != nil {
+			return err
+		}
+		pvc.ResourceVersion, pvc.UID = "", "claim-elsewhere"
+		return c.Create(ctx, pvc)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+	if s10.Result != evidence.Blocked || !strings.Contains(s10.Reason, "not its live claim claim-elsewhere") ||
+		len(fake.deletes) != 0 {
+		t.Fatalf("S10 = %+v, deletes %v, want blocked with nothing deleted", s10, fake.deletes)
+	}
+}
+
+// replacePod gives a member's Pod another UID.
+func replacePod(ctx context.Context, t *testing.T, c client.WithWatch, name string) {
+	t.Helper()
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "cubrid-lab-ha", Name: name}, pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.ResourceVersion, pod.UID = "", types.UID(name+"-other")
+	if err := c.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A claim delete that was accepted with a Pod delete that was not leaves a
+// Terminating claim: S10 is blocked and says so.
+func TestRunS10RecordsAClaimDeletedWithoutItsPod(t *testing.T) {
+	cfg := testS10Config(t)
+	cfg.RebuildLimit = time.Hour
+	f, fake := newS10Fixture(t, cfg, testHAPrimary)
+	fake.podDeleteFails = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+	if s10.Result != evidence.Blocked ||
+		!strings.Contains(s10.Reason, "claim data-"+testMemberLast+" deleted, Pod "+testMemberLast+" not deleted") ||
+		!strings.Contains(s10.Reason, "namespace needs attention") ||
+		s10.Measurements["claimDeletedPodNotDeleted"] != true {
+		t.Fatalf("S10 = %+v, want blocked recording the claim deleted without its Pod", s10)
+	}
+}
+
+// A step whose outcome is not seen within its bound blocks S10: neither a
+// rebuild that does not end nor a member that does not come back is a
+// measured violation, which only rebuild_limit or a broken rule makes.
+func TestRunS10StepsNotSeenInTimeAreBlocked(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*s10Fake)
+		reason string
+	}{
+		{"rebuild never ends", func(s *s10Fake) { s.neverEnds = true }, "was not seen to end"},
+		{"member never back", func(s *s10Fake) { s.degraded = true }, "was not seen to return as a slave"},
+	} {
+		// With rebuild_limit unset the wait is s10RebuildBound alone.
+		cfg := testS10Config(t)
+		f, fake := newS10Fixture(t, cfg, testHAPrimary)
+		tc.change(fake)
+		if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+			t.Fatalf("%s: RunHA() passed", tc.name)
+		}
+		_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+		if s10.Result != evidence.Blocked || !strings.Contains(s10.Reason, tc.reason) {
+			t.Errorf("%s: S10 = %+v, want blocked naming %q", tc.name, s10, tc.reason)
+		}
+	}
+}
+
+// With rebuild_limit set, the wait for the rebuild is never shorter than the
+// limit and its margin, and the -timeout accounting grows with it.
+func TestS10RebuildWaitCoversRebuildLimit(t *testing.T) {
+	cfg := testS10Config(t)
+	unset := cfg.s10StepBounds()
+	if got := cfg.s10RebuildWait(); got != s10RebuildBound {
+		t.Fatalf("unset limit: wait %s, want %s", got, s10RebuildBound)
+	}
+	cfg.RebuildLimit = 30 * time.Minute
+	if got, want := cfg.s10RebuildWait(), 30*time.Minute+s10RebuildMargin; got != want {
+		t.Fatalf("wait %s, want %s", got, want)
+	}
+	if got := cfg.s10StepBounds() - unset; got != 30*time.Minute+s10RebuildMargin-s10RebuildBound {
+		t.Fatalf("step bounds grew by %s", got)
 	}
 }
