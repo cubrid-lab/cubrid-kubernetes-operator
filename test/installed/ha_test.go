@@ -210,6 +210,14 @@ type haFixture struct {
 	// podDeleted plays the API server and the StatefulSet when the run
 	// deletes a Pod of the run namespace.
 	podDeleted func(ctx context.Context, c client.WithWatch, pod *corev1.Pod, opts ...client.DeleteOption) error
+	// dataClaims makes the HA cluster's members bound data claims, recorded
+	// in status.memberDataClaims; claimDeleted plays the API server when the
+	// run deletes one. Without claimDeleted a claim delete fails the test.
+	dataClaims   bool
+	claimDeleted func(ctx context.Context, c client.WithWatch, pvc *corev1.PersistentVolumeClaim,
+		opts ...client.DeleteOption) error
+	// claimRead plays the API server before a read of a claim.
+	claimRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -376,6 +384,13 @@ func (f *haFixture) deleteHooked(ctx context.Context, c client.WithWatch, obj cl
 			f.mu.Unlock()
 			return f.podDeleted(ctx, c, value, opts...), true
 		}
+	case *corev1.PersistentVolumeClaim:
+		if f.claimDeleted != nil && value.Namespace == f.cfg.Namespace {
+			f.mu.Lock()
+			f.writes = append(f.writes, "delete-claim")
+			f.mu.Unlock()
+			return f.claimDeleted(ctx, c, value, opts...), true
+		}
 	case *databasev1alpha1.CubridCluster:
 		if f.clusterDeleted != nil {
 			return f.clusterDeleted(ctx, c, value, opts...), true
@@ -422,6 +437,10 @@ func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key clien
 	case *appsv1.Deployment:
 		if f.deploymentRead != nil {
 			return f.deploymentRead(key)
+		}
+	case *corev1.PersistentVolumeClaim:
+		if f.claimRead != nil {
+			return f.claimRead(ctx, c, key)
 		}
 	}
 	return nil
@@ -563,6 +582,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
 	cluster.Status.ObservedGeneration = 1
 	cluster.Status.CurrentPrimary = f.primary
+	if f.dataClaims {
+		for _, member := range clusterMembers(cluster.Name) {
+			cluster.Status.MemberDataClaims = append(cluster.Status.MemberDataClaims, databasev1alpha1.MemberDataClaim{
+				Name: member, ClaimUID: "claim-" + member, VolumeName: "pv-" + member})
+			cluster.Status.Instances = append(cluster.Status.Instances, databasev1alpha1.InstanceStatus{Name: member})
+		}
+	}
 	// The status the manager wrote before the run.
 	before := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
 	cluster.Status.LastObservedTime = &before
@@ -604,6 +630,11 @@ func (f *haFixture) createChildren(ctx context.Context, c client.WithWatch,
 	objects = append(objects, sts)
 	for i := range haMemberCount {
 		name := fmt.Sprintf("%s-%d", cluster.Name, i)
+		if f.dataClaims {
+			objects = append(objects, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+				Name: dataVolumePrefix + name, Namespace: f.cfg.Namespace, UID: types.UID("claim-" + name)},
+				Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv-" + name}})
+		}
 		objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.cfg.Namespace,
 			UID: types.UID(name), OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", cluster.Name, sts.UID)}},
 			Spec: corev1.PodSpec{NodeName: fmt.Sprintf("node-%d", i+1),

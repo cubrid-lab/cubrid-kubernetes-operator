@@ -24,6 +24,8 @@ import (
 const (
 	vmLab      = "--level=vm-lab"
 	haSQLSmoke = "-check=installed-ha-sql-smoke"
+	// rebuildLimit sets rebuild_limit, which judges S10 alone.
+	rebuildLimit = "-rebuild-limit=10m"
 )
 
 // A check the HA command does not run, or one combined with a legacy option
@@ -68,6 +70,21 @@ func TestASoakWithoutAPositiveDurationIsRefusedBeforeACluster(t *testing.T) {
 		err := run(t.Context(), tc.args)
 		if err == nil || !strings.Contains(err.Error(), tc.reason) {
 			t.Errorf("%q = %v, want a refusal with %q", tc.args, err, tc.reason)
+		}
+	}
+}
+
+// rebuild_limit judges S10 alone: -rebuild-limit without the fault that
+// selects S10 is refused before any cluster is opened.
+func TestARebuildLimitWithoutTheRebuildIsRefusedBeforeACluster(t *testing.T) {
+	for _, args := range [][]string{
+		{vmLab, rebuildLimit},
+		{vmLab, rebuildLimit, "-fault=operator-restart"},
+		{vmLab, haSQLSmoke, rebuildLimit},
+	} {
+		err := run(t.Context(), args)
+		if err == nil || !strings.Contains(err.Error(), "-rebuild-limit needs -fault pvc-loss-rebuild") {
+			t.Errorf("%q = %v, want a refusal of -rebuild-limit", args, err)
 		}
 	}
 }

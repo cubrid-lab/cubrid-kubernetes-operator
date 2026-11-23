@@ -301,6 +301,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s07-master-isolated` | The installed-Operator HA command with `-fault partition-master-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`master-isolated`) on the same cluster: the master is cut off both ways from the other members and the manager Pod by network faults in the members' Pods, the write quarantine, SQL through new and already-open connections to the read-write Service, the release and every member's rows are recorded, and the fault is removed | none |
 | `lab-installed-ha-s07-slave-isolated` | The installed-Operator HA command with `-fault partition-slave-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`slave-isolated`) on the same cluster, as `master-isolated` with a slave that ranks below the master and is not the last resolved primary: the intentional non-trigger, which must start no quarantine | none |
 | `lab-installed-ha-s07-higher-rank-isolated` | The installed-Operator HA command with `-fault partition-higher-rank-isolated`, at the `vm-lab` level only, in a namespace that enforces Pod Security `privileged` ([details](installed-ha.md#s07-network-partition)) | LAB01, then S07 (`higher-rank-isolated`) on the same cluster, as `master-isolated` with a slave that ranks above the master, the master being the last resolved primary; when the master is the first member, the run first moves it off by a graceful deletion of its Pod and lets CUBRID fail over | none |
+| `lab-installed-ha-s10` | The installed-Operator HA command with `-fault pvc-loss-rebuild`, at the `vm-lab` level only ([details](installed-ha.md#s10-rebuild-after-volume-loss)) | LAB01, then S10 on the same cluster: a slave, never the master, has its data claim and then its Pod deleted with their UIDs as preconditions; the fault is confirmed by a new claim UID on a new volume, a new Pod and a read-only listing of its database directory without the database; a write quarantine the loss starts is released manually only when the slave outranks the master and the quarantine records that slave alone; a step not seen within its wait is `blocked`; the offered rebuild is requested while a client writes through the read-write Service, must end `Completed` naming that slave, the master as source and the new claim, and the slave must answer as a slave again; the data rules on all three members and both Services, the rebuilt member's applier fail count `0`, and unchanged claim UIDs of the other members; judged by `rebuild_limit` | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
@@ -2770,7 +2771,25 @@ embedded S09 `clean` test must be disentangled before candidate acceptance.
   `rebuild_limit` unset the result is `blocked` with `time_limit_unset`;
   with it set, the result is also `blocked` when the listing could not be
   made or no insert was acknowledged while the rebuild ran. The `kind`
-  lane does not require it.
+  lane's own gate does not require it; the release-candidate verifier still
+  requires S10 at both the Kind and the VM-lab level.
+- **VM-lab result:** the installed-Operator HA command with
+  `-fault pvc-loss-rebuild` records S10 at the `vm-lab` level in its own lane,
+  `lab-installed-ha-s10`, which requires it
+  ([details](installed-ha.md#s10-rebuild-after-volume-loss)). It follows the
+  Kind step's rules for the target, the fault confirmation, the client
+  writing while the rebuild runs, the data check, the fail count and the
+  other members' claim UIDs, and it releases the write quarantine of a target
+  that outranks the master as the manual release documents, only when the
+  quarantine records that target alone. Of the
+  never-events it observes that the rebuild names the requested slave, not
+  the master, and that the master's and the other slave's claims keep their
+  UIDs; it sends no request naming the master or a wrong token, and it does
+  not observe whether the rebuilt member was reported healthy before its data
+  matched. `-rebuild-limit` sets `rebuild_limit`; unset, as by default, the
+  result is `blocked` with `time_limit_unset`, and with it set the result is
+  still `blocked` when the fault was not confirmed or no insert was
+  acknowledged while the rebuild ran.
 
 ### S11: backup, failure and restart
 

@@ -116,7 +116,9 @@ type HAConfig struct {
 	// the master and evicts the run's Pods on it, or
 	// FaultPartitionMasterIsolated, FaultPartitionSlaveIsolated or
 	// FaultPartitionHigherRankIsolated for S07, which cut the master, a
-	// lower-ranked slave, or a slave that outranks the master off the network.
+	// lower-ranked slave, or a slave that outranks the master off the network,
+	// or FaultPVCLossRebuild for S10, which replaces a slave's data claim and
+	// Pod and requests the rebuild the Operator offers for it.
 	Fault string
 	// VMStopCommand, VMStartCommand and VMStatusCommand are the lab's own
 	// controls of a node's VM, for S04: each runs with sh -c on the run's
@@ -317,6 +319,10 @@ type HAConfig struct {
 	// restoreslave runs. Each placement is a variant and a lane of its own.
 	// Another value than the default needs RestoreGracefulStop.
 	RestoreGracefulStopAt string
+	// RebuildLimit bounds S10 from the rebuild request until every row was
+	// checked on every member and both Services (rebuild_limit); zero is
+	// unset, which makes the run a baseline.
+	RebuildLimit time.Duration
 	// SoakDuration selects the soak after LAB01: the background clients keep
 	// writing and reading through the read-write Service for this long, on
 	// the same cluster and with no fault, while the data rules are applied
@@ -334,6 +340,12 @@ func (c HAConfig) privileged() bool {
 	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping ||
 		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup) ||
 		c.partitionFault()
+}
+
+// knownFault reports whether Fault is empty or a fault the run knows.
+func (c HAConfig) knownFault() bool {
+	return c.Fault == "" || c.Fault == FaultOperatorRestart || c.Fault == FaultVMPowerOff || c.drainFault() ||
+		c.partitionFault() || c.Fault == FaultPVCLossRebuild
 }
 
 func (c HAConfig) validate() error {
@@ -354,11 +366,10 @@ func (c HAConfig) validate() error {
 		len(validation.IsDNS1123Subdomain(c.SeedSecret)) != 0 || c.SeedSecretNamespace == c.Namespace {
 		return errors.New("the seed Secret must be named, outside the run namespace")
 	}
-	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff && !c.drainFault() &&
-		!c.partitionFault() {
-		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s, %s or %s", FaultOperatorRestart,
+	if !c.knownFault() {
+		return fmt.Errorf("fault must be empty, %s, %s, %s, %s, %s, %s, %s or %s", FaultOperatorRestart,
 			FaultVMPowerOff, FaultDrainSlaveNode, FaultDrainMasterNode, FaultPartitionMasterIsolated,
-			FaultPartitionSlaveIsolated, FaultPartitionHigherRankIsolated)
+			FaultPartitionSlaveIsolated, FaultPartitionHigherRankIsolated, FaultPVCLossRebuild)
 	}
 	if err := c.validateS04(); err != nil {
 		return err
@@ -367,6 +378,9 @@ func (c HAConfig) validate() error {
 		return err
 	}
 	if err := c.validateS07(); err != nil {
+		return err
+	}
+	if err := c.validateS10(); err != nil {
 		return err
 	}
 	if c.Fault != "" && c.StablePeriod <= 0 {
@@ -499,6 +513,8 @@ type haRun struct {
 	s15 *evidence.Scenario
 	// s07 is the result of the S07 network partition, once it ran.
 	s07 *evidence.Scenario
+	// s10 is the result of S10, the rebuild after a volume loss, once it ran.
+	s10 *evidence.Scenario
 	// drainMu serializes S15's cordon and uncordon of its node, which the
 	// fault's steps, its cleanup and the run's end can each attempt.
 	drainMu sync.Mutex
@@ -798,6 +814,11 @@ func faultLane(fault string) (string, evidence.Requirement, string) {
 			"quarantine, SQL through the read-write Service and every member's rows are recorded; no other " +
 			"S00-S15 qualification"
 	}
+	if fault == FaultPVCLossRebuild {
+		return s10Lane, evidence.Requirement{ID: s10ID}, "Three-member HA cluster against an installed Operator, " +
+			"then S10: a slave's data claim and Pod are replaced and the rebuild the Operator offers for it is " +
+			"requested while a client writes through the read-write Service; no other S00-S15 qualification"
+	}
 	if fault == FaultVMPowerOff {
 		return s04Lane, evidence.Requirement{ID: s04ID, Variant: s04Variant}, "Three-member HA cluster against an " +
 			"installed Operator, then S04 power-off: the VM of the master's node is powered off without a " +
@@ -818,6 +839,7 @@ func (h *haRun) recordFault(summary *evidence.Summary) {
 	}{
 		{h.s04, FaultVMPowerOff, evidence.Requirement{ID: s04ID, Variant: s04Variant}},
 		{h.s06, FaultOperatorRestart, evidence.Requirement{ID: s06ID, Variant: s06Variant}},
+		{h.s10, FaultPVCLossRebuild, evidence.Requirement{ID: s10ID}},
 	} {
 		switch {
 		case f.result != nil:
@@ -995,6 +1017,12 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s07 = &s07
 		if s07.Result != evidence.Pass {
 			return fmt.Errorf("S07/%s: %s", s07.Variant, s07.Reason)
+		}
+	case h.cfg.Fault == FaultPVCLossRebuild:
+		s10 := h.runS10(ctx)
+		h.s10 = &s10
+		if s10.Result != evidence.Pass {
+			return fmt.Errorf("%s: %s", s10ID, s10.Reason)
 		}
 	case h.cfg.Fault == FaultOperatorRestart:
 		s06 := h.runS06(ctx)

@@ -131,6 +131,7 @@ const (
 	restoreExactKey   = "installed-restore-new-cluster-exact"
 	restoreIMKey      = "installed-restore-new-cluster-instance-manager-restart-"
 	restoreStopKey    = "installed-restore-new-cluster-graceful-stop-"
+	rebuildKey        = "installed-ha-pvc-loss-rebuild"
 	requiredAnchor    = "required-scenarios"
 )
 
@@ -231,6 +232,7 @@ var registry = scenarioRegistry{
 			partitionText+" - lower-ranked slave cut off, a case that must not quarantine"),
 		labResult("installed-ha-network-partition-higher-rank-isolated", "S07/higher-rank-isolated",
 			partitionText+" - slave ranked above the master cut off from the other members and the Operator"),
+		labResult(rebuildKey, "S10", rebuildText+" - a slave's claim and Pod replaced on the installed Operator"),
 
 		labResult(backupCompleteKey, "S11/complete", backupText+" - complete"),
 		labResult("installed-backup-missing-destination", "S11/missing-destination",
@@ -288,6 +290,7 @@ var registry = scenarioRegistry{
 		labLane("lab-installed-ha-s07-master-isolated", "installed-ha-network-partition-master-isolated"),
 		labLane("lab-installed-ha-s07-slave-isolated", "installed-ha-network-partition-slave-isolated"),
 		labLane("lab-installed-ha-s07-higher-rank-isolated", "installed-ha-network-partition-higher-rank-isolated"),
+		labLane("lab-installed-ha-s10", rebuildKey),
 		backupLane("lab-installed-ha-s11"),
 		backupLane("lab-installed-ha-s11-missing-destination", "installed-backup-missing-destination"),
 		backupLane("lab-installed-ha-s11-denied-credentials", "installed-backup-denied-credentials"),
