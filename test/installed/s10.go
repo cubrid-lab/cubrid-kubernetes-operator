@@ -203,6 +203,14 @@ type s10Record struct {
 	ClientStarted  bool                `json:"clientStarted"`
 	Unmet          string              `json:"unmet,omitempty"`
 	FaultConfirmed bool                `json:"faultConfirmed"`
+	// ReleaseTokenRemovedAt is when the run removed a release token it had
+	// set that no release consumed, and ReleaseTokenRemoveError why that
+	// removal failed.
+	ReleaseTokenRemovedAt   *time.Time `json:"releaseTokenRemovedByRun,omitempty"`
+	ReleaseTokenRemoveError string     `json:"releaseTokenRemoveError,omitempty"`
+	// releaseToken is the last release token the run set; it is never
+	// written to the evidence.
+	releaseToken string
 }
 
 // rebuildTarget picks the slave whose storage S10 replaces, by the Kind
@@ -312,6 +320,7 @@ func (h *haRun) runS10(ctx context.Context) (result evidence.Scenario) {
 				result.Result, result.Reason = evidence.Fail, "stop the client: "+err.Error()
 			}
 		}
+		h.removeS10ReleaseToken(ctx, &rec)
 		if err := h.writeJSON(s10RecordFile, rec); err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S10 evidence: "+err.Error()
 		}
@@ -718,11 +727,11 @@ func (h *haRun) s10WaitOffer(ctx context.Context, rec *s10Record) (string, error
 	for {
 		cluster, err := h.s07OwnCluster(ctx)
 		unmet := ""
-		switch q := (*databasev1alpha1.WriteQuarantine)(nil); {
+		switch {
 		case err != nil:
 			unmet = err.Error()
 		case cluster.Status.WriteQuarantine != nil:
-			q = cluster.Status.WriteQuarantine
+			q := cluster.Status.WriteQuarantine
 			unmet = fmt.Sprintf("a write quarantine (%s) is in force", q.Reason)
 			if !rec.OutranksMaster {
 				break
@@ -754,6 +763,7 @@ func (h *haRun) s10WaitOffer(ctx context.Context, rec *s10Record) (string, error
 					return "", fmt.Errorf("release the write quarantine %s: %w", q.GenerationID, err)
 				}
 				lastSet = q.ReleaseToken
+				rec.releaseToken = lastSet
 			}
 			rec.ReleasedQuarantine = q.GenerationID
 		case rec.ReleasedQuarantine != "" && !s10Released(cluster, rec.ReleasedQuarantine):
@@ -794,6 +804,51 @@ func (h *haRun) s10WaitOffer(ctx context.Context, rec *s10Record) (string, error
 		case <-time.After(h.cfg.Poll):
 		}
 	}
+}
+
+// jsonPatchTest is the JSON patch operation that makes a patch apply only
+// while a value is as the run read it.
+const jsonPatchTest = "test"
+
+// removeS10ReleaseToken removes the release annotation the run set when it
+// still holds the run's token, as the Operator removes a consumed one, so that
+// a release the Operator did not make, or a run that ended first, leaves no
+// token it could accept later. It is a JSON patch that tests the run's
+// cluster UID and the value before it removes the annotation, made within
+// s07RemoveTokenBound also after ctx ended.
+func (h *haRun) removeS10ReleaseToken(ctx context.Context, rec *s10Record) {
+	if rec.releaseToken == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s07RemoveTokenBound)
+	defer cancel()
+	cluster, err := h.s07OwnCluster(ctx)
+	if err == nil && cluster.Annotations[releaseWriteQuarantineAnnotation] != rec.releaseToken {
+		return
+	}
+	if err == nil {
+		annotation := "/metadata/annotations/" + strings.ReplaceAll(strings.ReplaceAll(
+			releaseWriteQuarantineAnnotation, "~", "~0"), "/", "~1")
+		type operation struct {
+			Op    string `json:"op"`
+			Path  string `json:"path"`
+			Value string `json:"value,omitempty"`
+		}
+		var patch []byte
+		patch, err = json.Marshal([]operation{{jsonPatchTest, "/metadata/uid", string(cluster.UID)},
+			{jsonPatchTest, annotation, rec.releaseToken}, {"remove", annotation, ""}})
+		if err == nil {
+			target := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: cluster.Name,
+				Namespace: cluster.Namespace}}
+			err = h.Client.Patch(ctx, target, client.RawPatch(types.JSONPatchType, patch))
+		}
+	}
+	if err != nil {
+		rec.ReleaseTokenRemoveError = err.Error()
+		return
+	}
+	now := time.Now().UTC()
+	rec.ReleaseTokenRemovedAt = &now
 }
 
 // s10Released reports whether the cluster records the manual release of the
@@ -874,6 +929,16 @@ func (h *haRun) s10WaitRebuild(ctx context.Context, rec *s10Record, token string
 		}
 		rec.Unmet = unmet
 		if time.Now().After(deadline) || ctx.Err() != nil {
+			// With rebuild_limit set, a wait that ran past the limit with no
+			// end seen is a rebuild over the limit, measured as a lower
+			// bound; only a run that ended, or an unset limit, leaves it
+			// unobserved.
+			if waited := time.Since(*rec.RequestedAt); ctx.Err() == nil && h.cfg.RebuildLimit > 0 &&
+				waited > h.cfg.RebuildLimit {
+				return nil, fmt.Errorf("rebuild_limit exceeded: no end of the rebuild of %s seen within %s of the "+
+					"request, over rebuild_limit %s: %s", rec.Member, waited.Round(time.Millisecond),
+					h.cfg.RebuildLimit, unmet)
+			}
 			return nil, s10Unobserved{fmt.Errorf("the rebuild of %s was not seen to end within %s: %s", rec.Member,
 				bound, unmet)}
 		}

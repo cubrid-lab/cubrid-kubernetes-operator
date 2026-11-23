@@ -1915,19 +1915,20 @@ step `test/e2e/member_rebuild_test.go`. The lane is then
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
   ...the LAB01 inputs above... -level vm-lab \
-  -fault pvc-loss-rebuild [-rebuild-limit <duration>] -timeout 60m'
+  -fault pvc-loss-rebuild [-rebuild-limit 5m] -timeout 60m'
 ```
 
 `-check installed-ha-pvc-loss-rebuild` selects the same run.
 
 - `-rebuild-limit` is `rebuild_limit`: the time from the rebuild request
-  until every row was checked on every member and both Services. The
-  contract gives it no value, so its default `0` is unset, and S10 is then
-  `blocked` with `time_limit_unset`, never a pass, as the Kind step is. It
-  needs `-fault pvc-loss-rebuild`, and a negative value is refused.
+  until every row was checked on every member and both Services. Its
+  default is 5 minutes, the value the maintainers set on #126
+  ([decision](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639)). An explicit `0` leaves it unset, and
+  S10 is then `blocked` with `time_limit_unset`, never a pass. It needs
+  `-fault pvc-loss-rebuild`, and a negative value is refused.
 - `-timeout` must be longer than the bounds of S10's own steps, 36 minutes
-  and a half with the default `-data-check-within` of 2 minutes and
-  `rebuild_limit` unset: 5 minutes for the replacement of the claim and Pod,
+  and a half with the default `-data-check-within` of 2 minutes and the
+  default `rebuild_limit`: 5 minutes for the replacement of the claim and Pod,
   2 for the listing, 10 for the offer with a manual release, 2 for the
   client's start, the wait for the rebuild, 3 for the member's return, 1 for the client's stop, the data check window with
   30 seconds of reading, and a minute for the reads without a bound of their
@@ -1984,7 +1985,11 @@ What the run does:
    then needs `status.lastWriteQuarantineRelease` to record that generation
    as released manually, and the read-write Brokers available again. A
    quarantine that records any other member, or has another reason, is not
-   released, and S10 is blocked.
+   released, and S10 is blocked. When S10 ends with a token the run set
+   still in the release annotation, unconsumed, the run removes it with a
+   JSON patch that tests the cluster's UID and the value, as S07 does, so
+   the Operator cannot release on it later (`releaseTokenRemovedByRun` in
+   the record).
 5. It waits up to 10 minutes for the offer in
    `status.memberRebuildOffers` that names the target and its new claim. An
    offer whose source is not the master fails S10; no offer blocks it.
@@ -2000,9 +2005,12 @@ What the run does:
    with no ownership marker in `status.instances`, `Degraded` not `True`, its
    new claim in `status.memberDataClaims`, its lost claim in
    `status.formerDataClaims`, and the consumed request removed. A master that
-   moved fails S10. A rebuild or a return not seen within its wait blocks S10:
-   only a measured rebuild over `rebuild_limit`, a broken rule or an outcome
-   that must never happen fails it.
+   moved fails S10. With `rebuild_limit` set, a rebuild with no end seen
+   when the wait ends, after the limit has passed since the request, fails
+   S10 ("rebuild_limit exceeded"); with it unset, that wait, and a member's
+   return not seen within its wait, block S10. Otherwise only a measured
+   rebuild over `rebuild_limit`, a broken rule or an outcome that must never
+   happen fails it.
 9. The client is stopped, and its history joins the run's. The inserts
    answered after the second that follows the rebuild's recorded acceptance
    and before its recorded end are counted as written while it ran. The

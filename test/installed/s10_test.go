@@ -656,6 +656,40 @@ func TestRunS10IsBlockedWhenNoRebuildIsOffered(t *testing.T) {
 		t.Fatalf("S10 = %+v, requests %v, want blocked with nothing requested", s10, fake.requests)
 	}
 	requireNoTokenInEvidence(t, cfg.EvidenceDir)
+	// The release token the run set and no release consumed is removed, so
+	// the Operator cannot release on it later.
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := f.store.Get(t.Context(), client.ObjectKey{Namespace: cfg.Namespace, Name: haClusterName},
+		cluster); err != nil {
+		t.Fatal(err)
+	}
+	if token, set := cluster.Annotations[releaseWriteQuarantineAnnotation]; set {
+		t.Fatalf("the release annotation is left with %q", token)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, s10RecordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"releaseTokenRemovedByRun"`) {
+		t.Fatalf("record = %s, want the removal of the release token recorded", data)
+	}
+}
+
+// With rebuild_limit set, a rebuild with no end seen once the limit has
+// passed since the request is over the limit: S10 fails. With the limit
+// unset the same wait leaves S10 blocked (TestRunS10StepsNotSeenInTimeAreBlocked).
+func TestRunS10FailsWhenNoRebuildEndIsSeenWithinRebuildLimit(t *testing.T) {
+	cfg := testS10Config(t)
+	cfg.RebuildLimit = 50 * time.Millisecond
+	f, fake := newS10Fixture(t, cfg, testHAPrimary)
+	fake.neverEnds = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s10 := s10Scenarios(t, cfg.EvidenceDir)
+	if s10.Result != evidence.Fail || !strings.Contains(s10.Reason, "rebuild_limit exceeded: no end of the rebuild") {
+		t.Fatalf("S10 = %+v, want failed over rebuild_limit", s10)
+	}
 }
 
 // A run that ends while the rebuild runs leaves S10 blocked, not failed, and

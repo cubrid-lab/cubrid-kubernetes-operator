@@ -327,8 +327,8 @@ func TestGateIsNotSatisfiedByARenamedResult(t *testing.T) {
 }
 
 // The Kind member rebuild step records S10 without a variant. The kind lane
-// does not require it, because rebuild_limit has no value and every run of it
-// is blocked: such a result leaves the lane's verdict alone, and a failure of
+// does not require it: a blocked result, as an explicitly unset
+// rebuild_limit leaves it, leaves the lane's verdict alone, and a failure of
 // it fails the run as any recorded result does. This is the kind lane's own
 // gate; the release-candidate verifier still requires S10 at both levels.
 func TestKindRebuildResultIsNotRequiredByTheKindLane(t *testing.T) {
@@ -363,7 +363,8 @@ func TestKindRebuildResultIsNotRequiredByTheKindLane(t *testing.T) {
 
 // The installed Operator's VM-lab lane records S10 under a key of its own,
 // which only its own lane requires, with LAB01 before it. Without its S10
-// result, or with that result blocked as an unset rebuild_limit leaves it,
+// result, or with that result blocked as an explicitly unset rebuild_limit
+// leaves it,
 // the lane does not pass.
 func TestLabRebuildResultIsRequiredByItsOwnLane(t *testing.T) {
 	const s10, lab01 = "S10", "LAB01"

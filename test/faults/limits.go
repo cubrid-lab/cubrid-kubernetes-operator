@@ -99,8 +99,9 @@ var (
 	// and with retentionPolicy Delete its PVCs, are gone.
 	DeleteLimit = LimitSpec{"delete_limit", "E2E_DELETE_LIMIT", time.Minute}
 	// RebuildLimit: the rebuild of a member requested until the member holds
-	// all rows. The contract records no value, so a run is a baseline.
-	RebuildLimit = LimitSpec{"rebuild_limit", "E2E_REBUILD_LIMIT", 0}
+	// all rows; 5 minutes on Kind and on the VM lab, by the maintainer
+	// decision of 2026-11-23 on #126.
+	RebuildLimit = LimitSpec{"rebuild_limit", "E2E_REBUILD_LIMIT", 5 * time.Minute}
 )
 
 // FromEnv reads the limit from its environment variable, as LimitFromEnv

@@ -79,6 +79,8 @@ func TestASoakWithoutAPositiveDurationIsRefusedBeforeACluster(t *testing.T) {
 func TestARebuildLimitWithoutTheRebuildIsRefusedBeforeACluster(t *testing.T) {
 	for _, args := range [][]string{
 		{vmLab, rebuildLimit},
+		// An explicit 0, which leaves the limit unset, is refused the same way.
+		{vmLab, "-rebuild-limit=0"},
 		{vmLab, rebuildLimit, "-fault=operator-restart"},
 		{vmLab, haSQLSmoke, rebuildLimit},
 	} {

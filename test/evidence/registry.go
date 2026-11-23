@@ -206,8 +206,8 @@ var registry = scenarioRegistry{
 		kindResult("operator-failure-recovery-absent-during-failover", "S06/absent-during-failover",
 			operatorText+" - absent during failover"),
 		// S10 is recorded by the Kind member rebuild step and judged by
-		// rebuild_limit, which has no value yet, so the result is blocked and
-		// the kind lane does not require it until the limit is set.
+		// rebuild_limit (5 minutes). The kind lane's own gate does not
+		// require it; the release-candidate verifier does.
 		kindResult("ha-pvc-loss-rebuild", "S10", rebuildText),
 		kindResult("cluster-deletion-retention-retain", "S13/retain", deletionText+" - retain"),
 		kindResult("cluster-deletion-retention-delete", "S13/delete", deletionText+" - delete"),
