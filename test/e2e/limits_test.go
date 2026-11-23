@@ -46,6 +46,7 @@ var (
 	brokerRecoveryLimit      = limit(faults.BrokerRecoveryLimit)
 	operatorResyncLimit      = limit(faults.OperatorResyncLimit)
 	deleteLimit              = limit(faults.DeleteLimit)
+	rebuildLimit             = limit(faults.RebuildLimit)
 )
 
 // limit reads one limit. A value that cannot be read stops the suite before

@@ -46,6 +46,8 @@ const (
 	masterIsolatedKey  = "installed-ha-network-partition-master-isolated"
 	oneBrokerPodKey    = "broker-failure-recovery-one-pod"
 	restoreExact       = "installed-restore-new-cluster-exact"
+	rebuildKey         = "ha-pvc-loss-rebuild"
+	judgedBlocked      = "judged blocked"
 	passedButNoGo      = "| PASS | PASS | NO-GO |"
 	listedState        = "listed"
 	unexplained        = "no judged result accounts for"
@@ -53,10 +55,10 @@ const (
 )
 
 // recordedFamilies are the v0.1 families with at least one registered result.
-// S08 and S10 have none, so no recorded run can prove them; a candidate is
-// judged complete against this list only to test the path that leads to Go.
+// S08 has none, so no recorded run can prove it; a candidate is judged
+// complete against this list only to test the path that leads to Go.
 var recordedFamilies = slices.DeleteFunc(slices.Clone(v01Families), func(id string) bool {
-	return id == s08Family || id == s10Family
+	return id == s08Family
 })
 
 // A candidate whose every registered v0.1 variant passed, with each measured
@@ -79,20 +81,22 @@ func TestVerifierAcceptsACompleteCandidate(t *testing.T) {
 	}
 }
 
-// S08 and S10 have no registered result, so the evidence a candidate would
-// need is not recorded by any run today. They block the release instead of
-// being left out of the requirement.
+// S08 has no registered result, so the evidence a candidate would need is
+// not recorded by any run today. It blocks the release instead of being left
+// out of the requirement. S10 has a registered Kind result, which the sample
+// candidate records as a pass, so it is judged like any other result.
 func TestVerifierBlocksScenariosWhoseEvidenceIsNotRecorded(t *testing.T) {
 	root, manifest := buildCandidate(t, nil)
 	out, ok := runVerifier(t, root, manifest, v01Families)
 	if ok || !strings.Contains(out, overallNoGo) {
-		t.Fatalf("a candidate without S08 and S10 evidence was not No-Go:\n%s", out)
+		t.Fatalf("a candidate without S08 evidence was not No-Go:\n%s", out)
 	}
-	for _, id := range []string{s08Family, s10Family} {
-		row := requiredRow(t, out, id)
-		if !strings.Contains(row, "| NO-GO |") || !strings.Contains(row, "evidence not recorded") {
-			t.Errorf("%s is not reported as evidence not recorded: %s", id, row)
-		}
+	row := requiredRow(t, out, s08Family)
+	if !strings.Contains(row, "| NO-GO |") || !strings.Contains(row, "evidence not recorded") {
+		t.Errorf("S08 is not reported as evidence not recorded: %s", row)
+	}
+	if row := requiredRow(t, out, rebuildKey); strings.Contains(row, "evidence not recorded") {
+		t.Errorf("S10 has a registered result but is reported as evidence not recorded: %s", row)
 	}
 	want, err := os.ReadFile("testdata/verify-sample.md")
 	if err != nil {
@@ -117,7 +121,15 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 		}, "no result was recorded"},
 		{"blocked", restoreExact, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S12/exact"), evidence.Blocked, "measurement_missing")
-		}, "judged blocked"},
+		}, judgedBlocked},
+		// The Kind rebuild result is blocked in every run while rebuild_limit
+		// has no value, so it keeps the candidate No-Go.
+		{"rebuild blocked without its limit", rebuildKey, func(runs []evidence.Summary) {
+			setResult(scenarioOf(runs, kindRunID, "S10"), evidence.Blocked, "time_limit_unset")
+		}, judgedBlocked},
+		{"rebuild missing", rebuildKey, func(runs []evidence.Summary) {
+			removeScenario(runs, kindRunID, "S10")
+		}, "no result was recorded"},
 		{"not run", restoreExact, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S12/exact"), evidence.NotRun, "skipped")
 		}, "judged not_run"},
@@ -362,7 +374,7 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 		}, "| FAIL | FAIL | NO-GO |", "no recorded field shows that only a time limit failed"},
 		{"blocked", powerOffKey, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, powerOffRunID, "S04/power-off"), evidence.Blocked, "not fenced")
-		}, "| BLOCKED | BLOCKED | NO-GO |", "judged blocked"},
+		}, "| BLOCKED | BLOCKED | NO-GO |", judgedBlocked},
 		{"empty name", powerOffKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, powerOffRunID, "S04/power-off").Measurements["finalMaster"] = ""
 		}, passedButNoGo, "finalMaster is not measured"},

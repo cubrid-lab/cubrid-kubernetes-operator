@@ -34,11 +34,11 @@ Tests compare the registry with its sources in both directions: `kindRequired` b
 
 ## Contract families: readable names
 
-These names are registered. The keys of the Kind results, and the family keys of S00, S01, S02, S03, S05, S06, S13 and S14, are also Ginkgo labels that select Kind steps; the keys of the VM-lab results are what `-check` of the installed commands takes, and the keys of the HA steps after the cluster is formed are what `E2E_BREAK_STEP` takes. None of them is yet an evidence key. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
+These names are registered. The keys of the Kind results, and the family keys of S00, S01, S02, S03, S05, S06, S10, S13 and S14, are also Ginkgo labels that select Kind steps; the keys of the VM-lab results are what `-check` of the installed commands takes, and the keys of the HA steps after the cluster is formed are what `E2E_BREAK_STEP` takes. None of them is yet an evidence key. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
 
 **How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key identifies one test. Only a result a run records today has a concrete key; the tables list those and the current lane definitions.
 
-The following have a family and no concrete key, because no run records them: S07, S08, S09, S10, S15, and the S11 contract variant `interrupted-pod`. S04 applies only to the lab, and S16 and S17 are reserved. A family key is not a result, so it does not resolve to one.
+The following have a family and no concrete key, because no run records them: S07, S08, S09, S15, and the S11 contract variant `interrupted-pod`. S04 applies only to the lab, and S16 and S17 are reserved. A family key is not a result, so it does not resolve to one.
 
 | Existing contract | What is checked | Descriptive family key |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ The following have a family and no concrete key, because no run records them: S0
 | S07 | HA network partition | `ha-network-partition` |
 | S08 | Replication lag under repeated faults | `ha-replication-lag-repeated-faults` |
 | S09 | Former primary member rejoins | `ha-former-primary-rejoin` |
-| S10 | Rebuild after persistent-volume data loss | `ha-pvc-loss-rebuild` |
+| S10 | Rebuild after persistent-volume data loss; the contract names no variant, so the Kind result has the family's key | `ha-pvc-loss-rebuild` |
 | S11 | Backup completion, faults and recovery | `installed-backup` |
 | S12 | Restore into a new cluster and fault handling | `installed-restore-new-cluster` |
 | S13 | Cluster deletion and data-retention policy | `cluster-deletion-retention` |
@@ -83,6 +83,8 @@ The `kind` lane requires the results below; the [required-lane contract](scenari
 | S14, S14/token-rotation, S14/token-migration | `instance-manager-access-and-secret-protection`, `ha-token-rotation`, `ha-legacy-token-migration` |
 
 The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The key's `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.
+
+The Kind suite also records S10 (`ha-pvc-loss-rebuild`), from the step that rebuilds a slave after its data claim and Pod are replaced. The `kind` lane does not require it: it is judged by `rebuild_limit`, which has no value, so every run of it is `blocked` with `time_limit_unset`, and a `fail` of it still fails the run like any recorded result.
 
 Filters are for local diagnostic runs and cannot certify the full lane (see the invariant above).
 

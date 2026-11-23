@@ -326,6 +326,38 @@ func TestGateIsNotSatisfiedByARenamedResult(t *testing.T) {
 	}
 }
 
+// The Kind member rebuild step records S10 without a variant. The kind lane
+// does not require it, because rebuild_limit has no value and every run of it
+// is blocked: such a result leaves the lane's verdict alone, and a failure of
+// it fails the run as any recorded result does.
+func TestKindRebuildResultIsRecordedButNotRequired(t *testing.T) {
+	const s10, rebuildKey = "S10", "ha-pvc-loss-rebuild"
+	resolved, err := ResolveAlias(kindLaneName, LevelKind, s10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Key != rebuildKey || resolved.Family != s10 || len(resolved.Lanes) != 0 ||
+		resolved.Contract != contractDoc+"#s10-rebuild-after-pvc-loss" {
+		t.Fatalf("S10 resolves to %+v", resolved)
+	}
+	if _, err := ResolveAlias(realLabLane, LevelVMLab, s10); err == nil {
+		t.Error("S10 resolves to a VM-lab result")
+	}
+	dir := runDir(t, s00Record)
+	lane := Lane{Name: kindLaneName, Required: []Requirement{{ID: s00}}}
+	s00Pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
+	for result, want := range map[Result][]string{
+		Blocked: nil,
+		Fail:    {"S10: fail: a check of S10 failed (Rebuild after persistent-volume data loss)"},
+	} {
+		rebuild := Scenario{ID: s10, Result: result, Reason: "a check of S10 failed"}
+		got := lane.Gate(Summary{Environment: Environment{Level: LevelKind}, Scenarios: []Scenario{s00Pass, rebuild}}, dir)
+		if !slices.Equal(got, want) {
+			t.Errorf("Gate with S10 %s = %q, want %q", result, got, want)
+		}
+	}
+}
+
 // laterVariant is the later variant of testKindKey in renamedRegistry.
 const laterVariant = "manager-restart"
 

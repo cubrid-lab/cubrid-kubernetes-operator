@@ -66,7 +66,7 @@ var registeredVariants = sync.OnceValue(func() map[string]map[string]bool {
 // scenario family and variant. No result or numerical limit is changed.
 // Unknown families and, for a family with registered results, unregistered
 // variants do not silently gain a v0.1 claim. A family with no registered
-// result (S08, S09, S10, S16, S17) is classified by family alone.
+// result (S08, S09, S16, S17) is classified by family alone.
 func scopeOf(sc scenario) v01Scope {
 	if variants, ok := registeredVariants()[sc.ID]; ok && !variants[sc.Variant] {
 		return scopeUnmapped
