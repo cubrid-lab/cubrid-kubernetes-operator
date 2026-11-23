@@ -39,8 +39,12 @@ const activeCaptureLimit = 4 * time.Minute
 // $CUBRID/log (cub_master, server error, and the log copiers and appliers,
 // whose file names are in docs/poc/RESULTS.md), a listing of the log
 // directories, of the copied logs of each peer ($2...) and of the database
-// directory, and the TCP connections. $1 is the database. Every command is
-// bounded, and a missing tool or file is printed and does not stop the rest.
+// directory, the TCP connections with their timers, and, for each CUBRID
+// process, its command line and the kernel function it waits in
+// (/proc/<pid>/wchan): a log copier blocked on a reply that never comes waits
+// in a socket receive, one that has nothing to copy does not. $1 is the
+// database. Every command is bounded, and a missing tool or file is printed
+// and does not stop the rest.
 const activeCaptureScript = `db=$1; shift
 PATH="${CUBRID}/bin:${PATH}"
 logs="${CUBRID}/log"
@@ -55,9 +59,16 @@ for f in "$logs"/*_master.err "$logs/server/${db}_latest.err" "$logs"/*copylogdb
   [ -f "$f" ] || { echo "(no file)"; continue; }
   tail -n 80 "$f" 2>&1 | cut -c1-400
 done
-echo "== TCP connections"
-if command -v ss >/dev/null 2>&1; then timeout 15 ss -tnp 2>&1 | head -n 80
+echo "== TCP connections, with their timers"
+if command -v ss >/dev/null 2>&1; then timeout 15 ss -tnpo 2>&1 | head -n 80
 else echo "(ss is not in the image; /proc/net/tcp follows)"; timeout 15 cat /proc/net/tcp 2>&1 | head -n 80; fi
+echo "== CUBRID processes: pid, state, kernel wait point, command line"
+for d in /proc/[0-9]*; do
+  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+  case "$cmd" in *cub_*|*copylogdb*|*applylogdb*) ;; *) continue ;; esac
+  state=$(sed -n 's/^State:[[:space:]]*//p' "$d/status" 2>/dev/null)
+  echo "${d#/proc/} [$state] wchan=$(cat "$d/wchan" 2>/dev/null || echo unreadable) $(echo "$cmd" | cut -c1-200)"
+done
 true`
 
 // captureActiveWait records, for each member, the output of
