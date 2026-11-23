@@ -535,9 +535,17 @@ func (h dbaPasswordHelpers) clusterField(name, jsonPath string) (string, error) 
 // the shell text that gives csql its password option, if any. A test password
 // on csql's command line inside the test Pod is acceptable: it is synthetic.
 func (h dbaPasswordHelpers) csqlOn(member, login, statement string) (string, error) {
-	return h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
-		`PATH="${CUBRID}/bin:${PATH}" csql -u dba `+login+` "$0" -c "$1" </dev/null`,
-		h.database+"@localhost", statement)
+	return h.kubectl(csqlOnArgs(member, h.database, login, statement)...)
+}
+
+// csqlOnArgs is the kubectl command line of csqlOn. csql reaches the member's
+// own server over TCP by its hostname, not through the local Unix socket that
+// "<db>@localhost" uses: over that socket a login that succeeded could still
+// print the -199/-111 pair of a lost session (POC-70, #238).
+func csqlOnArgs(member, database, login, statement string) []string {
+	return []string{"exec", member, "-c", "cubrid", "--", "bash", "-c",
+		`PATH="${CUBRID}/bin:${PATH}" csql -u dba ` + login + ` "$0@$(hostname)" -c "$1" </dev/null`,
+		database, statement}
 }
 
 // brokerLogins waits for a Broker of each access mode of cluster and runs the
