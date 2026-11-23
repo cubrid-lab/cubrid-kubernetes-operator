@@ -63,8 +63,8 @@ func TestValidateS07PartitionKeepalive(t *testing.T) {
 	}
 	documented := keepaliveConfig(t)
 	documented.DataCheckWithin = 2 * time.Minute
-	if got := documented.s07StepBounds(); got != 41*time.Minute+20*time.Second {
-		t.Errorf("the documented command's own bounds are %s, the guide says 41m20s", got)
+	if got := documented.s07StepBounds(); got != 44*time.Minute+20*time.Second {
+		t.Errorf("the documented command's own bounds are %s, the guide says 44m20s", got)
 	}
 	cfg.Timeout = cfg.s07StepBounds()
 	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "-timeout") {

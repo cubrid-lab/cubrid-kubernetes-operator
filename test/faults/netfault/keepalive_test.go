@@ -84,10 +84,14 @@ func newFakeSysctl() *fakeSysctl {
 	}
 	// The cut-off member copies the master's log over a connection made
 	// before the run changed anything, armed with the 2-hour default; and
-	// another member's log over a second one.
+	// another member's log over a second one. The master copies the cut-off
+	// member's log over a connection made as early (#1111).
 	s.ns[testPods[target]].sockets = []fakeSocket{
 		{local: testPods[target] + ":48794", peer: testPods[slave1] + ":1523", keepalive: "105min"},
 		{local: testPods[target] + ":48800", peer: testPods[slave2] + ":1523", keepalive: "104min"},
+	}
+	s.ns[testPods[slave1]].sockets = []fakeSocket{
+		{local: testPods[slave1] + ":47232", peer: testPods[target] + ":1523", keepalive: "114min"},
 	}
 	return s
 }
@@ -193,6 +197,10 @@ func (ns *fakeSysctlNS) ss(peer string) string {
 	return b.String()
 }
 
+// stillOpen is the reason a connection listed before its reset is still
+// listed after it.
+const stillOpen = "still open after the reset"
+
 var testKeepalive = Keepalive{Time: 30 * time.Second, Interval: 10 * time.Second, Probes: 3}
 
 // keepaliveEnv is an Env whose ephemeral containers start at once, and
@@ -225,8 +233,10 @@ func requireKeepaliveSet(t *testing.T, m KeepaliveMember, want KeepaliveValues) 
 
 // Every member's namespace gets the new values, read back afterwards; the
 // cut-off member's connection to the master is reset, and the connection
-// CUBRID makes again carries a keepalive timer within the new time. The
-// connection to the other member is left alone.
+// CUBRID makes again carries a keepalive timer within the new time. So do the
+// other connections the cut crosses that were on the old schedule: the
+// target's to the other member and the master's to the target; the other
+// member, with no connection to the target, is recorded with none.
 func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *testing.T) {
 	s := newFakeSysctl()
 	rec, err := shorten(t, s, time.Second)
@@ -262,10 +272,154 @@ func TestShortenKeepaliveSetsEveryMemberAndRemakesTheConnectionToTheMaster(t *te
 	if !strings.Contains(rec.Note, "addresses") || !strings.Contains(rec.Note, "process") {
 		t.Errorf("note %q", rec.Note)
 	}
-	if ns := s.ns[testPods[target]]; !slices.ContainsFunc(ns.sockets, func(sk fakeSocket) bool {
-		return sk.local == testPods[target]+":48800"
+	requireCrossingRemade(t, rec)
+}
+
+// requireCrossingRemade checks the crossing pairs of newFakeSysctl: the
+// master's connection to the target and the target's to the other member,
+// both on the old schedule, reset and made again; the other member, with no
+// connection to the target, recorded with none.
+func requireCrossingRemade(t *testing.T, rec KeepaliveRecord) {
+	t.Helper()
+	type pair struct{ member, peer string }
+	crossing := map[pair]KeepaliveCross{}
+	for _, c := range rec.Crossing {
+		crossing[pair{c.Member, c.Peer}] = c
+	}
+	if len(rec.Crossing) != 3 || len(crossing) != 3 {
+		t.Fatalf("crossing %+v", rec.Crossing)
+	}
+	for _, p := range []struct {
+		pair
+		old, addr string
+	}{
+		{pair{slave1, target}, testPods[slave1] + ":47232", testPods[target] + ":1523"},
+		{pair{target, slave2}, testPods[target] + ":48800", testPods[slave2] + ":1523"},
+	} {
+		c := crossing[p.pair]
+		if len(c.Before) != 1 || len(c.Reset) != 1 || c.Reset[0].Local != p.old || c.ResetAt == nil {
+			t.Errorf("%s to %s: before %+v, reset %+v at %v", p.member, p.peer, c.Before, c.Reset, c.ResetAt)
+		}
+		if r := c.Reconnected; r == nil || r.Peer != p.addr || r.Local == p.old || r.KeepaliveLeftSeconds > 30 ||
+			c.ReconnectedAt == nil || c.Unmet != "" {
+			t.Errorf("%s to %s: reconnected %+v, unmet %q", p.member, p.peer, r, c.Unmet)
+		}
+	}
+	if c := crossing[pair{slave2, target}]; len(c.Before) != 0 || len(c.Reset) != 0 || c.ResetAt != nil ||
+		c.Reconnected != nil || c.Unmet != "" {
+		t.Errorf("a member with no connection to the target: %+v", c)
+	}
+}
+
+// A crossing connection already on the new schedule, such as one made after
+// the write, is not reset.
+func TestShortenKeepaliveLeavesACrossingConnectionOnTheNewSchedule(t *testing.T) {
+	s := newFakeSysctl()
+	s.ns[testPods[slave2]].sockets = []fakeSocket{
+		{local: testPods[slave2] + ":59296", peer: testPods[target] + ":1523", keepalive: "27sec"},
+	}
+	rec, err := shorten(t, s, time.Second)
+	if err != nil {
+		t.Fatalf("ShortenKeepalive: %v", err)
+	}
+	i := slices.IndexFunc(rec.Crossing, func(c KeepaliveCross) bool { return c.Member == slave2 && c.Peer == target })
+	if i < 0 || len(rec.Crossing[i].Before) != 1 || len(rec.Crossing[i].Reset) != 0 || rec.Crossing[i].ResetAt != nil {
+		t.Fatalf("crossing %+v", rec.Crossing)
+	}
+	if slices.ContainsFunc(s.scripts, func(sc string) bool {
+		return strings.HasPrefix(sc, slave2+": ") && strings.Contains(sc, "sockets-reset")
 	}) {
-		t.Errorf("the connection to the other member was reset: %+v", ns.sockets)
+		t.Errorf("%s's connection was reset: %v", slave2, s.scripts)
+	}
+	if !slices.ContainsFunc(s.ns[testPods[slave2]].sockets, func(sk fakeSocket) bool {
+		return sk.local == testPods[slave2]+":59296"
+	}) {
+		t.Errorf("the connection on the new schedule was reset: %+v", s.ns[testPods[slave2]].sockets)
+	}
+}
+
+// A crossing connection that the kernel does not reset, or that CUBRID does
+// not make again within the wait, ends the step with an error naming the
+// pair, after the connection to the master was made again.
+func TestShortenKeepaliveCrossingFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(*fakeSysctlNS)
+		want string
+	}{
+		{"the kernel does not reset it", func(ns *fakeSysctlNS) { ns.ignoreDestroy = true },
+			stillOpen},
+		{"CUBRID does not connect again", func(ns *fakeSysctlNS) { ns.reconnectIn = -1 },
+			"no new connection with a keepalive timer"},
+		{"the new connection has no keepalive timer", func(ns *fakeSysctlNS) { ns.keepaliveOnReconnect = false },
+			"no new connection with a keepalive timer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeSysctl()
+			tc.set(s.ns[testPods[slave1]])
+			rec, err := shorten(t, s, 50*time.Millisecond)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), slave1) {
+				t.Fatalf("error %v, want %q naming %s", err, tc.want, slave1)
+			}
+			if rec.Reconnected == nil || !strings.Contains(rec.Unmet, tc.want) {
+				t.Errorf("reconnected %+v, unmet %q", rec.Reconnected, rec.Unmet)
+			}
+			i := slices.IndexFunc(rec.Crossing, func(c KeepaliveCross) bool {
+				return c.Member == slave1 && c.Peer == target
+			})
+			if i < 0 || rec.Crossing[i].Unmet == "" || rec.Crossing[i].Reconnected != nil {
+				t.Errorf("crossing %+v", rec.Crossing)
+			}
+		})
+	}
+}
+
+// Pairs reset together are waited for together: one made again at once is
+// kept while another is made again only a few listings later, and a pair
+// that never is names what was seen and leaves the others recorded.
+func TestShortenKeepaliveCrossingWaitsForEachPair(t *testing.T) {
+	s := newFakeSysctl()
+	s.ns[testPods[slave1]].reconnectIn = 4
+	rec, err := shorten(t, s, time.Second)
+	if err != nil {
+		t.Fatalf("ShortenKeepalive: %v", err)
+	}
+	for _, c := range rec.Crossing {
+		if c.ResetAt != nil && (c.Reconnected == nil || c.Unmet != "") {
+			t.Errorf("pair %s to %s: %+v", c.Member, c.Peer, c)
+		}
+	}
+
+	s = newFakeSysctl()
+	s.ns[testPods[slave1]].keepaliveOnReconnect = false
+	rec, err = shorten(t, s, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "has no keepalive timer") {
+		t.Fatalf("error %v", err)
+	}
+	for _, c := range rec.Crossing {
+		switch {
+		case c.Member == slave1 && c.Peer == target:
+			if !strings.Contains(c.Unmet, "has no keepalive timer") {
+				t.Errorf("unmet %q", c.Unmet)
+			}
+		case c.ResetAt != nil && c.Reconnected == nil:
+			t.Errorf("pair %s to %s was not made again and says nothing: %+v", c.Member, c.Peer, c)
+		}
+	}
+}
+
+// The pairs are each other member to the target, and the target to each
+// other member but the master, whose connection the step remakes first.
+func TestCrossingPairs(t *testing.T) {
+	members := []Endpoint{member(target), member(slave1), member(slave2)}
+	got := make([]string, 0, 3)
+	for _, p := range crossingPairs(members, member(target), member(slave1)) {
+		got = append(got, p[0].Name+">"+p[1].Name)
+	}
+	want := []string{slave1 + ">" + target, slave2 + ">" + target, target + ">" + slave2}
+	if !slices.Equal(got, want) {
+		t.Errorf("pairs %v, want %v", got, want)
 	}
 }
 
@@ -335,7 +489,7 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 			"wrong target", false},
 		{"the kernel does not reset the connection", func(s *fakeSysctl) {
 			s.ns[testPods[target]].ignoreDestroy = true
-		}, "still open after the reset", false},
+		}, stillOpen, false},
 		// ss -K prints nothing and exits 0 when the kernel answers
 		// SOCK_DESTROY with EOPNOTSUPP: the old socket is still listed.
 		{"ss -K prints nothing and the old socket stays", func(s *fakeSysctl) {
@@ -345,7 +499,7 @@ func TestShortenKeepaliveFailures(t *testing.T) {
 		// short timer; it is still not a new connection.
 		{"the old socket re-arms with a short timer", func(s *fakeSysctl) {
 			s.ns[testPods[target]].ignoreDestroy, s.ns[testPods[target]].rearmOld = true, true
-		}, "still open after the reset", false},
+		}, stillOpen, false},
 		{"a kernel without per-namespace keepalive", func(s *fakeSysctl) {
 			s.ns[testPods[slave1]].kernel = "4.9.0-11-amd64"
 		}, "4.13", false},

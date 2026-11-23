@@ -1241,7 +1241,16 @@ and anything is cut, the run:
 3. on the member it will cut off, resets the established TCP connections
    to the master's port 1523 (`ss -K`), which the log copy uses, and waits
    up to three minutes for CUBRID to connect again with a keepalive timer
-   no longer than the option.
+   no longer than the option;
+4. resets, the same way, the other connections the cut crosses that are
+   still on an older schedule: each other member's connections to the
+   cut-off member's port 1523, and the cut-off member's connections to the
+   other members' ports. It then waits up to three more minutes for each to
+   be made again with a keepalive timer no longer than the option. A
+   connection that already shows such a timer, and a member with no such
+   connection, are recorded and left alone. The record lists each pair
+   under `crossingConnections`, and one that is not made again blocks the
+   run with the pair's name.
 
 The `netsysctl` container is privileged because the container runtime
 mounts `/proc/sys` read-only in every other container: the `netfault`
@@ -1263,7 +1272,7 @@ step fails, `partitionKeepaliveDiagnostics` in `record.json` keeps each
 member Pod's `netsysctl` status (state, reason, message) and its latest
 Events. The step also reads the run namespace again and refuses one that
 does not enforce Pod Security `privileged`. It also refuses to start when
-less of the run's `-timeout` is left than its 7-minute bound. The container
+less of the run's `-timeout` is left than its 10-minute bound. The container
 only sleeps, for the rest of the step's bound plus a minute (15 minutes at
 most), so the privileged process ends long before the Pod does; an
 ephemeral container cannot be removed from a Pod's spec, so the stopped
@@ -1280,9 +1289,20 @@ network namespace: no value written before the move reaches it, and none
 can be written before that connection is made. So the run makes that
 connection again. The reset itself is a change before the cut: CUBRID's
 log copy sees its connection end and connects again, as after a short
-network failure. The connections to the other member, and the other
-members' own connections, keep the schedule they were made with until
-their current timer first fires.
+network failure.
+
+Step 4 is needed for the same reason. The other members' log copies of
+the cut-off member reconnect to its new Pod when it starts. That can be
+seconds before the run writes their values, and a connection made then
+keeps the 2-hour schedule. In 3 of 5 VM-lab runs on 2026-11-22/23 UTC
+before step 4 existed, the cut-off member's server ended such a connection
+during the cut, and the other side was left half-open after the heal.
+`copylogdb` in sync mode waits for the server's reply with no timeout, so
+that slave stopped copying the new master's log, and the Operator reported
+`LogCopyStalled`
+([#1111](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1111)).
+Connections between two members that are not cut keep their schedule,
+since the cut does not cross them.
 
 `ss -K` prints nothing and exits 0 when the kernel cannot destroy sockets,
 so the run judges the reset by listing the connections again: a connection
@@ -1322,19 +1342,22 @@ values asked for, each member's kernel release (`kernelRelease`) and values
 before and after with the time they were seen set, the cut-off member's
 connections to the members' port before the reset, those `ss -K` reported
 reset (`targetSocketsReset`, with each keepalive timer as `ss` printed it),
-and the connection made again (`targetReconnectedSocket`). When a Pod is
+the connection made again (`targetReconnectedSocket`), and for each other
+connection pair the cut crosses (`crossingConnections`) the connections
+before, those reset and the one made again. When a Pod is
 not the run's own, the kernel is older than 4.13, a value cannot be written
 or read back, the cut-off member has no connection to the master's port
-before the reset, the kernel does not reset the connection, or CUBRID does not
+before the reset, the kernel does not reset a connection, or CUBRID does not
 connect again with the new keepalive within the wait, S07 is blocked before
 any client starts and anything is cut, and the reason says which.
 
 The option is refused without a partition fault and with
 `partition-master-isolated`, where the cut-off member is the master. It
-adds 7 minutes to the steps' bounds in the `-timeout` check: 4 to add the
-container, which may pull its image, and 3 for the connection. With the
-10-minute move, a 10-minute settle and the other defaults, the variant's own
-bounds are 41 minutes and 20 seconds, plus LAB01:
+adds 10 minutes to the steps' bounds in the `-timeout` check: 4 to add the
+container, which may pull its image, 3 for the connection to the master and
+3 for the other connections the cut crosses. With the 10-minute move, a
+10-minute settle and the other defaults, the variant's own bounds are 44
+minutes and 20 seconds, plus LAB01:
 
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \

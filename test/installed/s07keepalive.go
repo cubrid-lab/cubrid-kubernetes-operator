@@ -46,8 +46,10 @@ const (
 var (
 	// s07KeepaliveBound bounds the whole setting: adding the keepalive
 	// container to each member, which may pull its image, as the cut's own
-	// preparation allows, and s07KeepaliveReconnect.
-	s07KeepaliveBound = s07PrepareBound + s07KeepaliveReconnect
+	// preparation allows, and s07KeepaliveReconnect twice: once for the
+	// cut-off member's connection to the master and once for the other
+	// connections the cut crosses (#1111).
+	s07KeepaliveBound = s07PrepareBound + 2*s07KeepaliveReconnect
 	// s07KeepaliveReconnect bounds the wait for CUBRID to make the cut-off
 	// member's connection to the master again after the run reset it.
 	s07KeepaliveReconnect = 3 * time.Minute
@@ -151,8 +153,15 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 		rec.mu.Unlock()
 		return err
 	}
-	rec.note("keepalive_shortened", fmt.Sprintf("%s: %d members; %s's connection %s to %s made again",
-		k.Time, len(got.Members), p.Target.Name, got.Reconnected.Local, got.Reconnected.Peer))
+	remade := 0
+	for _, c := range got.Crossing {
+		if c.Reconnected != nil {
+			remade++
+		}
+	}
+	rec.note("keepalive_shortened", fmt.Sprintf("%s: %d members; %s's connection %s to %s made again; "+
+		"%d other crossing connection(s) made again", k.Time, len(got.Members), p.Target.Name, got.Reconnected.Local,
+		got.Reconnected.Peer, remade))
 	return nil
 }
 
