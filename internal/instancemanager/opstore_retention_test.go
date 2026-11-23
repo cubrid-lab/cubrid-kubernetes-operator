@@ -41,6 +41,26 @@ func endedAt(t *testing.T, s *OperationStore, id string, state OperationState, a
 	}
 }
 
+// openedLongAgo makes s count as opened two horizons ago, so that its start
+// no longer keeps any record.
+func openedLongAgo(s *OperationStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startedAt = s.startedAt.Add(-2 * operationRetention)
+}
+
+// prune runs one pruning of s at the time of its clock.
+func prune(t *testing.T, s *OperationStore) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ops, err := s.listLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.pruneLocked(ops, s.now())
+}
+
 // noReferences is a referenced function that names no operation.
 func noReferences() (map[string]bool, error) { return map[string]bool{}, nil }
 
@@ -88,10 +108,11 @@ func TestOperationStore_SameKeyWithinTheHorizonIsNotRunAgainAfterARestart(t *tes
 
 // Only records whose operation ended more than the horizon ago are pruned.
 // One that has not ended, one whose end could not be written, one within
-// the horizon, one without a time and one from the future are kept.
+// the horizon and one without a time are kept.
 func TestOperationStore_PrunesOnlyRecordsThatEndedBeyondTheHorizon(t *testing.T) {
 	s, dir := newStore(t)
 	s.SetReferenced(noReferences)
+	openedLongAgo(s)
 	now := time.Now().UTC()
 	create := func(key, database string) *Operation {
 		t.Helper()
@@ -106,14 +127,12 @@ func TestOperationStore_PrunesOnlyRecordsThatEndedBeyondTheHorizon(t *testing.T)
 	expiredFailed := create("expired-failed", "db2")
 	young := create("young", "db3")
 	noTime := create("no-time", "db4")
-	future := create("future", "db5")
 	running := create("running", "db6")
 	unwritten := create("unwritten", "db7")
 	endedAt(t, s, expiredCompleted.ID, OpCompleted, now.Add(-operationRetention-time.Hour))
 	endedAt(t, s, expiredFailed.ID, OpFailed, now.Add(-operationRetention-time.Hour))
 	endedAt(t, s, young.ID, OpCompleted, now.Add(-operationRetention+time.Hour))
 	endedAt(t, s, noTime.ID, OpCompleted, time.Time{})
-	endedAt(t, s, future.ID, OpCompleted, now.Add(time.Hour))
 	endedAt(t, s, running.ID, OpRunningBackup, now.Add(-operationRetention-time.Hour))
 	endedAt(t, s, unwritten.ID, OpFailed, now.Add(-operationRetention-time.Hour))
 	// Its record on disk ended long ago, but a later end is kept in memory.
@@ -136,7 +155,6 @@ func TestOperationStore_PrunesOnlyRecordsThatEndedBeyondTheHorizon(t *testing.T)
 		{"failed beyond the horizon", expiredFailed, false},
 		{"within the horizon", young, true},
 		{"without a time", noTime, true},
-		{"from the future", future, true},
 		{"running", running, true},
 		{"end not written", unwritten, true},
 	} {
@@ -157,6 +175,7 @@ func TestOperationStore_KeepsRecordsThatAMarkerNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	openedLongAgo(store)
 	NewServer(fakeCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: databases})
 	old := time.Now().UTC().Add(-operationRetention - time.Hour)
 	// Every operation is created before any is aged: a creation prunes.
@@ -221,6 +240,7 @@ func TestOperationStore_KeepsRecordsThatAMarkerNames(t *testing.T) {
 // records a marker names.
 func TestOperationStore_PrunesNothingWithoutReferences(t *testing.T) {
 	s, dir := newStore(t)
+	openedLongAgo(s)
 	op, _, err := s.FindOrCreate(OpBackup, "old", sameBody, dbName)
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +262,7 @@ func TestOperationStore_PrunesNothingWithoutReferences(t *testing.T) {
 func TestOperationStore_PruningStoppedPartwayLeavesAUsableStore(t *testing.T) {
 	s, dir := newStore(t)
 	s.SetReferenced(noReferences)
+	openedLongAgo(s)
 	old := time.Now().UTC().Add(-operationRetention - time.Hour)
 	// Every operation is created before any is aged: a creation prunes.
 	first, _, err := s.FindOrCreate(OpBackup, "first", sameBody, "db1")
@@ -283,6 +304,7 @@ func TestOperationStore_PruningStoppedPartwayLeavesAUsableStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened.SetReferenced(noReferences)
+	openedLongAgo(reopened)
 	if err := reopened.unreadableErrLocked(); err != nil {
 		t.Fatalf("a record left by the stopped pruning cannot be read: %v", err)
 	}
@@ -295,14 +317,7 @@ func TestOperationStore_PruningStoppedPartwayLeavesAUsableStore(t *testing.T) {
 	// The directory sync after a removal fails: the request is answered.
 	syncOperationDir = func(string) error { return errors.New("sync failed") }
 	t.Cleanup(func() { syncOperationDir = syncDirPath })
-	reopened.mu.Lock()
-	ops, err := reopened.listLocked()
-	if err != nil {
-		reopened.mu.Unlock()
-		t.Fatal(err)
-	}
-	reopened.pruneLocked(ops, time.Now().UTC())
-	reopened.mu.Unlock()
+	prune(t, reopened)
 	syncOperationDir = syncDirPath
 	if recordExists(t, dir, first.ID) || recordExists(t, dir, second.ID) {
 		t.Error("the next pruning kept an expired record")
@@ -317,6 +332,7 @@ func TestOperationStore_PruningStoppedPartwayLeavesAUsableStore(t *testing.T) {
 func TestOperationStore_PruningKeepsTheUnreadableRecordGuard(t *testing.T) {
 	s, dir := newStore(t)
 	s.SetReferenced(noReferences)
+	openedLongAgo(s)
 	op, _, err := s.FindOrCreate(OpBackup, "old", sameBody, dbName)
 	if err != nil {
 		t.Fatal(err)
@@ -333,5 +349,182 @@ func TestOperationStore_PruningKeepsTheUnreadableRecordGuard(t *testing.T) {
 	again, existed, err := s.FindOrCreate(OpBackup, "old", sameBody, dbName)
 	if err != nil || !existed || again.ID != op.ID {
 		t.Fatalf("after the repair = %+v (existed %v), %v; want operation %s", again, existed, err, op.ID)
+	}
+}
+
+// fixedClock sets the clock of s to *at, read at each use.
+func fixedClock(s *OperationStore, at *time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clock = func() time.Time { return *at }
+}
+
+// The Operator reads a finished backup by its operation ID for as long as
+// the restore after it is held, which may be longer than the horizon. Each
+// read by a caller starts the horizon again: a record read past
+// UpdatedAt+horizon is kept, and one that nobody read for the whole horizon
+// is pruned.
+func TestOperationStore_ReadsKeepAFinishedRecord(t *testing.T) {
+	readers := map[string]func(s *OperationStore, op *Operation) error{
+		"Get":  func(s *OperationStore, op *Operation) error { _, err := s.Get(op.ID); return err },
+		"Peek": func(s *OperationStore, op *Operation) error { _, err := s.Peek(op.ID); return err },
+		"FindByKey": func(s *OperationStore, op *Operation) error {
+			found, err := s.FindByKey(op.IdempotencyKey)
+			if err == nil && len(found) != 1 {
+				err = errors.New("the record was not found by its key")
+			}
+			return err
+		},
+	}
+	for name, read := range readers {
+		t.Run(name, func(t *testing.T) {
+			s, dir := newStore(t)
+			s.SetReferenced(noReferences)
+			openedLongAgo(s)
+			now := time.Now().UTC()
+			fixedClock(s, &now)
+			op, _, err := s.FindOrCreate(OpBackup, "seed-backup", sameBody, dbName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			endedAt(t, s, op.ID, OpCompleted, now)
+			// FindOrCreate created the record and did not read it back.
+			s.mu.Lock()
+			delete(s.lastRead, op.ID)
+			s.mu.Unlock()
+
+			// Read on every pass, past UpdatedAt+horizon.
+			for i := range 4 {
+				now = now.Add(operationRetention / 2)
+				if err := read(s, op); err != nil {
+					t.Fatalf("read %d: %v", i, err)
+				}
+				prune(t, s)
+				if !recordExists(t, dir, op.ID) {
+					t.Fatalf("pruned %s after UpdatedAt although read within the horizon", now.Sub(op.UpdatedAt))
+				}
+			}
+			// Not read for exactly the horizon: kept.
+			now = now.Add(operationRetention)
+			prune(t, s)
+			if !recordExists(t, dir, op.ID) {
+				t.Fatal("pruned exactly one horizon after the last read")
+			}
+			// Not read for longer than the horizon: pruned.
+			now = now.Add(time.Nanosecond)
+			prune(t, s)
+			if recordExists(t, dir, op.ID) {
+				t.Fatal("kept a record that nobody read for longer than the horizon")
+			}
+		})
+	}
+}
+
+// Reads before a restart are not known, so the start of the store counts as
+// a read of every record: a record that ended long before is kept for one
+// horizon after the store was reopened, and pruned after it.
+func TestOperationStore_ARestartKeepsEveryRecordForAHorizon(t *testing.T) {
+	s, dir := newStore(t)
+	op, _, err := s.FindOrCreate(OpBackup, "seed-backup", sameBody, dbName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endedAt(t, s, op.ID, OpCompleted, time.Now().UTC().Add(-3*operationRetention))
+
+	reopened, err := NewOperationStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.SetReferenced(noReferences)
+	now := reopened.startedAt.Add(operationRetention)
+	fixedClock(reopened, &now)
+	prune(t, reopened)
+	if !recordExists(t, dir, op.ID) {
+		t.Fatal("pruned within one horizon of the restart")
+	}
+	now = now.Add(time.Nanosecond)
+	prune(t, reopened)
+	if recordExists(t, dir, op.ID) {
+		t.Fatal("kept a record one horizon after the restart that nobody read")
+	}
+}
+
+// A request whose own key is on a record past the horizon is answered from
+// that record: the key is looked up before anything is pruned, and the
+// answer counts as a read. The boundary is inclusive: a record that ended
+// exactly one horizon ago is kept, one a nanosecond older is pruned.
+func TestOperationStore_OwnKeyPastTheHorizonIsAnsweredAndTheBoundaryIsKept(t *testing.T) {
+	s, dir := newStore(t)
+	s.SetReferenced(noReferences)
+	openedLongAgo(s)
+	now := time.Now().UTC()
+	fixedClock(s, &now)
+	expired, _, err := s.FindOrCreate(OpBackup, "expired", sameBody, "db1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary, _, err := s.FindOrCreate(OpBackup, "boundary", sameBody, "db2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beyond, _, err := s.FindOrCreate(OpBackup, "beyond", sameBody, "db3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endedAt(t, s, expired.ID, OpCompleted, now.Add(-operationRetention-time.Hour))
+	endedAt(t, s, boundary.ID, OpCompleted, now.Add(-operationRetention))
+	endedAt(t, s, beyond.ID, OpCompleted, now.Add(-operationRetention-time.Nanosecond))
+	s.mu.Lock()
+	s.lastRead = nil
+	s.mu.Unlock()
+
+	again, existed, err := s.FindOrCreate(OpBackup, "expired", sameBody, "db1")
+	if err != nil || !existed || again.ID != expired.ID {
+		t.Fatalf("own key past the horizon = %+v (existed %v), %v; want operation %s", again, existed, err, expired.ID)
+	}
+	if n := recordFiles(t, dir); n != 3 {
+		t.Fatalf("records = %d after answering the key, want 3: nothing new is created", n)
+	}
+	prune(t, s)
+	if !recordExists(t, dir, expired.ID) {
+		t.Error("pruned the record whose key was just answered")
+	}
+	if !recordExists(t, dir, boundary.ID) {
+		t.Error("pruned the record that ended exactly one horizon ago")
+	}
+	if recordExists(t, dir, beyond.ID) {
+		t.Error("kept the record that ended a nanosecond more than one horizon ago")
+	}
+}
+
+// A clock that is before the last change of a record went back: ages are
+// not known, and nothing is pruned.
+func TestOperationStore_PrunesNothingWhenTheClockWentBack(t *testing.T) {
+	s, dir := newStore(t)
+	s.SetReferenced(noReferences)
+	openedLongAgo(s)
+	now := time.Now().UTC()
+	fixedClock(s, &now)
+	old, _, err := s.FindOrCreate(OpBackup, "old", sameBody, "db1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, _, err := s.FindOrCreate(OpBackup, "later", sameBody, "db2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endedAt(t, s, old.ID, OpCompleted, now.Add(-operationRetention-time.Hour))
+	endedAt(t, s, later.ID, OpCompleted, now.Add(time.Hour))
+	s.mu.Lock()
+	s.lastRead = nil
+	s.mu.Unlock()
+	prune(t, s)
+	if !recordExists(t, dir, old.ID) || !recordExists(t, dir, later.ID) {
+		t.Error("pruned although the clock is before the last change of a record")
+	}
+	now = now.Add(2 * time.Hour)
+	prune(t, s)
+	if recordExists(t, dir, old.ID) || !recordExists(t, dir, later.ID) {
+		t.Error("once the clock is past every change, only the expired record is pruned")
 	}
 }

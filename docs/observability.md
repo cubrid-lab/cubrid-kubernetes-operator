@@ -1142,10 +1142,12 @@ read or decoded is logged once as an error with `event`
 was found at start; while it stays unreadable the Instance Manager starts no
 backup, restore or HA bootstrap and answers each start `500` with the code
 `OperationRecordUnreadable` (ADR-0003, #427). A record whose operation ended more than
-30 days ago is removed at the next start request and logged at info level with
+30 days ago, and that nobody read and the manager did not start within those
+30 days, is removed at the next start request and logged at info level with
 `event` `operation_record_pruned`, the `operationID`, `kind`, `state` and
 `updatedAt`; records still named by an ownership marker are kept. When the
-markers cannot be read or a removal fails, nothing more is removed and a
+markers cannot be read, the clock is earlier than the last change of a
+record, or a removal fails, nothing more is removed and a
 warning with `event` `operation_store_prune_skipped` gives the error; the next
 start request tries again (ADR-0003, #369). The operator reports that start
 as `InstanceManagerOperationRecordUnreadable` (#481): on `BootstrapReady` it

@@ -413,20 +413,31 @@ memory does not count: a manager that restarts first finds the operation
 unfinished and records it as `Failed`, and the same idempotency key still
 names that operation.
 
-Operation records are kept for an idempotency horizon of 30 days after their
-operation ended (#369). Within it a repeat of the same idempotency key is
-answered with the recorded operation and never runs it again, also after a
-restart. After it, the next start request removes the record, so a request
-under that key would start a new operation; the horizon is far longer than the
-Operator's 30-minute bounds on waiting for an operation it started or cannot
-find, and a resource whose operation ended sends its key no more. A record is
-never removed while its operation has not ended, while its end is kept in
-memory only, while it cannot be read, or while an ownership marker below the
-database root names it; while a marker cannot be read nothing is removed. Each
-record is removed with one unlink followed by a directory sync, so a crash
-leaves every record whole or absent. Every start request still reads every
-record, so that a record damaged on disk keeps blocking admission (#427); the
-horizon bounds how many there are.
+Operation records are kept for an idempotency horizon of 30 days (#369),
+counted from the latest of three times: when the operation ended, when a
+caller last read the record (`GET /v1/operations/{id}`,
+`GET /v1/operations?idempotencyKey=`, the role answer, or a repeat of the
+request), and when the manager last started. Within it, a repeat of the same
+idempotency key is answered with the recorded operation and never runs it
+again, and a read by operation ID finds the record, also after a restart.
+The Operator reads a finished record by its ID for as long as it waits for
+the next step: the seed backup of an HA bootstrap and the backup of a member
+rebuild are read on every pass while their restore may be held for any time.
+Each such read starts the horizon again, so the record is kept for as long as
+that wait lasts. Reads before a restart are not known, so a restart starts the
+horizon again for every record. The Operator stops sending a key, or waiting
+for an operation it cannot find, after 30 minutes. A record that nobody read
+for the whole horizon is removed at the next start request, so a request
+under its key would start a new operation. A record is never removed while its
+operation has not ended, while its end is kept in memory only, while it cannot
+be read, or while an ownership marker below the database root names it.
+Nothing is removed while a marker cannot be read, or while the clock is
+earlier than the last change of any record (the clock went back). A clock
+that jumps forward is not detected; it shortens the horizon by the size of
+the jump. Each record is removed with one unlink followed by a directory
+sync, so a crash leaves every record whole or absent. Every start request
+still reads every record, so that a record damaged on disk keeps blocking
+admission (#427); the horizon bounds how many there are.
 
 A request is checked before anything is done for it (#301). A body larger
 than 16 KiB is answered with 413 without being read to its end. `POST
