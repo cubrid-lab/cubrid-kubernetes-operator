@@ -6,7 +6,7 @@
 
 **Overall v0.1 verdict: AUTOMATED CHECKS GO — manual gates pending**
 
-The automated checks pass only when every required variant is recorded by finished, indexed runs of registered lanes on this commit and these images, each record is a pass its evidence supports, and every must-measure record is measured without a safety violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no recorded field shows that only a time limit failed. This is not release approval.
+The automated checks pass only when every required variant is recorded by finished, indexed runs of registered lanes on this commit and these images, each record is a pass its evidence supports, and every must-measure record is measured without a safety violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant counts as MEASURED, DISCLOSED only when its runner recorded that time limits alone caused it, and a blocked S07 master-isolated run only when its runner recorded that CUBRID promoted no member; each with a confirmed fault, a succeeded cleanup, no never-event and every required measurement and safety rule. Any other raw fail or blocked result is No-Go. This is not release approval.
 
 ## Manual gates not checked
 

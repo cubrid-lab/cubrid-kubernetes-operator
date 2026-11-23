@@ -677,6 +677,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		}
 	}
 	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, client)
+	bounds := []faults.Bound{within(s03FailoverLimit(variant), recovery), stableFor(stable),
+		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt))}
 	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -704,15 +706,40 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 		},
 		Evidence: files,
-	}, within(s03FailoverLimit(variant), recovery), stableFor(stable),
-		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
+	}, bounds...)
 	var agreement faults.Agreement
 	result, agreement = s03Conditions(variant, result, rounds, events, outcome.Timeline, newMaster)
+	// Every other check of the variant held above; the Conditions were
+	// compared last, so the cause of a fail is classified only now.
+	result = s03TimeLimitOnly(variant, result, bounds, agreement)
 	conditionsJudged = true
 	Expect(agreement.Disagreements).To(BeEmpty(),
 		"S03/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", variant)
 	Expect(agreement.NotJudged).To(BeEmpty(),
 		"S03/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
+}
+
+// s03TimeLimitOnly records on a fail of the graceful variant that its only
+// cause is the time limits it exceeded (evidence.Scenario.TimeLimitOnly),
+// and returns result otherwise unchanged. s03 calls it only after every
+// other check of the variant held and the limits judged it. It marks the
+// fail only when the fault was confirmed and its cleanup succeeded, no
+// never-event was recorded, the Conditions agreed with heartbeat and every
+// rule on them was judged, the reason is still the limits' own, and
+// faults.ExceededOnly names the exceeded limits. The abrupt variants are
+// strict gates and are never marked.
+func s03TimeLimitOnly(variant string, result evidence.Scenario, bounds []faults.Bound,
+	agreement faults.Agreement) evidence.Scenario {
+	held := func(b *bool) bool { return b != nil && *b }
+	exceeded := faults.ExceededOnly(bounds...)
+	if variant != s03Graceful || result.Result != evidence.Fail || exceeded == nil ||
+		!held(result.FaultConfirmed) || !held(result.CleanupSucceeded) || len(result.NeverEvents) > 0 ||
+		len(agreement.Disagreements) > 0 || len(agreement.NotJudged) > 0 ||
+		result.Reason != faults.Judge(bounds...).Reason {
+		return result
+	}
+	result.TimeLimitOnly, result.ExceededLimits = true, exceeded
+	return result
 }
 
 // quarantineReasons lists, sorted and without repeats, the reasons starting

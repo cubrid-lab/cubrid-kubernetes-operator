@@ -773,6 +773,12 @@ type s07Verdict struct {
 	NeverEvents  []string
 	Limits       map[string]string
 	Measurements map[string]any
+	// TimeLimitOnly and ExceededLimits mark a fail whose only cause is the
+	// limits named; NoPromotion a blocked master-isolated run that ended
+	// because CUBRID promoted no member (evidence.Scenario has the rules).
+	TimeLimitOnly  bool
+	ExceededLimits map[string]string
+	NoPromotion    bool
 }
 
 // manualOnly reports whether ADR-0005 lets only a person release a
@@ -889,53 +895,122 @@ func firstReason(rec *s07Record) string {
 	return rec.Revisions[0].Reason
 }
 
-// s07Blocked names the first observation that keeps S07 from being judged,
-// or "".
-func s07Blocked(rec *s07Record) string {
-	switch {
-	case len(rec.StillRunning) > 0:
-		return "steps of the fault flow were still running after their limit: " +
-			strings.Join(rec.StillRunning, ", ")
-	case rec.FaultConfirmedAt == nil:
+// s07NoTrigger is why a trigger variant without a trigger is blocked.
+const s07NoTrigger = "no sweep pair showed a quarantine trigger while the partition held: the run cannot say a " +
+	"quarantine was required (whether one started is recorded)"
+
+// s07BlockedReasons names every observation that keeps S07 from being
+// judged, in the order the verdict names them: the first is its reason. All
+// are listed, so that a run blocked only because no trigger was seen can be
+// told from one that also missed another observation.
+func s07BlockedReasons(rec *s07Record) []string {
+	var reasons []string
+	add := func(when bool, reason func() string) {
+		if when {
+			reasons = append(reasons, reason())
+		}
+	}
+	add(len(rec.StillRunning) > 0, func() string {
+		return "steps of the fault flow were still running after their limit: " + strings.Join(rec.StillRunning, ", ")
+	})
+	add(rec.FaultConfirmedAt == nil, func() string {
 		return "the partition was not confirmed: " + cmpOr(rec.NotHeld, "the fault did not take effect")
-	case rec.HoldEndedAt == nil:
+	})
+	add(rec.HoldEndedAt == nil, func() string {
 		return "the partition was not held for the run's hold: " + cmpOr(rec.NotHeld, "unknown")
-	case !rec.Control && rec.TriggerObservedAt == nil:
-		return "no sweep pair showed a quarantine trigger while the partition held: the run cannot say a " +
-			"quarantine was required (whether one started is recorded)"
-	case rec.OperatorChangedAt != nil:
+	})
+	add(!rec.Control && rec.TriggerObservedAt == nil, func() string { return s07NoTrigger })
+	add(rec.OperatorChangedAt != nil, func() string {
 		return fmt.Sprintf("the manager Pod changed at %s (%s): the run stopped counting triggers",
 			rec.OperatorChangedAt.Format(time.RFC3339), rec.OperatorChange)
-	case rec.Control && rec.TriggerObservedAt == nil && rec.QuarantineSeenAt != nil:
+	})
+	add(rec.Control && rec.TriggerObservedAt == nil && rec.QuarantineSeenAt != nil, func() string {
 		return fmt.Sprintf("a %s quarantine started in the control case and is recorded, not counted as a "+
 			"violation, because %s", cmpOr(firstReason(rec), "reason unknown"), s07ControlUncounted(rec))
-	case rec.Control && (rec.ClusterReadsAfterGrace < 2 || rec.OneMasterSweepsAfterGrace < 2):
+	})
+	add(rec.Control && (rec.ClusterReadsAfterGrace < 2 || rec.OneMasterSweepsAfterGrace < 2), func() string {
 		return fmt.Sprintf("the control was not observed: after the grace the run read the cluster %d time(s) and "+
 			"saw one reachable active master in %d complete sweep(s), and needs two of each",
 			rec.ClusterReadsAfterGrace, rec.OneMasterSweepsAfterGrace)
-	case s07SessionProblem(rec.Session) != "":
-		return s07SessionProblem(rec.Session)
-	case rec.Session.AcknowledgedAfterClosed > 0:
+	})
+	sessionShown := s07SessionProblem(rec.Session) == ""
+	add(!sessionShown, func() string { return s07SessionProblem(rec.Session) })
+	add(sessionShown && rec.Session.AcknowledgedAfterClosed > 0, func() string {
 		return fmt.Sprintf("the established session had %d acknowledged write(s) after observed -rw path "+
 			"closure, but an observed release or incomplete quarantine evidence prevents attributing them "+
 			"to the closed interval; preserve the client timestamps and do not count this as a pass",
 			rec.Session.AcknowledgedAfterClosed)
-	case rec.ManualRelease != nil && rec.ManualRelease.OtherRelease != "":
+	})
+	add(rec.ManualRelease != nil && rec.ManualRelease.OtherRelease != "", func() string {
 		return "the run's manual release was cut short: the quarantine was " + rec.ManualRelease.OtherRelease +
 			", another token than the one the run set"
-	case rec.SettledAt == nil:
+	})
+	add(rec.SettledAt == nil, func() string {
 		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown") +
 			s07SnapshotNote(rec)
-	case rec.Data == nil || !rec.Data.Read:
+	})
+	add(rec.Data == nil || !rec.Data.Read, func() string {
 		reason := "not made"
 		if rec.Data != nil {
 			reason = rec.Data.Error
 		}
 		return "the post-recovery data check on every member could not be made: " + reason
-	case rec.HealthReadings == 0:
+	})
+	add(rec.HealthReadings == 0, func() string {
 		return "the cluster was not read in the health window after the data check"
+	})
+	return reasons
+}
+
+// s07NoPromotion says, for a master-isolated record that judgeS07 blocked
+// with blocked as every blocking observation, how the run showed that CUBRID
+// promoted no member, or "" when it did not show it. It requires that no
+// trigger was the only blocking observation (so the fault was confirmed and
+// held, the session's history shows the session with no acknowledgement
+// after the closure, the cluster settled, the data check read every member
+// and the health window was read); that the run saw the managed read-write
+// path closed (every -rw Broker Pod gone and no -rw endpoint) and new
+// connections stopped; that in every sweep from the fault's issue on, while
+// the cut held and after, every member but the cut-off master answered with
+// a role and none as an active master, with at least one sweep while the cut
+// held; and that the cluster settled on that master. judgeS07 calls it only
+// when no never-event and no broken expectation was found.
+func s07NoPromotion(rec *s07Record, blocked []string) string {
+	if rec.Variant != s07MasterIsolated || rec.Target.Pod != rec.Master ||
+		!slices.Equal(blocked, []string{s07NoTrigger}) || s07PathClosedAt(rec) == nil ||
+		rec.NewConnectionsStoppedAt == nil || rec.FaultIssuedAt == nil ||
+		rec.Session.AcknowledgedAfterClosed != 0 || rec.FinalMaster != rec.Master {
+		return ""
 	}
-	return ""
+	whileCut, seen := 0, 0
+	var members []string
+	for _, sweep := range rec.Sweeps {
+		if sweep.T.Before(*rec.FaultIssuedAt) {
+			continue
+		}
+		seen++
+		names := slices.Sorted(maps.Keys(sweep.Roles))
+		if members == nil {
+			members = names
+		}
+		if !slices.Equal(names, members) || !slices.Contains(names, rec.Master) || len(names) < 3 {
+			return ""
+		}
+		for _, m := range names {
+			if role := sweep.Roles[m]; m != rec.Master && (role == s07ActiveMaster || role == s07Unread) {
+				return ""
+			}
+		}
+		if !sweep.T.Before(*rec.FaultConfirmedAt) && !sweep.T.After(*rec.HoldEndedAt) {
+			whileCut++
+		}
+	}
+	if whileCut == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; CUBRID promoted no member: %s stayed the only member that answered as an active master "+
+		"in all %d sweep(s) from the fault on, the cluster settled on it, the managed -rw path was seen closed and "+
+		"no write was acknowledged after the closure. This is no failover pass", rec.Master, seen)
 }
 
 // judgeS07 judges what an S07 run recorded once its steps ended. A
@@ -958,8 +1033,11 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 		v.Result, v.Reason = evidence.Fail, broken
 		return v
 	}
-	if blocked := s07Blocked(rec); blocked != "" {
-		v.Result, v.Reason = evidence.Blocked, blocked+s07ReleaseNote(rec)
+	if blocked := s07BlockedReasons(rec); len(blocked) > 0 {
+		v.Result, v.Reason = evidence.Blocked, blocked[0]+s07ReleaseNote(rec)
+		if note := s07NoPromotion(rec, blocked); note != "" {
+			v.NoPromotion, v.Reason = true, v.Reason+note
+		}
 		return v
 	}
 	partition.Measured = rec.HoldEndedAt.Sub(*rec.FaultConfirmedAt)
@@ -974,6 +1052,12 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 	}
 	judged := faults.Judge(bounds...)
 	v.Result, v.Reason = judged.Result, judged.Reason
+	// Every never-event, broken expectation and blocking observation was
+	// checked above and none was found, so a fail here comes from the limits
+	// alone when ExceededOnly names them.
+	if exceeded := faults.ExceededOnly(bounds...); v.Result == evidence.Fail && exceeded != nil {
+		v.TimeLimitOnly, v.ExceededLimits = true, exceeded
+	}
 	if v.Result != evidence.Pass {
 		if v.Result == evidence.Blocked {
 			v.Reason += s07ReleaseNote(rec)
@@ -1794,6 +1878,9 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	clientsStarted := false
 	var p *netfault.Partition
 	defer func() {
+		judged := result
+		judged.NeverEvents = slices.Clone(result.NeverEvents)
+		defer keepMarkers(&result, judged)
 		if clientsStarted && !rec.ClientsStopped {
 			err := errors.Join(h.stopS07Probes(ctx), h.stopBackgroundClients(ctx, []string{s07OpenClient}))
 			rec.ClientsStopped = err == nil
@@ -1992,6 +2079,7 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	h.judgeS07Probes(rec, closed)
 	v := judgeS07(rec, h.s07Limits())
 	result.Measurements, result.Limits, result.NeverEvents = v.Measurements, v.Limits, v.NeverEvents
+	result.TimeLimitOnly, result.ExceededLimits, result.NoPromotion = v.TimeLimitOnly, v.ExceededLimits, v.NoPromotion
 	return end(v.Result, "%s", v.Reason)
 }
 
@@ -2016,8 +2104,14 @@ func (h *haRun) judgeS07Probes(rec *s07Record, closed *time.Time) {
 			}
 		}
 	}
-	if rec.TriggerWindowStart != nil {
+	switch {
+	case rec.TriggerWindowStart != nil:
 		rec.NewConnectionsStoppedAt = s07NewConnectionsStopped(rec.Probes, *rec.TriggerWindowStart, until)
+	case closed != nil && rec.FaultIssuedAt != nil:
+		// No trigger was seen, but the path was seen closed: when new
+		// connections stopped is measured from the fault's issue. No limit
+		// applies to it then (quarantine_limit needs a trigger).
+		rec.NewConnectionsStoppedAt = s07NewConnectionsStopped(rec.Probes, *rec.FaultIssuedAt, until)
 	}
 }
 

@@ -19,8 +19,10 @@ package installed
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +55,13 @@ const (
 )
 
 var testS07Members = []string{m0, m1, m2}
+
+// Observations several records of the tests share.
+const (
+	s07ManagerReplaced = "the manager Pod was replaced"
+	s07MemberUnread    = "ha-2: csql failed"
+	s07EndpointsAgain  = "the -rw EndpointSlices had 2 endpoint(s) again"
+)
 
 // A sweep is read as the Operator would read its observations: only the
 // members it can reach count as active masters, and one it cannot reach is
@@ -420,14 +429,14 @@ func TestJudgeS07(t *testing.T) {
 			"answered as an active master"},
 		"a control quarantine after the manager Pod changed is not counted": {true, testS07Limits,
 			controlQuarantine(func(r *s07Record) {
-				r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, "the manager Pod was replaced"
+				r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, s07ManagerReplaced
 			}), evidence.Blocked, "manager Pod"},
 		"a control without two cluster readings after the grace is blocked": {true, testS07Limits,
 			func(r *s07Record) { r.ClusterReadsAfterGrace = 1 }, evidence.Blocked, "not observed"},
 		"a control without two sweeps of one reachable master is blocked": {true, testS07Limits,
 			func(r *s07Record) { r.OneMasterSweepsAfterGrace = 1 }, evidence.Blocked, "not observed"},
 		"a manager Pod that changed blocks the trigger variant": {false, testS07Limits, func(r *s07Record) {
-			r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, "the manager Pod was replaced"
+			r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, s07ManagerReplaced
 		}, evidence.Blocked, "manager Pod"},
 		"an acknowledgement while one quarantine generation stayed closed is a safety failure": {false,
 			testS07Limits, func(r *s07Record) {
@@ -492,7 +501,7 @@ func TestJudgeS07(t *testing.T) {
 			r.FaultConfirmedAt, r.HoldEndedAt, r.NotHeld = nil, nil, "fault_not_confirmed: ha-2 -> ha-0 undecided"
 		}, evidence.Blocked, "not confirmed"},
 		"a data check that could not read a member is blocked": {false, testS07Limits, func(r *s07Record) {
-			r.Data = &s07Data{Error: "ha-2: csql failed"}
+			r.Data = &s07Data{Error: s07MemberUnread}
 		}, evidence.Blocked, "data check"},
 		"conflicting rows while the cluster reports its replication healthy fail": {false, testS07Limits,
 			func(r *s07Record) {
@@ -531,7 +540,7 @@ func TestJudgeS07(t *testing.T) {
 			r.ResolvedWhileUncertain = []string{"the Operator reported PrimaryResolved True"}
 		}, evidence.Fail, "PrimaryResolved True"},
 		"the path reopened while the quarantine was in force fails": {false, testS07Limits, func(r *s07Record) {
-			r.ReopenedWhileQuarantined = []string{"the -rw EndpointSlices had 2 endpoint(s) again"}
+			r.ReopenedWhileQuarantined = []string{s07EndpointsAgain}
 		}, evidence.Fail, "endpoint(s) again"},
 		"a foreign Pod about to be cut fails": {false, testS07Limits, func(r *s07Record) {
 			r.ForeignTargets = []string{"other/ha-0"}
@@ -556,6 +565,173 @@ func TestJudgeS07(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A fail is recorded as caused by time limits alone only when judgeS07
+// reached the limits, so every never-event, broken expectation and blocking
+// observation was checked first and none was found, and every limit was set
+// and measured with only quarantine_limit exceeded.
+func TestJudgeS07RecordsTimeLimitOnlyFails(t *testing.T) {
+	tight := s07Limits{Quarantine: 10 * time.Second, Partition: time.Minute}
+	tests := map[string]struct {
+		limits s07Limits
+		change func(*s07Record)
+		result evidence.Result
+		want   map[string]string
+	}{
+		"quarantine_limit exceeded, everything else held": {tight, nil, evidence.Fail,
+			map[string]string{quarantineLimitName: "14s > 10s"}},
+		"a pass is not a time-limit fail": {testS07Limits, nil, evidence.Pass, nil},
+		"a partition held shorter than partition_duration is not a time overrun": {s07Limits{
+			Quarantine: 10 * time.Second, Partition: 5 * time.Minute}, nil, evidence.Fail, nil},
+		"quarantine_limit exceeded with partition_duration unset": {s07Limits{Quarantine: 10 * time.Second}, nil,
+			evidence.Fail, nil},
+		"quarantine_limit exceeded and an acknowledged write after closure": {tight, func(r *s07Record) {
+			r.Session.AcknowledgedAfterClosed = 1
+			r.Generations = []string{s07OneGeneration}
+		}, evidence.Fail, nil},
+		"quarantine_limit exceeded and the path seen reopened": {tight, func(r *s07Record) {
+			r.ReopenedWhileQuarantined = []string{s07EndpointsAgain}
+		}, evidence.Fail, nil},
+		"quarantine_limit exceeded and the fault not seen removed": {tight, func(r *s07Record) {
+			r.CleanupSucceeded, r.CleanupError = false, "drop rules left after the removal"
+		}, evidence.Fail, nil},
+		"quarantine_limit exceeded but the data check could not read a member": {tight, func(r *s07Record) {
+			r.Data = &s07Data{Error: s07MemberUnread}
+		}, evidence.Blocked, nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := s07Base(false)
+			if tc.change != nil {
+				tc.change(rec)
+			}
+			v := judgeS07(rec, tc.limits)
+			if v.Result != tc.result || v.TimeLimitOnly != (tc.want != nil) || !maps.Equal(v.ExceededLimits, tc.want) {
+				t.Errorf("judgeS07 = %s %q, timeLimitOnly %t %v; want %s with %v", v.Result, v.Reason,
+					v.TimeLimitOnly, v.ExceededLimits, tc.result, tc.want)
+			}
+			if v.NoPromotion {
+				t.Error("a run that reached the limits is marked as ending without a promotion")
+			}
+		})
+	}
+}
+
+// s07NoPromotionBase is a master-isolated record that ended because CUBRID
+// promoted no member: no trigger was seen, the cut-off master stayed the
+// only active master in every sweep from the fault on and the final master,
+// the managed read-write path was seen closed and new connections stopped,
+// the established session had no acknowledgement after the closure, and the
+// data check and health readings were made.
+func s07NoPromotionBase() *s07Record {
+	rec := s07Base(false)
+	rec.TriggerObservedAt, rec.TriggerWindowStart, rec.Trigger = nil, nil, ""
+	rec.FinalMaster = m0
+	for _, s := range []int{2, 10, 60, 120, 150, 200} {
+		rec.Sweeps = append(rec.Sweeps, s07Sweep{T: at(*rec.FaultIssuedAt, s),
+			Roles: map[string]string{m0: s07ActiveMaster, m1: s07Slave, m2: s07Slave}})
+	}
+	return rec
+}
+
+// The no-promotion marker is set only when every proof holds; any one
+// missing leaves the run an ordinary blocked result.
+func TestJudgeS07MarksAMasterIsolatedRunWithoutAPromotion(t *testing.T) {
+	sweepRole := func(i int, member, role string) func(*s07Record) {
+		return func(r *s07Record) { r.Sweeps[i].Roles[member] = role }
+	}
+	tests := map[string]struct {
+		change func(*s07Record)
+		mark   bool
+	}{
+		"every proof holds": {nil, true},
+		"another variant": {func(r *s07Record) {
+			r.Variant, r.Target = s07HigherRankIsolated, imageIdentity{Pod: m1}
+		}, false},
+		"a slave answered as an active master while the cut held": {sweepRole(2, m1, s07ActiveMaster), false},
+		"a slave answered as an active master after the heal":     {sweepRole(5, m2, s07ActiveMaster), false},
+		"a member's role could not be read while the cut held":    {sweepRole(1, m2, s07Unread), false},
+		"no sweep while the cut held": {func(r *s07Record) {
+			r.Sweeps = slices.DeleteFunc(r.Sweeps, func(s s07Sweep) bool { return s.T.Before(*r.HoldEndedAt) })
+		}, false},
+		"another final master": {func(r *s07Record) { r.FinalMaster = m1 }, false},
+		"the fault was not confirmed": {func(r *s07Record) {
+			r.FaultConfirmedAt, r.HoldEndedAt, r.NotHeld = nil, nil, "fault_not_confirmed"
+		}, false},
+		"the -rw Broker Pods were not seen gone": {func(r *s07Record) { r.RWPodsGoneAt = nil }, false},
+		"the -rw endpoints were not seen empty":  {func(r *s07Record) { r.RWEndpointsEmptyAt = nil }, false},
+		"new connections were not seen stopping": {func(r *s07Record) {
+			r.NewConnectionsStoppedAt = nil
+		}, false},
+		"an established-session write acknowledged after the closure": {func(r *s07Record) {
+			r.Session.AcknowledgedAfterClosed = 1
+		}, false},
+		"an established-session history that does not show the session": {func(r *s07Record) {
+			r.Session = nil
+		}, false},
+		"a new connection took effect after the closure": {func(r *s07Record) {
+			r.ReopenedWhileQuarantined = []string{"the write s07n took effect"}
+		}, false},
+		"the fault was not seen removed": {func(r *s07Record) {
+			r.CleanupSucceeded, r.CleanupError = false, "drop rules left"
+		}, false},
+		"the data check could not read a member": {func(r *s07Record) {
+			r.Data = &s07Data{Error: s07MemberUnread}
+		}, false},
+		"the cluster did not settle": {func(r *s07Record) {
+			r.SettledAt, r.SettleUnmet = nil, "CUBRID reports masters [ha-0 ha-1]"
+		}, false},
+		"the manager Pod changed": {func(r *s07Record) {
+			r.OperatorChangedAt, r.OperatorChange = r.FaultConfirmedAt, s07ManagerReplaced
+		}, false},
+		"a trigger was seen": {func(r *s07Record) {
+			r.TriggerObservedAt, r.TriggerWindowStart, r.Trigger = r.FaultConfirmedAt, r.FaultIssuedAt,
+				s07TriggerUnverified
+		}, false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := s07NoPromotionBase()
+			if tc.change != nil {
+				tc.change(rec)
+			}
+			v := judgeS07(rec, testS07Limits)
+			if v.NoPromotion != tc.mark {
+				t.Fatalf("judgeS07 = %s %q, noPromotion %t; want %t", v.Result, v.Reason, v.NoPromotion, tc.mark)
+			}
+			if tc.mark && (v.Result != evidence.Blocked ||
+				!strings.Contains(v.Reason, "no sweep pair showed a quarantine trigger") ||
+				!strings.Contains(v.Reason, "CUBRID promoted no member")) {
+				t.Errorf("judgeS07 = %s %q; want the raw blocked verdict that says no member was promoted",
+					v.Result, v.Reason)
+			}
+			if v.TimeLimitOnly {
+				t.Error("a blocked run is marked as a time-limit fail")
+			}
+		})
+	}
+}
+
+// Without a trigger, a closure of the managed path the run saw still has its
+// new-connection stop measured, from the fault's issue; without a closure it
+// is not.
+func TestJudgeS07ProbesMeasuresNewConnectionsStoppedAfterAClosureWithoutATrigger(t *testing.T) {
+	rec := s07NoPromotionBase()
+	rec.NewConnectionsStoppedAt = nil
+	base := *rec.FaultIssuedAt
+	rec.Probes = []s07Probe{{StartedAt: at(base, 1), Outcome: workload.Acknowledged},
+		{StartedAt: at(base, 26), Outcome: workload.Failed}, {StartedAt: at(base, 40), Outcome: workload.Failed}}
+	h := &haRun{}
+	h.judgeS07Probes(rec, s07PathClosedAt(rec))
+	if rec.NewConnectionsStoppedAt == nil || !rec.NewConnectionsStoppedAt.Equal(at(base, 26)) {
+		t.Errorf("newConnectionsStoppedAt = %v, want 26 s after the fault", rec.NewConnectionsStoppedAt)
+	}
+	rec.NewConnectionsStoppedAt = nil
+	h.judgeS07Probes(rec, nil)
+	if rec.NewConnectionsStoppedAt != nil {
+		t.Errorf("newConnectionsStoppedAt = %v without a trigger or a closure", rec.NewConnectionsStoppedAt)
 	}
 }
 

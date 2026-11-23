@@ -474,3 +474,45 @@ func TestJudgeS00Limits(t *testing.T) {
 		})
 	}
 }
+
+// ExceededOnly names the exceeded limits only when exceeding them is all
+// that kept the bounds from passing. A limit not set, a measurement not
+// taken, or a limit a measurement must reach and did not, leaves the cause
+// of the fail unshown, so it returns nil.
+func TestExceededOnly(t *testing.T) {
+	failover := Limit{Name: FailoverLimit.Name, Value: 30 * time.Second}
+	rejoin := Limit{Name: RejoinLimit.Name, Value: 5 * time.Minute}
+	stable := Limit{Name: "stable_period", Value: 30 * time.Second}
+	late := Bound{Limit: failover, Measured: 41200 * time.Millisecond}
+	onTime := Bound{Limit: rejoin, Measured: time.Minute}
+	steady := Bound{Limit: stable, Measured: 45 * time.Second, AtLeast: true}
+	tests := map[string]struct {
+		bounds []Bound
+		want   map[string]string
+	}{
+		"one limit exceeded, the others held": {[]Bound{late, onTime, steady},
+			map[string]string{FailoverLimit.Name: "41.2s > 30s"}},
+		"every exceeded limit is named, not only the first": {[]Bound{late,
+			{Limit: rejoin, Measured: 6 * time.Minute}, steady},
+			map[string]string{FailoverLimit.Name: "41.2s > 30s", RejoinLimit.Name: "6m0s > 5m0s"}},
+		"no limit exceeded":                  {[]Bound{onTime, steady}, nil},
+		"no bounds":                          {nil, nil},
+		"a measurement exactly at its limit": {[]Bound{{Limit: failover, Measured: 30 * time.Second}}, nil},
+		"a limit that must be reached and was not": {[]Bound{late,
+			{Limit: stable, Measured: 10 * time.Second, AtLeast: true}}, nil},
+		"a limit not set beside the exceeded one": {[]Bound{late, {Limit: Limit{Name: RejoinLimit.Name}}}, nil},
+		"a measurement not taken beside the exceeded one": {[]Bound{late,
+			{Limit: rejoin, Unmeasured: true}}, nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := ExceededOnly(tc.bounds...)
+			if !maps.Equal(got, tc.want) || (tc.want == nil) != (got == nil) {
+				t.Errorf("ExceededOnly = %v, want %v", got, tc.want)
+			}
+			if got != nil && Judge(tc.bounds...).Result != evidence.Fail {
+				t.Errorf("Judge does not fail bounds ExceededOnly named: %+v", Judge(tc.bounds...))
+			}
+		})
+	}
+}

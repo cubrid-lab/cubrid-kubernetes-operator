@@ -88,6 +88,24 @@ type Scenario struct {
 	Measurements map[string]any `json:"measurements,omitempty"`
 	Operations   *Operations    `json:"operations,omitempty"`
 	NeverEvents  []string       `json:"neverEvents"`
+	// TimeLimitOnly is set on a fail only when the runner showed that the
+	// fail came from time limits alone: every safety rule held, every other
+	// check ran and passed, and one or more limits that a measurement must
+	// not exceed were exceeded. ExceededLimits names each of them with what
+	// was measured, as "41.2s > 30s". A limit that a measurement must reach,
+	// such as stable_period, is never in it. Neither field changes the raw
+	// verdict, and a summary written without them reads as false and nil:
+	// the cause of that fail is not shown.
+	TimeLimitOnly  bool              `json:"timeLimitOnly,omitempty"`
+	ExceededLimits map[string]string `json:"exceededLimits,omitempty"`
+	// NoPromotion is set only on a blocked S07 master-isolated result whose
+	// run ended because CUBRID promoted no member, and only when the run
+	// showed that: the fault was confirmed, the managed read-write path was
+	// proven closed, no write was acknowledged after the closure, every
+	// other safety rule held, and no member but the cut-off master answered
+	// as an active master in any sweep from the fault on. It is not a pass of
+	// failover and does not change the raw verdict.
+	NoPromotion bool `json:"noPromotion,omitempty"`
 	// Evidence lists files relative to the run directory.
 	Evidence []string `json:"evidence"`
 }

@@ -43,7 +43,6 @@ const (
 	overallReview      = "Overall v0.1 verdict: REVIEW REQUIRED"
 	gracefulKey        = "ha-primary-pod-recovery-graceful"
 	powerOffKey        = "installed-ha-primary-vm-failure-power-off"
-	masterIsolatedKey  = "installed-ha-network-partition-master-isolated"
 	oneBrokerPodKey    = "broker-failure-recovery-one-pod"
 	restoreExact       = "installed-restore-new-cluster-exact"
 	rebuildKey         = "ha-pvc-loss-rebuild"
@@ -400,7 +399,7 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 		}, passedButNoGo, "is not measured"},
 		{"fault not recorded as confirmed", powerOffKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, powerOffRunID, "S04/power-off").FaultConfirmed = nil
-		}, passedButNoGo, "the fault is not recorded as confirmed"},
+		}, passedButNoGo, faultUnconfirmed},
 		{"acknowledged write after proven closure", masterIsolatedKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, vmRunID, "S07/master-isolated").
 				Measurements["establishedAcknowledgedAfterPathClosed"] = 2
@@ -459,6 +458,208 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 			}
 			if after := summaryDigests(t, root); !slices.Equal(before, after) {
 				t.Error("the verifier changed a recorded summary")
+			}
+		})
+	}
+}
+
+// Names of the runs and results the disclosed-measurement tests change.
+const (
+	s03Graceful       = "S03/graceful"
+	s04PowerOff       = "S04/power-off"
+	s07MasterIsolated = "S07/master-isolated"
+	failoverLimit     = "failover_limit"
+	quarantineLimit   = "quarantine_limit"
+	notQualified      = "not qualified"
+	faultUnconfirmed  = "the fault is not recorded as confirmed"
+	failDisclosed     = "| FAIL | FAIL | MEASURED, DISCLOSED |"
+)
+
+// timeLimitOnly records a result as a fail caused by the one limit alone,
+// as the runners record it: the limit set, the cleanup succeeded, and the
+// run not passed with the result's problem line.
+func timeLimitOnly(runID, name, limit, value, exceeded string) func([]evidence.Summary) {
+	return func(runs []evidence.Summary) {
+		sc := scenarioOf(runs, runID, name)
+		setResult(sc, evidence.Fail, limit+" exceeded: "+exceeded)
+		succeeded := true
+		sc.CleanupSucceeded = &succeeded
+		sc.Limits = map[string]string{limit: value}
+		sc.TimeLimitOnly, sc.ExceededLimits = true, map[string]string{limit: exceeded}
+		failRun(runs, runID, name+": fail: "+sc.Reason)
+	}
+}
+
+// noPromotion records the S07 master-isolated result as the runner records a
+// run that ended because CUBRID promoted no member.
+func noPromotion(runs []evidence.Summary) {
+	sc := scenarioOf(runs, vmRunID, s07MasterIsolated)
+	setResult(sc, evidence.Blocked, "no sweep pair showed a quarantine trigger while the partition held; "+
+		"CUBRID promoted no member")
+	succeeded := true
+	sc.CleanupSucceeded = &succeeded
+	sc.NoPromotion = true
+	failRun(runs, vmRunID, s07MasterIsolated+": blocked: "+sc.Reason)
+}
+
+// failRun records that a run did not pass, with the problem line of one of
+// its results.
+func failRun(runs []evidence.Summary, runID, problem string) {
+	for i := range runs {
+		if runs[i].RunID == runID {
+			runs[i].Passed = false
+			runs[i].Problems = append(runs[i].Problems, problem)
+		}
+	}
+}
+
+// then applies changes in order.
+func then(changes ...func([]evidence.Summary)) func([]evidence.Summary) {
+	return func(runs []evidence.Summary) {
+		for _, change := range changes {
+			change(runs)
+		}
+	}
+}
+
+// A must-measure variant whose raw fail the runner recorded as caused by time
+// limits alone, with every required measurement and safety rule recorded, is
+// measured and disclosed: Go for the candidate, with the exceeded limits
+// shown and the raw fail kept. A master-isolated partition that ended because
+// CUBRID promoted no member is disclosed the same way, and shown as no
+// failover pass.
+func TestVerifierCountsDisclosedMeasurementsAsGo(t *testing.T) {
+	tests := []struct {
+		name, key string
+		mutate    func([]evidence.Summary)
+		raw       string
+		reason    []string
+	}{
+		{"graceful termination over failover_limit", gracefulKey,
+			timeLimitOnly(kindRunID, s03Graceful, failoverLimit, "30s", "41.2s > 30s"),
+			failDisclosed, []string{"failover_limit 41.2s > 30s", "raw fail kept"}},
+		{"VM power loss over failover_limit", powerOffKey,
+			timeLimitOnly(powerOffRunID, s04PowerOff, failoverLimit, "30s", "48.017s > 30s"),
+			failDisclosed, []string{"failover_limit 48.017s > 30s"}},
+		{"partition over quarantine_limit", masterIsolatedKey,
+			timeLimitOnly(vmRunID, s07MasterIsolated, quarantineLimit, "30s", "41s > 30s"),
+			failDisclosed, []string{"quarantine_limit 41s > 30s"}},
+		{"master-isolated partition without a promotion", masterIsolatedKey, noPromotion,
+			"| BLOCKED | BLOCKED | MEASURED, DISCLOSED — no promotion |",
+			[]string{"no member was promoted", "not a failover pass"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root, manifest := buildCandidate(t, tc.mutate)
+			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			if !ok || !strings.Contains(out, overallGo) {
+				t.Fatalf("a disclosed measurement did not leave the candidate Go:\n%s", out)
+			}
+			row := recordedRow(t, out, tc.key)
+			if !strings.Contains(row, tc.raw) {
+				t.Errorf("recorded row of %s does not show %q: %s", tc.key, tc.raw, row)
+			}
+			for _, want := range tc.reason {
+				if !strings.Contains(row, want) {
+					t.Errorf("recorded row of %s does not say %q: %s", tc.key, want, row)
+				}
+			}
+			if row := requiredRow(t, out, tc.key); !strings.Contains(row, "| GO |") {
+				t.Errorf("required row of %s is not Go: %s", tc.key, row)
+			}
+		})
+	}
+}
+
+// Anything that leaves the cause of a fail, or the end without a promotion,
+// unshown keeps the candidate No-Go: a missing field, a must-pass variant, a
+// missing measurement or safety rule, a never-event, an unrecorded cleanup,
+// an exceeded limit that is not recorded, or a marker on the wrong result.
+func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
+	gracefulLate := timeLimitOnly(kindRunID, s03Graceful, failoverLimit, "30s", "41.2s > 30s")
+	partitionLate := timeLimitOnly(vmRunID, s07MasterIsolated, quarantineLimit, "30s", "41s > 30s")
+	graceful := func(change func(*evidence.Scenario)) func([]evidence.Summary) {
+		return func(runs []evidence.Summary) { change(scenarioOf(runs, kindRunID, s03Graceful)) }
+	}
+	isolated := func(change func(*evidence.Scenario)) func([]evidence.Summary) {
+		return func(runs []evidence.Summary) { change(scenarioOf(runs, vmRunID, s07MasterIsolated)) }
+	}
+	tests := []struct {
+		name, key string
+		mutate    func([]evidence.Summary)
+		want      string
+	}{
+		{"time-limit-only field absent", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.TimeLimitOnly, sc.ExceededLimits = false, nil
+		})), notQualified},
+		{"a required measurement missing", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			delete(sc.Measurements, "recoveryTime")
+		})), "recoveryTime is not measured"},
+		{"an acknowledged write lost", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.Measurements[acknowledgedMissing] = 1
+		})), "acknowledgedMissing is 1, not 0"},
+		{"a never-event", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.NeverEvents = []string{"two masters reported as healthy"}
+		})), "an outcome that must never happen"},
+		{"the cleanup not recorded", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.CleanupSucceeded = nil
+		})), "the cleanup is not recorded as succeeded"},
+		{"the fault not confirmed", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.FaultConfirmed = nil
+		})), faultUnconfirmed},
+		{"no exceeded limit named", gracefulKey, then(gracefulLate, graceful(func(sc *evidence.Scenario) {
+			sc.ExceededLimits = nil
+		})), "names no exceeded limit"},
+		{"an exceeded limit the result was not judged by", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.Limits = map[string]string{"rejoin_limit": "5m0s"} })),
+			"failover_limit is not a set limit of the result"},
+		{"an exceeded limit recorded unset", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.Limits[failoverLimit] = "unset" })),
+			"failover_limit is not a set limit of the result"},
+		{"the time-limit-only field on a pass", gracefulKey, graceful(func(sc *evidence.Scenario) {
+			sc.TimeLimitOnly, sc.ExceededLimits = true, map[string]string{failoverLimit: "41.2s > 30s"}
+		}), "marked as caused by a time limit, but recorded pass"},
+		{"must-pass variant with the field", oneBrokerPodKey,
+			timeLimitOnly(kindRunID, "S05/one-broker-pod", "broker_recovery_limit", "1m0s", "2m0s > 1m0s"),
+			"judged fail"},
+		{"an acknowledged write after proven closure", masterIsolatedKey, then(partitionLate,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements[afterPathClosed] = 2 })),
+			"establishedAcknowledgedAfterPathClosed is 2, not 0"},
+		{"no promotion without the field", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.NoPromotion = false })), judgedBlocked},
+		{"no promotion with an acknowledged write after closure", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements[afterPathClosed] = 1 })),
+			"establishedAcknowledgedAfterPathClosed is 1, not 0"},
+		{"no promotion without the closure measured", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements["rwPodsGoneWithin"] = evidence.Unknown })),
+			"rwPodsGoneWithin is not measured"},
+		{"no promotion with the fault not confirmed", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.FaultConfirmed = nil })),
+			faultUnconfirmed},
+		{"no promotion on a fail", masterIsolatedKey, then(noPromotion, isolated(func(sc *evidence.Scenario) {
+			sc.Result = evidence.Fail
+		})), "marked as ending without a promotion, but recorded fail"},
+		{"both markers", masterIsolatedKey, then(partitionLate, isolated(func(sc *evidence.Scenario) {
+			sc.NoPromotion = true
+		})), "both"},
+		{"no promotion on another variant", "installed-ha-network-partition-higher-rank-isolated",
+			func(runs []evidence.Summary) {
+				sc := scenarioOf(runs, vmRunID, "S07/higher-rank-isolated")
+				setResult(sc, evidence.Blocked, "no sweep pair showed a quarantine trigger")
+				sc.NoPromotion = true
+				failRun(runs, vmRunID, "S07/higher-rank-isolated: blocked: "+sc.Reason)
+			}, "only the master-isolated partition"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root, manifest := buildCandidate(t, tc.mutate)
+			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			if ok || !strings.Contains(out, overallNoGo) {
+				t.Fatalf("not No-Go:\n%s", out)
+			}
+			if row := requiredRow(t, out, tc.key); !strings.Contains(row, "| NO-GO |") ||
+				!strings.Contains(row, tc.want) {
+				t.Errorf("row of %s does not say %q: %s", tc.key, tc.want, row)
 			}
 		})
 	}
