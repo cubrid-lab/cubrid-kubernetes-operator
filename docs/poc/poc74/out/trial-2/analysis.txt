@@ -1,0 +1,10 @@
+acknowledged writes: 257, unknown outcome: 0
+after-change-poc74-ha-0              rows=217   acknowledged-expected=217   missing=0 [] extra=0 []
+after-change-poc74-ha-1              rows=217   acknowledged-expected=217   missing=0 [] extra=0 []
+after-change-poc74-ha-2              rows=217   acknowledged-expected=217   missing=0 [] extra=0 []
+after-failover-poc74-ha-0            rows=247   acknowledged-expected=247   missing=0 [] extra=0 []
+after-failover-poc74-ha-1            rows=247   acknowledged-expected=247   missing=0 [] extra=0 []
+after-failover-poc74-ha-2            rows=247   acknowledged-expected=247   missing=0 [] extra=0 []
+final-poc74-ha-0                     rows=257   acknowledged-expected=257   missing=0 [] extra=0 []
+final-poc74-ha-1                     rows=257   acknowledged-expected=257   missing=0 [] extra=0 []
+final-poc74-ha-2                     rows=257   acknowledged-expected=257   missing=0 [] extra=0 []

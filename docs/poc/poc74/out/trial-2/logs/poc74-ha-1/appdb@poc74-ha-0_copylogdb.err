@@ -1,0 +1,51 @@
+
+Time: 11/23/26 10:57:33.188 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 318) connected to database server 'appdb@poc74-ha-0' on the host 'poc74-ha-0' (port 1523).
+
+Time: 11/23/26 10:57:33.239 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 2
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 10:57:33.332 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 3
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'na' to 'to-be-active'. 
+
+Time: 11/23/26 10:57:46.978 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 4
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/23/26 11:00:30.778 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 2157 ERROR CODE = -199, Tran = 3, EID = 5
+Server no longer responding.
+
+Time: 11/23/26 11:00:30.779 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 6
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'active' to 'dead'. 
+
+*** The previous error message is the last one. ***
+
+
+Time: 11/23/26 11:00:31.827 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 7
+Cannot connect to server "appdb" on "poc74-ha-0".
+
+Time: 11/23/26 11:00:31.827 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 8
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-0
+
+Time: 11/23/26 11:00:31.828 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 9
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-0:poc74-ha-0
+
+Time: 11/23/26 11:00:33.828 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 3516 ERROR CODE = -191, Tran = -1, EID = 10
+Cannot connect to server "appdb" on "poc74-ha-0".
+
+Time: 11/23/26 11:00:33.829 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1721 ERROR CODE = -677, Tran = -1, EID = 11
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-0
+
+Time: 11/23/26 11:00:33.829 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1749 ERROR CODE = -677, Tran = -1, EID = 12
+Failed to connect to database server, 'appdb', on the following host(s): poc74-ha-0:poc74-ha-0
+
+Time: 11/23/26 11:00:37.832 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 13
+Program 'copylogdb' (pid 318) connected to database server 'appdb@poc74-ha-0' on the host 'poc74-ha-0' (port 1523).
+
+Time: 11/23/26 11:00:37.846 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 3, EID = 14
+log writer: log writer started. mode: 3.
+
+Time: 11/23/26 11:00:37.847 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 3, EID = 15
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'dead' to 'standby'. 
+
+*** The previous error message is the last one. ***
+

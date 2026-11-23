@@ -1,0 +1,48 @@
+
+Time: 11/23/26 10:57:33.205 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 322) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+
+Time: 11/23/26 10:57:33.239 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 2
+Unable to mount log disk volume/file "/var/lib/cubrid/databases/appdb_poc74-ha-0/appdb_lgat".... No such file or directory
+
+Time: 11/23/26 10:57:33.497 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8220 ERROR CODE = -1038, Tran = 2, EID = 3
+log applier: log applier started. required LSA: 145|11152. last committed LSA: 145|11248. last committed repl LSA: 145|11152.
+
+Time: 11/23/26 10:57:33.497 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 4
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'idle' to 'to-be-active'. 
+
+Time: 11/23/26 10:57:33.502 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 5
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|13312. 
+
+Time: 11/23/26 10:57:47.032 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 6
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'to-be-active' to 'active'. 
+
+Time: 11/23/26 11:00:30.856 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 7
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'active' to 'dead'. 
+
+Time: 11/23/26 11:00:30.857 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 8
+HA generic: change log apply state from 'working' to 'done'. last committed LSA: 160|7616. 
+
+Time: 11/23/26 11:01:31.919 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6451  CODE = -1040, Tran = 2, EID = 9
+HA generic: change the state of HA server (appdb@poc74-ha-0) from 'dead' to 'standby'. 
+
+Time: 11/23/26 11:01:31.923 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 10
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 167|136. 
+
+Time: 11/23/26 11:01:41.351 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 11
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 168|608. 
+
+Time: 11/23/26 11:01:53.379 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 12
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 169|2224. 
+
+Time: 11/23/26 11:02:03.401 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 13
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 170|1008. 
+
+Time: 11/23/26 11:02:13.325 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 14
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 171|1976. 
+
+Time: 11/23/26 11:02:22.347 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6546  CODE = -1040, Tran = 2, EID = 15
+HA generic: change log apply state from 'recovering' to 'done'. last committed LSA: 172|368. 
+
+*** The previous error message is the last one. ***
+
