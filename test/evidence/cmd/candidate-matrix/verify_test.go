@@ -569,7 +569,7 @@ func TestVerifierCountsDisclosedMeasurementsAsGo(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if !ok || !strings.Contains(out, overallGo) {
 				t.Fatalf("a disclosed measurement did not leave the candidate Go:\n%s", out)
 			}
@@ -711,7 +711,7 @@ func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) {
 				t.Fatalf("not No-Go:\n%s", out)
 			}
