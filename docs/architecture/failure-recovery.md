@@ -150,7 +150,9 @@ masters under a partition** (POC-6 and #702/#703); those native experiments
 do not establish that two writes reached the Operator-managed RW Broker, and
 the Operator never decides which CUBRID member to promote. #113/#115 must
 measure the managed new-connection path separately from existing sessions
-and direct database clients.
+and direct database clients. Why CUBRID allows this, read from the engine
+source and compared with the POCs, is in
+[engine-source-ha-and-primary-keys.md](../poc/engine-source-ha-and-primary-keys.md).
 
 - **Write quarantine stops only the managed read-write Brokers, in part.**
   When the primary is only unresolved, the Operator sets `RoutingReady=False`

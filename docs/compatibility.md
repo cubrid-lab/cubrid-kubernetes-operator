@@ -15,7 +15,7 @@ narrow for the MVP and are widened only after they are validated in CI.
 | CSI | Untested | No CSI driver has been exercised. CSI attach/detach, a volume following its Pod to another node, volume resizing and zone resilience are untested and not claimed for v0.1. The Kind e2e uses Kind's default local-path provisioner and the three-VM k3s lab uses `rancher.io/local-path`; both are node-local and not CSI drivers ([dated inventory](testing/lab-inventory.md)). |
 | HA topology | 1 master + 2 slaves (`promotableMembers: 3`) | Standalone `1/0` is also a design target (ADR-0001); live evidence is tracked in ROADMAP.md. |
 | Non-promotable replica | Not supported | `topology.readReplicas` reserved, must be `0` (ADR-0001). |
-| Tables in an HA cluster | Every table needs a primary key | CUBRID HA replicates the rows of a table only if it has a primary key. A table without one is created on every member, but its inserts, updates and deletes stay on the master. The slaves report no failure and no delay, and every Condition stays `True`, so after a failover the new master lacks those rows (POC-62, #855). |
+| Tables in an HA cluster | Every table needs a primary key | CUBRID HA replicates the rows of a table only if it has a primary key. A table without one is created on every member, but its inserts, updates and deletes stay on the master. The slaves report no failure and no delay, and every Condition stays `True`, so after a failover the new master lacks those rows (POC-62, #855). The engine source shows why: [source reading](poc/engine-source-ha-and-primary-keys.md#4-tables-without-a-primary-key). |
 
 ## Reference engine image identity
 
