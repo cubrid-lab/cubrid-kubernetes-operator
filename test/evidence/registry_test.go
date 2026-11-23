@@ -340,8 +340,10 @@ func TestKindRebuildResultIsRecordedButNotRequired(t *testing.T) {
 		resolved.Contract != contractDoc+"#s10-rebuild-after-pvc-loss" {
 		t.Fatalf("S10 resolves to %+v", resolved)
 	}
-	if _, err := ResolveAlias(realLabLane, LevelVMLab, s10); err == nil {
-		t.Error("S10 resolves to a VM-lab result")
+	// The same legacy name at the VM-lab level is the installed lane's own
+	// result, never the Kind one.
+	if lab, err := ResolveAlias(realLabLane, LevelVMLab, s10); err != nil || lab.Key == rebuildKey {
+		t.Errorf("S10 at the VM-lab level resolves to %+v, %v", lab, err)
 	}
 	dir := runDir(t, s00Record)
 	lane := Lane{Name: kindLaneName, Required: []Requirement{{ID: s00}}}
@@ -354,6 +356,44 @@ func TestKindRebuildResultIsRecordedButNotRequired(t *testing.T) {
 		got := lane.Gate(Summary{Environment: Environment{Level: LevelKind}, Scenarios: []Scenario{s00Pass, rebuild}}, dir)
 		if !slices.Equal(got, want) {
 			t.Errorf("Gate with S10 %s = %q, want %q", result, got, want)
+		}
+	}
+}
+
+// The installed Operator's VM-lab lane records S10 under a key of its own,
+// which only its own lane requires, with LAB01 before it. Without its S10
+// result, or with that result blocked as an unset rebuild_limit leaves it,
+// the lane does not pass.
+func TestLabRebuildResultIsRequiredByItsOwnLane(t *testing.T) {
+	const s10, lab01 = "S10", "LAB01"
+	const labRebuildKey, labRebuildLane = "installed-ha-pvc-loss-rebuild", "lab-installed-ha-s10"
+	resolved, err := ResolveAlias(labRebuildLane, LevelVMLab, s10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Key != labRebuildKey || resolved.Family != s10 || resolved.Level != LevelVMLab ||
+		!slices.Equal(resolved.Lanes, []string{labRebuildLane}) ||
+		resolved.Contract != contractDoc+"#s10-rebuild-after-pvc-loss" {
+		t.Fatalf("S10 at the VM-lab level resolves to %+v", resolved)
+	}
+	required, err := RequirementsForKeys(labRebuildLane, LevelVMLab, haSmokeKey, labRebuildKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Requirement{{ID: lab01}, {ID: s10}}; !slices.Equal(required, want) {
+		t.Fatalf("requirements = %+v, want %+v", required, want)
+	}
+	lane := Lane{Name: labRebuildLane, Required: required}
+	if problems := lane.RegistryProblems(LevelVMLab); len(problems) != 0 {
+		t.Fatalf("registry problems: %q", problems)
+	}
+	for _, scenarios := range [][]Scenario{
+		{{ID: lab01, Result: Pass}},
+		{{ID: lab01, Result: Pass}, {ID: s10, Result: Blocked, Reason: "time_limit_unset"}},
+	} {
+		got := lane.Gate(Summary{Environment: Environment{Level: LevelVMLab}, Scenarios: scenarios}, t.TempDir())
+		if len(got) == 0 {
+			t.Errorf("Gate(%+v) passed the lane", scenarios)
 		}
 	}
 }

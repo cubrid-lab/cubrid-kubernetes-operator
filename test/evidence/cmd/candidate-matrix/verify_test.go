@@ -47,7 +47,9 @@ const (
 	oneBrokerPodKey    = "broker-failure-recovery-one-pod"
 	restoreExact       = "installed-restore-new-cluster-exact"
 	rebuildKey         = "ha-pvc-loss-rebuild"
+	labRebuildKey      = "installed-ha-pvc-loss-rebuild"
 	judgedBlocked      = "judged blocked"
+	noRecord           = "no result was recorded"
 	passedButNoGo      = "| PASS | PASS | NO-GO |"
 	listedState        = "listed"
 	unexplained        = "no judged result accounts for"
@@ -118,7 +120,7 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 	}{
 		{"missing variant", oneBrokerPodKey, func(runs []evidence.Summary) {
 			removeScenario(runs, kindRunID, "S05/one-broker-pod")
-		}, "no result was recorded"},
+		}, noRecord},
 		{"blocked", restoreExact, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S12/exact"), evidence.Blocked, "measurement_missing")
 		}, judgedBlocked},
@@ -129,7 +131,16 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 		}, judgedBlocked},
 		{"rebuild missing", rebuildKey, func(runs []evidence.Summary) {
 			removeScenario(runs, kindRunID, "S10")
-		}, "no result was recorded"},
+		}, noRecord},
+		// S10 is required at both levels: a Kind pass does not stand for the
+		// installed Operator's VM-lab result, which is blocked the same way
+		// while rebuild_limit has no value.
+		{"lab rebuild blocked without its limit", labRebuildKey, func(runs []evidence.Summary) {
+			setResult(scenarioOf(runs, vmRunID, "S10"), evidence.Blocked, "time_limit_unset")
+		}, judgedBlocked},
+		{"lab rebuild missing", labRebuildKey, func(runs []evidence.Summary) {
+			removeScenario(runs, vmRunID, "S10")
+		}, noRecord},
 		{"not run", restoreExact, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S12/exact"), evidence.NotRun, "skipped")
 		}, "judged not_run"},

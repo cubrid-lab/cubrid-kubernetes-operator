@@ -17,7 +17,8 @@ limitations under the License.
 // Command ha runs LAB01 against an installed Operator: a three-member HA
 // cluster in a fresh namespace, S01's starting state, the SQL workload client
 // and the data rules on every member and both Services, and with
-// -fault operator-restart S06 restart after it, or with -backup-bucket S11
+// -fault operator-restart S06 restart after it, with -fault pvc-loss-rebuild
+// S10, or with -backup-bucket S11
 // complete, and with -restore also S12 exact, followed by S12 tampered,
 // wrong-target, operator-restart or instance-manager-restart when selected,
 // or with -soak-duration a soak with data checks at intervals
@@ -80,7 +81,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"on it; vm-lab only), or partition-master-isolated, partition-slave-isolated or "+
 			"partition-higher-rank-isolated for S07 (cuts the master, a slave ranked below it, or a slave ranked "+
 			"above it, off the other members and the manager Pod; the last first moves the master off the first "+
-			"member by deleting its Pod when it is there; vm-lab only)")
+			"member by deleting its Pod when it is there; vm-lab only), or pvc-loss-rebuild for S10 (deletes a slave's data "+
+			"claim and Pod with their UIDs as preconditions and requests the rebuild the Operator offers; vm-lab only)")
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
 		"S04, S06 and S15: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.StringVar(&cfg.VMStopCommand, "vm-stop-command", "",
@@ -97,6 +99,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.DrainLimit, "drain-limit", 0,
 		"S15: bound from the cordon until the drained node's member and Broker Pods are gone or the eviction is "+
 			"refused (drain_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
+	flags.DurationVar(&cfg.RebuildLimit, "rebuild-limit", 0,
+		"S10: bound from the rebuild request until every row was checked on every member and both Services "+
+			"(rebuild_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
 	flags.DurationVar(&cfg.QuarantineLimit, "quarantine-limit", 0,
 		"S07: bound from the quarantine-triggering observation until new connections through the read-write "+
 			"Service stop succeeding (quarantine_limit); 0, the default, is unset and makes the run a baseline")
@@ -308,6 +313,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	s15FailoverLimit(&cfg, set)
 	if err := soakFlags(cfg, set); err != nil {
 		return err
+	}
+	if set["rebuild-limit"] && cfg.Fault != installed.FaultPVCLossRebuild {
+		return errors.New("-rebuild-limit needs -fault " + installed.FaultPVCLossRebuild)
 	}
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")

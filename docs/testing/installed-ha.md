@@ -13,7 +13,7 @@ installed:
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S15
 `drain-slave-node` and `drain-master-node`, S07 `master-isolated`,
-`slave-isolated` and `higher-rank-isolated`, S11 `complete`,
+`slave-isolated` and `higher-rank-isolated`, S10, S11 `complete`,
 `missing-destination`, `denied-credentials`, `signature-mismatch`,
 `interrupted-upload`, `operator-restart`, `instance-manager-restart` and
 `overlapping`, and S12
@@ -1896,6 +1896,131 @@ on the lab runner, in `partition-slave-isolated-76ae5e2-20261117T062313` and
 Beyond these runs, the unit tests use fake clients and a model of the
 members' network namespaces; they are no evidence of CUBRID's or the
 Operator's behavior under a real cut.
+
+## S10 rebuild after volume loss
+
+With `-fault pvc-loss-rebuild` the run goes on after LAB01 passed, on the
+same cluster, with S10 of the scenario contract: a slave's data claim and Pod
+are replaced, as an administrator replacing lost storage, and the rebuild the
+Operator offers for that slave is requested while a client keeps writing. It
+follows the operator procedure in
+[Rebuilding a member](../observability.md#rebuilding-a-member) and the Kind
+step `test/e2e/member_rebuild_test.go`. The lane is then
+`lab-installed-ha-s10`, and it requires both LAB01 and S10. It runs on the
+`vm-lab` level only.
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault pvc-loss-rebuild [-rebuild-limit <duration>] -timeout 60m'
+```
+
+`-check installed-ha-pvc-loss-rebuild` selects the same run.
+
+- `-rebuild-limit` is `rebuild_limit`: the time from the rebuild request
+  until every row was checked on every member and both Services. The
+  contract gives it no value, so its default `0` is unset, and S10 is then
+  `blocked` with `time_limit_unset`, never a pass, as the Kind step is. It
+  needs `-fault pvc-loss-rebuild`, and a negative value is refused.
+- `-timeout` must be longer than the bounds of S10's own steps, 36 minutes
+  and a half with the default `-data-check-within` of 2 minutes: 5 minutes for
+  the replacement of the claim and Pod, 2 for the listing, 10 for the offer
+  with a manual release, 2 for the client's start, 10 for the rebuild, 3 for
+  the member's return, 1 for the client's stop, the data check window with
+  30 seconds of reading, and a minute for the reads without a bound of their
+  own. LAB01's time comes on top; the run refuses a shorter `-timeout`
+  before it reads or creates anything in the cluster. The campaign Lease
+  must cover the whole `-timeout`.
+
+What the run does:
+
+1. It reads the run's own cluster (its UID is the one LAB01 recorded) and
+   needs no write quarantine and no rebuild in progress. It reads the roles
+   with `cubrid heartbeat status` and picks the target as the Kind step does:
+   the first slave ranked below the master (a higher ordinal); when every
+   slave outranks the master, the first slave. **The master is never the
+   target.** The target must be recorded in `status.memberDataClaims`. The
+   run records the UID and volume of every member's claim `data-<member>`,
+   and the target's Pod UID. Anything missing blocks S10 before anything is
+   deleted.
+2. It deletes the target's claim, then its Pod, each in the run namespace
+   with the UID it recorded as a precondition, as the documented commands
+   do: the API server refuses to delete a claim or Pod that replaced the one
+   the run checked, and a refused claim delete deletes no Pod. **This lane is
+   the only one in which the harness deletes a claim**, and it never deletes
+   one outside its own namespace or of another member.
+3. The fault is confirmed when, within 5 minutes, the claim has a new UID,
+   is not being deleted and is bound to a new volume, and the Pod has a new
+   UID, and when a read-only listing of the new Pod's database directory
+   (the Kind step's script) shows neither the database's directory nor its
+   line in `databases.txt`. A claim that keeps its UID, or is not bound to a
+   new volume, blocks S10 with the fault not confirmed, and nothing is
+   requested. A listing that shows the database fails S10 before any
+   request. A listing that could not be made within 2 minutes leaves the
+   fault unconfirmed: the run goes on, and S10 is then `blocked`, not passed.
+4. When the target outranks the master, its loss starts a
+   `WriteQuarantinedMemberUnverified` quarantine that does not end by itself,
+   and no rebuild is offered under it. The run releases it as the
+   [manual release](../observability.md#manual-release) documents: once the
+   quarantine names the target's new Pod, it sets the current release token
+   on its own cluster (the patch names the cluster's UID), and sets it again
+   when a revision replaces the token. It then needs
+   `status.lastWriteQuarantineRelease` to record that generation as released
+   manually, and the read-write Brokers available again. A quarantine with
+   another reason is not released, and S10 is blocked. This is safe here
+   only because the target's claim was replaced by an empty one.
+5. It waits up to 10 minutes for the offer in
+   `status.memberRebuildOffers` that names the target and its new claim. An
+   offer whose source is not the master fails S10; no offer blocks it.
+6. A client, `s10rb`, starts writing through `<cluster>-rw` in the
+   background, and the run sets `database.cubrid.io/rebuild-member` to
+   `<member>:<token>` (with `:<source>` for an offer with `formerPrimary`)
+   on its own cluster, the patch naming the cluster's UID.
+7. The rebuild recorded in `status.lastMemberRebuild` under that token must
+   end `Completed` within 10 minutes and name the target, the master as its
+   source and the new claim. A rebuild that names the master is recorded as
+   an outcome that must never happen.
+8. Within 3 minutes the target must answer as a slave of the same master,
+   with no ownership marker in `status.instances`, `Degraded` not `True`, its
+   new claim in `status.memberDataClaims`, its lost claim in
+   `status.formerDataClaims`, and the consumed request removed. A master that
+   moved fails S10.
+9. The client is stopped, and its history joins the run's. The inserts
+   answered after the second that follows the rebuild's recorded acceptance
+   and before its recorded end are counted as written while it ran.
+10. The data rules must hold on every member and both Services over the
+    whole history, the client's rows included; the rebuilt member's applier
+    must have fail count `0` (`cubrid applyinfo` for the master's log); and
+    the claims of the master and the other slave must keep their UIDs. A
+    claim with another UID is an outcome that must never happen.
+11. S10 is then judged by `rebuild_limit`. With it set and not exceeded,
+    S10 is still `blocked` when the fault was not confirmed or no insert was
+    acknowledged while the rebuild ran.
+
+A run that ends, for example at its `-timeout`, before S10 is judged leaves
+it blocked, not failed, unless an outcome that must never happen was already
+seen. The client is stopped in every case.
+
+S10 records the Kind step's measurements under the same names:
+`newVolumeBeforeRebuild`, `offerPublishedAfterLoss`,
+`rebuildRequestedToCompleted`, `rebuildRequestedToAllRowsChecked`,
+`writeQuarantineReleasedManually`, `rebuiltMemberApplierFailCount`,
+`rowsOnRebuiltMember`, `acknowledgedMissing`, the inserts acknowledged,
+failed and with an unknown outcome while the rebuild ran,
+`rebuildTargetWasMaster`, `otherMembersClaimsReplaced` and `masterMoved`.
+It does not send a request with a wrong token or one naming the master, as
+the Kind step does, so `requestWithWrongTokenIgnored` and
+`requestNamingMasterRefused` are `not observed`; neither is whether the
+rebuilt member was reported healthy before its data matched
+(`rebuiltMemberReportedHealthyBeforeDataMatch`). A restore into an unchanged
+claim of a healthy member is only partly observed: the other claims keep
+their UIDs and pass the data check.
+
+The lane adds these writes in the run namespace: the deletion of one
+member's claim and Pod, and annotations on the run's own cluster. The
+account needs `delete` on PersistentVolumeClaims and Pods and `patch` on
+`cubridclusters` there. With a `Delete` reclaim policy, as `local-path` has,
+the replaced volume is destroyed; it holds only the run's own data.
 
 ## S11 complete
 
@@ -5619,6 +5744,15 @@ and S12 variant other than `complete` and `exact` only those under
   `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` (or
   `unsettled-rows.json`) and `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
   lists them. The clients' and the new-connection writes' operations are in
+  `LAB01/history.jsonl`.
+- with `-fault pvc-loss-rebuild`, `S10/record.json` (the master and slaves,
+  the target and whether it outranks the master, every member's claim before
+  and the other members' claims after, the target's Pod UID before and after,
+  when the claim and Pod were deleted, the new claim, the listing's verdict,
+  the released quarantine's generation, the offer and the rebuild without
+  their tokens, when the target answered as a slave again and its applier's
+  fail count), `S10/new-volume-before-rebuild.txt` (the listing) and
+  `S10/data-check.json`. The client's operations are in
   `LAB01/history.jsonl`.
 - with `-soak-duration`, `SOAK/record.json` and one `SOAK/check-<n>.json`
   for each check, as [Soak](#soak) lists them. The clients' operations are in

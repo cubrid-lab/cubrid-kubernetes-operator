@@ -48,6 +48,7 @@ The automated checks pass only when every required variant is recorded by finish
 | S07 | higher-rank-isolated | installed-ha-network-partition-higher-rank-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
 | S08 |  | - | MEASURE + SAFETY REVIEW | 0 | NO-GO | evidence not recorded: no registered result of this scenario exists, so no recorded run can prove it |
 | S10 |  | ha-pvc-loss-rebuild | MUST PASS | 1 | GO | every record is Go (1) |
+| S10 |  | installed-ha-pvc-loss-rebuild | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | complete | installed-backup-complete | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | missing-destination | installed-backup-missing-destination | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | denied-credentials | installed-backup-denied-credentials | MUST PASS | 1 | GO | every record is Go (1) |
@@ -105,6 +106,7 @@ The automated checks pass only when every required variant is recorded by finish
 | candidate-vm-run | installed-ha-network-partition-master-isolated (S07) | master-isolated | MEASURE + SAFETY REVIEW | PASS | PASS | GO | executed, measured and no safety rule broken |
 | candidate-vm-run | installed-ha-network-partition-slave-isolated (S07) | slave-isolated | MEASURE + SAFETY REVIEW | PASS | PASS | GO | executed, measured and no safety rule broken |
 | candidate-vm-run | installed-ha-network-partition-higher-rank-isolated (S07) | higher-rank-isolated | MEASURE + SAFETY REVIEW | PASS | PASS | GO | executed, measured and no safety rule broken |
+| candidate-vm-run | installed-ha-pvc-loss-rebuild (S10) |  | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-vm-run | installed-backup-complete (S11) | complete | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-vm-run | installed-backup-missing-destination (S11) | missing-destination | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
 | candidate-vm-run | installed-backup-denied-credentials (S11) | denied-credentials | MUST PASS | PASS | PASS | GO | pass supported by its evidence |
