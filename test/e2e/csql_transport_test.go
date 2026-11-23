@@ -52,3 +52,20 @@ func TestCSQLRunnerConnectsOverTCP(t *testing.T) {
 		t.Errorf("csql is not given the database and the statement: %q", args)
 	}
 }
+
+// TestDBAPasswordLoginsConnectOverTCP checks the same for the DBA password
+// test's logins on a member: over the local Unix socket, a login that
+// succeeded could still print the -199/-111 pair of a lost session and fail
+// the step on the word ERROR (#238, Kind run 45092507011).
+func TestDBAPasswordLoginsConnectOverTCP(t *testing.T) {
+	args := csqlOnArgs("dbaha-0", "appdb", `-p "$(cat /etc/cubrid-dba-password/password)"`, "SELECT 1")
+	if strings.Contains(strings.Join(args, " "), "localhost") {
+		t.Errorf("csql connects through the local socket: %q", args)
+	}
+	if !slices.ContainsFunc(args, func(a string) bool { return strings.Contains(a, `"$0@$(hostname)"`) }) {
+		t.Errorf("csql does not connect by the member's hostname: %q", args)
+	}
+	if !slices.Contains(args, "appdb") || !slices.Contains(args, "SELECT 1") {
+		t.Errorf("csql is not given the database and the statement: %q", args)
+	}
+}
