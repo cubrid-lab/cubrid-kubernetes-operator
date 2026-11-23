@@ -484,8 +484,17 @@ var recordedLimits = map[string]map[string]string{
 	s07MasterIsolated: {quarantineLimit: thirtySeconds, limitPartition: "2m0s"},
 }
 
+// runnerMeasurement is, by result name, the measurement each runner compares
+// with a limit it may record as exceeded.
+var runnerMeasurement = map[string]map[string]string{
+	s03Graceful:       {failoverLimit: "recoveryTime", limitRejoin: "allMembersBackWithin"},
+	s04PowerOff:       {failoverLimit: "failoverWithin"},
+	s07MasterIsolated: {quarantineLimit: "quarantineWithin"},
+}
+
 // timeLimitOnly records a result as a fail caused by the one limit alone,
-// as the runners record it: every limit set, the cleanup succeeded, no
+// as the runners record it: every limit set, the measurement the limit
+// judged recorded as the runner rounds it, the cleanup succeeded, no
 // acknowledged write missing, and the run not passed with the result's
 // problem line.
 func timeLimitOnly(runID, name, limit, value, exceeded string) func([]evidence.Summary) {
@@ -501,6 +510,14 @@ func timeLimitOnly(runID, name, limit, value, exceeded string) func([]evidence.S
 		sc.Limits[limit] = value
 		if _, ok := sc.Measurements[acknowledgedMissing]; !ok && sc.Measurements != nil {
 			sc.Measurements[acknowledgedMissing] = 0
+		}
+		if measurement, ok := runnerMeasurement[name][limit]; ok {
+			measuredText, _, _ := strings.Cut(exceeded, " > ")
+			measured, err := time.ParseDuration(measuredText)
+			if err != nil {
+				panic(err)
+			}
+			sc.Measurements[measurement] = measured.Round(time.Millisecond).String()
 		}
 		sc.TimeLimitOnly, sc.ExceededLimits = true, map[string]string{limit: exceeded}
 		failRun(runs, runID, name+": fail: "+sc.Reason)
@@ -562,6 +579,9 @@ func TestVerifierCountsDisclosedMeasurementsAsGo(t *testing.T) {
 		{"partition over quarantine_limit", masterIsolatedKey,
 			timeLimitOnly(vmRunID, s07MasterIsolated, quarantineLimit, "30s", "41s > 30s"),
 			failDisclosed, []string{"quarantine_limit 41s > 30s"}},
+		{"graceful termination over rejoin_limit, measured finer than recorded", gracefulKey,
+			timeLimitOnly(kindRunID, s03Graceful, limitRejoin, "5m0s", "5m12.3456789s > 5m0s"),
+			failDisclosed, []string{"rejoin_limit 5m12.3456789s > 5m0s"}},
 		{"master-isolated partition without a promotion", masterIsolatedKey, noPromotion,
 			"| BLOCKED | BLOCKED | MEASURED, DISCLOSED — no promotion |",
 			[]string{"no member was promoted", "not a failover pass"}},
@@ -601,6 +621,10 @@ func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
 	}
 	isolated := func(change func(*evidence.Scenario)) func([]evidence.Summary) {
 		return func(runs []evidence.Summary) { change(scenarioOf(runs, vmRunID, s07MasterIsolated)) }
+	}
+	powerOffLate := timeLimitOnly(powerOffRunID, s04PowerOff, failoverLimit, "30s", "48.017s > 30s")
+	powerOff := func(change func(*evidence.Scenario)) func([]evidence.Summary) {
+		return func(runs []evidence.Summary) { change(scenarioOf(runs, powerOffRunID, s04PowerOff)) }
 	}
 	tests := []struct {
 		name, key string
@@ -700,6 +724,35 @@ func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
 		{"both markers", masterIsolatedKey, then(partitionLate, isolated(func(sc *evidence.Scenario) {
 			sc.NoPromotion = true
 		})), "both"},
+		{"no promotion with a partition held shorter than partition_duration", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements["partitionHeldFor"] = "10s" })),
+			"partitionHeldFor 10s is under partition_duration 2m0s"},
+		{"a partition overrun with a partition held shorter than partition_duration", masterIsolatedKey,
+			then(partitionLate, isolated(func(sc *evidence.Scenario) { sc.Measurements["partitionHeldFor"] = "10s" })),
+			"partitionHeldFor 10s is under partition_duration 2m0s"},
+		{"no promotion without the hold measured", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements["partitionHeldFor"] = evidence.Unknown })),
+			"partitionHeldFor is not measured"},
+		{"VM power loss with the clients stable shorter than stable_period", powerOffKey, then(powerOffLate,
+			powerOff(func(sc *evidence.Scenario) { sc.Measurements["shortestStableFor"] = "5s" })),
+			"shortestStableFor 5s is under stable_period 30s"},
+		{"graceful termination with the client stable shorter than stable_period", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.Measurements["stableFor"] = "12s" })),
+			"stableFor 12s is under stable_period 30s"},
+		{"VM power loss with an overrun the recorded failover time contradicts", powerOffKey,
+			then(timeLimitOnly(powerOffRunID, s04PowerOff, failoverLimit, "30s", "48s > 30s"),
+				powerOff(func(sc *evidence.Scenario) { sc.Measurements["failoverWithin"] = "1s" })),
+			`exceeded failover_limit "48s > 30s" does not match the recorded failoverWithin 1s`},
+		{"graceful termination with an overrun the recorded recovery time contradicts", gracefulKey,
+			then(gracefulLate, graceful(func(sc *evidence.Scenario) { sc.Measurements["recoveryTime"] = "24.512s" })),
+			"does not match the recorded recoveryTime 24.512s"},
+		{"graceful termination over rejoin_limit without the rejoin measured", gracefulKey,
+			then(timeLimitOnly(kindRunID, s03Graceful, limitRejoin, "5m0s", "6m0s > 5m0s"),
+				graceful(func(sc *evidence.Scenario) { sc.Measurements["allMembersBackWithin"] = evidence.Unknown })),
+			"allMembersBackWithin is not measured"},
+		{"a partition overrun with the quarantine time unreadable", masterIsolatedKey, then(partitionLate,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements["quarantineWithin"] = "soon" })),
+			"quarantineWithin is not measured"},
 		{"no promotion on another variant", higherRankKey,
 			func(runs []evidence.Summary) {
 				sc := scenarioOf(runs, vmRunID, "S07/higher-rank-isolated")
