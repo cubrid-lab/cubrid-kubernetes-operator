@@ -17,12 +17,19 @@ limitations under the License.
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
-const s03Scenario = "S03"
+const (
+	s03Scenario    = "S03"
+	s04Scenario    = "S04"
+	s05Scenario    = "S05"
+	s07Scenario    = "S07"
+	unknownVariant = "not-a-real-variant"
+)
 
 func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 	tests := []struct {
@@ -36,10 +43,10 @@ func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 		{s03Scenario, "abrupt-first-member", scopeMustPass},
 		{s03Scenario, "abrupt", scopeMustPass},
 		{s03Scenario, "graceful", scopeMustMeasure},
-		{"S04", "power-off", scopeMustMeasure},
-		{"S05", "one-broker-pod", scopeMustPass},
+		{s04Scenario, "power-off", scopeMustMeasure},
+		{s05Scenario, "one-broker-pod", scopeMustPass},
 		{"S06", "restart", scopeMustPass},
-		{"S07", "higher-rank-isolated", scopeMustMeasure},
+		{s07Scenario, "higher-rank-isolated", scopeMustMeasure},
 		{"S08", "", scopeMustMeasure},
 		{"S09", "clean", scopeDeferred},
 		{"S10", "", scopeMustPass},
@@ -79,5 +86,54 @@ func TestV01ScopeDoesNotRejudgeHistoricalFailure(t *testing.T) {
 		rec.Recorded != before.Recorded || rec.Judged != before.Judged ||
 		verdict(rec.Recorded) != "FAIL" || verdict(rec.Judged) != "FAIL" {
 		t.Fatal("the v0.1 scope mapping changed a historical failed verdict")
+	}
+}
+
+// A family the registry holds results for accepts only the variants it
+// registers. A mistyped or inapplicable variant is shown as unmapped rather
+// than as a v0.1 requirement it does not match.
+func TestV01ScopeShowsUnregisteredVariantsAsUnmapped(t *testing.T) {
+	tests := []struct{ id, variant string }{
+		{s05Scenario, unknownVariant},
+		{s05Scenario, ""},
+		{s07Scenario, unknownVariant},
+		{s07Scenario, ""},
+		{s04Scenario, unknownVariant},
+		{"S06", unknownVariant},
+		{"S11", unknownVariant},
+		{"S12", unknownVariant},
+		{"S13", unknownVariant},
+		{"S14", unknownVariant},
+		{"S15", unknownVariant},
+		{"S00", "abrupt"},
+		{"S01", "complete"},
+		{"LAB01", "restart"},
+		{s05Scenario, "graceful"},
+		{s07Scenario, "drain-master-node"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id+"/"+tc.variant, func(t *testing.T) {
+			if got := scopeOf(scenario{ID: tc.id, Variant: tc.variant}); got != scopeUnmapped {
+				t.Errorf("scopeOf(%s/%s) = %q, want %q", tc.id, tc.variant, got, scopeUnmapped)
+			}
+		})
+	}
+}
+
+// Every variant the registry holds keeps a v0.1 category.
+func TestV01ScopeMapsEveryRegisteredVariant(t *testing.T) {
+	for _, level := range []string{evidence.LevelKind, evidence.LevelVMLab} {
+		for _, key := range evidence.RegisteredKeys(level) {
+			resolved, err := evidence.ResolveKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, alias := range resolved.Aliases {
+				id, variant, _ := strings.Cut(alias, "/")
+				if got := scopeOf(scenario{ID: id, Variant: variant}); got == scopeUnmapped {
+					t.Errorf("registered result %q (%s) is shown as unmapped", alias, key)
+				}
+			}
+		}
 	}
 }

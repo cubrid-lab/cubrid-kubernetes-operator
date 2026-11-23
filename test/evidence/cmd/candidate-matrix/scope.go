@@ -16,6 +16,13 @@ limitations under the License.
 
 package main
 
+import (
+	"strings"
+	"sync"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+)
+
 // v01Scope classifies a recorded result against the experimental release
 // claim adopted on 2026-11-21. This is only an inventory label: it cannot
 // rejudge a historical scenario, waive a safety failure, or approve a release.
@@ -31,10 +38,39 @@ const (
 	scopeUnmapped    v01Scope = "UNMAPPED (REVIEW REQUIRED)"
 )
 
+// registeredVariants holds, for each scenario family the evidence registry has
+// results for, the variants it registers; an empty variant is the family's
+// result without one. The registry is the one source of scenario identity, so
+// the matrix keeps no second list.
+var registeredVariants = sync.OnceValue(func() map[string]map[string]bool {
+	known := map[string]map[string]bool{}
+	for _, level := range []string{evidence.LevelKind, evidence.LevelVMLab} {
+		for _, key := range evidence.RegisteredKeys(level) {
+			resolved, err := evidence.ResolveKey(key)
+			if err != nil {
+				continue
+			}
+			for _, alias := range resolved.Aliases {
+				id, variant, _ := strings.Cut(alias, "/")
+				if known[id] == nil {
+					known[id] = map[string]bool{}
+				}
+				known[id][variant] = true
+			}
+		}
+	}
+	return known
+})
+
 // scopeOf classifies the result already recorded in summary.json by its
 // scenario family and variant. No result or numerical limit is changed.
-// Unknown families and unknown S03 variants do not silently gain a v0.1 claim.
+// Unknown families and, for a family with registered results, unregistered
+// variants do not silently gain a v0.1 claim. A family with no registered
+// result (S08, S09, S10, S16, S17) is classified by family alone.
 func scopeOf(sc scenario) v01Scope {
+	if variants, ok := registeredVariants()[sc.ID]; ok && !variants[sc.Variant] {
+		return scopeUnmapped
+	}
 	switch sc.ID {
 	case "S03":
 		switch sc.Variant {
