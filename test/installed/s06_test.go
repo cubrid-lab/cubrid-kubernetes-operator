@@ -239,6 +239,13 @@ func TestRunS06RestartPassesWhenTheReplacementWritesAFreshStatus(t *testing.T) {
 	if s06.Operations == nil || s06.Operations.Acknowledged == 0 || s06.Measurements["operationsNotAcknowledged"] != 0.0 {
 		t.Fatalf("S06 operations = %+v, measurements = %v", s06.Operations, s06.Measurements)
 	}
+	// LAB01 counts only its own workload (the writes and the refused read-only write), not the
+	// clients S06 appends to the same run history afterwards.
+	if lab.Operations == nil || lab.Operations.Attempted != cfg.Operations+1 ||
+		lab.Operations.Acknowledged != cfg.Operations || lab.Operations.Failed != 1 {
+		t.Fatalf("LAB01 operations = %+v, want only its own %d writes and the refused read-only write",
+			lab.Operations, cfg.Operations)
+	}
 	var rec s06Record
 	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, s06RecordFile))
 	if err != nil || json.Unmarshal(data, &rec) != nil {
