@@ -33,15 +33,16 @@ import (
 
 // v01Families are the scenarios the v0.1 candidate acceptance table of
 // docs/testing/scenario-contract.md requires, by must-pass or must-measure.
-// S09 is deferred to v0.2 and is not listed. Every registered result of a
+// S08 is counted through repeated S04 and S07 runs and S09 is deferred to
+// v0.2, so neither is listed. Every registered result of a
 // listed family whose scope is a v0.1 requirement must be recorded, and a
 // listed family without a registered result cannot be proven by any run.
-var v01Families = []string{"S00", "S01", "S02", "S03", "S04", "S05", "S06", "S07", s08Family,
+var v01Families = []string{"S00", "S01", "S02", "S03", "S04", "S05", "S06", "S07",
 	"S10", "S11", "S12", "S13", "S14", "S15"}
 
 const (
-	// S08 is the v0.1 family without a registered result.
-	s08Family = "S08"
+	// s08Note is why a recorded S08 result is not counted by itself.
+	s08Note = "covered by repeated S04 and S07 runs (maintainer decision 2026-11-23, #126)"
 	// acknowledgedMissing counts acknowledged writes a member lacks.
 	acknowledgedMissing = "acknowledgedMissing"
 	// afterPathClosed counts established-session writes acknowledged after
@@ -140,6 +141,7 @@ const candidateGo = "AUTOMATED CHECKS GO — manual gates pending"
 var manualGates = []string{
 	"Conditions, Events and metrics as separate v0.1 requirements",
 	"repetitions of the core fault and recovery variants",
+	"S08 coverage: repeated S04 and S07 runs on the candidate; count not yet decided",
 	"the 24-hour soak run",
 	"real-fault review of the VM-lab runs",
 	"index completeness: every failure and rerun of the candidate linked in the index; " +
@@ -457,7 +459,7 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 	scope := scopeOf(scenario{ID: sc.ID, Variant: sc.Variant})
 	cleanupFailed := sc.CleanupSucceeded != nil && !*sc.CleanupSucceeded
 	switch {
-	case (scope == scopeDeferred || scope == scopeConditional) &&
+	case (scope == scopeDeferred || scope == scopeConditional || scope == scopeCovered) &&
 		(result.Judged == evidence.Fail || result.Judged == evidence.Blocked || cleanupFailed):
 		// The contract keeps S09's held-member safety behavior, and a lane
 		// fails on a failed result it does not require.
@@ -465,6 +467,8 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 			result.Judged, cleanupFailed, result.Reason)
 	case scope == scopeDeferred:
 		return scope, verdictNotCounted, "deferred to v0.2: not required and not counted"
+	case scope == scopeCovered:
+		return scope, verdictNotCounted, s08Note
 	case scope == scopeConditional:
 		return scope, verdictNotCounted, "not claimed for v0.1: not required and not counted"
 	case scope == scopeUnmapped || result.Key == "":

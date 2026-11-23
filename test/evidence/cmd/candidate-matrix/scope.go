@@ -35,7 +35,11 @@ const (
 	scopeMustMeasure v01Scope = "MEASURE + SAFETY REVIEW"
 	scopeDeferred    v01Scope = "v0.2 DEFERRED"
 	scopeConditional v01Scope = "CONDITIONAL (NOT CLAIMED)"
-	scopeUnmapped    v01Scope = "UNMAPPED (REVIEW REQUIRED)"
+	// scopeCovered is replication lag under repeated faults (S08): the
+	// maintainer decision of 2026-11-23 (#126) counts it through repeated
+	// S04 and S07 runs, so it is not a separate required result.
+	scopeCovered  v01Scope = "COVERED BY REPEATED S04 AND S07 RUNS"
+	scopeUnmapped v01Scope = "UNMAPPED (REVIEW REQUIRED)"
 )
 
 // registeredVariants holds, for each scenario family the evidence registry has
@@ -81,8 +85,10 @@ func scopeOf(sc scenario) v01Scope {
 		default:
 			return scopeUnmapped
 		}
-	case "S04", "S07", "S08":
+	case "S04", "S07":
 		return scopeMustMeasure
+	case "S08":
+		return scopeCovered
 	case "S09":
 		return scopeDeferred
 	case "S16", "S17":

@@ -4,7 +4,7 @@
 - Operator image: `sha256:3333333333333333333333333333333333333333333333333333333333333333`
 - CUBRID image: `sha256:4444444444444444444444444444444444444444444444444444444444444444`
 
-**Overall v0.1 verdict: NO-GO**
+**Overall v0.1 verdict: AUTOMATED CHECKS GO — manual gates pending**
 
 The automated checks pass only when every required variant is recorded by finished, indexed runs of registered lanes on this commit and these images, each record is a pass its evidence supports, and every must-measure record is measured without a safety violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no recorded field shows that only a time limit failed. This is not release approval.
 
@@ -12,6 +12,7 @@ The automated checks pass only when every required variant is recorded by finish
 
 - Conditions, Events and metrics as separate v0.1 requirements
 - repetitions of the core fault and recovery variants
+- S08 coverage: repeated S04 and S07 runs on the candidate; count not yet decided
 - the 24-hour soak run
 - real-fault review of the VM-lab runs
 - index completeness: every failure and rerun of the candidate linked in the index; a run left out of the index cannot be detected here
@@ -46,7 +47,6 @@ The automated checks pass only when every required variant is recorded by finish
 | S07 | master-isolated | installed-ha-network-partition-master-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
 | S07 | slave-isolated | installed-ha-network-partition-slave-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
 | S07 | higher-rank-isolated | installed-ha-network-partition-higher-rank-isolated | MEASURE + SAFETY REVIEW | 1 | GO | every record is Go (1) |
-| S08 |  | - | MEASURE + SAFETY REVIEW | 0 | NO-GO | evidence not recorded: no registered result of this scenario exists, so no recorded run can prove it |
 | S10 |  | ha-pvc-loss-rebuild | MUST PASS | 1 | GO | every record is Go (1) |
 | S10 |  | installed-ha-pvc-loss-rebuild | MUST PASS | 1 | GO | every record is Go (1) |
 | S11 | complete | installed-backup-complete | MUST PASS | 1 | GO | every record is Go (1) |
