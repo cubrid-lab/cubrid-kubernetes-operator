@@ -37,3 +37,7 @@ internal/instancemanager/staging/
 
 # The per-run copy make docker-buildx builds from; removed when the run ends (#869)
 Dockerfile.cross*
+
+# Python bytecode, written when a POC analysis script runs
+__pycache__/
+*.py[cod]
