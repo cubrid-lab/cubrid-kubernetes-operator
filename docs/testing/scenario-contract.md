@@ -270,6 +270,51 @@ empty list when the sampled reads showed none, `unknown` when no status read
 was taken after the fault). It discloses the reason only; the verdict does
 not depend on it.
 
+**Time-limit-only failures and runs without a promotion** (maintainer
+decisions 2 and 3 on #126, 2026-11-23 UTC). The raw result keeps its
+meaning; only the candidate verifier's v0.1 disposition changes:
+
+- A raw `fail` of S04 `power-off`, an S07 variant or S03 `graceful` that its
+  runner recorded as caused by time limits alone (`timeLimitOnly` and
+  `exceededLimits` in [`summary.json`](#summaryjson)) is **measured and
+  disclosed**, Go for the candidate, with each exceeded limit and its
+  measured value in the report. The runners set it only when the fault was
+  confirmed, the cleanup succeeded, no never-event was seen, every other
+  check ran and passed (for S04 every client acknowledged after the taint,
+  none interrupted, all back after the release and stable for
+  `stable_period`, and the data rules held; for S07 no never-event, broken
+  expectation or blocking observation, and every limit set and measured;
+  for S03 `graceful` every other check of the variant, then the
+  Conditions agreeing with heartbeat with every rule judged), and only a
+  limit a measurement must not exceed was exceeded. A check that could not
+  run after a time overrun, a limit not set or not measured, or a limit a
+  measurement must reach (`stable_period`, `partition_duration`) leaves
+  the field out, and the `fail` stays No-Go. The verifier does not rely on
+  the field alone: every limit the runner records must be set, each
+  `exceededLimits` entry must be a must-not-exceed limit of the variant
+  whose measured value exceeds the recorded limit, and the variant's
+  measurements and data rules must hold (no acknowledged write after
+  proven closure and no rows differing between members for S07, no missing
+  acknowledged write for S03 `graceful`, S04 and S07). Must-pass variants
+  are unchanged: a timing `fail` there is No-Go.
+- An S07 `master-isolated` run that ends `blocked` because no quarantine
+  trigger was seen, and in which CUBRID promoted no member, is **measured
+  and disclosed — no promotion**, Go for the candidate, only when its
+  runner recorded `noPromotion`: `quarantine_limit` and
+  `partition_duration` were set (a baseline run is never marked), the
+  fault was confirmed and held for at least `partition_duration`, the
+  managed `-rw` path was proven closed (every Broker Pod gone, no endpoint,
+  new connections stopped), no write was acknowledged after the closure,
+  every other safety rule held and every other observation was made, in
+  every sweep from the fault on every member but the cut-off master
+  answered as a slave (an unread role or one CUBRID reports as neither
+  refuses the marker), and the cluster settled on that master. The sweeps
+  are samples: the record gives their number and the longest interval
+  between two of them. The verifier again requires every limit set, no
+  acknowledged write missing and no rows differing between members. The
+  record says that no promotion happened. It is not a pass of failover.
+  Any missing proof keeps it No-Go.
+
 **Existing tools need alignment before candidate acceptance:** the Kind
 and installed-HA runners currently encode the previous limits and S03's
 embedded S09 `clean` rejoin check. Their raw `pass`/`fail`/`blocked`
@@ -1267,6 +1312,18 @@ each should mirror. The samples it accepted are kept as `S03/<variant>/metrics.t
   result when its other checks held; otherwise the existing failure wins.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
+- `timeLimitOnly`, left out when false, is `true` only on a `fail` whose
+  runner showed that time limits alone caused it: every safety rule held,
+  every other check ran and passed, and only limits a measurement must not
+  exceed were exceeded. `exceededLimits` then names each of them with what
+  was measured, for example `{"failover_limit": "48.017s > 30s"}`. A limit
+  a measurement must reach, such as `stable_period`, is never one of them.
+  `noPromotion`, left out when false, is `true` only on a `blocked` S07
+  `master-isolated` result whose run ended because CUBRID promoted no
+  member, with the proof listed under
+  [v0.1 candidate acceptance](#v01-candidate-acceptance--2026-11-21-decision).
+  Neither field changes the raw result; a summary without them reads as
+  both false, so the cause of an older `fail` stays unshown.
 - In a scenario whose Conditions are compared with SQL and the fault (see
   [Conditions during the fault](#conditions-during-the-fault)),
   `measurements.conditionAgreement` counts the status reads, the reads that
@@ -2304,7 +2361,9 @@ it needs more.
 - **Limits:** `quarantined_failover_limit` for the two required abrupt
   variants; `stable_period` and the other applicable safety checks.
   For `graceful`, record the former `failover_limit` and its violation
-  as a measured result, not a v0.1 numeric release gate. The current
+  as a measured result, not a v0.1 numeric release gate; a `fail` caused
+  by the limits alone is marked `timeLimitOnly`
+  ([v0.1 candidate acceptance](#v01-candidate-acceptance--2026-11-21-decision)). The current
   implementation still applies `rejoin_limit` to S03's embedded S09
   check until the accepted change is implemented and tested.
 - **Replication record:** after each abrupt variant, passed or failed,

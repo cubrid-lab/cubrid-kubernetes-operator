@@ -581,6 +581,36 @@ func TestCompareRunsDoesNotTakeAChangedCheckForTheSameBaseline(t *testing.T) {
 	}
 }
 
+// The time-limit-only and no-promotion markers, and the limits a fail
+// exceeded, are shown beside each other when either run records them. A run
+// that records neither shows no such value, as before the fields existed.
+func TestCompareRunsShowsTheTimeLimitOnlyAndNoPromotionMarkers(t *testing.T) {
+	marked := inAbrupt(func(scenario map[string]any) {
+		scenario[fieldTimeLimitOnly] = true
+		scenario["exceededLimits"] = map[string]any{failoverLimit: exceededFailover}
+		scenario[fieldNoPromotion] = true
+	})
+	got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, kindRun, marked))
+	values := resultWithKey(t, got, abruptKey).Values
+	for name, want := range map[string]ComparedValue{
+		fieldTimeLimitOnly:                {Old: "false", New: "true", State: ValueChanged},
+		fieldNoPromotion:                  {Old: "false", New: "true", State: ValueChanged},
+		"exceededLimits." + failoverLimit: {Old: Unknown, New: exceededFailover, State: ValueUnknown},
+	} {
+		value := comparedValue(t, values, name)
+		if value.Old != want.Old || value.New != want.New || value.State != want.State {
+			t.Errorf("%s = %+v, want %+v", name, value, want)
+		}
+	}
+	got = frozen.compareRuns(readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, kindRun))
+	for _, value := range resultWithKey(t, got, abruptKey).Values {
+		if value.Name == fieldTimeLimitOnly || value.Name == fieldNoPromotion ||
+			strings.HasPrefix(value.Name, "exceededLimits.") {
+			t.Errorf("runs without the markers show %+v", value)
+		}
+	}
+}
+
 // A comparison depends on the runs and not on the order of a map: results come
 // sorted by key, with those without one last, and two comparisons are equal.
 func TestCompareRunsIsDeterministic(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -49,6 +50,20 @@ const (
 	// the managed -rw path was observed closed.
 	afterPathClosed = "establishedAcknowledgedAfterPathClosed"
 	finalMaster     = "finalMaster"
+	membersDiverged = "membersDiverged"
+	// masterIsolatedKey is the only result that may record no promotion.
+	masterIsolatedKey = "installed-ha-network-partition-master-isolated"
+	gracefulKey       = "ha-primary-pod-recovery-graceful"
+	powerOffKey       = "installed-ha-primary-vm-failure-power-off"
+	higherRankKey     = "installed-ha-network-partition-higher-rank-isolated"
+	slaveIsolatedKey  = "installed-ha-network-partition-slave-isolated"
+	// The time limits the runners of the must-measure results record.
+	limitFailover   = "failover_limit"
+	limitRejoin     = "rejoin_limit"
+	limitStable     = "stable_period"
+	limitPartition  = "partition_duration"
+	limitQuarantine = "quarantine_limit"
+	limitVMReturn   = "vm_return_limit"
 )
 
 // measuredRule is what a must-measure result records besides its verdict:
@@ -84,7 +99,7 @@ var measurementKinds = map[string]measureKind{
 	"quarantineSeenWithin": durationValue, "rwScaledDownWithin": durationValue, "rwPodsGoneWithin": durationValue,
 	"rwEndpointsEmptyWithin": durationValue, "newConnectionsStoppedWithin": durationValue,
 	acknowledgedMissing: countValue, "outcomeUnknown": countValue, "operationsNotAcknowledged": countValue,
-	"membersDiverged": countValue, afterPathClosed: countValue,
+	membersDiverged: countValue, afterPathClosed: countValue,
 	"establishedAcknowledgedAfterFault": countValue,
 	finalMaster:                         nameValue,
 	"newConnectionWrites":               classesValue,
@@ -94,7 +109,7 @@ var (
 	// newConnectionWrites is recorded for every S07 variant: the run reads the
 	// new-connection probes before it judges any of them.
 	s07Common = []string{"faultConfirmedWithin", "partitionHeldFor", afterPathClosed,
-		acknowledgedMissing, "membersDiverged", finalMaster, "newConnectionWrites"}
+		acknowledgedMissing, membersDiverged, finalMaster, "newConnectionWrites"}
 	// The closure of the managed -rw path is measured only where the variant
 	// quarantines; the slave-isolated control case must not.
 	s07Closure = []string{"rwScaledDownWithin", "quarantineSeenWithin", "rwPodsGoneWithin",
@@ -108,7 +123,7 @@ var (
 // must-measure result without a rule here is No-Go: what it must record has
 // not been decided.
 var v01Measured = map[string]measuredRule{
-	"ha-primary-pod-recovery-graceful": {
+	gracefulKey: {
 		measured: []string{"recoveryTime", "stableFor", acknowledgedMissing, "outcomeUnknown",
 			"primaryUnresolvedFor", "routingNotReadyFor"},
 		zero: []string{acknowledgedMissing},
@@ -116,16 +131,16 @@ var v01Measured = map[string]measuredRule{
 	// A passed S04 run has recorded each of these: the pass needs the node
 	// back, every client acknowledged after the taint and after the return,
 	// and the stable period reached.
-	"installed-ha-primary-vm-failure-power-off": {
+	powerOffKey: {
 		measured: []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
 			"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "shortestStableFor",
 			finalMaster, "operationsNotAcknowledged"},
 	},
-	"installed-ha-network-partition-master-isolated": {
+	masterIsolatedKey: {
 		measured: slices.Concat(s07Common, s07Closure), zero: s07Safety},
-	"installed-ha-network-partition-higher-rank-isolated": {
+	higherRankKey: {
 		measured: slices.Concat(s07Common, s07Closure), zero: s07Safety},
-	"installed-ha-network-partition-slave-isolated": {
+	slaveIsolatedKey: {
 		measured: append(slices.Clone(s07Common), "establishedAcknowledgedAfterFault"), zero: s07Safety},
 }
 
@@ -155,7 +170,21 @@ const (
 	verdictNoGo       releaseVerdict = "NO-GO"
 	verdictReview     releaseVerdict = "REVIEW REQUIRED"
 	verdictNotCounted releaseVerdict = "NOT COUNTED"
+	// verdictDisclosed is a must-measure result whose raw fail the runner
+	// recorded as caused by time limits alone, with every required
+	// measurement and safety rule recorded (maintainer decision 2 on #126).
+	// verdictNoPromotion is the S07 master-isolated result whose raw blocked
+	// verdict the runner recorded as the end of a run in which CUBRID
+	// promoted no member, with the same proof (decision 3). Both count as Go
+	// for the candidate; neither is a pass, and the raw verdict is kept.
+	verdictDisclosed   releaseVerdict = "MEASURED, DISCLOSED"
+	verdictNoPromotion releaseVerdict = "MEASURED, DISCLOSED — no promotion"
 )
+
+// countsAsGo reports whether a result's verdict lets the candidate be Go.
+func countsAsGo(v releaseVerdict) bool {
+	return v == verdictGo || v == verdictDisclosed || v == verdictNoPromotion
+}
 
 // verifiedResult is one recorded result with its separate v0.1 verdict.
 type verifiedResult struct {
@@ -214,8 +243,11 @@ func verify(out io.Writer, indexPath, runRoot string, families []string) (bool, 
 	report.WriteString("The automated checks pass only when every required variant is recorded by finished, " +
 		"indexed runs of registered lanes on this commit and these images, each record is a pass its evidence " +
 		"supports, and every must-measure record is measured without a safety violation. Raw and judged " +
-		"verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no " +
-		"recorded field shows that only a time limit failed. This is not release approval.\n\n")
+		"verdicts are shown unchanged. A raw fail of a must-measure variant counts as MEASURED, DISCLOSED only " +
+		"when its runner recorded that time limits alone caused it, and a blocked S07 master-isolated run only " +
+		"when its runner recorded that CUBRID promoted no member; each with a confirmed fault, a succeeded " +
+		"cleanup, no never-event and every required measurement and safety rule. Any other raw fail or blocked " +
+		"result is No-Go. This is not release approval.\n\n")
 	report.WriteString("## Manual gates not checked\n\n")
 	for _, gate := range manualGates {
 		report.WriteString("- " + gate + "\n")
@@ -318,7 +350,7 @@ func verifyRun(c candidate, source run, dir string) verifiedRun {
 	if vr.problem == "" {
 		vr.problem = unexplainedProblem(actual, vr.results)
 		for i := range vr.results {
-			if vr.problem != "" && vr.results[i].verdict == verdictGo {
+			if vr.problem != "" && countsAsGo(vr.results[i].verdict) {
 				vr.results[i].verdict, vr.results[i].reason = verdictNoGo, vr.problem
 			}
 		}
@@ -477,6 +509,21 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 		return scope, verdictNoGo, problem
 	case cleanupFailed:
 		return scope, verdictNoGo, "the cleanup did not succeed"
+	case scope == scopeMustMeasure && (sc.TimeLimitOnly || sc.NoPromotion):
+		if reason := disclosedProblem(result); reason != "" {
+			return scope, verdictNoGo, reason
+		}
+		if sc.NoPromotion {
+			return scope, verdictNoPromotion, "raw blocked kept: CUBRID promoted no member, so no member was " +
+				"promoted; the fault was confirmed, the managed write path was proven closed with no write " +
+				"acknowledged after it, measured and no safety rule broken; not a failover pass (" + sc.Reason + ")"
+		}
+		var exceeded []string
+		for _, name := range slices.Sorted(maps.Keys(sc.ExceededLimits)) {
+			exceeded = append(exceeded, name+" "+sc.ExceededLimits[name])
+		}
+		return scope, verdictDisclosed, "raw fail kept: only time limits failed (" + strings.Join(exceeded, ", ") +
+			"); measured and no safety rule broken"
 	case scope == scopeMustMeasure && result.Judged == evidence.Fail:
 		return scope, verdictNoGo, "raw fail, disclosed and not qualified: no recorded field shows that only a " +
 			"time limit failed (" + result.Reason + ")"
@@ -489,6 +536,121 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 		return scope, verdictGo, "executed, measured and no safety rule broken"
 	}
 	return scope, verdictGo, "pass supported by its evidence"
+}
+
+// disclosedProblem is why a must-measure result marked as caused by time
+// limits alone, or as ending without a promotion, does not qualify as a
+// disclosed measurement, or "". The marker must sit on the raw and judged
+// verdict it belongs to (fail, or blocked for no promotion), and no
+// promotion only on the S07 master-isolated result; no never-event may be
+// recorded, the cleanup must be recorded as succeeded, every exceeded limit
+// must be a set limit of the result, and the result must qualify as a passed
+// one would (measuredProblem): fault confirmed, every required measurement
+// recorded and every safety count zero.
+func disclosedProblem(result evidence.RecordedResult) string {
+	sc := result.Scenario
+	switch {
+	case sc.TimeLimitOnly && sc.NoPromotion:
+		return "marked both as caused by a time limit and as ending without a promotion"
+	case sc.TimeLimitOnly && (sc.Result != evidence.Fail || result.Judged != evidence.Fail):
+		return fmt.Sprintf("marked as caused by a time limit, but recorded %s and judged %s", sc.Result,
+			result.Judged)
+	case sc.NoPromotion && (sc.Result != evidence.Blocked || result.Judged != evidence.Blocked):
+		return fmt.Sprintf("marked as ending without a promotion, but recorded %s and judged %s", sc.Result,
+			result.Judged)
+	case sc.NoPromotion && result.Key != masterIsolatedKey:
+		return "marked as ending without a promotion, which only the master-isolated partition records"
+	case len(sc.NeverEvents) > 0:
+		return "an outcome that must never happen was recorded: " + strings.Join(sc.NeverEvents, "; ")
+	case sc.CleanupSucceeded == nil || !*sc.CleanupSucceeded:
+		return "the cleanup is not recorded as succeeded"
+	case sc.TimeLimitOnly && len(sc.ExceededLimits) == 0:
+		return "marked as caused by a time limit, but names no exceeded limit"
+	}
+	// A baseline (a limit unset or not recorded) proves no bound, so neither
+	// marker counts.
+	for _, name := range markedLimits[result.Key] {
+		if _, ok := sc.Limits[name]; !ok {
+			return "limit " + name + " is not recorded: a baseline run is not a disclosed measurement"
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(sc.Limits)) {
+		if d, err := time.ParseDuration(sc.Limits[name]); err != nil || d <= 0 {
+			return fmt.Sprintf("limit %s is %q, not a set duration: a baseline run is not a disclosed measurement",
+				name, sc.Limits[name])
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(sc.ExceededLimits)) {
+		if reason := exceededProblem(result.Key, name, sc.ExceededLimits[name], sc.Limits[name]); reason != "" {
+			return reason
+		}
+	}
+	if reason := measuredProblem(result); reason != "" {
+		return reason
+	}
+	// The data rules are checked here too, not left to the runner's marker.
+	for _, name := range disclosedZero[result.Key] {
+		if value := sc.Measurements[name]; !isZero(value) {
+			return fmt.Sprintf("%s is %v, not 0", name, value)
+		}
+	}
+	return ""
+}
+
+// markedLimits are the limits each runner records for a must-measure
+// result; a marked record must record every one of them with a value.
+var markedLimits = map[string][]string{
+	gracefulKey:       {limitFailover, limitRejoin, limitStable},
+	powerOffKey:       {limitFailover, limitStable, limitVMReturn},
+	masterIsolatedKey: {limitPartition, limitQuarantine},
+	higherRankKey:     {limitPartition, limitQuarantine},
+	slaveIsolatedKey:  {limitPartition, limitQuarantine},
+}
+
+// exceededLimits are, for each must-measure result, the limits whose
+// overrun alone may make its fail a disclosed measurement: limits a
+// measurement must not exceed. A limit a measurement must reach
+// (stable_period, partition_duration) is never one of them.
+var exceededLimits = map[string][]string{
+	gracefulKey:       {limitFailover, limitRejoin},
+	powerOffKey:       {limitFailover},
+	masterIsolatedKey: {limitQuarantine},
+	higherRankKey:     {limitQuarantine},
+	slaveIsolatedKey:  {limitQuarantine},
+}
+
+// disclosedZero are the data counts that must be 0 on a disclosed
+// measurement, beyond the safety counts of its v01Measured rule: no
+// acknowledged write missing and, for S07, no rows that differ between
+// members.
+var disclosedZero = map[string][]string{
+	powerOffKey:       {acknowledgedMissing},
+	masterIsolatedKey: {acknowledgedMissing, membersDiverged},
+	higherRankKey:     {acknowledgedMissing, membersDiverged},
+	slaveIsolatedKey:  {acknowledgedMissing, membersDiverged},
+}
+
+// exceededProblem is why one exceededLimits entry of a result does not show
+// an overrun, or "": the name must be a must-not-exceed limit of the result,
+// the entry must read "<measured> > <limit>" with two durations, the limit
+// must be the one the result records, and the measured value must exceed it.
+func exceededProblem(key, name, entry, recorded string) string {
+	if !slices.Contains(exceededLimits[key], name) {
+		return name + " is not a limit whose overrun alone this result may disclose"
+	}
+	measuredText, limitText, ok := strings.Cut(entry, " > ")
+	measured, errMeasured := time.ParseDuration(measuredText)
+	limit, errLimit := time.ParseDuration(limitText)
+	want, errRecorded := time.ParseDuration(recorded)
+	switch {
+	case !ok || errMeasured != nil || errLimit != nil:
+		return fmt.Sprintf("exceeded %s %q does not read as a measured duration over the limit", name, entry)
+	case errRecorded != nil || limit != want:
+		return fmt.Sprintf("exceeded %s %q names another limit than the recorded %s", name, entry, recorded)
+	case measured <= limit:
+		return fmt.Sprintf("exceeded %s %q does not exceed the limit", name, entry)
+	}
+	return ""
 }
 
 // measuredProblem is why a passed must-measure result does not qualify, or "".
@@ -629,13 +791,21 @@ func requiredVariant(id, variant, key string, scope v01Scope, records []verified
 		row.verdict, row.reason = verdictNoGo, "no result was recorded"
 		return row
 	}
+	disclosed := 0
 	for _, r := range records {
-		if r.verdict != verdictGo {
+		if !countsAsGo(r.verdict) {
 			row.verdict, row.reason = verdictNoGo, r.run+": "+r.reason
 			return row
 		}
+		if r.verdict != verdictGo {
+			disclosed++
+		}
 	}
 	row.reason = fmt.Sprintf("every record is Go (%d)", len(records))
+	if disclosed > 0 {
+		row.reason = fmt.Sprintf("every record is Go (%d), %d of them measured and disclosed", len(records),
+			disclosed)
+	}
 	return row
 }
 

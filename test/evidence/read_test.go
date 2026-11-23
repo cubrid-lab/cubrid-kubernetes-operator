@@ -543,6 +543,59 @@ func TestReadRunReadsWhatTheWriterWrites(t *testing.T) {
 	}
 }
 
+// The JSON names of the markers, and an exceeded limit as a runner records
+// it.
+const (
+	fieldTimeLimitOnly = "timeLimitOnly"
+	fieldNoPromotion   = "noPromotion"
+	exceededFailover   = "41.2s > 30s"
+)
+
+// The time-limit-only and no-promotion fields round-trip through the writer
+// and the reader, and a summary written without them still reads, with
+// neither set: the cause of its fail is not shown.
+func TestReadRunKeepsTheTimeLimitOnlyAndNoPromotionFields(t *testing.T) {
+	write := func(sc Scenario) RecordedRun {
+		t.Helper()
+		dir := runDir(t, s00Record)
+		sc.ID, sc.Evidence = lab00, []string{s00Record}
+		summary := Summary{RunID: testRunName, StartedAt: time.Unix(1, 0).UTC(),
+			FinishedAt: time.Unix(2, 0).UTC(), Environment: Environment{Level: LevelVMLab},
+			Scenarios: []Scenario{sc}}
+		// A fail does not pass the lane: Conclude reports that and still
+		// writes the summary.
+		if err := summary.Conclude(dir, NewRedactor(), Lane{Name: labSmokeLane,
+			Required: []Requirement{{ID: lab00}}}); err != nil && !strings.Contains(err.Error(), "did not pass") {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, summaryFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		marked := sc.TimeLimitOnly || sc.NoPromotion
+		for _, field := range []string{fieldTimeLimitOnly, "exceededLimits", fieldNoPromotion} {
+			if strings.Contains(string(data), field) != marked {
+				t.Errorf("%s in summary.json = %t, want %t", field, !marked, marked)
+			}
+		}
+		run, err := readFixture(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	got := resultOf(t, write(Scenario{Result: Fail, Reason: "failover_limit exceeded: 41.2s > 30s",
+		TimeLimitOnly: true, ExceededLimits: map[string]string{"failover_limit": exceededFailover},
+		NoPromotion: true}), lab00).Scenario
+	if !got.TimeLimitOnly || got.ExceededLimits["failover_limit"] != exceededFailover || !got.NoPromotion {
+		t.Errorf("read back %+v, want both markers and the exceeded limit", got)
+	}
+	got = resultOf(t, write(Scenario{Result: Fail, Reason: "failover_limit exceeded"}), lab00).Scenario
+	if got.TimeLimitOnly || got.NoPromotion || got.ExceededLimits != nil {
+		t.Errorf("a summary without the markers read as %+v", got)
+	}
+}
+
 // A version the reader was not written for is refused, because its fields may
 // not mean what version 1's mean. So is a file that is not one whole summary.
 func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {

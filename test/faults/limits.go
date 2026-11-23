@@ -204,6 +204,31 @@ func Judge(bounds ...Bound) Verdict {
 	return v
 }
 
+// ExceededOnly returns the limits the bounds exceeded, by name, each with
+// what was measured against it ("41.2s > 30s"), when exceeding them is all
+// that keeps Judge from passing the bounds: every limit is set, every
+// measurement was taken, no AtLeast bound fell short, and at least one
+// bound exceeded its limit. Otherwise it returns nil. An AtLeast bound that
+// fell short is not counted: a stable period or a hold cut short shows that
+// the run did not observe what it needed, not that something was slow.
+func ExceededOnly(bounds ...Bound) map[string]string {
+	exceeded := map[string]string{}
+	for _, b := range bounds {
+		switch {
+		case !b.Limit.Set() || b.Unmeasured:
+			return nil
+		case b.AtLeast && b.Measured < b.Limit.Value:
+			return nil
+		case !b.AtLeast && b.Measured > b.Limit.Value:
+			exceeded[b.Limit.Name] = fmt.Sprintf("%s > %s", b.Measured, b.Limit.Value)
+		}
+	}
+	if len(exceeded) == 0 {
+		return nil
+	}
+	return exceeded
+}
+
 // JudgeS00Limits judges a run of S00 by install_limit and ready_limit. The
 // limits are always recorded; only a run whose checks all held is judged by
 // them.

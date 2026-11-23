@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2008,5 +2009,147 @@ func TestS04DataMeasurementsDiscloseAcknowledgedLoss(t *testing.T) {
 	s04DataMeasurements(m, nil, 1)
 	if m["acknowledgedMissing"] != evidence.Unknown || m["outcomeUnknown"] != 1 {
 		t.Errorf("without a report: acknowledgedMissing %v, outcomeUnknown %v", m["acknowledgedMissing"], m["outcomeUnknown"])
+	}
+}
+
+// A fail is recorded as caused by a time limit alone only when every client
+// was acknowledged after the taint, none was interrupted, every one came back
+// after the release and stayed for stable_period, no never-event was seen,
+// and failover_limit was exceeded. Any other failing check, or a check whose
+// answer was not seen, leaves the cause of the fail unshown.
+func TestS04TimeLimitOnly(t *testing.T) {
+	const limit, stable = 30 * time.Second, 30 * time.Second
+	late := s04ClientsJudged{slowest: 41200 * time.Millisecond, shortest: 45 * time.Second}
+	tests := map[string]struct {
+		clients s04ClientsJudged
+		never   []string
+		want    map[string]string
+	}{
+		"failover_limit exceeded and every other check held": {late, nil,
+			map[string]string{failoverLimitName: "41.2s > 30s"}},
+		"within failover_limit there is no time-limit fail": {s04ClientsJudged{slowest: 10 * time.Second,
+			shortest: 45 * time.Second}, nil, nil},
+		"a never-event beside the overrun": {late, []string{"PrimaryResolved True while unobserved"}, nil},
+		"a client interrupted after it was acknowledged again": {s04ClientsJudged{slowest: late.slowest,
+			shortest: late.shortest, interrupted: []string{"s04a at 12:00:00Z"}}, nil, nil},
+		"a client never acknowledged after the taint is not a measured overrun": {s04ClientsJudged{
+			slowest: late.slowest, shortest: late.shortest, notAcked: []string{"s04b"}}, nil, nil},
+		"a client not back after the release leaves stable_period unmeasured": {s04ClientsJudged{
+			slowest: late.slowest, notBack: []string{"s04a"}}, nil, nil},
+		"stable_period not reached beside the overrun": {s04ClientsJudged{slowest: late.slowest,
+			shortest: 5 * time.Second}, nil, nil},
+		// The durations are compared as measured: one that would round up
+		// to stable_period has not reached it.
+		"stable_period missed by less than a millisecond": {s04ClientsJudged{slowest: late.slowest,
+			shortest: 29999600 * time.Microsecond}, nil, nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := s04TimeLimitOnly(tc.clients, tc.never, limit, stable)
+			if !maps.Equal(got, tc.want) || (got == nil) != (tc.want == nil) {
+				t.Errorf("s04TimeLimitOnly = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A run whose first write after the taint is late, with every other check
+// held, is a fail recorded as caused by failover_limit alone, with the
+// measured time; the raw verdict stays fail.
+func TestRunS04RecordsALateFirstWriteAsATimeLimitOnlyFail(t *testing.T) {
+	cfg := testS04Config(t)
+	// The clients wait for stable_period until failover_limit plus
+	// stable_period after the release, so they come back soon after it.
+	cfg.FailoverLimit = 400 * time.Millisecond
+	cfg.StablePeriod = 500 * time.Millisecond
+	cfg.VMDownFor = 1500 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.releaseDelay = time.Second
+	liveS04Clients(f, lab, func(at, fence, ret, rel time.Time) bool {
+		return at.Before(fence.Add(time.Second)) || returnBarrierOutage(at, ret, rel, 100*time.Millisecond)
+	})
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !s04.TimeLimitOnly ||
+		!strings.HasSuffix(s04.ExceededLimits[failoverLimitName], " > 400ms") || len(s04.ExceededLimits) != 1 {
+		t.Fatalf("S04 = %+v, want a fail recorded as caused by failover_limit alone", s04)
+	}
+}
+
+// A late first write together with an interruption after the return is not
+// a fail of the time limit alone.
+func TestRunS04DoesNotRecordALateFirstWriteWithAnInterruptionAsTimeLimitOnly(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 500 * time.Millisecond
+	cfg.StablePeriod = 2 * time.Second
+	cfg.VMDownFor = 2 * time.Second
+	f, lab := newS04Fixture(t, cfg)
+	lab.releaseDelay = time.Second
+	liveS04Clients(f, lab, func(at, fence, ret, rel time.Time) bool {
+		again := !rel.IsZero() && !at.Before(rel.Add(time.Second)) && at.Before(rel.Add(1200*time.Millisecond))
+		return at.Before(fence.Add(time.Second)) || returnBarrierOutage(at, ret, rel, 200*time.Millisecond) || again
+	})
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || !strings.Contains(s04.Reason, "over failover_limit") || s04.TimeLimitOnly ||
+		s04.ExceededLimits != nil {
+		t.Fatalf("S04 = %+v, want a failover_limit fail that is not recorded as caused by the limit alone", s04)
+	}
+}
+
+// Without a promotion within the outcome limit the run never reaches the
+// clients' checks, so nothing shows that only a time limit failed.
+func TestRunS04DoesNotRecordAMissingPromotionAsTimeLimitOnly(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 200 * time.Millisecond
+	f, lab := newS04Fixture(t, cfg)
+	lab.promote = false
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || s04.TimeLimitOnly || s04.ExceededLimits != nil {
+		t.Fatalf("S04 = %+v, want a fail whose cause is not shown", s04)
+	}
+}
+
+// The markers describe the judgement they were set with: a later step that
+// changes the verdict, the reason, the never-events or the cleanup clears
+// them, and so does a fault not confirmed.
+func TestKeepMarkersClearsMarkersAChangedJudgementNoLongerSupports(t *testing.T) {
+	yes := true
+	no := false
+	judged := evidence.Scenario{Result: evidence.Fail, Reason: "over failover_limit", NeverEvents: []string{},
+		FaultConfirmed: &yes, CleanupSucceeded: &yes, TimeLimitOnly: true,
+		ExceededLimits: map[string]string{failoverLimitName: "1s > 500ms"}}
+	tests := map[string]struct {
+		change func(*evidence.Scenario)
+		keep   bool
+	}{
+		"nothing changed":            {nil, true},
+		"the reason grew":            {func(s *evidence.Scenario) { s.Reason += "; node ha-x is still tainted" }, false},
+		"the verdict became blocked": {func(s *evidence.Scenario) { s.Result = evidence.Blocked }, false},
+		"a never-event was added": {func(s *evidence.Scenario) {
+			s.NeverEvents = append(s.NeverEvents, "the Pod was replaced")
+		}, false},
+		"the cleanup failed":         {func(s *evidence.Scenario) { s.CleanupSucceeded = &no }, false},
+		"the fault is not confirmed": {func(s *evidence.Scenario) { s.FaultConfirmed = nil }, false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := judged
+			result.NeverEvents = slices.Clone(judged.NeverEvents)
+			if tc.change != nil {
+				tc.change(&result)
+			}
+			keepMarkers(&result, judged)
+			if result.TimeLimitOnly != tc.keep || (result.ExceededLimits != nil) != tc.keep {
+				t.Errorf("after keepMarkers: %+v, want the marker kept %t", result, tc.keep)
+			}
+		})
 	}
 }

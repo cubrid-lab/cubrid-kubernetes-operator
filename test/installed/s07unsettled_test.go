@@ -403,7 +403,7 @@ func TestJudgeS07ReportsTheUnsettledSnapshotWithoutJudgingIt(t *testing.T) {
 		t.Errorf("conflicting rows in the snapshot judged %s %q, want blocked (reported only)", v.Result, v.Reason)
 	}
 	reopened := unsettled()
-	reopened.ReopenedWhileQuarantined = []string{"the -rw EndpointSlices had 2 endpoint(s) again"}
+	reopened.ReopenedWhileQuarantined = []string{s07EndpointsAgain}
 	if v := judgeS07(reopened, testS07Limits); v.Result != evidence.Fail {
 		t.Errorf("a never-event with a snapshot judged %s %q, want fail", v.Result, v.Reason)
 	}

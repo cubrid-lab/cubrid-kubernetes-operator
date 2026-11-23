@@ -182,10 +182,39 @@ into the bundles. The rules, failing closed:
   count, a non-empty name, or a non-empty map of counts; `unknown`, an
   empty value or another type is No-Go. Acknowledged writes on the
   established S07 session after the managed `-rw` path was observed closed
-  must be `0`, and S03 `graceful` must miss no acknowledged write. A raw
-  `fail` stays `FAIL` and is No-Go: no recorded field shows that only a
-  time limit failed, so a timing overrun cannot be told from another
-  failure.
+  must be `0`, and S03 `graceful` must miss no acknowledged write. The raw
+  verdict is always shown as recorded.
+- A must-measure record whose raw `fail` the runner recorded as caused by
+  time limits alone (`timeLimitOnly: true` with `exceededLimits` in
+  `summary.json`) is **MEASURED, DISCLOSED** and counts as Go for the
+  candidate (decision 2 on #126, 2026-11-23 UTC). It qualifies only when
+  the raw and judged verdicts are `fail`, the fault is recorded as
+  confirmed, the cleanup is recorded as succeeded, no never-event is
+  recorded, every limit the runner records for the variant is recorded
+  with a set duration (a baseline run never qualifies), each
+  `exceededLimits` entry names a must-not-exceed limit of the variant
+  (`failover_limit` or `rejoin_limit` for S03 `graceful`, `failover_limit`
+  for S04, `quarantine_limit` for S07) and reads `<measured> > <limit>`
+  with the recorded limit and a measured value over it, every measurement
+  and safety rule of the item above holds, and no acknowledged write is
+  missing (S04 and S07) and no rows differ between members (S07). The report shows
+  each exceeded limit with its measured value. Without the field, or with
+  any of these missing, the raw `fail` is No-Go. A must-pass record with
+  the field stays No-Go.
+- A blocked S07 `master-isolated` record that the runner recorded as the
+  end of a run in which CUBRID promoted no member (`noPromotion: true`) is
+  **MEASURED, DISCLOSED — no promotion** and counts as Go for the candidate
+  (decision 3 on #126). It qualifies only with a raw and judged `blocked`,
+  a confirmed fault, a succeeded cleanup, no never-event, `quarantine_limit`
+  and `partition_duration` recorded with set durations, the managed `-rw`
+  path's closure measured and no acknowledged write after it, no
+  acknowledged write missing, no rows differing between members, and
+  every other measurement of the item above. The report says it is not a
+  failover pass. The marker on another variant or result, both markers on
+  one record, or any missing proof is No-Go. When the runners set the two
+  markers is described in
+  [installed HA](installed-ha.md#time-limit-only-failures-and-runs-without-a-promotion)
+  and in the [scenario contract](scenario-contract.md#v01-candidate-acceptance--2026-11-21-decision).
 - S08 is counted through repeated S04 and S07 runs on the candidate
   (maintainer decision 2026-11-23, #126), so it is not a required variant.
   A recorded S08 result is **NOT COUNTED** with that reason, and a `fail`,

@@ -361,8 +361,22 @@ func compareRecords(older, newer []RecordedResult) ([]ComparedValue, []string) {
 		}
 	}
 	values := slices.Concat(limits, compareMaps("measurements.", before.Measurements, after.Measurements),
-		compareMaps("operations.", operationCounts(before.Operations), operationCounts(after.Operations)))
+		compareMaps("operations.", operationCounts(before.Operations), operationCounts(after.Operations)),
+		compareMarkers(before, after))
 	return values, problems
+}
+
+// compareMarkers shows the time-limit-only and no-promotion markers and the
+// limits a fail exceeded, side by side, when either record sets a marker. A
+// record without them was not shown to be either, so its side reads false.
+func compareMarkers(before, after Scenario) []ComparedValue {
+	if !before.TimeLimitOnly && !after.TimeLimitOnly && !before.NoPromotion && !after.NoPromotion {
+		return nil
+	}
+	return slices.Concat([]ComparedValue{
+		compareValue("timeLimitOnly", fmt.Sprint(before.TimeLimitOnly), fmt.Sprint(after.TimeLimitOnly)),
+		compareValue("noPromotion", fmt.Sprint(before.NoPromotion), fmt.Sprint(after.NoPromotion)),
+	}, compareMaps("exceededLimits.", before.ExceededLimits, after.ExceededLimits))
 }
 
 func faultText(sc Scenario) string {

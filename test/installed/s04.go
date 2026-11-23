@@ -469,6 +469,8 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		MembersAfter: []imageIdentity{}}
 	clientsStarted := false
 	defer func() {
+		judged := result
+		judged.NeverEvents = slices.Clone(result.NeverEvents)
 		h.endCordon(ctx, &rec, &result)
 		h.endFence(ctx, &rec, &result)
 		if clientsStarted {
@@ -477,6 +479,7 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		if err := h.writeJSON(s04RecordFile, rec); err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S04 evidence: "+err.Error()
 		}
+		keepMarkers(&result, judged)
 		result.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
 			return !strings.HasPrefix(f, "S04/")
 		})
@@ -625,6 +628,55 @@ func s04DataMeasurements(m map[string]any, report *workload.Report, outcomeUnkno
 	}
 }
 
+// s04ClientsJudged is what the clients' answers after the taint showed:
+// the clients with no write acknowledged after the taint, those interrupted
+// after they were acknowledged again, those with no write acknowledged
+// after the release, the slowest first write after the taint and the
+// shortest time a client was acknowledged without interruption after the
+// return.
+type s04ClientsJudged struct {
+	notAcked, interrupted, notBack []string
+	slowest, shortest              time.Duration
+}
+
+// s04TimeLimitOnly returns the limits S04 exceeded when they are the only
+// cause of its fail, or nil: no never-event was seen, every client had a
+// write acknowledged after the taint, none was interrupted, every one was
+// back after the release and was acknowledged without interruption for at
+// least stable_period, and failover_limit was exceeded. finishS04 calls it
+// only after the data check held. stable_period not reached is not a time
+// overrun: it shows that the clients' stability was not observed for long
+// enough.
+func s04TimeLimitOnly(c s04ClientsJudged, never []string, failoverLimit, stablePeriod time.Duration) map[string]string {
+	if len(never) > 0 || len(c.notAcked) > 0 || len(c.interrupted) > 0 || len(c.notBack) > 0 {
+		return nil
+	}
+	return faults.ExceededOnly(
+		faults.Bound{Limit: faults.Limit{Name: failoverLimitName, Value: failoverLimit}, Measured: c.slowest},
+		faults.Bound{Limit: faults.Limit{Name: stablePeriodName, Value: stablePeriod}, Measured: c.shortest,
+			AtLeast: true})
+}
+
+// keepMarkers clears the time-limit-only and no-promotion markers of result
+// unless it still has the verdict, reason, never-events and cleanup it was
+// judged with, as judged, a confirmed fault and a cleanup that succeeded: a
+// step after the judgement that changed any of these, such as an end of the
+// fence that failed, is a cause the markers do not cover. A time-limit-only
+// marker stays only on a fail, a no-promotion marker only on a blocked
+// result.
+func keepMarkers(result *evidence.Scenario, judged evidence.Scenario) {
+	held := func(b *bool) bool { return b != nil && *b }
+	same := result.Result == judged.Result && result.Reason == judged.Reason &&
+		slices.Equal(result.NeverEvents, judged.NeverEvents) && len(result.NeverEvents) == 0 &&
+		held(result.FaultConfirmed) && held(result.CleanupSucceeded)
+	if !same || result.Result != evidence.Fail {
+		result.TimeLimitOnly, result.ExceededLimits = false, nil
+	}
+	if !same || result.Result != evidence.Blocked {
+		result.NoPromotion = false
+	}
+}
+
 // finishS04 lets the clients go on until each was acknowledged without
 // interruption for the stable period after the return to service, or until
 // failover_limit plus the stable period after the later of the release and
@@ -700,11 +752,18 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	if len(result.NeverEvents) > 0 {
 		return end(evidence.Fail, "%s", strings.Join(result.NeverEvents, "; "))
 	}
+	// Every check of the clients was made above, whichever of them the
+	// reason names first, so a failover_limit overrun is recorded as the
+	// only cause only when all the others held.
+	exceeded := s04TimeLimitOnly(s04ClientsJudged{notAcked: notAcked, interrupted: interrupted, notBack: notBack,
+		slowest: slowest, shortest: shortest}, result.NeverEvents,
+		h.cfg.FailoverLimit, h.cfg.StablePeriod)
 	switch {
 	case len(notAcked) > 0:
 		return end(evidence.Fail, "the clients %v had no write acknowledged through the read-write Service after "+
 			"the out-of-service taint was added to node %s", notAcked, rec.Node)
 	case slowest > h.cfg.FailoverLimit:
+		result.TimeLimitOnly, result.ExceededLimits = exceeded != nil, exceeded
 		return end(evidence.Fail, "a client's first write was acknowledged %s after the out-of-service taint was "+
 			"added to node %s, over failover_limit %s", slowest.Round(time.Millisecond), rec.Node, h.cfg.FailoverLimit)
 	case len(interrupted) > 0:

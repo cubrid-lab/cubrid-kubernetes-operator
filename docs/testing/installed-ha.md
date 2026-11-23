@@ -651,7 +651,9 @@ acknowledged after the release), `operationsNotAcknowledged`,
 data check produced no report) and `outcomeUnknown` (operations whose outcome
 the client could not tell). The last two never change the result.
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
-the fault flow.
+the fault flow. A `fail` caused by `failover_limit` alone is marked in
+`summary.json` as described in
+[time-limit-only failures and runs without a promotion](#time-limit-only-failures-and-runs-without-a-promotion).
 
 Whatever S04 comes to, also when the run's context ended, its end finishes
 the return to service that step 8 did not, when the taint the run added is
@@ -1832,7 +1834,9 @@ resolved); and for `s07open`
 `establishedSession`, `establishedAcknowledgedAfterFault` and
 `establishedAcknowledgedAfterPathClosed`, on the client's clock, or
 `unknown` when its history does not show the session (step 3 of what S07
-judges). The established session has no time bound in the contract, and
+judges). `newConnectionsStoppedWithin` is measured from the trigger window
+when a trigger was seen, and otherwise from the cut's issue when the run saw
+the `-rw` path closed; it is `unknown` without either. The established session has no time bound in the contract, and
 the pinned JDBC driver can reconnect internally under one Java
 connection, so an open connection is not proof of one physical session. A
 time that was not seen is `unknown`. With `-partition-manual-release`, from
@@ -1873,6 +1877,62 @@ Beyond LAB01's, the account needs in the run namespace `update` on
 namespace. `higher-rank-isolated` also needs `delete` on Pods in the run
 namespace, to move the master. `-partition-manual-release` also needs
 `patch` on `cubridclusters` and `list` on Events in the run namespace.
+
+### Time-limit-only failures and runs without a promotion
+
+Two maintainer decisions on #126 (2026-11-23 UTC) let the release-candidate
+verifier count two raw results as measured and disclosed instead of No-Go.
+The runners record each with a field of the result in `summary.json`; the
+raw verdict, the reason's first cause, the limits and every safety rule stay
+as they were. A field is only set when the run shows its cause, and is
+cleared again if anything after the judgement changes the verdict, the
+reason or the never-events, or when the fault is not recorded as confirmed
+or its cleanup as succeeded (for S04, the end of the fence or of the
+clients).
+
+`timeLimitOnly: true`, with `exceededLimits` naming each exceeded limit and
+what was measured, unrounded (`"failover_limit": "48.017s > 30s"`), is set on a `fail`
+only when time limits alone caused it:
+
+- **S04 `power-off`:** step 9 above judged every client after the data
+  rules held and no never-event was seen; every client had a write
+  acknowledged after the taint, none was interrupted, every one was back
+  after the release and stayed acknowledged for at least `stable_period`,
+  and `failover_limit` was exceeded. It is not set when the run ended
+  before step 9 (no promotion within the outcome limit, a cluster that did
+  not converge within `vm_return_limit`, the VM not powered on again or the
+  taint not added: what came after could not be observed), when
+  `stable_period` was not reached (stability was not observed for long
+  enough), or beside any other failing check.
+- **S07:** `judgeS07` reaches the limits only after it found no never-event,
+  no broken expectation and no blocking observation (step 3 of what S07
+  judges), so it is set when the limits then fail, every limit is set and
+  measured, and only `quarantine_limit` was exceeded. A
+  `partition_duration` not reached is a hold cut short, not a slow result,
+  and is never marked.
+
+`noPromotion: true` is set on a `blocked` S07 `master-isolated` result only
+when all of these hold: `-quarantine-limit` and `-partition-duration` are
+set and the cut was held at least `partition_duration` (a baseline run or a
+hold cut short is never marked); no never-event and no broken expectation;
+the only
+blocking observation is that no sweep pair showed a quarantine trigger, so
+the cut was confirmed and held, the established session's history shows
+the session, the cluster settled, the data check read every member and the
+health window was read; the run saw every `-rw` Broker Pod gone and no `-rw`
+endpoint, and new connections stopped (measured from the cut's issue when no
+trigger was seen); no write was acknowledged on the established session
+after that closure, and none through a new connection; and in every sweep
+from the cut's issue on, while the cut held and after it, every member but
+the cut-off master answered as a slave (an unread role, or one CUBRID
+reports as neither master nor slave, refuses the marker), with at least one
+sweep while the cut held, and the cluster settled on that master. The
+sweeps are samples, so the reason gives their number, how many were made
+while the cut held, the hold and the longest interval between two sweeps: a
+promotion undone within such an interval would not have been seen. The
+reason then adds that CUBRID promoted no member and that this is no
+failover pass. A run that misses any of these stays an ordinary
+`blocked` result.
 
 ### First lab runs
 
