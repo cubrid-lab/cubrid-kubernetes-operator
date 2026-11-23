@@ -51,3 +51,23 @@ func TestAWrongCheckIsRefusedBeforeACluster(t *testing.T) {
 		}
 	}
 }
+
+// A soak is selected only by a positive -soak-duration: zero or a negative
+// length is refused, not read as no soak, and an interval without a soak is
+// refused, before any cluster is opened.
+func TestASoakWithoutAPositiveDurationIsRefusedBeforeACluster(t *testing.T) {
+	for _, tc := range []struct {
+		args   []string
+		reason string
+	}{
+		{[]string{vmLab, "-soak-duration=0"}, "-soak-duration must be positive"},
+		{[]string{vmLab, "-soak-duration=-1h"}, "-soak-duration must be positive"},
+		{[]string{vmLab, "-soak-check-every=10m"}, "-soak-check-every needs -soak-duration"},
+		{[]string{vmLab, haSQLSmoke, "-soak-duration=24h"}, "remove -soak-duration"},
+	} {
+		err := run(t.Context(), tc.args)
+		if err == nil || !strings.Contains(err.Error(), tc.reason) {
+			t.Errorf("%q = %v, want a refusal with %q", tc.args, err, tc.reason)
+		}
+	}
+}

@@ -120,6 +120,9 @@ type Runner struct {
 	// maxLogBytes bounds what S11 reads of one container instance's log;
 	// zero selects defaultMaxLogBytes.
 	maxLogBytes int64
+	// soakClock is the clock the soak schedules its checks by; nil selects
+	// the wall clock.
+	soakClock soakClock
 }
 
 type sqlStep struct {

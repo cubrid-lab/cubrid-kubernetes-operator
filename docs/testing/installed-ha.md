@@ -768,6 +768,97 @@ S06 does not check the slaves' applier fail count, which the Kind step does.
 Run the [observer](lab-observer.md) on the same cluster during the run, so
 that the status and metrics are followed outside the run's own checks.
 
+## Soak
+
+With `-soak-duration` the run goes on after LAB01 passed, on the same
+cluster, with no fault: a continuous workload with periodic data checks, as
+the release-candidate campaign asks for (#126). The lane is then
+`lab-installed-ha-soak`, and it requires LAB01 and the result `SOAK`. Both
+names are the installed harness's own: the scenario registry
+(`test/evidence/registry.go`) holds neither, so `-check` cannot select the
+soak, and a verifier that reads the registry shows the result as unmapped.
+What a soak must show to accept a release is not decided yet (#126);
+registering the soak for the release-candidate verifier follows that
+decision.
+
+```sh
+go build -o bin/installed-ha ./test/installed/cmd/ha
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  <the inputs above> \
+  -soak-duration 24h -soak-check-every 30m -timeout 26h \
+  -level vm-lab -evidence-dir <empty directory outside the lab>'
+```
+
+- `-soak-duration` has no default: it must be given and positive. `0` or a
+  negative length is refused, not read as no soak. It cannot be combined
+  with `-fault` or `-backup-bucket`.
+- `-soak-check-every` (default 30 minutes) is the time between two checks; it
+  must be positive and at most `-soak-duration`, and needs `-soak-duration`.
+- `-timeout` must be longer than the soak plus the bounds of its own steps:
+  2 minutes for each client's start, 1 minute for their stop, and twice
+  `-data-check-within` plus 30 seconds, for a check running at the end and
+  the final check. The time LAB01 takes, about 10 minutes on the lab, comes
+  on top; the run refuses a shorter `-timeout` before it reads or creates
+  anything in the cluster. The campaign Lease must cover the whole `-timeout`: a lost Lease
+  ends the run through `make test-lab`, and the soak is then blocked.
+
+What the run does:
+
+1. Two clients, `soak1` and `soak2`, start writing through `<cluster>-rw` in
+   the background, one operation a second each: every seventh is rolled back,
+   and every tenth reads back the client's last acknowledged insert, also
+   through `<cluster>-rw`. The soak starts once each has ten operations
+   acknowledged.
+2. Every `-soak-check-every` from that moment, the run makes a check while
+   the clients keep running; nothing is paused. It records the roles that
+   `cubrid heartbeat status` reports on every member and the cluster's
+   `status.currentPrimary` and Conditions. It then reads the history the
+   clients have written so far (the check's cutoff) and applies the existing
+   data rules to every member, read directly with `csql`, and to the rows
+   read through `<cluster>-rw` and `<cluster>-ro`:
+   - every operation acknowledged by the cutoff must be on every member and
+     through both Services within `-data-check-within` of the cutoff. A row
+     a slave or the read-only Service lacks is read again until then, as
+     LAB01 does; a row the master or the read-write Service lacks fails at
+     once;
+   - no rolled-back, failed, duplicated, changed or unexplained row, and no
+     read that found its row missing or different.
+
+   The rows of operations the clients attempted after the cutoff are left
+   out of that check: they may be on one member and not yet on another while
+   the clients write, and a later check judges them.
+3. At `-soak-duration` the clients are stopped, what they recorded is added
+   to the run's history, and the final check applies the data rules to all
+   of it, as LAB01 does.
+
+What is judged, and how the result reads:
+- A broken data rule at any check fails `SOAK` at once, naming the check
+  and the rule; the clients are stopped and no later check runs.
+- A check that cannot read the rows within `-data-check-within` (reads are
+  retried within it, as LAB01's are) is recorded as `unread`, and the soak
+  goes on to its next check. A soak with an unread check is blocked, not
+  passed, and its reason names each unread check.
+- A run that ends before the final check, at its `-timeout`, a signal or a
+  lost Lease, leaves `SOAK` blocked unless a rule was already broken.
+- `SOAK` passes when every check, the final one included, held.
+
+What is not judged: the roles and Conditions are recorded at each check and
+never judged, so a change of master or a Condition that turned `False` does
+not by itself change the result; client operations that failed or stayed
+unanswered are counted, not judged, apart from what the data rules say of
+them; the soak makes no S00 to S15 claim, and sets no limit of its own.
+
+The evidence is in `SOAK/`: `record.json` holds the settings, when the soak
+started and ended, whether the clients were stopped and, for each check,
+when it was due, started and finished, its verdict and error, the operations
+of its history by outcome, the rows each member and Service held, the
+acknowledged rows missing, the time until the rules held, the roles and the
+Conditions. It is rewritten after every check, so a run that was killed keeps
+the checks it made. `SOAK/check-<n>.json` is check `n`'s last data report.
+The clients' operations are in `LAB01/history.jsonl`. `summary.json` records
+`SOAK` with the measurements `checks`, `checksHeld`, `checksUnread`,
+`soakSeconds` and `lostSessions`, and the clients' operations by outcome.
+
 ## S15 node drain
 
 With `-fault drain-slave-node` or `-fault drain-master-node` the run goes on
@@ -5528,6 +5619,9 @@ and S12 variant other than `complete` and `exact` only those under
   `S07/<variant>/record.json`, `timeline.jsonl`, `data-check.json` (or
   `unsettled-rows.json`) and `open-connection.jsonl`, as [S07 network partition](#s07-network-partition)
   lists them. The clients' and the new-connection writes' operations are in
+  `LAB01/history.jsonl`.
+- with `-soak-duration`, `SOAK/record.json` and one `SOAK/check-<n>.json`
+  for each check, as [Soak](#soak) lists them. The clients' operations are in
   `LAB01/history.jsonl`.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
