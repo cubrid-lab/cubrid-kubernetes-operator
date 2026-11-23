@@ -36,6 +36,7 @@ import (
 	"time"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/installed"
 )
 
@@ -99,9 +100,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.DrainLimit, "drain-limit", 0,
 		"S15: bound from the cordon until the drained node's member and Broker Pods are gone or the eviction is "+
 			"refused (drain_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
-	flags.DurationVar(&cfg.RebuildLimit, "rebuild-limit", 0,
+	flags.DurationVar(&cfg.RebuildLimit, "rebuild-limit", faults.RebuildLimit.Default,
 		"S10: bound from the rebuild request until every row was checked on every member and both Services "+
-			"(rebuild_limit); 0, the default, is unset and makes the run a baseline, blocked, never a pass")
+			"(rebuild_limit); 0 is unset and makes the run a baseline, blocked, never a pass")
 	flags.DurationVar(&cfg.QuarantineLimit, "quarantine-limit", 0,
 		"S07: bound from the quarantine-triggering observation until new connections through the read-write "+
 			"Service stop succeeding (quarantine_limit); 0, the default, is unset and makes the run a baseline")

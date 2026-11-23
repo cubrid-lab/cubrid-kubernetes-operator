@@ -84,7 +84,7 @@ The `kind` lane requires the results below; the [required-lane contract](scenari
 
 The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The key's `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.
 
-The Kind suite also records S10 (`ha-pvc-loss-rebuild`), from the step that rebuilds a slave after its data claim and Pod are replaced. The `kind` lane's own gate does not require it (the release-candidate verifier still requires S10 at both levels): it is judged by `rebuild_limit`, which has no value, so every run of it is `blocked` with `time_limit_unset`, and a `fail` of it still fails the run like any recorded result.
+The Kind suite also records S10 (`ha-pvc-loss-rebuild`), from the step that rebuilds a slave after its data claim and Pod are replaced. The `kind` lane's own gate does not require it (the release-candidate verifier still requires S10 at both levels): it is judged by `rebuild_limit` (5 minutes), and a `fail` of it still fails the run like any recorded result.
 
 Filters are for local diagnostic runs and cannot certify the full lane (see the invariant above).
 

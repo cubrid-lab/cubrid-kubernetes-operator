@@ -105,8 +105,9 @@ const memberRebuildLimit = 10 * time.Minute
 // in the common starting state, which the next step verifies. It records the
 // rebuild after the loss of a member's volume (scenario S10 of
 // docs/testing/scenario-contract.md) in the summary, judged by
-// rebuild_limit. That limit has no value yet, so the result is blocked with
-// time_limit_unset, and the kind lane does not require it. A client keeps
+// rebuild_limit, 5 minutes by default (E2E_REBUILD_LIMIT); with it unset the
+// result is blocked with time_limit_unset. The kind lane's own gate does not
+// require it; the release-candidate verifier does. A client keeps
 // writing through the read-write Service while the rebuild runs, so the data
 // check includes rows written during it; with the limit set, the result is
 // still blocked when no such insert was acknowledged or when the new

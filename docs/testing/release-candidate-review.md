@@ -192,9 +192,12 @@ into the bundles. The rules, failing closed:
   `blocked` or failed cleanup of it is **REVIEW REQUIRED**. The report lists
   the S08 coverage among the manual gates; the number of repetitions is not
   yet decided. S10 has two registered must-pass results, `ha-pvc-loss-rebuild`
-  (Kind) and `installed-ha-pvc-loss-rebuild` (VM lab). Each is judged like any
-  other must-pass result: a `blocked` result, such as one recorded while
-  `rebuild_limit` has no value, is No-Go.
+  (Kind) and `installed-ha-pvc-loss-rebuild` (VM lab). Each is judged by
+  `rebuild_limit`, 5 minutes on Kind and on the VM lab since the
+  [maintainer decision of 2026-11-23](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639),
+  and like any other must-pass result: a `blocked` result, such as one
+  recorded with the limit explicitly unset, is No-Go, and each stays No-Go
+  until a run on the candidate passes it.
 - S08, S09, S16 and S17 results are never required. A `pass` or `not_run` is
   **NOT COUNTED**; a `fail`, `blocked` or failed cleanup is **REVIEW
   REQUIRED**, because the contract keeps S09's held-member safety behavior.

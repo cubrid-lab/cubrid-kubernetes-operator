@@ -157,8 +157,8 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 		{"blocked", restoreExact, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S12/exact"), evidence.Blocked, "measurement_missing")
 		}, judgedBlocked},
-		// The Kind rebuild result is blocked in every run while rebuild_limit
-		// has no value, so it keeps the candidate No-Go.
+		// A Kind rebuild result blocked, as with rebuild_limit unset, keeps
+		// the candidate No-Go.
 		{"rebuild blocked without its limit", rebuildKey, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, kindRunID, "S10"), evidence.Blocked, "time_limit_unset")
 		}, judgedBlocked},
@@ -166,8 +166,8 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 			removeScenario(runs, kindRunID, "S10")
 		}, noRecord},
 		// S10 is required at both levels: a Kind pass does not stand for the
-		// installed Operator's VM-lab result, which is blocked the same way
-		// while rebuild_limit has no value.
+		// installed Operator's VM-lab result, which a blocked or missing
+		// record leaves No-Go.
 		{"lab rebuild blocked without its limit", labRebuildKey, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, vmRunID, "S10"), evidence.Blocked, "time_limit_unset")
 		}, judgedBlocked},

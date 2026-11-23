@@ -360,8 +360,8 @@ func (h *haRun) removeS07ReleaseToken(ctx context.Context, rec *s07Record, r *s0
 			Value string `json:"value,omitempty"`
 		}
 		var patch []byte
-		patch, err = json.Marshal([]operation{{"test", "/metadata/uid", string(cluster.UID)},
-			{"test", annotation, r.lastSet}, {"remove", annotation, ""}})
+		patch, err = json.Marshal([]operation{{jsonPatchTest, "/metadata/uid", string(cluster.UID)},
+			{jsonPatchTest, annotation, r.lastSet}, {"remove", annotation, ""}})
 		if err == nil {
 			target := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: cluster.Name,
 				Namespace: cluster.Namespace}}

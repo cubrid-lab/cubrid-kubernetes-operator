@@ -2765,7 +2765,9 @@ embedded S09 `clean` test must be disentangled before candidate acceptance.
   before its data matches.
 - **Data check:** all data rules on all three members, including rows written
   while the rebuild ran.
-- **Limits:** `rebuild_limit`.
+- **Limits:** `rebuild_limit`, 5 minutes on Kind and on the VM lab, from the
+  rebuild request until every row was checked on every member and both
+  Services ([maintainer decision of 2026-11-23 on #126](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639)).
 - **Kind result:** the member rebuild step of the Kind suite
   (`test/e2e/member_rebuild_test.go`) records S10 without a variant. It
   replaces a slave's data claim and Pod, and confirms the fault by a
@@ -2780,9 +2782,10 @@ embedded S09 `clean` test must be disentangled before candidate acceptance.
   observes only that a request naming the master is refused, that the
   rebuild names the requested slave, and that the master's and the other
   slave's claims keep their UIDs; it does not observe whether the rebuilt
-  member was reported healthy before its data matched. With
-  `rebuild_limit` unset the result is `blocked` with `time_limit_unset`;
-  with it set, the result is also `blocked` when the listing could not be
+  member was reported healthy before its data matched. It is judged by
+  `rebuild_limit` (`E2E_REBUILD_LIMIT`, 5 minutes by default); with it set
+  to `0` or `unset` the result is `blocked` with `time_limit_unset`, and
+  with it set the result is also `blocked` when the listing could not be
   made or no insert was acknowledged while the rebuild ran. The `kind`
   lane's own gate does not require it; the release-candidate verifier still
   requires S10 at both the Kind and the VM-lab level.
@@ -2799,9 +2802,10 @@ embedded S09 `clean` test must be disentangled before candidate acceptance.
   the master, and that the master's and the other slave's claims keep their
   UIDs; it sends no request naming the master or a wrong token, and it does
   not observe whether the rebuilt member was reported healthy before its data
-  matched. `-rebuild-limit` sets `rebuild_limit`; unset, as by default, the
-  result is `blocked` with `time_limit_unset`, and with it set the result is
-  still `blocked` when the fault was not confirmed or no insert was
+  matched. `-rebuild-limit` sets `rebuild_limit`, 5 minutes by default; `0`
+  leaves it unset and the result `blocked` with `time_limit_unset`. With it
+  set, a rebuild with no end seen once the limit has passed fails, and the
+  result is still `blocked` when the fault was not confirmed or no insert was
   acknowledged while the rebuild ran.
 
 ### S11: backup, failure and restart
@@ -3477,7 +3481,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `operator_resync_limit` | Operator started until status matches fresh observations | Kind on a GitHub-hosted runner: 2 minutes. VM lab: unset | Kind: measured |
 | `quarantine_limit` | Triggering observation until the managed `-rw` path actually closes; v0.1 requires measurement and no post-closure acknowledged write, not a numeric 30 s pass bound | VM lab: historical 30-second comparison. Kind: unset | VM lab: measured historical baseline; not a v0.1 numeric release gate |
 | `partition_duration` | How long the partition is held, at least | VM lab: 2 minutes. Kind: unset | VM lab: choice, checked against the measured holds |
-| `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
+| `rebuild_limit` | Rebuild requested until the member holds all rows | Kind and VM lab: 5 minutes | choice ([maintainer decision of 2026-11-23](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639), from one Kind run of 40.2 s to `Completed` and 48.9 s until every row was checked) |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
 | `delete_limit` | Cluster deleted until its resources are gone | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
