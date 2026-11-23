@@ -133,9 +133,9 @@ type Socket struct {
 }
 
 // KeepaliveRecord is what ShortenKeepalive did: the values asked for, each
-// member's namespace, and the cut-off member's connections to the members'
-// port before the reset, those reset, and the connection to the master
-// made again under the new values.
+// member's namespace, the cut-off member's connections to the members'
+// port before the reset, those reset, the connection to the master made
+// again under the new values, and the other connections the cut crosses.
 type KeepaliveRecord struct {
 	Requested     KeepaliveValues   `json:"requested"`
 	Container     string            `json:"container"`
@@ -147,9 +147,25 @@ type KeepaliveRecord struct {
 	ResetAt       *time.Time        `json:"resetAt,omitempty"`
 	Reconnected   *Socket           `json:"targetReconnectedSocket,omitempty"`
 	ReconnectedAt *time.Time        `json:"reconnectedSeenAt,omitempty"`
+	Crossing      []KeepaliveCross  `json:"crossingConnections"`
 	Unmet         string            `json:"unmet,omitempty"`
 	Note          string            `json:"note"`
 	SSVersion     string            `json:"ssVersion,omitempty"`
+}
+
+// KeepaliveCross is one member's connections to another member's port that
+// the cut crosses, other than the cut-off member's to the master: those
+// listed before, those on an older schedule reset, and the connection made
+// again under the new values. Unmet says why the step stopped at it.
+type KeepaliveCross struct {
+	Member        string     `json:"member"`
+	Peer          string     `json:"peer"`
+	Before        []Socket   `json:"socketsBefore"`
+	Reset         []Socket   `json:"socketsReset"`
+	ResetAt       *time.Time `json:"resetAt,omitempty"`
+	Reconnected   *Socket    `json:"reconnectedSocket,omitempty"`
+	ReconnectedAt *time.Time `json:"reconnectedSeenAt,omitempty"`
+	Unmet         string     `json:"unmet,omitempty"`
 }
 
 // ShortenKeepalive sets k in each member's network namespace and reads the
@@ -171,8 +187,19 @@ type KeepaliveRecord struct {
 // so the reset is judged by the listing: a connection to the master listed
 // before it must be gone, and no connection listed before it ever counts as
 // the new one. The new one is told apart by its addresses only, not by the
-// process that owns it. The connections to the other members are left as
-// they are. Each member's kernel release is read and recorded, and one older
+// process that owns it.
+//
+// The cut crosses more connections than that one: each other member's
+// connections to the target's port, which CUBRID's log copy of the target
+// uses, and the target's connections to the other members' ports. Those
+// made before the write keep the old schedule as well; one the target's
+// server ends during the cut is then left half-open on the other side, and
+// a log copy waiting on it never learns of it (#1111). So, once the
+// connection to the master is made again, remakeCrossing resets each of
+// those that shows a keepalive timer longer than k.Time, or none, and waits,
+// within wait again, until each is made again under the new values. A pair
+// with no connection listed, or only connections already within k.Time, is
+// recorded and left alone. Each member's kernel release is read and recorded, and one older
 // than 4.13, whose keepalive values are not per namespace, is refused.
 //
 // Any step that does not hold returns an error that says why, and the
@@ -180,7 +207,8 @@ type KeepaliveRecord struct {
 func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpoint, target, master Endpoint,
 	wait time.Duration) (KeepaliveRecord, error) {
 	rec := KeepaliveRecord{Requested: k.values(), Container: KeepaliveContainer, Members: []KeepaliveMember{},
-		Target: target.Name, Master: master.Name, SocketsBefore: []Socket{}, Reset: []Socket{}, Note: reconnectedNote}
+		Target: target.Name, Master: master.Name, SocketsBefore: []Socket{}, Reset: []Socket{},
+		Crossing: []KeepaliveCross{}, Note: reconnectedNote}
 	fail := func(err error) (KeepaliveRecord, error) {
 		rec.Unmet = err.Error()
 		return rec, err
@@ -261,9 +289,14 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 			case slices.Contains(before, s.Local):
 				// A connection listed before the reset is never the new one,
 				// whatever its timer shows.
-			case s.Keepalive != "" && !s.KeepaliveUnread && s.KeepaliveLeftSeconds <= k.Time.Seconds():
+			case k.within(s):
 				at := time.Now().UTC()
 				rec.Reconnected, rec.ReconnectedAt = &s, &at
+				crossing, err := remakeCrossing(ctx, env, k, members, target, master, wait)
+				rec.Crossing = crossing
+				if err != nil {
+					return fail(err)
+				}
 				return rec, nil
 			default:
 				seen = append(seen, s)
@@ -297,6 +330,186 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	return fail(fmt.Errorf("%s's new connections to %s's port %s do not use the new keepalive: %s", target.Name,
 		master.Name, port, strings.Join(timers, "; ")))
+}
+
+// within reports whether s shows a keepalive timer that can be read and is no
+// longer than k.Time: a connection on the new schedule.
+func (k Keepalive) within(s Socket) bool {
+	return s.Keepalive != "" && !s.KeepaliveUnread && s.KeepaliveLeftSeconds <= k.Time.Seconds()
+}
+
+// crossingPairs lists the connections the cut crosses besides the target's
+// to the master, as (member, peer) pairs: each other member to the target,
+// and the target to each other member but the master.
+func crossingPairs(members []Endpoint, target, master Endpoint) [][2]Endpoint {
+	var pairs [][2]Endpoint
+	for _, e := range members {
+		if e.Name == target.Name {
+			continue
+		}
+		pairs = append(pairs, [2]Endpoint{e, target})
+		if e.Name != master.Name {
+			pairs = append(pairs, [2]Endpoint{target, e})
+		}
+	}
+	return pairs
+}
+
+// remakeCrossing resets each crossing pair's connections when one of them
+// is not on the new schedule, and waits within wait until each pair reset
+// has a new connection that is. As for the connection to the master, the
+// listing decides: a connection listed before its reset that is still
+// listed, or a reset pair with no new connection within k.Time by the end of
+// wait, ends the step with an error that names the pair.
+func remakeCrossing(ctx context.Context, env Env, k Keepalive, members []Endpoint, target, master Endpoint,
+	wait time.Duration) ([]KeepaliveCross, error) {
+	crossing := []KeepaliveCross{}
+	type reset struct {
+		i      int
+		from   Endpoint
+		port   int
+		peer   string
+		before []string
+		seen   []Socket // new connections not on the new schedule, last listing
+	}
+	var pending []reset
+	for _, pair := range crossingPairs(members, target, master) {
+		from, to := pair[0], pair[1]
+		c := KeepaliveCross{Member: from.Name, Peer: to.Name, Before: []Socket{}, Reset: []Socket{}}
+		fail := func(err error) ([]KeepaliveCross, error) {
+			c.Unmet = err.Error()
+			return unchecked(append(crossing, c), err), err
+		}
+		// Built as ss lists it, so that an IPv6 address, which ss brackets,
+		// matches too; an address that does not parse stops the step rather
+		// than matching nothing and resetting nothing.
+		addr, err := netip.ParseAddr(to.IP)
+		if err != nil {
+			return fail(fmt.Errorf("%s's address %q: %w", to.Name, to.IP, err))
+		}
+		peer := netip.AddrPortFrom(addr.Unmap(), uint16(to.Port)).String()
+		sockets, err := readSockets(ctx, env, from, to.Port)
+		if err != nil {
+			return fail(err)
+		}
+		var before []string
+		old := false
+		for _, s := range sockets {
+			if s.Peer != peer {
+				continue
+			}
+			c.Before, before = append(c.Before, s), append(before, s.Local)
+			old = old || !k.within(s)
+		}
+		if !old {
+			crossing = append(crossing, c)
+			continue
+		}
+		out, err := shellIn(ctx, env, from, KeepaliveContainer, fmt.Sprintf(": netfault sockets-reset %[1]s %[2]d\n"+
+			"ss -K -tnoH state established '( ( dst %[1]s or dst [::ffff:%[1]s] ) and dport = :%[2]d )'",
+			to.IP, to.Port))
+		if err != nil {
+			return fail(fmt.Errorf("reset %s's connections to %s's port %d: %w", from.Name, to.Name, to.Port, err))
+		}
+		now := time.Now().UTC()
+		c.ResetAt = &now
+		if c.Reset, err = parseSockets(out); err != nil {
+			return fail(fmt.Errorf("%s: %w", from.Name, err))
+		}
+		pending = append(pending, reset{i: len(crossing), from: from, port: to.Port, peer: peer, before: before})
+		crossing = append(crossing, c)
+	}
+	deadline := time.Now().Add(wait)
+	for len(pending) > 0 {
+		start := time.Now()
+		left := pending[:0]
+		for _, r := range pending {
+			c := &crossing[r.i]
+			sockets, err := readSockets(ctx, env, r.from, r.port)
+			if err != nil {
+				c.Unmet = err.Error()
+				return unchecked(crossing, err), err
+			}
+			made := false
+			r.seen = r.seen[:0]
+			for _, s := range sockets {
+				switch {
+				case s.Peer != r.peer:
+				case slices.Contains(r.before, s.Local):
+					err := fmt.Errorf("%s's connection %s to %s is still open after the reset (ss -K reported %d "+
+						"reset): the kernel may not support destroying sockets (CONFIG_INET_DIAG_DESTROY)",
+						r.from.Name, s.Local, r.peer, len(c.Reset))
+					c.Unmet = err.Error()
+					return unchecked(crossing, err), err
+				case !made && k.within(s):
+					at := time.Now().UTC()
+					c.Reconnected, c.ReconnectedAt, made = &s, &at, true
+				default:
+					r.seen = append(r.seen, s)
+				}
+			}
+			if !made {
+				left = append(left, r)
+			}
+		}
+		pending = left
+		if len(pending) == 0 || time.Now().After(deadline) {
+			break
+		}
+		if err := env.pause(ctx, time.Since(start)); errors.Is(err, errNoTimeLeft) {
+			break
+		} else if err != nil {
+			return unchecked(crossing, err), err
+		}
+	}
+	if len(pending) == 0 {
+		return crossing, nil
+	}
+	var pairs []string
+	for _, r := range pending {
+		c := &crossing[r.i]
+		why := "none was listed"
+		if len(r.seen) > 0 {
+			why = strings.Join(timers(r.seen, k), "; ")
+		}
+		c.Unmet = fmt.Sprintf("not made again with a keepalive timer of at most %s within %s after the reset: %s",
+			k.Time, wait, why)
+		pairs = append(pairs, c.Member+" to "+c.Peer+" ("+why+")")
+	}
+	return crossing, fmt.Errorf("no new connection with a keepalive timer of at most %s within %s after the "+
+		"reset, from %s", k.Time, wait, strings.Join(pairs, ", "))
+}
+
+// unchecked marks the crossing pairs that were reset but not yet seen made
+// again, when the step stopped at another pair, so that the record does not
+// leave them looking pending.
+func unchecked(crossing []KeepaliveCross, err error) []KeepaliveCross {
+	for i := range crossing {
+		c := &crossing[i]
+		if c.ResetAt != nil && c.Reconnected == nil && c.Unmet == "" {
+			c.Unmet = "not checked again: the step stopped at another connection: " + err.Error()
+		}
+	}
+	return crossing
+}
+
+// timers says, for each connection, why its keepalive timer does not show
+// the new schedule.
+func timers(sockets []Socket, k Keepalive) []string {
+	var out []string
+	for _, s := range sockets {
+		switch {
+		case s.Keepalive == "":
+			out = append(out, s.Local+" has no keepalive timer")
+		case s.KeepaliveUnread:
+			out = append(out, fmt.Sprintf("%s has a keepalive timer %q that could not be read", s.Local,
+				s.Keepalive))
+		default:
+			out = append(out, fmt.Sprintf("%s has a keepalive timer of %s, longer than %s", s.Local, s.Keepalive,
+				k.Time))
+		}
+	}
+	return out
 }
 
 // toMembers returns the sockets to a member's address, their local
