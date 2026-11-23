@@ -375,11 +375,17 @@ func TestRecovery(t *testing.T) {
 // with the given outcome and error.
 func readOnlyHistory(t *testing.T, outcome, errText string) History {
 	t.Helper()
-	text := `{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro",` +
+	return readOnlyHistoryOf(t, OpInsert, outcome, errText)
+}
+
+// readOnlyHistoryOf is readOnlyHistory for one operation of the given kind.
+func readOnlyHistoryOf(t *testing.T, op, outcome, errText string) History {
+	t.Helper()
+	text := fmt.Sprintf(`{"client":"ro","seq":1,"op":%q,"opId":"ro-000001","endpoint":"ro",`, op) +
 		`"event":"attempted","amount":38,"note":"ro-1"}` + "\n"
 	if outcome != "" {
-		text += fmt.Sprintf(`{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro","event":%q,"error":%q}`,
-			outcome, errText) + "\n"
+		text += fmt.Sprintf(`{"client":"ro","seq":1,"op":%q,"opId":"ro-000001","endpoint":"ro","event":%q,"error":%q}`,
+			op, outcome, errText) + "\n"
 	}
 	h, err := ReadHistory(strings.NewReader(text))
 	if err != nil {
@@ -410,6 +416,13 @@ func TestCheckReadOnlyRefusal(t *testing.T) {
 	} {
 		if err := CheckReadOnlyRefusal(h); err == nil {
 			t.Errorf("%s: judged as a refusal by the read-only Broker", name)
+		}
+	}
+	// The refusal text on an operation that is not a write proves nothing
+	// about a refused write.
+	for _, op := range []string{OpRead, OpRollback, "unknown-kind", ""} {
+		if err := CheckReadOnlyRefusal(readOnlyHistoryOf(t, op, Failed, refusal)); err == nil {
+			t.Errorf("operation %q with the refusal text: judged as a refused write", op)
 		}
 	}
 	two := readOnlyHistory(t, Failed, refusal)
