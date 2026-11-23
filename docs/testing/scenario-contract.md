@@ -230,6 +230,12 @@ lost 13 client-acknowledged writes (#1035); do not claim that this
 hazard was fixed or that the Operator guarantees zero RPO. A failure of
 role/routing recovery or false-healthy status still blocks the claimed outcome.
 
+The installed S04 `power-off` result records the acknowledged writes missing
+on a member as `acknowledgedMissing` and the operations whose outcome the
+client could not tell as `outcomeUnknown` (the names of the Kind S03 result).
+Both are `unknown` when the data check produced no report, and neither
+changes the verdict.
+
 **S07–S08 release claim:** the Operator offers **best-effort closure of the
 managed `-rw` Broker path**, not prevention of CUBRID native promotion or
 database-process fencing. Measure fault-to-closure and separately retain
@@ -249,6 +255,12 @@ publish the actual time and reason for any unnecessary write quarantine
 (#938), including historical 30-second exceedances. Do not waive unrelated
 data-integrity, second-master, unauthorized-restart, status or resource
 ownership checks. Abrupt S03 variants remain strict pass/fail gates.
+
+The Kind S03 result records the reasons the Operator's Conditions showed
+for a write quarantine from the fault on as `quarantineReasons` (sorted, an
+empty list when the sampled reads showed none, `unknown` when no status read
+was taken after the fault). It discloses the reason only; the verdict does
+not depend on it.
 
 **Existing tools need alignment before candidate acceptance:** the Kind
 and installed-HA runners currently encode the previous limits and S03's

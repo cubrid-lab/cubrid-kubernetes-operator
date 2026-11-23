@@ -597,7 +597,7 @@ func s04FaultMeasurements(rec *s04Record) map[string]any {
 	m := map[string]any{}
 	for _, name := range []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
 		"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "primaryResolvedNotTrueFor",
-		"finalMaster", "shortestStableFor", "operationsNotAcknowledged"} {
+		"finalMaster", "shortestStableFor", "operationsNotAcknowledged", "acknowledgedMissing", "outcomeUnknown"} {
 		m[name] = evidence.Unknown
 	}
 	if rec.StopIssuedAt == nil {
@@ -610,6 +610,19 @@ func s04FaultMeasurements(rec *s04Record) map[string]any {
 		}
 	}
 	return m
+}
+
+// s04DataMeasurements records what the data check found about the writes the
+// clients were told were committed: acknowledgedMissing, the acknowledged
+// writes some member lacks, is unknown when the check produced no report.
+// outcomeUnknown counts the operations whose outcome the client could not
+// tell. Both names are those of the Kind result of S03. Neither changes the
+// verdict.
+func s04DataMeasurements(m map[string]any, report *workload.Report, outcomeUnknown int) {
+	m["outcomeUnknown"] = outcomeUnknown
+	if report != nil {
+		m["acknowledgedMissing"] = report.AcknowledgedMissing
+	}
 }
 
 // finishS04 lets the clients go on until each was acknowledged without
@@ -677,9 +690,13 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 			result.Measurements["shortestStableFor"] = shortest.Round(time.Millisecond).String()
 		}
 	}
-	if err := h.checkData(ctx, time.Now(), s04DataCheckFile); err != nil {
+	report, held, err := h.checkDataOf(ctx, h.history.String(), h.sourceTarget(), time.Now(), s04DataCheckFile)
+	s04DataMeasurements(result.Measurements, report, clients.operations.Unknown)
+	if err != nil {
 		return end(evidence.Fail, "%v", err)
 	}
+	seconds := held.Seconds()
+	h.rec.DataRulesHeldAfterSeconds = &seconds
 	if len(result.NeverEvents) > 0 {
 		return end(evidence.Fail, "%s", strings.Join(result.NeverEvents, "; "))
 	}

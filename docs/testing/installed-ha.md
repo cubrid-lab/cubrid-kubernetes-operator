@@ -646,7 +646,10 @@ behind the return-to-service barrier),
 the node was `Ready`, and until the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
 of it not `True` after its last `True` until the cluster converged),
 `finalMaster`, `shortestStableFor` (from each client's first write
-acknowledged after the release) and `operationsNotAcknowledged`.
+acknowledged after the release), `operationsNotAcknowledged`,
+`acknowledgedMissing` (acknowledged writes a member lacks, `unknown` when the
+data check produced no report) and `outcomeUnknown` (operations whose outcome
+the client could not tell). The last two never change the result.
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`
 the fault flow.
 

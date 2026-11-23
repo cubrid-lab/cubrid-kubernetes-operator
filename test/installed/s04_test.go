@@ -1990,3 +1990,23 @@ func TestRunS04FailsOnAnInterruptionAfterTheReturn(t *testing.T) {
 		t.Fatalf("S04 = %+v, want a failure on the interruption after the return", s04)
 	}
 }
+
+// TestS04DataMeasurementsDiscloseAcknowledgedLoss checks that the data check's
+// counts are recorded under the names of the Kind result of S03, and that a
+// check that produced no report leaves the loss unknown rather than zero.
+func TestS04DataMeasurementsDiscloseAcknowledgedLoss(t *testing.T) {
+	fresh := func() map[string]any { return s04FaultMeasurements(&s04Record{}) }
+	m := fresh()
+	if m["acknowledgedMissing"] != evidence.Unknown || m["outcomeUnknown"] != evidence.Unknown {
+		t.Fatalf("before the data check: %v", m)
+	}
+	s04DataMeasurements(m, &workload.Report{AcknowledgedMissing: 3}, 2)
+	if m["acknowledgedMissing"] != 3 || m["outcomeUnknown"] != 2 {
+		t.Errorf("with a report: acknowledgedMissing %v, outcomeUnknown %v", m["acknowledgedMissing"], m["outcomeUnknown"])
+	}
+	m = fresh()
+	s04DataMeasurements(m, nil, 1)
+	if m["acknowledgedMissing"] != evidence.Unknown || m["outcomeUnknown"] != 1 {
+		t.Errorf("without a report: acknowledgedMissing %v, outcomeUnknown %v", m["acknowledgedMissing"], m["outcomeUnknown"])
+	}
+}
