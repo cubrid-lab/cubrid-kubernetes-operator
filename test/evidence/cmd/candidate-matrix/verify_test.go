@@ -32,21 +32,24 @@ import (
 )
 
 const (
-	candidateCommit   = "cccccccccccccccccccccccccccccccccccccccc"
-	candidateOperator = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-	candidateCUBRID   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-	kindRunID         = "candidate-kind-run"
-	powerOffRunID     = "candidate-vm-power-off-run"
-	vmRunID           = "candidate-vm-run"
-	overallGo         = "Overall v0.1 verdict: GO"
-	overallNoGo       = "Overall v0.1 verdict: NO-GO"
-	overallReview     = "Overall v0.1 verdict: REVIEW REQUIRED"
-	gracefulKey       = "ha-primary-pod-recovery-graceful"
-	powerOffKey       = "installed-ha-primary-vm-failure-power-off"
-	masterIsolatedKey = "installed-ha-network-partition-master-isolated"
-	oneBrokerPodKey   = "broker-failure-recovery-one-pod"
-	restoreExact      = "installed-restore-new-cluster-exact"
-	passedButNoGo     = "| PASS | PASS | NO-GO |"
+	candidateCommit    = "cccccccccccccccccccccccccccccccccccccccc"
+	candidateOperator  = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	candidateCUBRID    = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	kindRunID          = "candidate-kind-run"
+	powerOffRunID      = "candidate-vm-power-off-run"
+	vmRunID            = "candidate-vm-run"
+	overallGo          = "Overall v0.1 verdict: AUTOMATED CHECKS GO — manual gates pending"
+	overallNoGo        = "Overall v0.1 verdict: NO-GO"
+	overallReview      = "Overall v0.1 verdict: REVIEW REQUIRED"
+	gracefulKey        = "ha-primary-pod-recovery-graceful"
+	powerOffKey        = "installed-ha-primary-vm-failure-power-off"
+	masterIsolatedKey  = "installed-ha-network-partition-master-isolated"
+	oneBrokerPodKey    = "broker-failure-recovery-one-pod"
+	restoreExact       = "installed-restore-new-cluster-exact"
+	passedButNoGo      = "| PASS | PASS | NO-GO |"
+	listedState        = "listed"
+	unexplained        = "no judged result accounts for"
+	failoverUnmeasured = "failoverWithin is not measured"
 )
 
 // recordedFamilies are the v0.1 families with at least one registered result.
@@ -64,6 +67,10 @@ func TestVerifierAcceptsACompleteCandidate(t *testing.T) {
 	out, ok := runVerifier(t, root, manifest, recordedFamilies)
 	if !ok || !strings.Contains(out, overallGo) {
 		t.Fatalf("a complete candidate did not verify as Go:\n%s", out)
+	}
+	if !strings.Contains(out, "## Manual gates not checked") || !strings.Contains(out, "24-hour soak") ||
+		!strings.Contains(out, "release approval") {
+		t.Errorf("the report does not list the manual gates:\n%s", out)
 	}
 	for _, key := range []string{gracefulKey, powerOffKey, masterIsolatedKey, oneBrokerPodKey, restoreExact} {
 		if row := requiredRow(t, out, key); !strings.Contains(row, "| GO |") {
@@ -123,6 +130,10 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 		{"pass without listed evidence", oneBrokerPodKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, kindRunID, "S05/one-broker-pod").Evidence = nil
 		}, "no evidence is listed"},
+		{"cleanup failed", oneBrokerPodKey, func(runs []evidence.Summary) {
+			failed := false
+			scenarioOf(runs, kindRunID, "S05/one-broker-pod").CleanupSucceeded = &failed
+		}, "the cleanup did not succeed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,6 +208,36 @@ func TestVerifierBlocksBrokenOrTruncatedEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "junit.xml: MISSING EVIDENCE"},
+		{"indexed file absent with a bogus digest", nil, func(t *testing.T, root string, manifest *index) {
+			manifest.Runs[2].Files = append(manifest.Runs[2].Files,
+				indexedFile{Path: "manager.log", SHA256: strings.Repeat("e", 64), State: listedState})
+		}, "manager.log: MISSING EVIDENCE"},
+		{"empty evidence file", nil, func(t *testing.T, root string, manifest *index) {
+			path := filepath.Join("S12", "exact", "evidence.txt")
+			if err := os.WriteFile(filepath.Join(root, vmRunID, path), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for i, file := range manifest.Runs[2].Files {
+				if file.Path == path {
+					manifest.Runs[2].Files[i].SHA256 = fmt.Sprintf("%x", sha256.Sum256(nil))
+				}
+			}
+		}, "S12/exact/evidence.txt: EMPTY EVIDENCE"},
+		{"credential leak", func(runs []evidence.Summary) {
+			runs[2].Passed = false
+			runs[2].Problems = []string{"the evidence file S12/exact/evidence.txt holds a credential of the run"}
+		}, nil, unexplained},
+		{"unlabelled step", func(runs []evidence.Summary) {
+			runs[2].Passed = false
+			runs[2].Problems = []string{"S12/exact: no step of the suite carries the label S12/exact"}
+		}, nil, unexplained},
+		{"suite deadline", func(runs []evidence.Summary) {
+			runs[2].Passed = false
+			runs[2].Problems = []string{"the suite's deadline passed during S15: the steps after it did not run"}
+		}, nil, unexplained},
+		{"not passed without a problem", func(runs []evidence.Summary) {
+			runs[2].Passed = false
+		}, nil, "the run recorded that it did not pass, with no problem listed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,6 +254,30 @@ func TestVerifierBlocksBrokenOrTruncatedEvidence(t *testing.T) {
 			}
 			if !strings.Contains(out, tc.want) {
 				t.Errorf("the report does not say %q:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// A filtered Kind run selected its own requirements and an unregistered lane
+// validates nothing, so neither can stand for the candidate.
+func TestVerifierBlocksFilteredOrUnregisteredLanes(t *testing.T) {
+	tests := []struct {
+		name, key string
+		mutate    func([]evidence.Summary)
+	}{
+		{"filtered Kind run", oneBrokerPodKey, func(runs []evidence.Summary) { runs[0].Lane = "kind-filtered" }},
+		{"unregistered lane", restoreExact, func(runs []evidence.Summary) { runs[2].Lane = "lab-unregistered" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root, manifest := buildCandidate(t, tc.mutate)
+			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			if ok || !strings.Contains(out, overallNoGo) || !strings.Contains(out, "is not a registered lane") {
+				t.Fatalf("not No-Go for its lane:\n%s", out)
+			}
+			if row := requiredRow(t, out, tc.key); !strings.Contains(row, "| NO-GO |") {
+				t.Errorf("%s from that run is not No-Go: %s", tc.key, row)
 			}
 		})
 	}
@@ -270,7 +335,7 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 	}{
 		{"unknown measurement", powerOffKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, powerOffRunID, "S04/power-off").Measurements["failoverWithin"] = evidence.Unknown
-		}, passedButNoGo, "failoverWithin is not measured"},
+		}, passedButNoGo, failoverUnmeasured},
 		{"absent measurement", gracefulKey, func(runs []evidence.Summary) {
 			delete(scenarioOf(runs, kindRunID, "S03/graceful").Measurements, "recoveryTime")
 		}, passedButNoGo, "recoveryTime is not measured"},
@@ -298,6 +363,28 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 		{"blocked", powerOffKey, func(runs []evidence.Summary) {
 			setResult(scenarioOf(runs, powerOffRunID, "S04/power-off"), evidence.Blocked, "not fenced")
 		}, "| BLOCKED | BLOCKED | NO-GO |", "judged blocked"},
+		{"empty name", powerOffKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, powerOffRunID, "S04/power-off").Measurements["finalMaster"] = ""
+		}, passedButNoGo, "finalMaster is not measured"},
+		{"empty duration", powerOffKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, powerOffRunID, "S04/power-off").Measurements["failoverWithin"] = ""
+		}, passedButNoGo, failoverUnmeasured},
+		{"duration that is not one", powerOffKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, powerOffRunID, "S04/power-off").Measurements["failoverWithin"] = "soon"
+		}, passedButNoGo, failoverUnmeasured},
+		{"count recorded as a string", gracefulKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, kindRunID, "S03/graceful").Measurements[acknowledgedMissing] = "0"
+		}, passedButNoGo, "acknowledgedMissing is not measured"},
+		{"count recorded as a boolean", masterIsolatedKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, vmRunID, "S07/master-isolated").Measurements["membersDiverged"] = false
+		}, passedButNoGo, "membersDiverged is not measured"},
+		{"no new-connection writes", masterIsolatedKey, func(runs []evidence.Summary) {
+			scenarioOf(runs, vmRunID, "S07/master-isolated").Measurements["newConnectionWrites"] = map[string]any{}
+		}, passedButNoGo, "newConnectionWrites is not measured"},
+		{"cleanup failed", powerOffKey, func(runs []evidence.Summary) {
+			failed := false
+			scenarioOf(runs, powerOffRunID, "S04/power-off").CleanupSucceeded = &failed
+		}, passedButNoGo, "the cleanup did not succeed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -336,23 +423,45 @@ func TestVerifierNeedsReviewForUnmappedResults(t *testing.T) {
 	}
 }
 
-// S09 is deferred to v0.2: a recorded S09 result, even a failed one, is shown
-// but neither required nor counted.
+// S09 is deferred to v0.2: a recorded S09 result is shown but never
+// required. A pass or not_run is not counted; a fail or blocked needs review,
+// because the contract keeps S09's held-member safety behavior and a lane
+// fails on a failed result it does not require.
 func TestVerifierDoesNotCountDeferredResults(t *testing.T) {
-	root, manifest := buildCandidate(t, func(runs []evidence.Summary) {
-		failed := passed("S09", "clean")
-		setResult(&failed, evidence.Fail, "rejoin_limit exceeded: 6m > 5m")
-		runs[0].Scenarios = append(runs[0].Scenarios, failed)
-	})
-	out, ok := runVerifier(t, root, manifest, recordedFamilies)
-	if !ok || !strings.Contains(out, overallGo) {
-		t.Fatalf("a deferred S09 result changed the verdict:\n%s", out)
+	tests := []struct {
+		result  evidence.Result
+		overall string
+		row     string
+	}{
+		{evidence.Pass, overallGo, "| S09 | clean | v0.2 DEFERRED | PASS | PASS | NOT COUNTED |"},
+		{evidence.NotRun, overallGo, "| S09 | clean | v0.2 DEFERRED | NOT_RUN | NOT_RUN | NOT COUNTED |"},
+		{evidence.Fail, overallReview, "| S09 | clean | v0.2 DEFERRED | FAIL | FAIL | REVIEW REQUIRED |"},
+		{evidence.Blocked, overallReview, "| S09 | clean | v0.2 DEFERRED | BLOCKED | BLOCKED | REVIEW REQUIRED |"},
 	}
-	if !strings.Contains(out, "| S09 | clean | v0.2 DEFERRED | FAIL | FAIL | NOT COUNTED |") {
-		t.Errorf("the deferred result is not shown as not counted:\n%s", out)
-	}
-	if strings.Contains(requiredTable(out), "S09") {
-		t.Errorf("S09 is listed as a required variant:\n%s", out)
+	for _, tc := range tests {
+		t.Run(string(tc.result), func(t *testing.T) {
+			root, manifest := buildCandidate(t, func(runs []evidence.Summary) {
+				deferred := passed("S09", "clean")
+				if tc.result != evidence.Pass {
+					setResult(&deferred, tc.result, "rejoin_limit exceeded: 6m > 5m")
+				}
+				if tc.result == evidence.Fail || tc.result == evidence.Blocked {
+					runs[0].Passed = false
+					runs[0].Problems = []string{"S09/clean: " + string(tc.result) + ": rejoin_limit exceeded"}
+				}
+				runs[0].Scenarios = append(runs[0].Scenarios, deferred)
+			})
+			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			if ok != (tc.overall == overallGo) || !strings.Contains(out, tc.overall) {
+				t.Fatalf("a deferred S09 %s did not give %q:\n%s", tc.result, tc.overall, out)
+			}
+			if !strings.Contains(out, tc.row) {
+				t.Errorf("the deferred result is not shown as %q:\n%s", tc.row, out)
+			}
+			if strings.Contains(requiredTable(out), "S09") {
+				t.Errorf("S09 is listed as a required variant:\n%s", out)
+			}
+		})
 	}
 }
 
@@ -423,7 +532,7 @@ func indexRun(t *testing.T, dir string) run {
 			t.Fatal(err)
 		}
 		source.Files = append(source.Files,
-			indexedFile{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), State: "listed"})
+			indexedFile{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), State: listedState})
 	}
 	return source
 }

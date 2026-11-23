@@ -6,7 +6,17 @@
 
 **Overall v0.1 verdict: NO-GO**
 
-GO needs every required variant recorded by runs of this commit and these images, each record a pass its evidence supports, and every must-measure record measured without a safety violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no recorded field shows that only a time limit failed. Repetitions, the soak run, real-fault review and release approval are not checked here.
+The automated checks pass only when every required variant is recorded by finished, indexed runs of registered lanes on this commit and these images, each record is a pass its evidence supports, and every must-measure record is measured without a safety violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no recorded field shows that only a time limit failed. This is not release approval.
+
+## Manual gates not checked
+
+- Conditions, Events and metrics as separate v0.1 requirements
+- repetitions of the core fault and recovery variants
+- the 24-hour soak run
+- real-fault review of the VM-lab runs
+- index completeness: every failure and rerun of the candidate linked in the index; a run left out of the index cannot be detected here
+- independent reproduction of the procedures (#127)
+- release approval
 
 ## Runs
 

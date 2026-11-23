@@ -187,6 +187,9 @@
           "failoverWithin": "18.7s",
           "returnWithin": "95.2s",
           "convergedWithin": "140.9s",
+          "vmReturnWithin": "48.6s",
+          "returnWriteOutage": "3.2s",
+          "shortestStableFor": "31.5s",
           "finalMaster": "cluster-cubrid-1",
           "operationsNotAcknowledged": 3
         }
@@ -234,8 +237,13 @@
           "partitionHeldFor": "2m0.4s",
           "establishedAcknowledgedAfterPathClosed": 0,
           "acknowledgedMissing": 0,
-          "membersDiverged": false,
+          "membersDiverged": 0,
+          "newConnectionWrites": {
+            "acknowledged": 12,
+            "refused": 30
+          },
           "finalMaster": "cluster-cubrid-1",
+          "rwScaledDownWithin": "22.0s",
           "quarantineSeenWithin": "21.3s",
           "rwPodsGoneWithin": "24.8s",
           "rwEndpointsEmptyWithin": "24.9s",
@@ -255,7 +263,11 @@
           "partitionHeldFor": "2m0.4s",
           "establishedAcknowledgedAfterPathClosed": 0,
           "acknowledgedMissing": 0,
-          "membersDiverged": false,
+          "membersDiverged": 0,
+          "newConnectionWrites": {
+            "acknowledged": 12,
+            "refused": 30
+          },
           "finalMaster": "cluster-cubrid-1",
           "establishedAcknowledgedAfterFault": 40
         }
@@ -273,8 +285,13 @@
           "partitionHeldFor": "2m0.4s",
           "establishedAcknowledgedAfterPathClosed": 0,
           "acknowledgedMissing": 0,
-          "membersDiverged": false,
+          "membersDiverged": 0,
+          "newConnectionWrites": {
+            "acknowledged": 12,
+            "refused": 30
+          },
           "finalMaster": "cluster-cubrid-1",
+          "rwScaledDownWithin": "22.0s",
           "quarantineSeenWithin": "21.3s",
           "rwPodsGoneWithin": "24.8s",
           "rwEndpointsEmptyWithin": "24.9s",

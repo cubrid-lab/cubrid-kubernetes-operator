@@ -20,10 +20,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
@@ -42,24 +44,63 @@ const (
 	s10Family = "S10"
 	// acknowledgedMissing counts acknowledged writes a member lacks.
 	acknowledgedMissing = "acknowledgedMissing"
+	// afterPathClosed counts established-session writes acknowledged after
+	// the managed -rw path was observed closed.
+	afterPathClosed = "establishedAcknowledgedAfterPathClosed"
+	finalMaster     = "finalMaster"
 )
 
 // measuredRule is what a must-measure result records besides its verdict:
-// measurements that must be present and not unknown, and the ones of them
-// that are a safety rule and must be zero.
+// measurements that must be present with a value of their kind, and the
+// ones of them that are a safety rule and must be zero.
 type measuredRule struct {
 	measured []string
 	zero     []string
 }
 
+// measureKind is the form a measurement's value must have.
+type measureKind int
+
+const (
+	// durationValue is a duration string ("24.512s") or a number of seconds.
+	durationValue measureKind = iota + 1
+	// countValue is a non-negative whole number.
+	countValue
+	// nameValue is a non-empty name, such as a member.
+	nameValue
+	// classesValue is a non-empty map of outcome classes to counts.
+	classesValue
+)
+
+// measurementKinds gives the kind of every measurement a rule lists. A listed
+// measurement without a kind here is never accepted.
+var measurementKinds = map[string]measureKind{
+	"recoveryTime": durationValue, "stableFor": durationValue, "primaryUnresolvedFor": durationValue,
+	"routingNotReadyFor": durationValue, "confirmedOffAfter": durationValue, "fencedAfter": durationValue,
+	"promotedWithin": durationValue, "failoverWithin": durationValue, "vmReturnWithin": durationValue,
+	"returnWithin": durationValue, "returnWriteOutage": durationValue, "convergedWithin": durationValue,
+	"shortestStableFor": durationValue, "faultConfirmedWithin": durationValue, "partitionHeldFor": durationValue,
+	"quarantineSeenWithin": durationValue, "rwScaledDownWithin": durationValue, "rwPodsGoneWithin": durationValue,
+	"rwEndpointsEmptyWithin": durationValue, "newConnectionsStoppedWithin": durationValue,
+	acknowledgedMissing: countValue, "outcomeUnknown": countValue, "operationsNotAcknowledged": countValue,
+	"membersDiverged": countValue, afterPathClosed: countValue,
+	"establishedAcknowledgedAfterFault": countValue,
+	finalMaster:                         nameValue,
+	"newConnectionWrites":               classesValue,
+}
+
 var (
-	s07Common = []string{"faultConfirmedWithin", "partitionHeldFor", "establishedAcknowledgedAfterPathClosed",
-		acknowledgedMissing, "membersDiverged", "finalMaster"}
-	s07Closure = []string{"quarantineSeenWithin", "rwPodsGoneWithin", "rwEndpointsEmptyWithin",
-		"newConnectionsStoppedWithin"}
+	// newConnectionWrites is recorded for every S07 variant: the run reads the
+	// new-connection probes before it judges any of them.
+	s07Common = []string{"faultConfirmedWithin", "partitionHeldFor", afterPathClosed,
+		acknowledgedMissing, "membersDiverged", finalMaster, "newConnectionWrites"}
+	// The closure of the managed -rw path is measured only where the variant
+	// quarantines; the slave-isolated control case must not.
+	s07Closure = []string{"rwScaledDownWithin", "quarantineSeenWithin", "rwPodsGoneWithin",
+		"rwEndpointsEmptyWithin", "newConnectionsStoppedWithin"}
 	// No write may be acknowledged on an established session after the
 	// managed -rw path was proven closed.
-	s07Safety = []string{"establishedAcknowledgedAfterPathClosed"}
+	s07Safety = []string{afterPathClosed}
 )
 
 // v01Measured holds the rule of each registered must-measure result. A
@@ -71,9 +112,13 @@ var v01Measured = map[string]measuredRule{
 			"primaryUnresolvedFor", "routingNotReadyFor"},
 		zero: []string{acknowledgedMissing},
 	},
+	// A passed S04 run has recorded each of these: the pass needs the node
+	// back, every client acknowledged after the taint and after the return,
+	// and the stable period reached.
 	"installed-ha-primary-vm-failure-power-off": {
 		measured: []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
-			"returnWithin", "convergedWithin", "finalMaster", "operationsNotAcknowledged"},
+			"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "shortestStableFor",
+			finalMaster, "operationsNotAcknowledged"},
 	},
 	"installed-ha-network-partition-master-isolated": {
 		measured: slices.Concat(s07Common, s07Closure), zero: s07Safety},
@@ -86,6 +131,22 @@ var v01Measured = map[string]measuredRule{
 // releaseVerdict is the v0.1 verdict of one result, one required variant or
 // the candidate. It never replaces the raw verdict a run recorded.
 type releaseVerdict string
+
+// candidateGo is the overall verdict of a candidate that passed every
+// automated check. It is not release approval: manualGates remain.
+const candidateGo = "AUTOMATED CHECKS GO — manual gates pending"
+
+// manualGates are the release gates of #126 the verifier does not check.
+var manualGates = []string{
+	"Conditions, Events and metrics as separate v0.1 requirements",
+	"repetitions of the core fault and recovery variants",
+	"the 24-hour soak run",
+	"real-fault review of the VM-lab runs",
+	"index completeness: every failure and rerun of the candidate linked in the index; " +
+		"a run left out of the index cannot be detected here",
+	"independent reproduction of the procedures (#127)",
+	"release approval",
+}
 
 const (
 	verdictGo         releaseVerdict = "GO"
@@ -140,15 +201,24 @@ func verify(out io.Writer, indexPath, runRoot string, families []string) (bool, 
 		overall = worse(overall, row.verdict)
 	}
 
+	shown := string(overall)
+	if overall == verdictGo {
+		shown = candidateGo
+	}
 	var report strings.Builder
 	fmt.Fprintf(&report, "# Candidate v0.1 verdict\n\n- Candidate commit: `%s`\n- Operator image: `%s`\n"+
 		"- CUBRID image: `%s`\n\n**Overall v0.1 verdict: %s**\n\n",
-		manifest.Candidate.Commit, manifest.Candidate.Operator, manifest.Candidate.CUBRID, overall)
-	report.WriteString("GO needs every required variant recorded by runs of this commit and these images, " +
-		"each record a pass its evidence supports, and every must-measure record measured without a safety " +
-		"violation. Raw and judged verdicts are shown unchanged. A raw fail of a must-measure variant is " +
-		"disclosed and not qualified: no recorded field shows that only a time limit failed. Repetitions, " +
-		"the soak run, real-fault review and release approval are not checked here.\n\n")
+		manifest.Candidate.Commit, manifest.Candidate.Operator, manifest.Candidate.CUBRID, shown)
+	report.WriteString("The automated checks pass only when every required variant is recorded by finished, " +
+		"indexed runs of registered lanes on this commit and these images, each record is a pass its evidence " +
+		"supports, and every must-measure record is measured without a safety violation. Raw and judged " +
+		"verdicts are shown unchanged. A raw fail of a must-measure variant is disclosed and not qualified: no " +
+		"recorded field shows that only a time limit failed. This is not release approval.\n\n")
+	report.WriteString("## Manual gates not checked\n\n")
+	for _, gate := range manualGates {
+		report.WriteString("- " + gate + "\n")
+	}
+	report.WriteString("\n")
 	report.WriteString("## Runs\n\n| Run | Level | Lane | Run check |\n| --- | --- | --- | --- |\n")
 	for _, vr := range runs {
 		check := "MATCHING CANDIDATE"
@@ -219,8 +289,21 @@ func verifyRun(c candidate, source run, dir string) verifiedRun {
 		vr.problem = summaryPath + " does not match the index"
 		return vr
 	}
-	vr.problem = runProblem(c, source, actual, checkFile(root, files[junitPath]))
 	checked := map[string]string{}
+	vr.problem = runProblem(c, source, actual, checkIndexed(root, files[junitPath]))
+	// Every file the index lists or archives must be the indexed one, whether
+	// a result names it or not. The index gives those a digest and an
+	// unavailable file the unknown one (run.validateFiles).
+	for _, file := range source.Files {
+		if vr.problem != "" {
+			break
+		}
+		if file.SHA256 != evidence.Unknown {
+			if status := cachedCheck(root, files, checked, file.Path); status != "" {
+				vr.problem = "indexed file " + file.Path + ": " + status
+			}
+		}
+	}
 	for _, result := range actual.Results {
 		problem := vr.problem
 		if problem == "" {
@@ -230,7 +313,56 @@ func verifyRun(c candidate, source run, dir string) verifiedRun {
 		vr.results = append(vr.results, verifiedResult{run: source.ID, result: result, scope: scope,
 			verdict: verdict, reason: reason})
 	}
+	if vr.problem == "" {
+		vr.problem = unexplainedProblem(actual, vr.results)
+		for i := range vr.results {
+			if vr.problem != "" && vr.results[i].verdict == verdictGo {
+				vr.results[i].verdict, vr.results[i].reason = verdictNoGo, vr.problem
+			}
+		}
+	}
 	return vr
+}
+
+// unexplainedProblem is the first problem the run recorded, or the evidence
+// reader found, that no result the verifier judged as not Go accounts for,
+// or "". A credential found in the evidence, a step without its label or a
+// suite deadline belongs to no result's verdict, so it blocks the run. A
+// problem line of a result starts with its legacy name and ": "; one about the
+// identity of a result without a key starts with its name and " ".
+func unexplainedProblem(actual evidence.RecordedRun, results []verifiedResult) string {
+	s := actual.Summary
+	switch {
+	case s.Passed && len(s.Problems) > 0:
+		return "the run claims a pass but lists problems"
+	case !s.Passed && len(s.Problems) == 0:
+		return "the run recorded that it did not pass, with no problem listed"
+	}
+	explained := func(p string) bool {
+		for _, r := range results {
+			name := r.result.Scenario.Name()
+			// The registry has no key for an unmapped or deferred result,
+			// and the reader says so; its verdict already shows that.
+			if r.result.Key == "" && strings.HasPrefix(p, name+" ") {
+				return true
+			}
+			if r.verdict != verdictGo && r.verdict != verdictNotCounted && strings.HasPrefix(p, name+": ") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range s.Problems {
+		if !explained(p) {
+			return "the run recorded a problem no judged result accounts for: " + p
+		}
+	}
+	for _, p := range actual.Problems {
+		if p != "the run recorded that it did not pass lane "+s.Lane && !explained(p) {
+			return "the evidence reader found a problem no judged result accounts for: " + p
+		}
+	}
+	return ""
 }
 
 // runProblem is why the whole run cannot stand for the candidate, or "".
@@ -239,6 +371,9 @@ func runProblem(c candidate, source run, actual evidence.RecordedRun, junitStatu
 	switch {
 	case junitStatus != "":
 		return junitPath + ": " + junitStatus
+	case !registeredLane(source.Lane):
+		return fmt.Sprintf("lane %s is not a registered lane: a filtered or unregistered run validates no lane",
+			source.Lane)
 	case actual.Provisional:
 		return "the run did not finish"
 	case !commitPattern.MatchString(env.Commit):
@@ -250,14 +385,14 @@ func runProblem(c candidate, source run, actual evidence.RecordedRun, junitStatu
 	case env.images != c.images:
 		return "the image digests are not the candidate's"
 	}
-	// junit.xml is one write with summary.json; a disagreement is a mixed or
-	// edited bundle.
-	for _, p := range actual.Problems {
-		if strings.HasPrefix(p, junitPath+" ") {
-			return p
-		}
-	}
 	return ""
+}
+
+// registeredLane reports whether lane is a lane of the registry at either
+// level; kind-filtered is not one.
+func registeredLane(lane string) bool {
+	return slices.Contains(evidence.RegisteredLanes(evidence.LevelKind), lane) ||
+		slices.Contains(evidence.RegisteredLanes(evidence.LevelVMLab), lane)
 }
 
 // evidenceProblem is the first listed evidence file of a result that is not
@@ -267,14 +402,31 @@ func evidenceProblem(root *os.Root, files map[string]indexedFile, checked map[st
 		return "no evidence is listed"
 	}
 	for _, path := range paths {
-		status, ok := checked[path]
-		if !ok {
-			status = checkFile(root, files[path])
-			checked[path] = status
-		}
-		if status != "" {
+		if status := cachedCheck(root, files, checked, path); status != "" {
 			return "evidence " + path + ": " + status
 		}
+	}
+	return ""
+}
+
+// cachedCheck checks an indexed file once per run.
+func cachedCheck(root *os.Root, files map[string]indexedFile, checked map[string]string, path string) string {
+	status, ok := checked[path]
+	if !ok {
+		status = checkIndexed(root, files[path])
+		checked[path] = status
+	}
+	return status
+}
+
+// checkIndexed is checkFile, and an empty file is refused as well: empty
+// evidence proves nothing.
+func checkIndexed(root *os.Root, file indexedFile) string {
+	if status := checkFile(root, file); status != "" {
+		return status
+	}
+	if info, err := root.Stat(file.Path); err != nil || info.Size() == 0 {
+		return "EMPTY EVIDENCE"
 	}
 	return ""
 }
@@ -285,7 +437,14 @@ func evidenceProblem(root *os.Root, files map[string]indexedFile, checked map[st
 func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, releaseVerdict, string) {
 	sc := result.Scenario
 	scope := scopeOf(scenario{ID: sc.ID, Variant: sc.Variant})
+	cleanupFailed := sc.CleanupSucceeded != nil && !*sc.CleanupSucceeded
 	switch {
+	case (scope == scopeDeferred || scope == scopeConditional) &&
+		(result.Judged == evidence.Fail || result.Judged == evidence.Blocked || cleanupFailed):
+		// The contract keeps S09's held-member safety behavior, and a lane
+		// fails on a failed result it does not require.
+		return scope, verdictReview, fmt.Sprintf("not required, but judged %s (cleanup failed: %t): %s",
+			result.Judged, cleanupFailed, result.Reason)
 	case scope == scopeDeferred:
 		return scope, verdictNotCounted, "deferred to v0.2: not required and not counted"
 	case scope == scopeConditional:
@@ -294,6 +453,8 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 		return scopeUnmapped, verdictReview, "the registry or the v0.1 scope does not map this result"
 	case problem != "":
 		return scope, verdictNoGo, problem
+	case cleanupFailed:
+		return scope, verdictNoGo, "the cleanup did not succeed"
 	case scope == scopeMustMeasure && result.Judged == evidence.Fail:
 		return scope, verdictNoGo, "raw fail, disclosed and not qualified: no recorded field shows that only a " +
 			"time limit failed (" + result.Reason + ")"
@@ -319,7 +480,7 @@ func measuredProblem(result evidence.RecordedResult) string {
 		return "evidence not recorded: no measurement rule is defined for this variant"
 	}
 	for _, name := range rule.measured {
-		if value, ok := sc.Measurements[name]; !ok || value == nil || value == evidence.Unknown {
+		if !validMeasurement(measurementKinds[name], sc.Measurements[name]) {
 			return name + " is not measured"
 		}
 	}
@@ -331,8 +492,62 @@ func measuredProblem(result evidence.RecordedResult) string {
 	return ""
 }
 
+// validMeasurement reports whether value is a measured value of the kind:
+// "unknown", an empty string, a value of another type or an empty map is not.
+func validMeasurement(kind measureKind, value any) bool {
+	switch kind {
+	case durationValue:
+		if s, ok := value.(string); ok {
+			d, err := time.ParseDuration(s)
+			return err == nil && d >= 0
+		}
+		n, ok := number(value)
+		return ok && n >= 0
+	case countValue:
+		return isCount(value)
+	case nameValue:
+		s, ok := value.(string)
+		return ok && s != "" && s != evidence.Unknown
+	case classesValue:
+		classes, ok := value.(map[string]any)
+		if !ok || len(classes) == 0 {
+			return false
+		}
+		for _, count := range classes {
+			if !isCount(count) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// number is a JSON number as a float, as summary.json records it
+// (json.Number) or as a caller built it.
+func number(value any) (float64, bool) {
+	switch v := value.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	}
+	return 0, false
+}
+
+// isCount reports whether value is a non-negative whole number.
+func isCount(value any) bool {
+	n, ok := number(value)
+	return ok && n >= 0 && n == math.Trunc(n)
+}
+
 // isZero reports whether a measurement is the number zero, as summary.json
-// records it (json.Number) or as a caller built it.
+// records it (json.Number) or as a caller built it. Only the literal JSON
+// number 0 is accepted, not "0.0", a string or false: a safety count in any
+// other form fails closed.
 func isZero(value any) bool {
 	switch v := value.(type) {
 	case json.Number:
