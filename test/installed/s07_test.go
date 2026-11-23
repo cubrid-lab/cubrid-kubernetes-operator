@@ -653,6 +653,8 @@ func TestJudgeS07MarksAMasterIsolatedRunWithoutAPromotion(t *testing.T) {
 		"a slave answered as an active master while the cut held": {sweepRole(2, m1, s07ActiveMaster), false},
 		"a slave answered as an active master after the heal":     {sweepRole(5, m2, s07ActiveMaster), false},
 		"a member's role could not be read while the cut held":    {sweepRole(1, m2, s07Unread), false},
+		"a slave reported as neither master nor slave while the cut held": {sweepRole(2, m1, s07OtherRole),
+			false},
 		"no sweep while the cut held": {func(r *s07Record) {
 			r.Sweeps = slices.DeleteFunc(r.Sweeps, func(s s07Sweep) bool { return s.T.Before(*r.HoldEndedAt) })
 		}, false},
@@ -709,6 +711,36 @@ func TestJudgeS07MarksAMasterIsolatedRunWithoutAPromotion(t *testing.T) {
 			}
 			if v.TimeLimitOnly {
 				t.Error("a blocked run is marked as a time-limit fail")
+			}
+		})
+	}
+}
+
+// A baseline run, with a limit unset, and a cut held shorter than
+// partition_duration never get the no-promotion marker, however the rest of
+// the record looks; a run under the VM-lab limits does, and its reason gives
+// the sweeps and the longest interval between two of them.
+func TestJudgeS07MarksNoPromotionOnlyUnderSetLimitsAndAFullHold(t *testing.T) {
+	for name, tc := range map[string]struct {
+		limits s07Limits
+		mark   bool
+	}{
+		"every limit unset, as by default": {s07Limits{}, false},
+		"partition_duration unset":         {s07Limits{Quarantine: 30 * time.Second}, false},
+		"quarantine_limit unset":           {s07Limits{Partition: time.Minute}, false},
+		"a hold shorter than partition_duration": {s07Limits{Quarantine: 30 * time.Second,
+			Partition: 5 * time.Minute}, false},
+		"the VM-lab limits, held 2 minutes": {s07VMLabLimits, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := judgeS07(s07NoPromotionBase(), tc.limits)
+			if v.NoPromotion != tc.mark || v.Result != evidence.Blocked {
+				t.Fatalf("judgeS07 = %s %q, noPromotion %t; want blocked with %t", v.Result, v.Reason,
+					v.NoPromotion, tc.mark)
+			}
+			if tc.mark && (!strings.Contains(v.Reason, "6 sweep(s)") ||
+				!strings.Contains(v.Reason, "at most 1m0s between two sweeps")) {
+				t.Errorf("reason %q does not give the sweeps and their longest interval", v.Reason)
 			}
 		})
 	}

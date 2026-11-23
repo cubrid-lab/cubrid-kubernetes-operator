@@ -970,25 +970,37 @@ func s07BlockedReasons(rec *s07Record) []string {
 // after the closure, the cluster settled, the data check read every member
 // and the health window was read); that the run saw the managed read-write
 // path closed (every -rw Broker Pod gone and no -rw endpoint) and new
-// connections stopped; that in every sweep from the fault's issue on, while
-// the cut held and after, every member but the cut-off master answered with
-// a role and none as an active master, with at least one sweep while the cut
-// held; and that the cluster settled on that master. judgeS07 calls it only
-// when no never-event and no broken expectation was found.
-func s07NoPromotion(rec *s07Record, blocked []string) string {
+// connections stopped; that every limit of the run is set and the cut was
+// held at least partition_duration, so that a baseline or a hold cut short is
+// never marked; that in every sweep from the fault's issue on, while the cut
+// held and after, every member but the cut-off master answered as a slave
+// (an unread role, or one CUBRID reports as neither master nor slave, shows
+// nothing), with at least one sweep while the cut held; and that the cluster
+// settled on that master. The sweeps are samples: the reason gives how many
+// there were and the longest interval between two of them, within which a
+// promotion that was undone again would not have been seen. judgeS07 calls
+// it only when no never-event and no broken expectation was found.
+func s07NoPromotion(rec *s07Record, blocked []string, limits s07Limits) string {
 	if rec.Variant != s07MasterIsolated || rec.Target.Pod != rec.Master ||
 		!slices.Equal(blocked, []string{s07NoTrigger}) || s07PathClosedAt(rec) == nil ||
 		rec.NewConnectionsStoppedAt == nil || rec.FaultIssuedAt == nil ||
-		rec.Session.AcknowledgedAfterClosed != 0 || rec.FinalMaster != rec.Master {
+		rec.Session.AcknowledgedAfterClosed != 0 || rec.FinalMaster != rec.Master ||
+		limits.Quarantine <= 0 || limits.Partition <= 0 ||
+		rec.HoldEndedAt.Sub(*rec.FaultConfirmedAt) < limits.Partition {
 		return ""
 	}
 	whileCut, seen := 0, 0
 	var members []string
+	var last time.Time
+	var widest time.Duration
 	for _, sweep := range rec.Sweeps {
 		if sweep.T.Before(*rec.FaultIssuedAt) {
 			continue
 		}
-		seen++
+		if seen > 0 {
+			widest = max(widest, sweep.T.Sub(last))
+		}
+		seen, last = seen+1, sweep.T
 		names := slices.Sorted(maps.Keys(sweep.Roles))
 		if members == nil {
 			members = names
@@ -997,7 +1009,7 @@ func s07NoPromotion(rec *s07Record, blocked []string) string {
 			return ""
 		}
 		for _, m := range names {
-			if role := sweep.Roles[m]; m != rec.Master && (role == s07ActiveMaster || role == s07Unread) {
+			if m != rec.Master && sweep.Roles[m] != s07Slave {
 				return ""
 			}
 		}
@@ -1008,9 +1020,11 @@ func s07NoPromotion(rec *s07Record, blocked []string) string {
 	if whileCut == 0 {
 		return ""
 	}
-	return fmt.Sprintf("; CUBRID promoted no member: %s stayed the only member that answered as an active master "+
-		"in all %d sweep(s) from the fault on, the cluster settled on it, the managed -rw path was seen closed and "+
-		"no write was acknowledged after the closure. This is no failover pass", rec.Master, seen)
+	return fmt.Sprintf("; CUBRID promoted no member: %s stayed the only member that answered as an active master, "+
+		"every other member answering as a slave, in all %d sweep(s) from the fault on (%d while the cut held for "+
+		"%s; at most %s between two sweeps), the cluster settled on it, the managed -rw path was seen closed and no "+
+		"write was acknowledged after the closure. This is no failover pass", rec.Master, seen, whileCut,
+		rec.HoldEndedAt.Sub(*rec.FaultConfirmedAt).Round(time.Millisecond), widest.Round(time.Millisecond))
 }
 
 // judgeS07 judges what an S07 run recorded once its steps ended. A
@@ -1035,7 +1049,7 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 	}
 	if blocked := s07BlockedReasons(rec); len(blocked) > 0 {
 		v.Result, v.Reason = evidence.Blocked, blocked[0]+s07ReleaseNote(rec)
-		if note := s07NoPromotion(rec, blocked); note != "" {
+		if note := s07NoPromotion(rec, blocked, limits); note != "" {
 			v.NoPromotion, v.Reason = true, v.Reason+note
 		}
 		return v

@@ -756,7 +756,7 @@ func (h *haRun) finishS04(ctx context.Context, rec *s04Record, result *evidence.
 	// reason names first, so a failover_limit overrun is recorded as the
 	// only cause only when all the others held.
 	exceeded := s04TimeLimitOnly(s04ClientsJudged{notAcked: notAcked, interrupted: interrupted, notBack: notBack,
-		slowest: slowest.Round(time.Millisecond), shortest: shortest.Round(time.Millisecond)}, result.NeverEvents,
+		slowest: slowest, shortest: shortest}, result.NeverEvents,
 		h.cfg.FailoverLimit, h.cfg.StablePeriod)
 	switch {
 	case len(notAcked) > 0:

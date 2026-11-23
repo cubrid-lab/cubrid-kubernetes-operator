@@ -2038,6 +2038,10 @@ func TestS04TimeLimitOnly(t *testing.T) {
 			slowest: late.slowest, notBack: []string{"s04a"}}, nil, nil},
 		"stable_period not reached beside the overrun": {s04ClientsJudged{slowest: late.slowest,
 			shortest: 5 * time.Second}, nil, nil},
+		// The durations are compared as measured: one that would round up
+		// to stable_period has not reached it.
+		"stable_period missed by less than a millisecond": {s04ClientsJudged{slowest: late.slowest,
+			shortest: 29999600 * time.Microsecond}, nil, nil},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -1891,7 +1891,7 @@ or its cleanup as succeeded (for S04, the end of the fence or of the
 clients).
 
 `timeLimitOnly: true`, with `exceededLimits` naming each exceeded limit and
-what was measured (`"failover_limit": "48.017s > 30s"`), is set on a `fail`
+what was measured, unrounded (`"failover_limit": "48.017s > 30s"`), is set on a `fail`
 only when time limits alone caused it:
 
 - **S04 `power-off`:** step 9 above judged every client after the data
@@ -1912,7 +1912,10 @@ only when time limits alone caused it:
   and is never marked.
 
 `noPromotion: true` is set on a `blocked` S07 `master-isolated` result only
-when all of these hold: no never-event and no broken expectation; the only
+when all of these hold: `-quarantine-limit` and `-partition-duration` are
+set and the cut was held at least `partition_duration` (a baseline run or a
+hold cut short is never marked); no never-event and no broken expectation;
+the only
 blocking observation is that no sweep pair showed a quarantine trigger, so
 the cut was confirmed and held, the established session's history shows
 the session, the cluster settled, the data check read every member and the
@@ -1921,10 +1924,14 @@ endpoint, and new connections stopped (measured from the cut's issue when no
 trigger was seen); no write was acknowledged on the established session
 after that closure, and none through a new connection; and in every sweep
 from the cut's issue on, while the cut held and after it, every member but
-the cut-off master answered with a role and none as an active master, with
-at least one sweep while the cut held, and the cluster settled on that
-master. The reason then adds that CUBRID promoted no member and that this
-is no failover pass. A run that misses any of these stays an ordinary
+the cut-off master answered as a slave (an unread role, or one CUBRID
+reports as neither master nor slave, refuses the marker), with at least one
+sweep while the cut held, and the cluster settled on that master. The
+sweeps are samples, so the reason gives their number, how many were made
+while the cut held, the hold and the longest interval between two sweeps: a
+promotion undone within such an interval would not have been seen. The
+reason then adds that CUBRID promoted no member and that this is no
+failover pass. A run that misses any of these stays an ordinary
 `blocked` result.
 
 ### First lab runs

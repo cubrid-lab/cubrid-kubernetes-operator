@@ -50,8 +50,20 @@ const (
 	// the managed -rw path was observed closed.
 	afterPathClosed = "establishedAcknowledgedAfterPathClosed"
 	finalMaster     = "finalMaster"
+	membersDiverged = "membersDiverged"
 	// masterIsolatedKey is the only result that may record no promotion.
 	masterIsolatedKey = "installed-ha-network-partition-master-isolated"
+	gracefulKey       = "ha-primary-pod-recovery-graceful"
+	powerOffKey       = "installed-ha-primary-vm-failure-power-off"
+	higherRankKey     = "installed-ha-network-partition-higher-rank-isolated"
+	slaveIsolatedKey  = "installed-ha-network-partition-slave-isolated"
+	// The time limits the runners of the must-measure results record.
+	limitFailover   = "failover_limit"
+	limitRejoin     = "rejoin_limit"
+	limitStable     = "stable_period"
+	limitPartition  = "partition_duration"
+	limitQuarantine = "quarantine_limit"
+	limitVMReturn   = "vm_return_limit"
 )
 
 // measuredRule is what a must-measure result records besides its verdict:
@@ -87,7 +99,7 @@ var measurementKinds = map[string]measureKind{
 	"quarantineSeenWithin": durationValue, "rwScaledDownWithin": durationValue, "rwPodsGoneWithin": durationValue,
 	"rwEndpointsEmptyWithin": durationValue, "newConnectionsStoppedWithin": durationValue,
 	acknowledgedMissing: countValue, "outcomeUnknown": countValue, "operationsNotAcknowledged": countValue,
-	"membersDiverged": countValue, afterPathClosed: countValue,
+	membersDiverged: countValue, afterPathClosed: countValue,
 	"establishedAcknowledgedAfterFault": countValue,
 	finalMaster:                         nameValue,
 	"newConnectionWrites":               classesValue,
@@ -97,7 +109,7 @@ var (
 	// newConnectionWrites is recorded for every S07 variant: the run reads the
 	// new-connection probes before it judges any of them.
 	s07Common = []string{"faultConfirmedWithin", "partitionHeldFor", afterPathClosed,
-		acknowledgedMissing, "membersDiverged", finalMaster, "newConnectionWrites"}
+		acknowledgedMissing, membersDiverged, finalMaster, "newConnectionWrites"}
 	// The closure of the managed -rw path is measured only where the variant
 	// quarantines; the slave-isolated control case must not.
 	s07Closure = []string{"rwScaledDownWithin", "quarantineSeenWithin", "rwPodsGoneWithin",
@@ -111,7 +123,7 @@ var (
 // must-measure result without a rule here is No-Go: what it must record has
 // not been decided.
 var v01Measured = map[string]measuredRule{
-	"ha-primary-pod-recovery-graceful": {
+	gracefulKey: {
 		measured: []string{"recoveryTime", "stableFor", acknowledgedMissing, "outcomeUnknown",
 			"primaryUnresolvedFor", "routingNotReadyFor"},
 		zero: []string{acknowledgedMissing},
@@ -119,16 +131,16 @@ var v01Measured = map[string]measuredRule{
 	// A passed S04 run has recorded each of these: the pass needs the node
 	// back, every client acknowledged after the taint and after the return,
 	// and the stable period reached.
-	"installed-ha-primary-vm-failure-power-off": {
+	powerOffKey: {
 		measured: []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
 			"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "shortestStableFor",
 			finalMaster, "operationsNotAcknowledged"},
 	},
 	masterIsolatedKey: {
 		measured: slices.Concat(s07Common, s07Closure), zero: s07Safety},
-	"installed-ha-network-partition-higher-rank-isolated": {
+	higherRankKey: {
 		measured: slices.Concat(s07Common, s07Closure), zero: s07Safety},
-	"installed-ha-network-partition-slave-isolated": {
+	slaveIsolatedKey: {
 		measured: append(slices.Clone(s07Common), "establishedAcknowledgedAfterFault"), zero: s07Safety},
 }
 
@@ -555,12 +567,90 @@ func disclosedProblem(result evidence.RecordedResult) string {
 	case sc.TimeLimitOnly && len(sc.ExceededLimits) == 0:
 		return "marked as caused by a time limit, but names no exceeded limit"
 	}
-	for _, name := range slices.Sorted(maps.Keys(sc.ExceededLimits)) {
-		if d, err := time.ParseDuration(sc.Limits[name]); err != nil || d <= 0 {
-			return name + " is not a set limit of the result"
+	// A baseline (a limit unset or not recorded) proves no bound, so neither
+	// marker counts.
+	for _, name := range markedLimits[result.Key] {
+		if _, ok := sc.Limits[name]; !ok {
+			return "limit " + name + " is not recorded: a baseline run is not a disclosed measurement"
 		}
 	}
-	return measuredProblem(result)
+	for _, name := range slices.Sorted(maps.Keys(sc.Limits)) {
+		if d, err := time.ParseDuration(sc.Limits[name]); err != nil || d <= 0 {
+			return fmt.Sprintf("limit %s is %q, not a set duration: a baseline run is not a disclosed measurement",
+				name, sc.Limits[name])
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(sc.ExceededLimits)) {
+		if reason := exceededProblem(result.Key, name, sc.ExceededLimits[name], sc.Limits[name]); reason != "" {
+			return reason
+		}
+	}
+	if reason := measuredProblem(result); reason != "" {
+		return reason
+	}
+	// The data rules are checked here too, not left to the runner's marker.
+	for _, name := range disclosedZero[result.Key] {
+		if value := sc.Measurements[name]; !isZero(value) {
+			return fmt.Sprintf("%s is %v, not 0", name, value)
+		}
+	}
+	return ""
+}
+
+// markedLimits are the limits each runner records for a must-measure
+// result; a marked record must record every one of them with a value.
+var markedLimits = map[string][]string{
+	gracefulKey:       {limitFailover, limitRejoin, limitStable},
+	powerOffKey:       {limitFailover, limitStable, limitVMReturn},
+	masterIsolatedKey: {limitPartition, limitQuarantine},
+	higherRankKey:     {limitPartition, limitQuarantine},
+	slaveIsolatedKey:  {limitPartition, limitQuarantine},
+}
+
+// exceededLimits are, for each must-measure result, the limits whose
+// overrun alone may make its fail a disclosed measurement: limits a
+// measurement must not exceed. A limit a measurement must reach
+// (stable_period, partition_duration) is never one of them.
+var exceededLimits = map[string][]string{
+	gracefulKey:       {limitFailover, limitRejoin},
+	powerOffKey:       {limitFailover},
+	masterIsolatedKey: {limitQuarantine},
+	higherRankKey:     {limitQuarantine},
+	slaveIsolatedKey:  {limitQuarantine},
+}
+
+// disclosedZero are the data counts that must be 0 on a disclosed
+// measurement, beyond the safety counts of its v01Measured rule: no
+// acknowledged write missing and, for S07, no rows that differ between
+// members.
+var disclosedZero = map[string][]string{
+	powerOffKey:       {acknowledgedMissing},
+	masterIsolatedKey: {acknowledgedMissing, membersDiverged},
+	higherRankKey:     {acknowledgedMissing, membersDiverged},
+	slaveIsolatedKey:  {acknowledgedMissing, membersDiverged},
+}
+
+// exceededProblem is why one exceededLimits entry of a result does not show
+// an overrun, or "": the name must be a must-not-exceed limit of the result,
+// the entry must read "<measured> > <limit>" with two durations, the limit
+// must be the one the result records, and the measured value must exceed it.
+func exceededProblem(key, name, entry, recorded string) string {
+	if !slices.Contains(exceededLimits[key], name) {
+		return name + " is not a limit whose overrun alone this result may disclose"
+	}
+	measuredText, limitText, ok := strings.Cut(entry, " > ")
+	measured, errMeasured := time.ParseDuration(measuredText)
+	limit, errLimit := time.ParseDuration(limitText)
+	want, errRecorded := time.ParseDuration(recorded)
+	switch {
+	case !ok || errMeasured != nil || errLimit != nil:
+		return fmt.Sprintf("exceeded %s %q does not read as a measured duration over the limit", name, entry)
+	case errRecorded != nil || limit != want:
+		return fmt.Sprintf("exceeded %s %q names another limit than the recorded %s", name, entry, recorded)
+	case measured <= limit:
+		return fmt.Sprintf("exceeded %s %q does not exceed the limit", name, entry)
+	}
+	return ""
 }
 
 // measuredProblem is why a passed must-measure result does not qualify, or "".

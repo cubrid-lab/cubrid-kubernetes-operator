@@ -289,22 +289,31 @@ meaning; only the candidate verifier's v0.1 disposition changes:
   limit a measurement must not exceed was exceeded. A check that could not
   run after a time overrun, a limit not set or not measured, or a limit a
   measurement must reach (`stable_period`, `partition_duration`) leaves
-  the field out, and the `fail` stays No-Go. The verifier also requires the
-  variant's measurements and safety rules: no acknowledged write after
-  proven closure for S07, no missing acknowledged write for S03
-  `graceful`. Must-pass variants are unchanged: a timing `fail` there is
-  No-Go.
+  the field out, and the `fail` stays No-Go. The verifier does not rely on
+  the field alone: every limit the runner records must be set, each
+  `exceededLimits` entry must be a must-not-exceed limit of the variant
+  whose measured value exceeds the recorded limit, and the variant's
+  measurements and data rules must hold (no acknowledged write after
+  proven closure and no rows differing between members for S07, no missing
+  acknowledged write for S03 `graceful`, S04 and S07). Must-pass variants
+  are unchanged: a timing `fail` there is No-Go.
 - An S07 `master-isolated` run that ends `blocked` because no quarantine
   trigger was seen, and in which CUBRID promoted no member, is **measured
   and disclosed — no promotion**, Go for the candidate, only when its
-  runner recorded `noPromotion`: the fault was confirmed and held, the
+  runner recorded `noPromotion`: `quarantine_limit` and
+  `partition_duration` were set (a baseline run is never marked), the
+  fault was confirmed and held for at least `partition_duration`, the
   managed `-rw` path was proven closed (every Broker Pod gone, no endpoint,
   new connections stopped), no write was acknowledged after the closure,
-  every other safety rule held and every other observation was made, and
-  in every sweep from the fault on no member but the cut-off master
-  answered as an active master and the cluster settled on it. The record
-  says that no promotion happened. It is not a pass of failover. Any
-  missing proof keeps it No-Go.
+  every other safety rule held and every other observation was made, in
+  every sweep from the fault on every member but the cut-off master
+  answered as a slave (an unread role or one CUBRID reports as neither
+  refuses the marker), and the cluster settled on that master. The sweeps
+  are samples: the record gives their number and the longest interval
+  between two of them. The verifier again requires every limit set, no
+  acknowledged write missing and no rows differing between members. The
+  record says that no promotion happened. It is not a pass of failover.
+  Any missing proof keeps it No-Go.
 
 **Existing tools need alignment before candidate acceptance:** the Kind
 and installed-HA runners currently encode the previous limits and S03's

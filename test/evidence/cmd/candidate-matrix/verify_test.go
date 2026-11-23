@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,8 +42,6 @@ const (
 	overallGo          = "Overall v0.1 verdict: AUTOMATED CHECKS GO — manual gates pending"
 	overallNoGo        = "Overall v0.1 verdict: NO-GO"
 	overallReview      = "Overall v0.1 verdict: REVIEW REQUIRED"
-	gracefulKey        = "ha-primary-pod-recovery-graceful"
-	powerOffKey        = "installed-ha-primary-vm-failure-power-off"
 	oneBrokerPodKey    = "broker-failure-recovery-one-pod"
 	restoreExact       = "installed-restore-new-cluster-exact"
 	rebuildKey         = "ha-pvc-loss-rebuild"
@@ -431,7 +430,7 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 			scenarioOf(runs, kindRunID, "S03/graceful").Measurements[acknowledgedMissing] = "0"
 		}, passedButNoGo, "acknowledgedMissing is not measured"},
 		{"count recorded as a boolean", masterIsolatedKey, func(runs []evidence.Summary) {
-			scenarioOf(runs, vmRunID, "S07/master-isolated").Measurements["membersDiverged"] = false
+			scenarioOf(runs, vmRunID, "S07/master-isolated").Measurements[membersDiverged] = false
 		}, passedButNoGo, "membersDiverged is not measured"},
 		{"no new-connection writes", masterIsolatedKey, func(runs []evidence.Summary) {
 			scenarioOf(runs, vmRunID, "S07/master-isolated").Measurements["newConnectionWrites"] = map[string]any{}
@@ -471,20 +470,38 @@ const (
 	failoverLimit     = "failover_limit"
 	quarantineLimit   = "quarantine_limit"
 	notQualified      = "not qualified"
+	unsetLimit        = "unset"
+	thirtySeconds     = "30s"
 	faultUnconfirmed  = "the fault is not recorded as confirmed"
 	failDisclosed     = "| FAIL | FAIL | MEASURED, DISCLOSED |"
 )
 
+// recordedLimits are the limits each runner records, set as a judged run
+// sets them.
+var recordedLimits = map[string]map[string]string{
+	s03Graceful:       {failoverLimit: thirtySeconds, limitRejoin: "5m0s", limitStable: thirtySeconds},
+	s04PowerOff:       {failoverLimit: thirtySeconds, limitStable: thirtySeconds, limitVMReturn: "10m0s"},
+	s07MasterIsolated: {quarantineLimit: thirtySeconds, limitPartition: "2m0s"},
+}
+
 // timeLimitOnly records a result as a fail caused by the one limit alone,
-// as the runners record it: the limit set, the cleanup succeeded, and the
-// run not passed with the result's problem line.
+// as the runners record it: every limit set, the cleanup succeeded, no
+// acknowledged write missing, and the run not passed with the result's
+// problem line.
 func timeLimitOnly(runID, name, limit, value, exceeded string) func([]evidence.Summary) {
 	return func(runs []evidence.Summary) {
 		sc := scenarioOf(runs, runID, name)
 		setResult(sc, evidence.Fail, limit+" exceeded: "+exceeded)
 		succeeded := true
 		sc.CleanupSucceeded = &succeeded
-		sc.Limits = map[string]string{limit: value}
+		sc.Limits = maps.Clone(recordedLimits[name])
+		if sc.Limits == nil {
+			sc.Limits = map[string]string{}
+		}
+		sc.Limits[limit] = value
+		if _, ok := sc.Measurements[acknowledgedMissing]; !ok && sc.Measurements != nil {
+			sc.Measurements[acknowledgedMissing] = 0
+		}
 		sc.TimeLimitOnly, sc.ExceededLimits = true, map[string]string{limit: exceeded}
 		failRun(runs, runID, name+": fail: "+sc.Reason)
 	}
@@ -498,6 +515,7 @@ func noPromotion(runs []evidence.Summary) {
 		"CUBRID promoted no member")
 	succeeded := true
 	sc.CleanupSucceeded = &succeeded
+	sc.Limits = maps.Clone(recordedLimits[s07MasterIsolated])
 	sc.NoPromotion = true
 	failRun(runs, vmRunID, s07MasterIsolated+": blocked: "+sc.Reason)
 }
@@ -611,11 +629,51 @@ func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
 			sc.ExceededLimits = nil
 		})), "names no exceeded limit"},
 		{"an exceeded limit the result was not judged by", gracefulKey, then(gracefulLate,
-			graceful(func(sc *evidence.Scenario) { sc.Limits = map[string]string{"rejoin_limit": "5m0s"} })),
-			"failover_limit is not a set limit of the result"},
+			graceful(func(sc *evidence.Scenario) { delete(sc.Limits, failoverLimit) })),
+			"limit failover_limit is not recorded"},
 		{"an exceeded limit recorded unset", gracefulKey, then(gracefulLate,
-			graceful(func(sc *evidence.Scenario) { sc.Limits[failoverLimit] = "unset" })),
-			"failover_limit is not a set limit of the result"},
+			graceful(func(sc *evidence.Scenario) { sc.Limits[failoverLimit] = unsetLimit })),
+			`limit failover_limit is "unset"`},
+		{"another limit unset beside the exceeded one", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.Limits[limitRejoin] = unsetLimit })),
+			`limit rejoin_limit is "unset"`},
+		{"an overrun that does not exceed the limit", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.ExceededLimits[failoverLimit] = "1s > 30s" })),
+			"does not exceed the limit"},
+		{"an overrun that does not read as durations", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.ExceededLimits[failoverLimit] = "late" })),
+			"does not read as a measured duration"},
+		{"an overrun of another limit value than the recorded one", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.ExceededLimits[failoverLimit] = "41.2s > 10s" })),
+			"names another limit than the recorded"},
+		{"an overrun of a limit that must be reached", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.ExceededLimits[limitStable] = "45s > 30s" })),
+			"stable_period is not a limit whose overrun alone"},
+		{"an overrun of an unknown limit", gracefulKey, then(gracefulLate,
+			graceful(func(sc *evidence.Scenario) { sc.ExceededLimits["made_up_limit"] = "2s > 1s" })),
+			"made_up_limit is not a limit whose overrun alone"},
+		{"VM power loss with an acknowledged write lost", powerOffKey, then(
+			timeLimitOnly(powerOffRunID, s04PowerOff, failoverLimit, "30s", "48.017s > 30s"),
+			func(runs []evidence.Summary) {
+				scenarioOf(runs, powerOffRunID, s04PowerOff).Measurements[acknowledgedMissing] = 3
+			}), "acknowledgedMissing is 3, not 0"},
+		{"VM power loss without the data check's count", powerOffKey, then(
+			timeLimitOnly(powerOffRunID, s04PowerOff, failoverLimit, "30s", "48.017s > 30s"),
+			func(runs []evidence.Summary) {
+				scenarioOf(runs, powerOffRunID, s04PowerOff).Measurements[acknowledgedMissing] = evidence.Unknown
+			}), "acknowledgedMissing is unknown, not 0"},
+		{"a partition overrun with rows that differ between members", masterIsolatedKey, then(partitionLate,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements[membersDiverged] = 2 })),
+			"membersDiverged is 2, not 0"},
+		{"no promotion in a baseline run with every limit unset", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) {
+				sc.Limits = map[string]string{quarantineLimit: unsetLimit, limitPartition: unsetLimit}
+			})), "a baseline run is not a disclosed measurement"},
+		{"no promotion without its limits recorded", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Limits = nil })), "is not recorded"},
+		{"no promotion with rows that differ between members", masterIsolatedKey, then(noPromotion,
+			isolated(func(sc *evidence.Scenario) { sc.Measurements[membersDiverged] = 2 })),
+			"membersDiverged is 2, not 0"},
 		{"the time-limit-only field on a pass", gracefulKey, graceful(func(sc *evidence.Scenario) {
 			sc.TimeLimitOnly, sc.ExceededLimits = true, map[string]string{failoverLimit: "41.2s > 30s"}
 		}), "marked as caused by a time limit, but recorded pass"},
@@ -642,7 +700,7 @@ func TestVerifierRefusesDisclosedMeasurementsWithoutTheirProof(t *testing.T) {
 		{"both markers", masterIsolatedKey, then(partitionLate, isolated(func(sc *evidence.Scenario) {
 			sc.NoPromotion = true
 		})), "both"},
-		{"no promotion on another variant", "installed-ha-network-partition-higher-rank-isolated",
+		{"no promotion on another variant", higherRankKey,
 			func(runs []evidence.Summary) {
 				sc := scenarioOf(runs, vmRunID, "S07/higher-rank-isolated")
 				setResult(sc, evidence.Blocked, "no sweep pair showed a quarantine trigger")

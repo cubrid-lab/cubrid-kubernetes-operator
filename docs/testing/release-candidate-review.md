@@ -190,8 +190,14 @@ into the bundles. The rules, failing closed:
   candidate (decision 2 on #126, 2026-11-23 UTC). It qualifies only when
   the raw and judged verdicts are `fail`, the fault is recorded as
   confirmed, the cleanup is recorded as succeeded, no never-event is
-  recorded, every exceeded limit is a set limit of the result, and every
-  measurement and safety rule of the item above holds. The report shows
+  recorded, every limit the runner records for the variant is recorded
+  with a set duration (a baseline run never qualifies), each
+  `exceededLimits` entry names a must-not-exceed limit of the variant
+  (`failover_limit` or `rejoin_limit` for S03 `graceful`, `failover_limit`
+  for S04, `quarantine_limit` for S07) and reads `<measured> > <limit>`
+  with the recorded limit and a measured value over it, every measurement
+  and safety rule of the item above holds, and no acknowledged write is
+  missing (S04 and S07) and no rows differ between members (S07). The report shows
   each exceeded limit with its measured value. Without the field, or with
   any of these missing, the raw `fail` is No-Go. A must-pass record with
   the field stays No-Go.
@@ -199,8 +205,10 @@ into the bundles. The rules, failing closed:
   end of a run in which CUBRID promoted no member (`noPromotion: true`) is
   **MEASURED, DISCLOSED — no promotion** and counts as Go for the candidate
   (decision 3 on #126). It qualifies only with a raw and judged `blocked`,
-  a confirmed fault, a succeeded cleanup, no never-event, the managed
-  `-rw` path's closure measured and no acknowledged write after it, and
+  a confirmed fault, a succeeded cleanup, no never-event, `quarantine_limit`
+  and `partition_duration` recorded with set durations, the managed `-rw`
+  path's closure measured and no acknowledged write after it, no
+  acknowledged write missing, no rows differing between members, and
   every other measurement of the item above. The report says it is not a
   failover pass. The marker on another variant or result, both markers on
   one record, or any missing proof is No-Go. When the runners set the two
