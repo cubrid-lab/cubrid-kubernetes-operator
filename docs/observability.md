@@ -1460,16 +1460,25 @@ NS="<namespace>"
 # Record the UID of the claim you checked.
 CLAIM_UID="$(kubectl -n "$NS" get pvc data-<member> -o jsonpath='{.metadata.uid}')"
 # ... check that nothing on this claim is needed ...
-# Delete the claim only while it is still that claim, and do not wait: it stays
-# until its Pod is gone. Delete the Pod only after that. The StatefulSet then
-# creates an empty claim and a new Pod. Nothing is deleted if the check fails.
-if [ -n "${CLAIM_UID}" ] && [ "$(kubectl -n "$NS" get pvc data-<member> -o jsonpath='{.metadata.uid}')" = "${CLAIM_UID}" ]; then
-  kubectl -n "$NS" delete pvc data-<member> --wait=false &&
+# Delete the claim only while it is still that claim. The API server enforces
+# the UID in the delete request itself and refuses it with 409 Conflict if the
+# claim now has another UID, so a claim that replaced it after the check is
+# never deleted. Do not wait: the claim stays until its Pod is gone. Delete
+# the Pod only after that. The StatefulSet then creates an empty claim and a
+# new Pod. If the claim delete is refused, the Pod is not deleted.
+if [ -n "${CLAIM_UID}" ]; then
+  printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "${CLAIM_UID}" |
+    kubectl delete --raw "/api/v1/namespaces/${NS}/persistentvolumeclaims/data-<member>" -f - &&
     kubectl -n "$NS" delete pod <member> --timeout=5m
 else
-  echo "data-<member> is not the claim you checked; nothing was deleted" >&2
+  echo "Could not read the UID of data-<member>; nothing was deleted" >&2
 fi
 ```
+
+`kubectl delete --raw` prints the API server's reply and does not wait.
+A claim with a finalizer, such as the built-in `kubernetes.io/pvc-protection`
+that holds a claim while a Pod uses it, therefore shows a `deletionTimestamp`
+and stays `Terminating` until the Pod is deleted.
 
 **The order matters, and the delete is permanent.** If the Pod is deleted
 first, the StatefulSet recreates it on the old claim and the claim's deletion

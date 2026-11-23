@@ -53,11 +53,14 @@ On it, **a kept claim is the only thing keeping the data**.
 
 2. Delete a claim by name, in its namespace, and only while its UID is still
    the recorded one. A claim with the same name but another UID belongs to a
-   newer cluster:
+   newer cluster. Put the recorded UID in the delete request itself, so that
+   the API server refuses it with 409 Conflict if the claim has another UID,
+   even when the claim was replaced a moment ago:
 
    ```sh
-   [ "$(kubectl -n "$NS" get pvc "$NAME" -o jsonpath='{.metadata.uid}')" = "$UID" ] \
-     && kubectl -n "$NS" delete pvc "$NAME"
+   CLAIM_UID="<the UID you recorded>"
+   printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "${CLAIM_UID}" |
+     kubectl delete --raw "/api/v1/namespaces/${NS}/persistentvolumeclaims/${NAME}" -f -
    ```
 
 3. Do it only after the data is known not to be needed, or after a backup of
