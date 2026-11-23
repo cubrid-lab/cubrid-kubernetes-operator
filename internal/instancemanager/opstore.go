@@ -475,7 +475,8 @@ func (s *OperationStore) pruneLocked(ops []*Operation, now time.Time) {
 	for _, op := range ops {
 		if now.Before(op.UpdatedAt) {
 			s.logPruneSkipped(fmt.Errorf("the clock (%s) is before the last change of operation %s (%s)",
-				now.Format(time.RFC3339), op.ID, op.UpdatedAt.Format(time.RFC3339)))
+				now.Format(time.RFC3339), op.ID, op.UpdatedAt.Format(time.RFC3339)),
+				"operationID", op.ID, "updatedAt", op.UpdatedAt.Format(time.RFC3339))
 			return
 		}
 	}
@@ -527,13 +528,14 @@ func (s *OperationStore) pruneLocked(ops []*Operation, now time.Time) {
 	}
 }
 
-// logPruneSkipped records why expired records were kept for now.
-func (s *OperationStore) logPruneSkipped(err error) {
+// logPruneSkipped records why expired records were kept for now, with
+// attrs naming the record that stopped the pruning, when one did.
+func (s *OperationStore) logPruneSkipped(err error, attrs ...any) {
 	if s.logger == nil {
 		return
 	}
-	s.logger.Warn("Kept expired operation records; the next request tries again", "event", eventPruneSkipped,
-		"err", err.Error())
+	s.logger.With(attrs...).Warn("Kept expired operation records; the next request tries again",
+		"event", eventPruneSkipped, "err", err.Error())
 }
 
 // reasonRestarted is the failure reason of an operation that was running

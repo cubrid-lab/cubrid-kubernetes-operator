@@ -17,7 +17,9 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -498,9 +500,12 @@ func TestOperationStore_OwnKeyPastTheHorizonIsAnsweredAndTheBoundaryIsKept(t *te
 }
 
 // A clock that is before the last change of a record went back: ages are
-// not known, and nothing is pruned.
+// not known, and nothing is pruned. The warning names the record whose time
+// is ahead of the clock.
 func TestOperationStore_PrunesNothingWhenTheClockWentBack(t *testing.T) {
 	s, dir := newStore(t)
+	var logged bytes.Buffer
+	s.SetLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
 	s.SetReferenced(noReferences)
 	openedLongAgo(s)
 	now := time.Now().UTC()
@@ -521,6 +526,11 @@ func TestOperationStore_PrunesNothingWhenTheClockWentBack(t *testing.T) {
 	prune(t, s)
 	if !recordExists(t, dir, old.ID) || !recordExists(t, dir, later.ID) {
 		t.Error("pruned although the clock is before the last change of a record")
+	}
+	for _, want := range []string{`"event":"operation_store_prune_skipped"`, `"operationID":"` + later.ID + `"`, `"updatedAt":`} {
+		if !bytes.Contains(logged.Bytes(), []byte(want)) {
+			t.Errorf("the warning lacks %s: %s", want, logged.String())
+		}
 	}
 	now = now.Add(2 * time.Hour)
 	prune(t, s)

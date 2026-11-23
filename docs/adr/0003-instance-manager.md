@@ -437,7 +437,16 @@ that jumps forward is not detected; it shortens the horizon by the size of
 the jump. Each record is removed with one unlink followed by a directory
 sync, so a crash leaves every record whole or absent. Every start request
 still reads every record, so that a record damaged on disk keeps blocking
-admission (#427); the horizon bounds how many there are.
+admission (#427).
+
+Counting a restart as a read of every record is a deliberate trade-off: reads
+by the Operator before a restart are not recorded on disk, and assuming none
+happened could remove a record the Operator still polls. Its cost is that the
+store is bounded only while the manager stays up for at least one horizon. A
+manager restarted at least every 30 days, by rolling upgrades, node
+maintenance or a crash loop, never prunes, and its store grows as before. Keeping the
+last-read times on disk, so that a restart does not reset them, would remove
+that cost and is a possible later improvement.
 
 A request is checked before anything is done for it (#301). A body larger
 than 16 KiB is answered with 413 without being read to its end. `POST

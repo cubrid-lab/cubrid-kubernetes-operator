@@ -1149,7 +1149,21 @@ backup, restore or HA bootstrap and answers each start `500` with the code
 markers cannot be read, the clock is earlier than the last change of a
 record, or a removal fails, nothing more is removed and a
 warning with `event` `operation_store_prune_skipped` gives the error; the next
-start request tries again (ADR-0003, #369). The operator reports that start
+start request tries again (ADR-0003, #369). A restart counts as a read of
+every record, so a manager that restarts at least every 30 days removes
+nothing and its store keeps growing; this is deliberate, because reads before
+a restart are not known.
+
+A record whose `updatedAt` lies in the future, for example one written while
+the node's clock was ahead, stops all pruning until the clock passes it. Each
+start request then logs `operation_store_prune_skipped` with that record's
+`operationID` and `updatedAt`, and an `err` that starts with `the clock (...)
+is before the last change of operation`. This fails safe: records are kept,
+never removed early, and requests are answered as usual. Check the node's
+clock first; if it is right, the record's time is wrong, and pruning resumes
+by itself once the clock passes it. A person may also remove that record by
+hand once its operation is confirmed not to run and nothing polls it (see the
+runbook below for checking a record's operation). The operator reports that start
 as `InstanceManagerOperationRecordUnreadable` (#481): on `BootstrapReady` it
 waits without using up an attempt; a `CubridBackup` waits within the
 recorded-target bound like any member that cannot be asked (ADR-0007). The
