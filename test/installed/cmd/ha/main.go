@@ -19,7 +19,8 @@ limitations under the License.
 // and the data rules on every member and both Services, and with
 // -fault operator-restart S06 restart after it, or with -backup-bucket S11
 // complete, and with -restore also S12 exact, followed by S12 tampered,
-// wrong-target, operator-restart or instance-manager-restart when selected
+// wrong-target, operator-restart or instance-manager-restart when selected,
+// or with -soak-duration a soak with data checks at intervals
 // (docs/testing/installed-ha.md).
 package main
 
@@ -259,6 +260,13 @@ func run(ctx context.Context, args []string) (runErr error) {
 			" (the restore's target, once restoredb is seen) or "+installed.GracefulStopAtSeeding+" (the first "+
 			"member being seeded, once restoreslave is seen); a value other than "+installed.GracefulStopAtRestoring+
 			" needs -restore-graceful-stop")
+	flags.DurationVar(&cfg.SoakDuration, "soak-duration", 0,
+		"scenario after LAB01: a soak of this length on the same cluster with no fault, two clients writing "+
+			"and reading through the read-write Service while the data rules are applied to every member and "+
+			"both Services every -soak-check-every and once more after the clients stopped; no default, it must "+
+			"be positive and fit -timeout with the soak's own steps; not with -fault or -backup-bucket")
+	flags.DurationVar(&cfg.SoakCheckEvery, "soak-check-every", 30*time.Minute,
+		"soak: the time between two checks of the data rules, at most -soak-duration; needs -soak-duration")
 	flags.StringVar(&check, "check", "",
 		"VM-lab check to run, by its key in the scenario registry (for example installed-backup-denied-credentials), "+
 			"instead of the options -fault, -backup-<variant>, -restore, -restore-<variant> and the placements "+
@@ -298,6 +306,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 		}
 	}
 	s15FailoverLimit(&cfg, set)
+	if err := soakFlags(cfg, set); err != nil {
+		return err
+	}
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
 	}
@@ -347,4 +358,17 @@ func s15FailoverLimit(cfg *installed.HAConfig, set map[string]bool) {
 		!set["failover-limit"] {
 		cfg.FailoverLimit = 0
 	}
+}
+
+// soakFlags refuses a soak given a length of zero or less, which is never read
+// as no soak, and a check interval given without a soak. set holds the flags
+// given.
+func soakFlags(cfg installed.HAConfig, set map[string]bool) error {
+	if set["soak-duration"] && cfg.SoakDuration <= 0 {
+		return errors.New("-soak-duration must be positive")
+	}
+	if set["soak-check-every"] && !set["soak-duration"] {
+		return errors.New("-soak-check-every needs -soak-duration")
+	}
+	return nil
 }

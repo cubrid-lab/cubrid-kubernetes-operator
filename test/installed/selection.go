@@ -153,6 +153,7 @@ func (c HAConfig) selectedOptions() []string {
 		{"-restore-instance-manager-restart-at", c.imRestartAt() != IMRestartAtRestoring},
 		{"-restore-graceful-stop", c.RestoreGracefulStop},
 		{"-restore-graceful-stop-at", c.gracefulStopAt() != GracefulStopAtRestoring},
+		{"-soak-duration", c.SoakDuration != 0},
 	} {
 		if option.on {
 			set = append(set, option.flag)

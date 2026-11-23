@@ -558,10 +558,11 @@ func (h *haRun) startBackgroundClient(ctx context.Context, id string) error {
 }
 
 // startBackgroundClientWith starts such a client with env, variable
-// assignments ending in a space, set for it.
+// assignments ending in a space, set for it after the defaults, so that env
+// may replace OPS, INTERVAL_MS or ROLLBACK_EVERY.
 func (h *haRun) startBackgroundClientWith(ctx context.Context, id, env string) error {
 	file := "/tmp/" + id
-	if _, err := h.clientRun(ctx, fmt.Sprintf("%[3]sCLIENT_ID=%[1]s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7 "+
+	if _, err := h.clientRun(ctx, fmt.Sprintf("CLIENT_ID=%[1]s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7 %[3]s"+
 		"nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file, env)); err != nil {
 		return err
 	}

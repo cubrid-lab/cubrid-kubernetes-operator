@@ -317,6 +317,12 @@ type HAConfig struct {
 	// restoreslave runs. Each placement is a variant and a lane of its own.
 	// Another value than the default needs RestoreGracefulStop.
 	RestoreGracefulStopAt string
+	// SoakDuration selects the soak after LAB01: the background clients keep
+	// writing and reading through the read-write Service for this long, on
+	// the same cluster and with no fault, while the data rules are applied
+	// every SoakCheckEvery. Zero selects no soak. It cannot be combined with
+	// Fault or BackupBucket.
+	SoakDuration, SoakCheckEvery time.Duration
 }
 
 // privileged reports whether the run namespace must enforce Pod Security
@@ -373,6 +379,9 @@ func (c HAConfig) validate() error {
 		return err
 	}
 	if err := c.validateS12(); err != nil {
+		return err
+	}
+	if err := c.validateSoak(); err != nil {
 		return err
 	}
 	if !validMemberSpread(c.MemberSpread) {
@@ -510,6 +519,8 @@ type haRun struct {
 	// s12Expected is the history at S11's known point that S12 exact took.
 	s12, s12Tampered, s12WrongTarget, s12Restart, s12IMRestart, s12GracefulStop *evidence.Scenario
 	s12Expected                                                                 string
+	// soak is the result of the soak, once it ran.
+	soak *evidence.Scenario
 	// scenario names the scenario whose reads run now, for lostSessions, and
 	// reads counts the csql reads each scenario made.
 	scenario string
@@ -682,6 +693,14 @@ func (h *haRun) observeTarget(ctx context.Context, observed *record, env *eviden
 func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requirement, error) {
 	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
 	switch {
+	case cfg.SoakDuration > 0:
+		lane = soakLane
+		requirements = append(requirements, evidence.Requirement{ID: soakID})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then a soak: clients keep " +
+			"writing and reading through the read-write Service with no fault, and the data rules are applied " +
+			"to every member and both Services at intervals; no S00-S15 qualification"
+		summary.Notes = append(summary.Notes, "The soak's lane and result are the installed harness's own: "+
+			"the scenario registry holds neither, and no soak acceptance is defined yet")
 	case cfg.Fault != "":
 		var requirement evidence.Requirement
 		lane, requirement, summary.Notes[0] = faultLane(cfg.Fault)
@@ -814,6 +833,7 @@ func (h *haRun) recordFault(summary *evidence.Summary) {
 // settles as blocked those that did not run.
 func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 	h.recordFault(summary)
+	h.recordSoak(summary)
 	switch {
 	case h.s15 != nil:
 		summary.Record(*h.s15)
@@ -952,6 +972,12 @@ func (h *haRun) runS11Variants(ctx context.Context) error {
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
 func (h *haRun) afterLAB01(ctx context.Context) error {
 	switch {
+	case h.cfg.SoakDuration > 0:
+		soak := h.runSoak(ctx)
+		h.soak = &soak
+		if soak.Result != evidence.Pass {
+			return fmt.Errorf("%s: %s", soakID, soak.Reason)
+		}
 	case h.cfg.Fault == FaultVMPowerOff:
 		s04 := h.runS04(ctx)
 		h.s04 = &s04
@@ -1709,6 +1735,15 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time, file string) 
 // answered until the rules held.
 func (h *haRun) checkDataOf(ctx context.Context, historyText string, target dataTarget, answered time.Time,
 	file string) (*workload.Report, time.Duration, error) {
+	return h.checkFilteredDataOf(ctx, historyText, target, answered, file, nil)
+}
+
+// checkFilteredDataOf is checkDataOf with filter, when set, applied to each
+// reading of the rows before the rules are: a filter that fails is a reading
+// that could not be made.
+func (h *haRun) checkFilteredDataOf(ctx context.Context, historyText string, target dataTarget, answered time.Time,
+	file string, filter func(context.Context, map[string][]workload.Row) error) (*workload.Report, time.Duration,
+	error) {
 	history, err := workload.ReadHistory(strings.NewReader(historyText))
 	if err != nil {
 		return nil, 0, err
@@ -1726,6 +1761,9 @@ func (h *haRun) checkDataOf(ctx context.Context, historyText string, target data
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, max(h.cfg.DataCheckWithin-time.Since(answered), 0)+readSlack)
 		rows, readErr := h.readRowsOf(readCtx, target)
+		if readErr == nil && filter != nil {
+			readErr = filter(readCtx, rows)
+		}
 		cancel()
 		if readErr == nil {
 			checked := workload.Check(history, rows)
