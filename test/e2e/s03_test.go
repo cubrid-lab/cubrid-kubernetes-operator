@@ -696,6 +696,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			// From samples taken every few seconds during the wait.
 			"primaryUnresolvedFor":               unresolved.length(),
 			"routingNotReadyFor":                 notRouting.length(),
+			"quarantineReasons":                  quarantineReasons(rounds, outcome.FaultIssuedAt),
 			"acknowledgedWhilePrimaryUnresolved": acknowledgedWhileUnresolved,
 		},
 		Operations: &evidence.Operations{
@@ -712,6 +713,34 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		"S03/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", variant)
 	Expect(agreement.NotJudged).To(BeEmpty(),
 		"S03/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
+}
+
+// quarantineReasons lists, sorted and without repeats, the reasons starting
+// with WriteQuarantined that any Condition showed in the sampled reads taken
+// from the fault on. It is empty when the reads showed none, and unknown when
+// no status read was taken from the fault on: nothing was sampled then.
+// It only discloses why the Operator closed the write path; no verdict
+// depends on it.
+func quarantineReasons(rounds []conditionRound, from time.Time) any {
+	reasons := []string{}
+	sampled := false
+	for _, round := range rounds {
+		s := round.Status
+		if s == nil || s.ReadStart.Before(from) {
+			continue
+		}
+		sampled = true
+		for _, c := range s.Conditions {
+			if strings.HasPrefix(c.Reason, "WriteQuarantined") && !slices.Contains(reasons, c.Reason) {
+				reasons = append(reasons, c.Reason)
+			}
+		}
+	}
+	if !sampled {
+		return evidence.Unknown
+	}
+	slices.Sort(reasons)
+	return reasons
 }
 
 // s03Conditions applies S03's rules on the Conditions to the sampled reads of

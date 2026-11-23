@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -920,5 +921,47 @@ func TestAgreementTextGivesEachToleranceRuleItsOwnTolerance(t *testing.T) {
 	}
 	if !strings.Contains(string(text), "client operations with an outcome: 0") {
 		t.Errorf("agreement.txt does not count a client workload's operations:\n%s", text)
+	}
+}
+
+// TestQuarantineReasonsFromTheSampledReads checks the disclosure of why the
+// Operator closed the write path during a variant: no reason, one, several
+// without repeats, and reads that were not taken from the fault on.
+func TestQuarantineReasonsFromTheSampledReads(t *testing.T) {
+	start := time.Now().UTC()
+	read := func(second int, conditions map[string]string) conditionRound {
+		at := start.Add(time.Duration(second) * time.Second)
+		states := map[string]faults.ConditionState{}
+		for name, reason := range conditions {
+			states[name] = faults.ConditionState{Status: "False", Reason: reason}
+		}
+		return conditionRound{Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, Conditions: states}}
+	}
+	from := start.Add(5 * time.Second)
+	tests := map[string]struct {
+		rounds []conditionRound
+		want   any
+	}{
+		"none": {[]conditionRound{read(6, map[string]string{"RoutingReady": "Routed"})}, []string{}},
+		"one": {[]conditionRound{read(6, map[string]string{"RoutingReady": "WriteQuarantinedMasterChanged"}),
+			read(8, map[string]string{"RoutingReady": "WriteQuarantinedMasterChanged"})},
+			[]string{"WriteQuarantinedMasterChanged"}},
+		"several": {[]conditionRound{
+			read(6, map[string]string{"RoutingReady": "WriteQuarantinedMemberUnverified"}),
+			read(8, map[string]string{"WriteReady": "WriteQuarantinedMasterChanged", "RoutingReady": "Routed"})},
+			[]string{"WriteQuarantinedMasterChanged", "WriteQuarantinedMemberUnverified"}},
+		"read before the fault is ignored": {[]conditionRound{
+			read(1, map[string]string{"RoutingReady": "WriteQuarantinedMasterChanged"}),
+			read(6, map[string]string{"RoutingReady": "Routed"})}, []string{}},
+		"not sampled": {[]conditionRound{{StatusError: "no answer"},
+			read(1, map[string]string{"RoutingReady": "WriteQuarantinedMasterChanged"})}, evidence.Unknown},
+		"no rounds": {nil, evidence.Unknown},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := quarantineReasons(tc.rounds, from); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("quarantineReasons = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
