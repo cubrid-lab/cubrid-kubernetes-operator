@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -328,8 +329,10 @@ func verifyRun(c candidate, source run, dir string) verifiedRun {
 // reader found, that no result the verifier judged as not Go accounts for,
 // or "". A credential found in the evidence, a step without its label or a
 // suite deadline belongs to no result's verdict, so it blocks the run. A
-// problem line of a result starts with its legacy name and ": "; one about the
-// identity of a result without a key starts with its name and " ".
+// problem line of a result starts with its legacy name and ": ". Of the
+// evidence reader's problems, an identity message the registry writes for a
+// result without a key is accepted as well, and only in its exact form
+// (identityProblem); the runner's own problems never are.
 func unexplainedProblem(actual evidence.RecordedRun, results []verifiedResult) string {
 	s := actual.Summary
 	switch {
@@ -338,14 +341,12 @@ func unexplainedProblem(actual evidence.RecordedRun, results []verifiedResult) s
 	case !s.Passed && len(s.Problems) == 0:
 		return "the run recorded that it did not pass, with no problem listed"
 	}
-	explained := func(p string) bool {
+	explained := func(p string, reader bool) bool {
 		for _, r := range results {
-			name := r.result.Scenario.Name()
-			// The registry has no key for an unmapped or deferred result,
-			// and the reader says so; its verdict already shows that.
-			if r.result.Key == "" && strings.HasPrefix(p, name+" ") {
+			if reader && r.result.Key == "" && identityProblem(r.result, s.Environment.Level).MatchString(p) {
 				return true
 			}
+			name := r.result.Scenario.Name()
 			if r.verdict != verdictGo && r.verdict != verdictNotCounted && strings.HasPrefix(p, name+": ") {
 				return true
 			}
@@ -353,16 +354,34 @@ func unexplainedProblem(actual evidence.RecordedRun, results []verifiedResult) s
 		return false
 	}
 	for _, p := range s.Problems {
-		if !explained(p) {
+		if !explained(p, false) {
 			return "the run recorded a problem no judged result accounts for: " + p
 		}
 	}
 	for _, p := range actual.Problems {
-		if p != "the run recorded that it did not pass lane "+s.Lane && !explained(p) {
+		if p != "the run recorded that it did not pass lane "+s.Lane && !explained(p, true) {
 			return "the evidence reader found a problem no judged result accounts for: " + p
 		}
 	}
 	return ""
+}
+
+// identityProblem matches exactly the messages the evidence registry writes
+// when a result's legacy name does not resolve to one key at the run's level
+// (resolveAlias, resolveResult and checkRecordedIdentity in
+// test/evidence/registry.go and read.go). The registry has no key for an
+// unmapped or deferred result, and the verifier already shows its verdict.
+func identityProblem(r evidence.RecordedResult, level string) *regexp.Regexp {
+	name := regexp.QuoteMeta(r.Scenario.Name())
+	lvl := regexp.QuoteMeta(level)
+	return regexp.MustCompile("^" + name + "(?:" +
+		" is not a legacy name of a " + lvl + " result" +
+		"| names [0-9]+ " + lvl + " results" +
+		"| is recorded with the ID " + regexp.QuoteMeta(r.Scenario.ID) + ", not [A-Z]+[0-9]+" +
+		"| records no key" +
+		"| is recorded with the key " + regexp.QuoteMeta(r.RecordedKey) + ", not [a-z0-9-]+" +
+		"| records no display name" +
+		")$")
 }
 
 // runProblem is why the whole run cannot stand for the candidate, or "".

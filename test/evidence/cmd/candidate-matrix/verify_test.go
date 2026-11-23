@@ -465,6 +465,21 @@ func TestVerifierDoesNotCountDeferredResults(t *testing.T) {
 	}
 }
 
+// A problem the runner records is never excused by starting with the name of
+// a result without a key: a credential found in a not-counted S09 result's
+// evidence still blocks the run.
+func TestVerifierBlocksProblemsNamedAfterAKeylessResult(t *testing.T) {
+	root, manifest := buildCandidate(t, func(runs []evidence.Summary) {
+		runs[0].Scenarios = append(runs[0].Scenarios, passed("S09", "clean"))
+		runs[0].Passed = false
+		runs[0].Problems = []string{"S09/clean evidence holds a credential of the run"}
+	})
+	out, ok := runVerifier(t, root, manifest, recordedFamilies)
+	if ok || !strings.Contains(out, overallNoGo) || !strings.Contains(out, unexplained) {
+		t.Fatalf("an unrelated problem named after S09 did not block the run:\n%s", out)
+	}
+}
+
 // buildCandidate writes the bundles of testdata/candidate/runs.json, changed
 // by mutate, as the evidence package writes a run, and indexes them.
 func buildCandidate(t *testing.T, mutate func([]evidence.Summary)) (string, index) {
