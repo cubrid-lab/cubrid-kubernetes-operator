@@ -292,7 +292,10 @@ meaning; only the candidate verifier's v0.1 disposition changes:
   the field out, and the `fail` stays No-Go. The verifier does not rely on
   the field alone: every limit the runner records must be set, each
   `exceededLimits` entry must be a must-not-exceed limit of the variant
-  whose measured value exceeds the recorded limit, and the variant's
+  whose measured value exceeds the recorded limit and equals the recorded
+  measurement that limit judges, each limit a measurement must reach
+  (`stable_period`, `partition_duration`) must be reached by its recorded
+  measurement, and the variant's
   measurements and data rules must hold (no acknowledged write after
   proven closure and no rows differing between members for S07, no missing
   acknowledged write for S03 `graceful`, S04 and S07). Must-pass variants

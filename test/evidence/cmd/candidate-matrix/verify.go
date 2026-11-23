@@ -51,6 +51,17 @@ const (
 	afterPathClosed = "establishedAcknowledgedAfterPathClosed"
 	finalMaster     = "finalMaster"
 	membersDiverged = "membersDiverged"
+	// partitionHeldFor is how long an S07 partition held after the fault
+	// was confirmed, which must reach partition_duration; quarantineWithin
+	// is the S07 time quarantine_limit judges.
+	partitionHeldFor = "partitionHeldFor"
+	quarantineWithin = "quarantineWithin"
+	// The times failover_limit judges in S03 and S04, and the
+	// S03 and S04 times that must reach stable_period.
+	recoveryTime      = "recoveryTime"
+	failoverWithin    = "failoverWithin"
+	shortestStableFor = "shortestStableFor"
+	stableFor         = "stableFor"
 	// masterIsolatedKey is the only result that may record no promotion.
 	masterIsolatedKey = "installed-ha-network-partition-master-isolated"
 	gracefulKey       = "ha-primary-pod-recovery-graceful"
@@ -91,11 +102,11 @@ const (
 // measurementKinds gives the kind of every measurement a rule lists. A listed
 // measurement without a kind here is never accepted.
 var measurementKinds = map[string]measureKind{
-	"recoveryTime": durationValue, "stableFor": durationValue, "primaryUnresolvedFor": durationValue,
+	recoveryTime: durationValue, stableFor: durationValue, "primaryUnresolvedFor": durationValue,
 	"routingNotReadyFor": durationValue, "confirmedOffAfter": durationValue, "fencedAfter": durationValue,
-	"promotedWithin": durationValue, "failoverWithin": durationValue, "vmReturnWithin": durationValue,
+	"promotedWithin": durationValue, failoverWithin: durationValue, "vmReturnWithin": durationValue,
 	"returnWithin": durationValue, "returnWriteOutage": durationValue, "convergedWithin": durationValue,
-	"shortestStableFor": durationValue, "faultConfirmedWithin": durationValue, "partitionHeldFor": durationValue,
+	shortestStableFor: durationValue, "faultConfirmedWithin": durationValue, partitionHeldFor: durationValue,
 	"quarantineSeenWithin": durationValue, "rwScaledDownWithin": durationValue, "rwPodsGoneWithin": durationValue,
 	"rwEndpointsEmptyWithin": durationValue, "newConnectionsStoppedWithin": durationValue,
 	acknowledgedMissing: countValue, "outcomeUnknown": countValue, "operationsNotAcknowledged": countValue,
@@ -108,7 +119,7 @@ var measurementKinds = map[string]measureKind{
 var (
 	// newConnectionWrites is recorded for every S07 variant: the run reads the
 	// new-connection probes before it judges any of them.
-	s07Common = []string{"faultConfirmedWithin", "partitionHeldFor", afterPathClosed,
+	s07Common = []string{"faultConfirmedWithin", partitionHeldFor, afterPathClosed,
 		acknowledgedMissing, membersDiverged, finalMaster, "newConnectionWrites"}
 	// The closure of the managed -rw path is measured only where the variant
 	// quarantines; the slave-isolated control case must not.
@@ -124,7 +135,7 @@ var (
 // not been decided.
 var v01Measured = map[string]measuredRule{
 	gracefulKey: {
-		measured: []string{"recoveryTime", "stableFor", acknowledgedMissing, "outcomeUnknown",
+		measured: []string{recoveryTime, stableFor, acknowledgedMissing, "outcomeUnknown",
 			"primaryUnresolvedFor", "routingNotReadyFor"},
 		zero: []string{acknowledgedMissing},
 	},
@@ -132,8 +143,8 @@ var v01Measured = map[string]measuredRule{
 	// back, every client acknowledged after the taint and after the return,
 	// and the stable period reached.
 	powerOffKey: {
-		measured: []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", "failoverWithin",
-			"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", "shortestStableFor",
+		measured: []string{"confirmedOffAfter", "fencedAfter", "promotedWithin", failoverWithin,
+			"vmReturnWithin", "returnWithin", "returnWriteOutage", "convergedWithin", shortestStableFor,
 			finalMaster, "operationsNotAcknowledged"},
 	},
 	masterIsolatedKey: {
@@ -544,7 +555,9 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 // verdict it belongs to (fail, or blocked for no promotion), and no
 // promotion only on the S07 master-isolated result; no never-event may be
 // recorded, the cleanup must be recorded as succeeded, every exceeded limit
-// must be a set limit of the result, and the result must qualify as a passed
+// must be a set limit of the result that its recorded measurement exceeds,
+// every limit a measurement must reach must be reached by the recorded
+// measurement, and the result must qualify as a passed
 // one would (measuredProblem): fault confirmed, every required measurement
 // recorded and every safety count zero.
 func disclosedProblem(result evidence.RecordedResult) string {
@@ -581,8 +594,23 @@ func disclosedProblem(result evidence.RecordedResult) string {
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(sc.ExceededLimits)) {
-		if reason := exceededProblem(result.Key, name, sc.ExceededLimits[name], sc.Limits[name]); reason != "" {
+		if reason := exceededProblem(result, name); reason != "" {
 			return reason
+		}
+	}
+	// A limit a measurement must reach is checked here, not left to the
+	// runner's marker: a hold or stable period cut short shows that the run
+	// did not observe what it needed.
+	for _, name := range slices.Sorted(maps.Keys(reachedLimits[result.Key])) {
+		measurement := reachedLimits[result.Key][name]
+		limit, _ := time.ParseDuration(sc.Limits[name])
+		measured, ok := durationOf(sc.Measurements[measurement])
+		switch {
+		case !ok:
+			return fmt.Sprintf("%s is not measured, so %s cannot be checked", measurement, name)
+		case measured < limit:
+			return fmt.Sprintf("%s %s is under %s %s: the run did not reach a limit it must reach",
+				measurement, measured, name, limit)
 		}
 	}
 	if reason := measuredProblem(result); reason != "" {
@@ -609,14 +637,28 @@ var markedLimits = map[string][]string{
 
 // exceededLimits are, for each must-measure result, the limits whose
 // overrun alone may make its fail a disclosed measurement: limits a
-// measurement must not exceed. A limit a measurement must reach
-// (stable_period, partition_duration) is never one of them.
-var exceededLimits = map[string][]string{
-	gracefulKey:       {limitFailover, limitRejoin},
-	powerOffKey:       {limitFailover},
-	masterIsolatedKey: {limitQuarantine},
-	higherRankKey:     {limitQuarantine},
-	slaveIsolatedKey:  {limitQuarantine},
+// measurement must not exceed, each with the measurement the runner judges
+// by it (S03 in test/e2e/s03_test.go, S04 finishS04 and S07 judgeS07 in
+// test/installed). A limit a measurement must reach (stable_period,
+// partition_duration) is never one of them.
+var exceededLimits = map[string]map[string]string{
+	gracefulKey:       {limitFailover: recoveryTime, limitRejoin: "allMembersBackWithin"},
+	powerOffKey:       {limitFailover: failoverWithin},
+	masterIsolatedKey: {limitQuarantine: quarantineWithin},
+	higherRankKey:     {limitQuarantine: quarantineWithin},
+	slaveIsolatedKey:  {limitQuarantine: quarantineWithin},
+}
+
+// reachedLimits are, for each must-measure result, the limits a measurement
+// must reach, each with that measurement. A marked record qualifies only
+// when its recorded measurement reaches the recorded limit: neither runner
+// marks a record whose hold or stable period was cut short.
+var reachedLimits = map[string]map[string]string{
+	gracefulKey:       {limitStable: stableFor},
+	powerOffKey:       {limitStable: shortestStableFor},
+	masterIsolatedKey: {limitPartition: partitionHeldFor},
+	higherRankKey:     {limitPartition: partitionHeldFor},
+	slaveIsolatedKey:  {limitPartition: partitionHeldFor},
 }
 
 // disclosedZero are the data counts that must be 0 on a disclosed
@@ -633,15 +675,22 @@ var disclosedZero = map[string][]string{
 // exceededProblem is why one exceededLimits entry of a result does not show
 // an overrun, or "": the name must be a must-not-exceed limit of the result,
 // the entry must read "<measured> > <limit>" with two durations, the limit
-// must be the one the result records, and the measured value must exceed it.
-func exceededProblem(key, name, entry, recorded string) string {
-	if !slices.Contains(exceededLimits[key], name) {
+// must be the one the result records, the measured value must exceed it,
+// and it must be the measurement the result records for that limit. The
+// runners write the entry unrounded and the measurement rounded to the
+// millisecond, so both are compared at that precision.
+func exceededProblem(result evidence.RecordedResult, name string) string {
+	sc := result.Scenario
+	entry, recorded := sc.ExceededLimits[name], sc.Limits[name]
+	measurement, ok := exceededLimits[result.Key][name]
+	if !ok {
 		return name + " is not a limit whose overrun alone this result may disclose"
 	}
 	measuredText, limitText, ok := strings.Cut(entry, " > ")
 	measured, errMeasured := time.ParseDuration(measuredText)
 	limit, errLimit := time.ParseDuration(limitText)
 	want, errRecorded := time.ParseDuration(recorded)
+	got, isMeasured := durationOf(sc.Measurements[measurement])
 	switch {
 	case !ok || errMeasured != nil || errLimit != nil:
 		return fmt.Sprintf("exceeded %s %q does not read as a measured duration over the limit", name, entry)
@@ -649,8 +698,27 @@ func exceededProblem(key, name, entry, recorded string) string {
 		return fmt.Sprintf("exceeded %s %q names another limit than the recorded %s", name, entry, recorded)
 	case measured <= limit:
 		return fmt.Sprintf("exceeded %s %q does not exceed the limit", name, entry)
+	case !isMeasured:
+		return fmt.Sprintf("%s is not measured, so exceeded %s %q cannot be checked", measurement, name, entry)
+	case measured.Round(time.Millisecond) != got.Round(time.Millisecond):
+		return fmt.Sprintf("exceeded %s %q does not match the recorded %s %s", name, entry, measurement, got)
 	}
 	return ""
+}
+
+// durationOf is a duration measurement as summary.json records it: a
+// duration string ("24.512s") or a number of seconds. Anything else, such as
+// "unknown", is not measured.
+func durationOf(value any) (time.Duration, bool) {
+	if !validMeasurement(durationValue, value) {
+		return 0, false
+	}
+	if s, ok := value.(string); ok {
+		d, _ := time.ParseDuration(s)
+		return d, true
+	}
+	n, _ := number(value)
+	return time.Duration(n * float64(time.Second)), true
 }
 
 // measuredProblem is why a passed must-measure result does not qualify, or "".
