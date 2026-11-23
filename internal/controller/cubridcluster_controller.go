@@ -973,10 +973,13 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	if cluster.Spec.HighAvailability.Enabled && networkPolicyEnabled(cluster) {
 		initContainers = append(initContainers, peerWaitContainer(cluster, image, security))
 	}
+	noAPIToken := false
 	return corev1.PodSpec{
-		Volumes:        volumes,
-		InitContainers: initContainers,
-		Affinity:       memberAffinity(cluster),
+		// Nothing in the Pod calls the Kubernetes API, so it gets no ServiceAccount token.
+		AutomountServiceAccountToken: &noAPIToken,
+		Volumes:                      volumes,
+		InitContainers:               initContainers,
+		Affinity:                     memberAffinity(cluster),
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
