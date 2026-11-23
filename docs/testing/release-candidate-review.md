@@ -141,6 +141,67 @@ uses synthetic inputs and a placeholder Actions link. Keep manual judgement
 of SQL, repetitions, soak results, and release approval in the candidate
 review.
 
+### v0.1 Go/No-Go verifier
+
+The same command with `-verify` judges the indexed runs against the
+[v0.1 candidate acceptance](scenario-contract.md#v01-candidate-acceptance--2026-11-21-decision)
+table. It exits `0` only for **AUTOMATED CHECKS GO — manual gates
+pending**; **NO-GO** and **REVIEW REQUIRED** exit `1`. Even the first is
+not release approval: the report lists the manual gates it does not check.
+
+```sh
+go run ./test/evidence/cmd/candidate-matrix -verify \
+  -index candidate-index.json -runs ./retained-runs > candidate-verdict.md
+```
+
+The report lists each run's check, one row per required variant and one
+row per recorded result with its raw recorded verdict, the verdict its
+evidence supports now and the separate v0.1 verdict. It writes nothing
+into the bundles. The rules, failing closed:
+
+- Every run must be the indexed bundle: `summary.json`, `junit.xml` and
+  every file the index lists or archives must be present, non-empty and
+  match its SHA-256 digest. The run must have finished, belong to a
+  registered lane (not `kind-filtered`), and record the candidate's full
+  commit and both image digests. It must have passed its lane, or every
+  problem it or the evidence reader records must belong to a result the
+  verifier judged as not Go; any other problem, such as a credential in
+  the evidence, a step without its label or a suite deadline, blocks the
+  run. A run that fails any of these makes the candidate No-Go and
+  qualifies none of its results.
+- A required variant is every registered result, at the Kind and VM-lab
+  levels, of S00–S08 and S10–S15 whose v0.1 scope is must-pass or
+  must-measure. It is Go only when it has at least one record and every
+  record of it is Go; a missing variant is No-Go.
+- A must-pass record is Go only when its evidence supports a `pass` and
+  its cleanup did not fail. `fail`, `blocked`, `not_run`,
+  `not_applicable` or a pass without its evidence is No-Go.
+- A must-measure record (S03 `graceful`, S04 `power-off`, the S07
+  variants) must also record a confirmed fault and every measurement its
+  rule lists, each of its kind: a duration or number of seconds, a whole
+  count, a non-empty name, or a non-empty map of counts; `unknown`, an
+  empty value or another type is No-Go. Acknowledged writes on the
+  established S07 session after the managed `-rw` path was observed closed
+  must be `0`, and S03 `graceful` must miss no acknowledged write. A raw
+  `fail` stays `FAIL` and is No-Go: no recorded field shows that only a
+  time limit failed, so a timing overrun cannot be told from another
+  failure.
+- S08 and S10 have no registered result, so no run records their evidence
+  and they are always No-Go ("evidence not recorded").
+- S09, S16 and S17 results are never required. A `pass` or `not_run` is
+  **NOT COUNTED**; a `fail`, `blocked` or failed cleanup is **REVIEW
+  REQUIRED**, because the contract keeps S09's held-member safety behavior.
+  A result the registry or the scope cannot map is **REVIEW REQUIRED**.
+
+The verifier judges only the runs the index names: it cannot detect a run
+left out of it. Index completeness, with every failure and rerun of the
+candidate linked as #126 requires, remains a manual review item, as do
+Conditions/Events/metrics as separate requirements, repetitions, the
+24-hour soak, the real-fault review of VM runs, independent reproduction
+(#127) and release approval. The
+[sample report](../../test/evidence/cmd/candidate-matrix/testdata/verify-sample.md)
+comes from synthetic runs and is No-Go only because of S08 and S10.
+
 Review the original bundle and the scenario-specific
 [oracle](scenario-contract.md#oracle-correctness), not the green status
 of a wrapper workflow. A fault that did not occur, untrusted role evidence,
