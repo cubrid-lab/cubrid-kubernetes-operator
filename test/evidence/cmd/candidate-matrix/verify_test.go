@@ -56,19 +56,12 @@ const (
 	failoverUnmeasured = "failoverWithin is not measured"
 )
 
-// recordedFamilies are the v0.1 families with at least one registered result.
-// S08 has none, so no recorded run can prove it; a candidate is judged
-// complete against this list only to test the path that leads to Go.
-var recordedFamilies = slices.DeleteFunc(slices.Clone(v01Families), func(id string) bool {
-	return id == s08Family
-})
-
 // A candidate whose every registered v0.1 variant passed, with each measured
 // variant's measurements recorded, on one commit and one pair of images, is
 // the only input that verifies as Go.
 func TestVerifierAcceptsACompleteCandidate(t *testing.T) {
 	root, manifest := buildCandidate(t, nil)
-	out, ok := runVerifier(t, root, manifest, recordedFamilies)
+	out, ok := runVerifier(t, root, manifest, v01Families)
 	if !ok || !strings.Contains(out, overallGo) {
 		t.Fatalf("a complete candidate did not verify as Go:\n%s", out)
 	}
@@ -83,22 +76,21 @@ func TestVerifierAcceptsACompleteCandidate(t *testing.T) {
 	}
 }
 
-// S08 has no registered result, so the evidence a candidate would need is
-// not recorded by any run today. It blocks the release instead of being left
-// out of the requirement. S10 has a registered Kind result, which the sample
-// candidate records as a pass, so it is judged like any other result.
-func TestVerifierBlocksScenariosWhoseEvidenceIsNotRecorded(t *testing.T) {
+// Replication lag under repeated faults (S08) is counted through repeated
+// S04 and S07 runs (maintainer decision 2026-11-23, #126), so a candidate
+// without any S08 result is judged on everything else, the S08 coverage is
+// listed as a manual gate, and S08 is not a required variant.
+func TestVerifierDoesNotRequireAnS08Result(t *testing.T) {
 	root, manifest := buildCandidate(t, nil)
 	out, ok := runVerifier(t, root, manifest, v01Families)
-	if ok || !strings.Contains(out, overallNoGo) {
-		t.Fatalf("a candidate without S08 evidence was not No-Go:\n%s", out)
+	if !ok || !strings.Contains(out, overallGo) {
+		t.Fatalf("a candidate without an S08 result was not Go:\n%s", out)
 	}
-	row := requiredRow(t, out, s08Family)
-	if !strings.Contains(row, "| NO-GO |") || !strings.Contains(row, "evidence not recorded") {
-		t.Errorf("S08 is not reported as evidence not recorded: %s", row)
+	if strings.Contains(requiredTable(out), "S08") {
+		t.Errorf("S08 is listed as a required variant:\n%s", out)
 	}
-	if row := requiredRow(t, out, rebuildKey); strings.Contains(row, "evidence not recorded") {
-		t.Errorf("S10 has a registered result but is reported as evidence not recorded: %s", row)
+	if !strings.Contains(out, "- S08 coverage: repeated S04 and S07 runs on the candidate; count not yet decided\n") {
+		t.Errorf("the S08 coverage is not listed as a manual gate:\n%s", out)
 	}
 	want, err := os.ReadFile("testdata/verify-sample.md")
 	if err != nil {
@@ -106,6 +98,47 @@ func TestVerifierBlocksScenariosWhoseEvidenceIsNotRecorded(t *testing.T) {
 	}
 	if out != string(want) {
 		t.Errorf("verifier report differs from testdata/verify-sample.md:\n%s", out)
+	}
+}
+
+// A recorded S08 result is shown but never counted: a pass or not_run is
+// NOT COUNTED, and a fail, blocked or failed cleanup is REVIEW REQUIRED like
+// any other result that is not counted.
+func TestVerifierDoesNotCountRecordedS08Results(t *testing.T) {
+	tests := []struct {
+		result  evidence.Result
+		overall string
+		row     string
+	}{
+		{evidence.Pass, overallGo, "| PASS | PASS | NOT COUNTED | " + s08Note + " |"},
+		{evidence.NotRun, overallGo, "| NOT_RUN | NOT_RUN | NOT COUNTED |"},
+		{evidence.Fail, overallReview, "| FAIL | FAIL | REVIEW REQUIRED |"},
+		{evidence.Blocked, overallReview, "| BLOCKED | BLOCKED | REVIEW REQUIRED |"},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.result), func(t *testing.T) {
+			root, manifest := buildCandidate(t, func(runs []evidence.Summary) {
+				lag := passed("S08", "")
+				if tc.result != evidence.Pass {
+					setResult(&lag, tc.result, "second failure not recovered")
+				}
+				if tc.result == evidence.Fail || tc.result == evidence.Blocked {
+					runs[0].Passed = false
+					runs[0].Problems = []string{lag.Name() + ": " + string(tc.result) + ": second failure not recovered"}
+				}
+				runs[0].Scenarios = append(runs[0].Scenarios, lag)
+			})
+			out, ok := runVerifier(t, root, manifest, v01Families)
+			if ok != (tc.overall == overallGo) || !strings.Contains(out, tc.overall) {
+				t.Fatalf("an S08 %s did not give %q:\n%s", tc.result, tc.overall, out)
+			}
+			if !strings.Contains(out, "COVERED BY REPEATED S04 AND S07 RUNS") || !strings.Contains(out, tc.row) {
+				t.Errorf("the S08 result is not shown as %q:\n%s", tc.row, out)
+			}
+			if strings.Contains(requiredTable(out), "S08") {
+				t.Errorf("S08 is listed as a required variant:\n%s", out)
+			}
+		})
 	}
 }
 
@@ -161,7 +194,7 @@ func TestVerifierBlocksMissingOrUnsuccessfulMustPassResults(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) {
 				t.Fatalf("not No-Go:\n%s", out)
 			}
@@ -268,7 +301,7 @@ func TestVerifierBlocksBrokenOrTruncatedEvidence(t *testing.T) {
 			if tc.after != nil {
 				tc.after(t, root, &manifest)
 			}
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) {
 				t.Fatalf("not No-Go:\n%s", out)
 			}
@@ -295,7 +328,7 @@ func TestVerifierBlocksFilteredOrUnregisteredLanes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) || !strings.Contains(out, "is not a registered lane") {
 				t.Fatalf("not No-Go for its lane:\n%s", out)
 			}
@@ -332,7 +365,7 @@ func TestVerifierBlocksResultsOfAnotherCandidate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) {
 				t.Fatalf("not No-Go:\n%s", out)
 			}
@@ -413,7 +446,7 @@ func TestVerifierRequiresMeasurementsAndSafetyOfMeasuredVariants(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, manifest := buildCandidate(t, tc.mutate)
 			before := summaryDigests(t, root)
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok || !strings.Contains(out, overallNoGo) {
 				t.Fatalf("not No-Go:\n%s", out)
 			}
@@ -437,7 +470,7 @@ func TestVerifierNeedsReviewForUnmappedResults(t *testing.T) {
 	root, manifest := buildCandidate(t, func(runs []evidence.Summary) {
 		runs[0].Scenarios = append(runs[0].Scenarios, passed("S05", "not-a-real-variant"))
 	})
-	out, ok := runVerifier(t, root, manifest, recordedFamilies)
+	out, ok := runVerifier(t, root, manifest, v01Families)
 	if ok || !strings.Contains(out, overallReview) {
 		t.Fatalf("an unmapped result did not require review:\n%s", out)
 	}
@@ -474,7 +507,7 @@ func TestVerifierDoesNotCountDeferredResults(t *testing.T) {
 				}
 				runs[0].Scenarios = append(runs[0].Scenarios, deferred)
 			})
-			out, ok := runVerifier(t, root, manifest, recordedFamilies)
+			out, ok := runVerifier(t, root, manifest, v01Families)
 			if ok != (tc.overall == overallGo) || !strings.Contains(out, tc.overall) {
 				t.Fatalf("a deferred S09 %s did not give %q:\n%s", tc.result, tc.overall, out)
 			}
@@ -497,7 +530,7 @@ func TestVerifierBlocksProblemsNamedAfterAKeylessResult(t *testing.T) {
 		runs[0].Passed = false
 		runs[0].Problems = []string{"S09/clean evidence holds a credential of the run"}
 	})
-	out, ok := runVerifier(t, root, manifest, recordedFamilies)
+	out, ok := runVerifier(t, root, manifest, v01Families)
 	if ok || !strings.Contains(out, overallNoGo) || !strings.Contains(out, unexplained) {
 		t.Fatalf("an unrelated problem named after S09 did not block the run:\n%s", out)
 	}

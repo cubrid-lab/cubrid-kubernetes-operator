@@ -214,7 +214,7 @@ part of this work. The candidate calendar is in [ROADMAP](../../ROADMAP.md).
 | Release acceptance | Scenario and variants | Candidate rule |
 |---|---|---|
 | **Must pass** | S00–S02; S03 `abrupt`, `abrupt-first-member`; S05–S06; S10; S11–S12; S13–S15; Conditions, Events and metrics | Exact-candidate positive and negative SQL, roles, data protection, required evidence and non-time safety rules must pass; `fail`, `blocked`, `not_run` or a missing variant blocks release. |
-| **Must execute, measure and publish** | S04 VM power loss; S07–S08 partition, quarantine and repeated failure; S03 `graceful` | Record real fault identity, timing, SQL and all member histories, and separately record former threshold failures and current known limitations. No previous failure is renamed `pass`. A missing required observation blocks acceptance. |
+| **Must execute, measure and publish** | S04 VM power loss; S07 partition and quarantine; S03 `graceful` | Record real fault identity, timing, SQL and all member histories, and separately record former threshold failures and current known limitations. No previous failure is renamed `pass`. A missing required observation blocks acceptance. |
 | **Deferred to v0.2** | S09 automatic rejoin of retained data; automatic HA PVC adoption on cluster recreation (#798) | Keep prior evidence and held-member safety behavior. Suspect retained data may be recovered only through an explicitly approved S10 replacement-storage rebuild in the v0.1 claim. |
 
 **S04 release claim:** a confirmed physical VM loss must eventually lead to
@@ -236,7 +236,7 @@ client could not tell as `outcomeUnknown` (the names of the Kind S03 result).
 Both are `unknown` when the data check produced no report, and neither
 changes the verdict.
 
-**S07–S08 release claim:** the Operator offers **best-effort closure of the
+**S07 release claim:** the Operator offers **best-effort closure of the
 managed `-rw` Broker path**, not prevention of CUBRID native promotion or
 database-process fencing. Measure fault-to-closure and separately retain
 request/actual Broker scale-down, Pod termination, empty endpoints, fresh-
@@ -249,6 +249,14 @@ writes must be recorded and disclosed, not called fixed or silently hidden.
 If closure or the post-closure SQL observation is not established, the
 candidate claim is not qualified. The old 30-second `quarantine_limit` is
 reported for comparison, not a v0.1 numeric pass/fail criterion.
+
+**S08 release claim:** replication lag under repeated faults is no longer a
+separate required result. By the maintainer decision of 2026-11-23
+([#126](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639)), it is
+covered by **repeated S04 (VM power loss) and S07 (partition) runs on the pinned
+candidate**, and the release-candidate verifier does not require an S08 result.
+A recorded S08 result is shown as not counted; a `fail`, `blocked` or failed
+cleanup of it still needs review. The number of repetitions is not yet decided.
 
 **S03 graceful release claim:** run the graceful-termination variant and
 publish the actual time and reason for any unnecessary write quarantine
@@ -277,7 +285,7 @@ a candidate, and **no candidate is approved by this document change**.
 Each lane below names the scenarios and variants that its **current test
 runner** requires. A raw lane passes only when each required result is
 `pass`. For the narrowed v0.1 release, apply the explicit acceptance mapping
-above separately: formerly required S04/S07–S08 and S03 graceful outcomes
+above separately: formerly required S04/S07 and S03 graceful outcomes
 still must be executed and reported, but their old numeric and engine-loss
 guarantees are not v0.1 acceptance claims. Align the runners and the #126
 evidence-index verifier before counting a candidate as qualified. A missing
@@ -2651,6 +2659,11 @@ it needs more.
 
 ### S08: replication lag followed by repeated failures
 
+- **v0.1 acceptance:** not a separate required result. The maintainer
+  decision of 2026-11-23 ([#126](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126#issuecomment-7096254639))
+  counts replication lag under repeated faults through repeated S04 and S07
+  runs on the pinned candidate; the number of repetitions is not yet decided.
+  The scenario below stays as the design of a possible dedicated run.
 - **Level:** VM lab.
 - **Fault:** a slave is made to lag behind the master, then the master fails
   (as in S03 `abrupt`), then the new master fails before the cluster has
@@ -3414,7 +3427,7 @@ The values below are the defaults of the **current** Kind suite. The
 Nov 21 candidate scope decision above changes which observations are
 release pass criteria, not the numeric limits that earlier tests
 actually used. The historical runner may still judge S03 graceful,
-S04 and S07/S08 with the old limits; a release verifier must make the
+S04 and S07 with the old limits; a release verifier must make the
 scope distinction explicitly and retain those raw failures.
 Each limit can be set for another environment without changing the code,
 through an environment

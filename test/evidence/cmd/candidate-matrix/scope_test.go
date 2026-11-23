@@ -47,7 +47,7 @@ func TestV01ScopeKeepsMandatoryAndMeasuredResultsSeparate(t *testing.T) {
 		{s05Scenario, "one-broker-pod", scopeMustPass},
 		{"S06", "restart", scopeMustPass},
 		{s07Scenario, "higher-rank-isolated", scopeMustMeasure},
-		{"S08", "", scopeMustMeasure},
+		{"S08", "", scopeCovered},
 		{"S09", "clean", scopeDeferred},
 		{"S10", "", scopeMustPass},
 		{"S11", "complete", scopeMustPass},
