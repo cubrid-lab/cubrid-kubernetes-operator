@@ -5757,7 +5757,9 @@ and S12 variant other than `complete` and `exact` only those under
 - `LAB01/record.json`: identities before and after, the starting state with
   the time it took to form, the roles at the end, the seed prefix and the
   Secret's source, operation counts and cleanup;
-- `LAB01/history.jsonl`: the client's history;
+- `LAB01/history.jsonl`: the run's shared history, which the data rules judge: LAB01's
+  client first, then every later scenario's clients. Each scenario's `operations` in
+  `summary.json` counts only its own operations, not the whole file;
 - `LAB01/data-check.json`: the last data-rule report.
 - with `-fault vm-power-off`, `S04/power-off/record.json` (the master, its Pod
   and node, the clock offsets, the read-write probe's operation, when the VM

@@ -503,6 +503,10 @@ type haRun struct {
 	members  []string
 	history  strings.Builder
 	files    []string
+	// labOperations counts LAB01's own workload by outcome, taken when its
+	// workload ended. Later scenarios append their clients to the shared
+	// history, so the history's counts at the end are not LAB01's.
+	labOperations map[string]int
 	// labPassed is set once LAB01's checks have passed.
 	labPassed bool
 	// s04 is the result of S04 power-off, once it ran.
@@ -622,7 +626,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		scenario.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
 			return !strings.HasPrefix(f, haScenarioID+"/")
 		})
-		if counts := h.rec.Operations; counts != nil {
+		if counts := h.labOperations; counts != nil {
 			scenario.Operations = &evidence.Operations{Attempted: counts[workload.Attempted],
 				Acknowledged: counts[workload.Acknowledged], Failed: counts[workload.Failed],
 				Unknown: counts[workload.Unknown]}
@@ -1674,6 +1678,7 @@ func (h *haRun) runWorkload(ctx context.Context) (time.Time, error) {
 			return workload.History{}, err
 		}
 		h.rec.Operations = history.Counts
+		h.labOperations = history.Counts
 		return workload.ReadHistory(strings.NewReader(out))
 	}
 	written, err := run(fmt.Sprintf("CLIENT_ID=c1 OPS=%d ROLLBACK_EVERY=5", h.cfg.Operations))

@@ -578,6 +578,9 @@ type s07Record struct {
 	mu     sync.Mutex
 	cut    *s07CutFile
 	tokens []s07SeenToken
+	// historyBefore counts the run's history by outcome when S07 started, so
+	// S07's own operations are the history's counts after it, less these.
+	historyBefore map[string]int
 }
 
 // s07MasterMove records how the run moved the master off the first member:
@@ -1791,6 +1794,7 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	rec := &s07Record{Variant: variant, Control: variant == s07SlaveIsolated, Master: h.rec.StartingState.Master,
 		MembersBefore: h.rec.MembersAfter, MembersAfter: []imageIdentity{}, Sweeps: []s07Sweep{},
 		Conditions: []s07Condition{}, Path: []s07Path{}, Probes: []s07Probe{}, Observed: []faults.Step{}}
+	rec.historyBefore = h.historyCounts()
 	clientsStarted := false
 	var p *netfault.Partition
 	defer func() {
@@ -1947,6 +1951,16 @@ func (h *haRun) recordS07Outcome(rec *s07Record, o faults.Outcome) {
 	}
 }
 
+// historyCounts counts the run's history so far by outcome; a history that
+// cannot be read counts as empty.
+func (h *haRun) historyCounts() map[string]int {
+	history, err := workload.ReadHistory(strings.NewReader(h.history.String()))
+	if err != nil {
+		return nil
+	}
+	return history.Counts
+}
+
 // finishS07 stops and reads the clients, checks every member's rows, and
 // judges S07.
 func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.Scenario,
@@ -1973,9 +1987,12 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	rec.ClientsRead = true
 	if all, err := workload.ReadHistory(strings.NewReader(h.history.String())); err == nil {
 		h.rec.Operations = all.Counts
-		result.Operations = &evidence.Operations{Attempted: all.Counts[workload.Attempted],
-			Acknowledged: all.Counts[workload.Acknowledged], Failed: all.Counts[workload.Failed],
-			Unknown: all.Counts[workload.Unknown]}
+		// Only the operations S07 added to the run's history are its own.
+		result.Operations = &evidence.Operations{
+			Attempted:    all.Counts[workload.Attempted] - rec.historyBefore[workload.Attempted],
+			Acknowledged: all.Counts[workload.Acknowledged] - rec.historyBefore[workload.Acknowledged],
+			Failed:       all.Counts[workload.Failed] - rec.historyBefore[workload.Failed],
+			Unknown:      all.Counts[workload.Unknown] - rec.historyBefore[workload.Unknown]}
 	}
 	if rec.ManualRelease != nil {
 		if cluster, err := h.s07OwnCluster(ctx); err == nil {
