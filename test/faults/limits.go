@@ -98,6 +98,9 @@ var (
 	// DeleteLimit: a cluster deleted until what the Operator created for it,
 	// and with retentionPolicy Delete its PVCs, are gone.
 	DeleteLimit = LimitSpec{"delete_limit", "E2E_DELETE_LIMIT", time.Minute}
+	// RebuildLimit: the rebuild of a member requested until the member holds
+	// all rows. The contract records no value, so a run is a baseline.
+	RebuildLimit = LimitSpec{"rebuild_limit", "E2E_REBUILD_LIMIT", 0}
 )
 
 // FromEnv reads the limit from its environment variable, as LimitFromEnv
