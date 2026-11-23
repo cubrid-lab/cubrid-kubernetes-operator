@@ -105,10 +105,21 @@ type indexedFile struct {
 func main() {
 	indexPath := flag.String("index", "", "immutable release evidence index")
 	runRoot := flag.String("runs", "", "directory containing one evidence bundle per run ID")
+	verifyV01 := flag.Bool("verify", false, "write the v0.1 Go/No-Go verdict and exit 1 unless it is Go")
 	flag.Parse()
 	if *indexPath == "" || *runRoot == "" || flag.NArg() != 0 {
 		flag.Usage()
 		os.Exit(2)
+	}
+	if *verifyV01 {
+		ok, err := verifyCandidate(os.Stdout, *indexPath, *runRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		if !ok {
+			os.Exit(1)
+		}
+		return
 	}
 	if err := generate(os.Stdout, *indexPath, *runRoot); err != nil {
 		fmt.Fprintln(os.Stderr, err)

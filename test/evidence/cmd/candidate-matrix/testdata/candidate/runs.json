@@ -1,0 +1,472 @@
+[
+  {
+    "schemaVersion": "2",
+    "runId": "candidate-kind-run",
+    "startedAt": "2026-12-08T01:00:00Z",
+    "finishedAt": "2026-12-08T01:50:00Z",
+    "environment": {
+      "level": "kind"
+    },
+    "lane": "kind",
+    "passed": true,
+    "problems": [],
+    "scenarios": [
+      {
+        "id": "S00",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S01",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S02",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S03",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "abrupt-first-member",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S03",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "abrupt",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S03",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "graceful",
+        "faultConfirmed": true,
+        "measurements": {
+          "recoveryTime": "24.512s",
+          "stableFor": "30.004s",
+          "acknowledgedMissing": 0,
+          "outcomeUnknown": 0,
+          "primaryUnresolvedFor": "9s",
+          "routingNotReadyFor": "9s"
+        }
+      },
+      {
+        "id": "S05",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "broker-process",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S05",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "one-broker-pod",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S05",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "all-rw-brokers",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S06",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "restart",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S06",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "absent-during-failover",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S13",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "retain"
+      },
+      {
+        "id": "S13",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "delete"
+      },
+      {
+        "id": "S14",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S14",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "token-rotation"
+      },
+      {
+        "id": "S14",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "token-migration"
+      }
+    ]
+  },
+  {
+    "schemaVersion": "2",
+    "runId": "candidate-vm-power-off-run",
+    "startedAt": "2026-12-09T01:00:00Z",
+    "finishedAt": "2026-12-09T01:50:00Z",
+    "environment": {
+      "level": "vm-lab"
+    },
+    "lane": "lab-installed-ha-s04",
+    "passed": true,
+    "problems": [],
+    "scenarios": [
+      {
+        "id": "LAB01",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S04",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "power-off",
+        "faultConfirmed": true,
+        "measurements": {
+          "confirmedOffAfter": "4.1s",
+          "fencedAfter": "62.3s",
+          "promotedWithin": "11.8s",
+          "failoverWithin": "18.7s",
+          "returnWithin": "95.2s",
+          "convergedWithin": "140.9s",
+          "finalMaster": "cluster-cubrid-1",
+          "operationsNotAcknowledged": 3
+        }
+      }
+    ]
+  },
+  {
+    "schemaVersion": "2",
+    "runId": "candidate-vm-run",
+    "startedAt": "2026-12-10T01:00:00Z",
+    "finishedAt": "2026-12-10T01:50:00Z",
+    "environment": {
+      "level": "vm-lab"
+    },
+    "lane": "lab-installed-ha",
+    "passed": true,
+    "problems": [],
+    "scenarios": [
+      {
+        "id": "LAB01",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": []
+      },
+      {
+        "id": "S06",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "restart",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S07",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "master-isolated",
+        "faultConfirmed": true,
+        "measurements": {
+          "faultConfirmedWithin": "2.1s",
+          "partitionHeldFor": "2m0.4s",
+          "establishedAcknowledgedAfterPathClosed": 0,
+          "acknowledgedMissing": 0,
+          "membersDiverged": false,
+          "finalMaster": "cluster-cubrid-1",
+          "quarantineSeenWithin": "21.3s",
+          "rwPodsGoneWithin": "24.8s",
+          "rwEndpointsEmptyWithin": "24.9s",
+          "newConnectionsStoppedWithin": "25.0s"
+        }
+      },
+      {
+        "id": "S07",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "slave-isolated",
+        "faultConfirmed": true,
+        "measurements": {
+          "faultConfirmedWithin": "2.1s",
+          "partitionHeldFor": "2m0.4s",
+          "establishedAcknowledgedAfterPathClosed": 0,
+          "acknowledgedMissing": 0,
+          "membersDiverged": false,
+          "finalMaster": "cluster-cubrid-1",
+          "establishedAcknowledgedAfterFault": 40
+        }
+      },
+      {
+        "id": "S07",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "higher-rank-isolated",
+        "faultConfirmed": true,
+        "measurements": {
+          "faultConfirmedWithin": "2.1s",
+          "partitionHeldFor": "2m0.4s",
+          "establishedAcknowledgedAfterPathClosed": 0,
+          "acknowledgedMissing": 0,
+          "membersDiverged": false,
+          "finalMaster": "cluster-cubrid-1",
+          "quarantineSeenWithin": "21.3s",
+          "rwPodsGoneWithin": "24.8s",
+          "rwEndpointsEmptyWithin": "24.9s",
+          "newConnectionsStoppedWithin": "25.0s"
+        }
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "complete"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "missing-destination"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "denied-credentials"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "signature-mismatch"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "interrupted-upload"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "operator-restart"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "overlapping"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "operation-store-loss"
+      },
+      {
+        "id": "S11",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "graceful-stop"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "exact"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "tampered"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "wrong-target"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "operator-restart"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart-preparing"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart-seeding"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart-starting"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "instance-manager-restart-seed-backup"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "graceful-stop"
+      },
+      {
+        "id": "S12",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "graceful-stop-seeding"
+      },
+      {
+        "id": "S15",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "drain-slave-node",
+        "faultConfirmed": true
+      },
+      {
+        "id": "S15",
+        "result": "pass",
+        "reason": "",
+        "neverEvents": [],
+        "evidence": [],
+        "variant": "drain-master-node",
+        "faultConfirmed": true
+      }
+    ]
+  }
+]
