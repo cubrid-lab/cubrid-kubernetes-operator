@@ -181,7 +181,7 @@ alignment gaps are tracked in the scenario contract.
   every client the Broker NetworkPolicy admits can connect to it as `dba`.
   Changing the password later is not supported; the Operator reports a
   changed Secret value as `DBAPasswordRotationUnsupported` (on an HA cluster
-  it asks only the primary) and does not apply it.
+  it asks every member) and does not apply it.
 - **No traffic is encrypted:** not between clients and Brokers, Brokers and
   the database, members, or the Operator and the Instance Manager. The
   Instance Manager requires a bearer token.

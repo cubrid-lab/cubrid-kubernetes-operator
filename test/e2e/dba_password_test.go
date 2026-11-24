@@ -1013,21 +1013,24 @@ spec:
 				}
 			})
 
-			// The Operator asks the primary at most once every 5 minutes, and at
-			// once after it restarts (docs/operations/dba-password.md). The step
-			// waits until the kubelet has written the changed value into the
-			// primary's file and then restarts the Operator, so that it does not
-			// wait out the poll (#845).
+			// The Operator asks every member at most once every 5 minutes, and
+			// at once after it restarts (docs/operations/dba-password.md). The
+			// step waits until the kubelet has written the changed value into
+			// every member's file and then restarts the Operator, so that it
+			// does not wait out the poll (#845). A match needs every member to
+			// match (#1012), so the value put back must have reached every file.
 			It("reports a changed Secret value as an unsupported rotation, and True again once it is put back", func() {
 				primary, err := h.clusterField(clusterName, "{.status.currentPrimary}")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(primary).To(BeElementOf(members), "no primary is resolved")
 				resolved := func(g Gomega) (string, string) { return passwordCondition(g, clusterName) }
-				// changeTo puts value into the Secret, waits until the primary's
+				// changeTo puts value into the Secret, waits until every member's
 				// mounted file holds it and restarts the Operator.
 				changeTo := func(value string) {
 					h.apply(dbaPasswordSecret(haNamespace, secretName, value))
-					fileHolds(primary, value)
+					for _, member := range members {
+						fileHolds(member, value)
+					}
 					restartOperator(password, changed)
 				}
 
@@ -1414,11 +1417,13 @@ spec:
 					Should(Succeed())
 			})
 
-			// The Operator's check asks the primary whether the Secret's value
-			// logs in. Until the Secret is changed it reports the database's new
-			// password as an unsupported rotation; once it holds the new value,
-			// the check matches and the Condition is True again. The Operator is
-			// restarted before each, so that it asks at once.
+			// The Operator's check asks every member whether the Secret's value
+			// logs in on it (#1012). Until the Secret is changed it reports the
+			// database's new password as an unsupported rotation, refused on
+			// every member, slaves included; once it holds the new value, every
+			// member matches and the Condition is True again, which needs each
+			// slave's own answer. The Operator is restarted before each, so
+			// that it asks at once.
 			It("reports the change until the Secret holds the new password, and True once it does", func() {
 				By("restarting the Operator while the Secret still holds the old value")
 				restartOperator(password, newPassword)
@@ -1426,6 +1431,13 @@ spec:
 					status, reason := passwordCondition(g, restoredName)
 					g.Expect(status).To(Equal("False"))
 					g.Expect(reason).To(Equal("DBAPasswordRotationUnsupported"))
+					msg, err := h.clusterField(restoredName,
+						`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].message}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					for _, member := range membersOf(restoredName) {
+						g.Expect(msg).To(ContainSubstring(member), "the check did not report %s's answer", member)
+					}
+					g.Expect(msg).NotTo(ContainSubstring("accepted on"))
 				}, 3*time.Minute, 3*time.Second).Should(Succeed())
 
 				By("putting the new value into the Secret, last, and waiting until every member's file holds it")

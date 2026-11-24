@@ -128,8 +128,9 @@ it can still test guesses. The `DBAPasswordRotationUnsupported` Condition tells
 them whether a guess matched the database's stored password: it appears when
 the value is not the password and is absent when it is. A new value is checked
 about once per poll (5 minutes by default) while a member can be asked; on an
-HA cluster that needs a resolved primary. A check that cannot tell is retried
-after about 30 seconds. The time the kubelet takes to update the mounted file
+HA cluster that needs a resolved primary, and every member is asked. A check
+of the standalone member or the HA primary that cannot tell is retried after
+about 30 seconds. The time the kubelet takes to update the mounted file
 (about a minute) also limits the rate. See
 [Changing the password is not supported](#changing-the-password-is-not-supported),
 which describes how a changed value is reported.
@@ -179,7 +180,7 @@ database, if one could tell, accepted it.
 | `DBAPasswordKeyEmpty` | The key is empty, or holds only a line feed |
 | `DBAPasswordValueInvalid` | The value exceeds 31 bytes, CUBRID's own bound, or contains NUL, CR, a line feed other than the one optional trailing newline, another ASCII control byte (including tab and Ctrl+C), or DEL. These bytes are refused because a terminal password prompt may interpret them as editing, signals or flow control |
 | `DBAPasswordSecretReadFailed` | The Operator could not read the Secret, for example for lack of permission; it retries with backoff |
-| `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused: it is not the database's current DBA password (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
+| `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused on at least one member: it is not that member's current DBA password. The message names the members that refused it and, on an HA cluster whose members disagree, those that accepted it (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
 
 The message names the Secret and the key, never the value. A new problem also
 records a Warning Event with the same reason.
@@ -240,15 +241,21 @@ resolve, so no member runs and the HA bootstrap does not start until it does.
 
 A changed value is reported on an HA cluster as on a standalone one (see
 [Changing the password is not supported](#changing-the-password-is-not-supported)),
-except that the Operator asks only the cluster's primary: the member in
-`status.currentPrimary`, resolved and ready in the same reconcile. The
-password was set on it and reaches the slaves from it by replication, and its
-Instance Manager checks only while `cubrid heartbeat status` reports it as the
-master with its server `registered_and_active`. No member is asked while no
-primary is resolved, while two members claim to be the master, or while the
-HA bootstrap has not admitted every member (a member that is still being
-seeded is never asked); the Condition is then left as it is. A slave that
-lags does not stop the check. A member whose container starts again starts
+except that the Operator asks every member: the primary in
+`status.currentPrimary`, resolved and ready in the same reconcile, and each
+member that is ready as a slave (#1012). Each member keeps its own copy of the
+password: a slave seeded from the primary starts with the primary's, but a
+password changed later with `set_password` changes only the member it runs on
+(POC-74). Asking only the primary would leave a slave still on an old password
+unnoticed until a failover promoted it. Each member's Instance Manager checks
+only while `cubrid heartbeat status` reports it as the master with its server
+`registered_and_active`, or as a slave with its server
+`registered_and_standby`; in any other state it answers that it cannot tell.
+No member is asked while no primary is resolved, while two members claim to be
+the master, or while the HA bootstrap has not admitted every member (a member
+that is still being seeded is never asked); the Condition is then left as it
+is. A slave that lags is asked like the others: it answers for its own
+password. A member whose container starts again starts
 heartbeat without checking the password
 ([Restarting after a changed value](#restarting-after-a-changed-value)).
 
@@ -313,27 +320,54 @@ It has been tried only in local Docker and is not supported yet.
 
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
-([HA clusters](#ha-clusters)), the Operator asks that member's Instance
-Manager, at most once every 5 minutes per cluster and at once after the
-Operator restarts, whether the value is still the database's DBA
-password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
+([HA clusters](#ha-clusters)), the Operator asks the Instance Manager of that
+member, or of every member of the HA cluster, at most once every 5 minutes per
+cluster and at once after the Operator restarts, whether the value is still
+that member's DBA password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
 through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
 and types the file's value at csql's `Enter Password` prompt on a
 pseudo-terminal, as the password step does. The login changes nothing, and no
 copy or hash of the value is stored. So it also notices a password changed in
 the database by hand with `ALTER USER`.
 
-- **The login is refused for its password:** `DBAPasswordSecretResolved`
-  becomes `False` with the reason `DBAPasswordRotationUnsupported`, and a
-  Warning Event with the same reason is recorded once. The message names the
-  Secret and the key, never the value. The StatefulSet and the Pod are not
-  changed, and nothing is restarted.
-- **The login is accepted again**, for example after the old value was put
-  back: the Condition returns to `True` with `DBAPasswordSecretResolved`.
-- **The check cannot tell** (the server is not running, an HA member is not
-  the active master, the Instance Manager cannot be reached, another check is
-  running, or csql neither accepted nor refused the login): the Condition is left as it is, and the Operator asks
-  again after about 30 seconds instead of waiting out the 5-minute poll. It is never reported as a changed password.
+- **The login is refused for its password on any member:**
+  `DBAPasswordSecretResolved` becomes `False` with the reason
+  `DBAPasswordRotationUnsupported`, and a Warning Event with the same reason
+  is recorded once. The message names the Secret, the key and the members
+  that refused the value, never the value. When other members accepted it,
+  the message names them too: the members' passwords differ (a manual change
+  ran on only some of them), or the kubelet has not yet written a changed
+  Secret into every member's file. Both cases keep the same reason, because
+  for about a minute after a Secret change they look the same. The
+  StatefulSet and the Pods are not changed, and nothing is restarted.
+- **The login is accepted on every member**, for example after the old value
+  was put back: the Condition returns to `True` with
+  `DBAPasswordSecretResolved`. On an HA cluster this needs the answer of every
+  member; a member that was not asked or could not tell is never counted as a
+  match.
+- **The check cannot tell** on a member, and no member refused the login (the
+  server is not running, an HA member is neither the active master nor a
+  slave with a standby server, the Instance Manager cannot be reached,
+  another check is running, or csql neither accepted nor refused the login):
+  the Condition is left as it is. When the member that cannot tell is the
+  standalone member or the HA primary, the Operator asks again after about 30
+  seconds instead of waiting out the 5-minute poll. A slave that cannot tell
+  waits for the next poll: a slave whose Instance Manager is older than the
+  Operator (for example while the DB Pods have not yet been replaced after an
+  Operator upgrade, or with a pinned `spec.image`) answers that it cannot
+  tell on every check, and a shorter retry would log in on every member every
+  30 seconds. It is never reported as a changed password, nor as a match.
+
+**After upgrading to an Operator that asks every member** (#1012): an HA
+cluster whose slaves really hold another password than the Secret's, for
+example after an earlier manual `set_password` ran on the primary only,
+changes from `True` to `False` with `DBAPasswordRotationUnsupported` and
+records a Warning Event naming the slaves that refused the value. This is
+intended: such a slave would refuse the Secret's password after a failover.
+Change the password on those members, or put their password back on the
+others, until every member accepts the Secret's value. Until every member's
+Instance Manager is of the new build, its slaves answer that they cannot
+tell, and the Condition stays as it was.
 
 A change is therefore reported within about 5 minutes, plus the time the
 kubelet takes to update the mounted file (up to its sync period, about a
@@ -402,9 +436,11 @@ Steps, as tried in Docker:
 6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'exec csql -u dba -c "SELECT 1" <db>@localhost'`
    must accept the new password and answer `Incorrect or missing password.`
    for the old one.
-7. Put the new value in the Secret. Until the kubelet updates the mounted
-   file, the Operator reports `DBAPasswordRotationUnsupported` for the old
-   value ([How a changed value is reported](#changing-the-password-is-not-supported)).
+7. Put the new value in the Secret. Until the kubelet updates every member's
+   mounted file, the Operator reports `DBAPasswordRotationUnsupported`
+   ([How a changed value is reported](#changing-the-password-is-not-supported)).
+   It reports `True` only once every member accepts the Secret's value, so a
+   member that was skipped in steps 3 and 4 stays reported by name.
    The Secret must hold the new value before any member is seeded again,
    since a seed is checked against it.
 
@@ -446,9 +482,10 @@ copiers and appliers logged no new `-171` line and each slave's applier fail
 count (`cubrid applyinfo`) did not grow; that `HAReady` and
 `ReplicationHealthy` are `True`; that, after an Operator restart with the old
 value still in the Secret, `DBAPasswordSecretResolved` is `False` with
-`DBAPasswordRotationUnsupported`, and, once the Secret holds the new value,
-every member's mounted file holds it and an Operator restart sets it back to
-`True`; that a Broker client logging in through `-rw` and `-ro` is refused
+`DBAPasswordRotationUnsupported`, with every member named as refusing it,
+and, once the Secret holds the new value, every member's mounted file holds it
+and an Operator restart sets it back to `True`, which needs every member,
+slaves included, to accept it; that a Broker client logging in through `-rw` and `-ro` is refused
 with the old value and the empty one and accepted with the new one; and that
 neither value is in the cluster, the StatefulSet, the Events, the Broker
 client Pods, the Operator log, a member's log, the operation store,
@@ -516,7 +553,7 @@ its DB Pod is started again.
 
 A Kind e2e step changes the Secret of an HA cluster after it became Ready,
 expects `DBAPasswordRotationUnsupported`, and `True` again once the value is
-put back; it restarts no member. On the VM lab, a changed value was reported as
+put back and every member's file holds it; it restarts no member. On the VM lab, a changed value was reported as
 `DBAPasswordRotationUnsupported` and not applied, and the condition was `True`
 again once the original was put back (2026-11-22 UTC, #801; development
 build `b6486c5`, not a candidate).
@@ -536,8 +573,11 @@ csql tries the empty password and prints that same refusal, so only what csql
 prints after the prompt decides the answer. The same login in client mode,
 `csql -u dba <db>@localhost`, logs in on every member of an HA cluster,
 slaves included, in the Kind HA scenario with a DBA password on CUBRID
-11.4.7.1995. The Instance Manager's own check is tested with a stand-in for
-csql. A Kind e2e step changes the Secret of an HA cluster after it became
+11.4.7.1995. The Instance Manager's own check, on a master and on a slave, is
+tested with a stand-in for csql. The Operator's rule that every member must
+match, one member that refuses is reported and an answer that cannot tell is
+never a match, is tested with a stand-in for the Instance Managers
+(`internal/controller/dba_password_rotation_test.go`). A Kind e2e step changes the Secret of an HA cluster after it became
 Ready and expects `DBAPasswordRotationUnsupported`, then `True` once the
 password is put back; it restarts the Operator instead of waiting out the
 5-minute poll. The same check ran on the VM lab without a restart, on
