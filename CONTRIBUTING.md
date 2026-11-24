@@ -409,6 +409,44 @@ This section governs new work selection alongside the normal small-PR,
 issue-assignment and CI/acceptance rules below. It does not transfer ownership,
 waive required failure evidence, or authorize a merge without maintainer direction.
 
+### Closing issues during the v0.1 release
+
+Measure progress by open v0.1 **acceptance gates and actionable work**, not
+by total issue count. Keep evidence gates few and separately judgeable.
+The gate owners and supported scope are defined in ROADMAP.md and the
+current #308 execution order; the decision is recorded on #954.
+
+- Classify open issues as an acceptance gate, bounded implementation task,
+  unresolved finding, or backlog. A gate may remain open for required
+  real-environment or independent release evidence. A task closes on merge
+  when its scoped acceptance criteria, regression tests and applicable
+  final-head checks are met; separate candidate evidence belongs to the
+  gate. For multi-PR tasks, earlier PRs may use `Refs #N` until completion.
+- Each PR links its bounded task (`Closes #N` when complete, otherwise
+  `Refs #N`) and the relevant gate when applicable. A gate-only evidence PR
+  may use `Refs #N`. A PR without an owning issue needs a maintainer
+  decision before review. Never auto-close a release gate from a PR.
+- Record a lab or Kind finding on its existing owning gate first, with run
+  identity, raw verdict, evidence and effect on acceptance. Create a distinct
+  task only for a concrete fix with its own acceptance criteria. Unresolved
+  safety findings stay visible until disposition; never close them simply
+  to reduce the count.
+- Consolidate duplicate trackers only after transferring all outstanding
+  acceptance obligations and linking the historical issue. Closing a task
+  or consolidating a tracker is not a scenario pass. Do not reopen completed
+  implementation for a later candidate campaign.
+- Use repository-local `gate` and `known limitation` labels and `v0.1` /
+  `v0.2` milestones once provisioned. These are acceptance/scheduling
+  metadata, not workflow-status labels, and must not replace the canonical
+  type, priority, size or phase labels or the Release line. Keep the Release
+  line and milestone consistent; mark administrative or cross-version
+  tracking as non-blocking and keep it outside the v0.1 count. Until metadata
+  is available, use the Release line and the named gate index.
+- Never weaken ADR invariants, required candidate or final-head evidence,
+  raw historical verdicts, mandatory measurements, independent reproduction,
+  or publication authorization to close an issue. A documented limitation
+  is not a fixed defect or a waiver of required measurements.
+
 ## Two-maintainer coordination
 
 - Each maintainer has one implementation issue in progress by default.
@@ -515,7 +553,8 @@ separate safety/SQL/VM acceptance criteria.
   cannot pass on the wrong behavior, and what was implemented is kept apart
   from what was validated, with the remaining limits written down. Refer to its
   tracking issue with `Refs #45`. A tracking issue is closed by a maintainer after its
-  sub-issues are done and the integrated validation is confirmed.
+  sub-issues are done and the integrated validation is confirmed, or explicitly
+  consolidated into the owning gate under the v0.1 issue lifecycle rules.
 - Fill in the "Validation Evidence" section of the PR template. Keep what was
   implemented separate from what was validated on a real cluster.
 - Resolve or answer every review comment before merging.
@@ -782,7 +821,8 @@ create more issues.
 - Keep the tracking issue's checklist in step with the actual state of its
   sub-issues.
 - Closing every sub-issue does not close the tracking issue automatically; a
-  maintainer closes it after confirming the integrated result.
+  maintainer closes it after confirming the integrated result, or after
+  explicitly consolidating all remaining obligations into the owning gate.
 - Release acceptance and tracking-issue closure are separate. A tracking issue
   states which of its items the release needs; an open tracking issue, or an
   open item the release does not need, does not by itself block a release.
