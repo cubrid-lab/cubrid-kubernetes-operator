@@ -605,17 +605,17 @@ func (h *haRun) endS07OldToken(ctx context.Context, c *s07Record) {
 	}
 }
 
-// removeS07OldToken removes an earlier token the run set, once, when the
-// annotation still names it; it runs within s07RemoveTokenBound, also after
-// the run's context ended.
+// removeS07OldToken removes an earlier token the run set when the annotation
+// still names it, until an attempt did not fail; it runs within
+// s07RemoveTokenBound, also after the run's context ended.
 func (h *haRun) removeS07OldToken(ctx context.Context, c *s07Record, o *s07OldToken) {
 	if o.token == "" || o.removed {
 		return
 	}
-	o.removed = true
 	r := &s07ManualRelease{lastSet: o.token}
 	h.removeS07ReleaseToken(ctx, c, r)
 	o.AnnotationRemovedByRun, o.AnnotationRemoveError = r.AnnotationRemovedByRun, r.AnnotationRemoveError
+	o.removed = r.AnnotationRemoveError == ""
 }
 
 // s07OldTokenSettled reports whether the hold may end as far as the earlier
@@ -694,13 +694,17 @@ func (h *haRun) readS07EndRoles(ctx context.Context, rec *s07Record) {
 }
 
 // s07CleanupSucceeded is the scenario's cleanup: the first cut's, and also the
-// second cut's when one was injected.
+// second cut's when one was injected, with every earlier token the run set
+// removed or found gone.
 func s07CleanupSucceeded(rec *s07Record, first *bool) *bool {
 	c := s07RepeatCut(rec)
 	if first == nil || c == nil || c.FaultIssuedAt == nil {
 		return first
 	}
 	both := *first && c.CleanupSucceeded
+	for _, o := range rec.Repeat.OldTokens {
+		both = both && o.AnnotationRemoveError == ""
+	}
 	return &both
 }
 
@@ -811,8 +815,13 @@ func s07OldTokenBlocked(o *s07OldToken) string {
 		return ""
 	case o.OtherRelease != "":
 		return "the new quarantine was " + o.OtherRelease + " during the watch after " + o.Kind
+	case o.QuarantineGone != "" && s07OldTokenWatched(o):
+		return fmt.Sprintf("the new quarantine was gone at the last reading of the watch after %s, at the end of "+
+			"its %s window, so whether that token released it is unknown: %s", o.Kind, s07StaleTokenWindow,
+			o.QuarantineGone)
 	case o.QuarantineGone != "":
-		return "the watch after " + o.Kind + " ended early: " + o.QuarantineGone
+		return fmt.Sprintf("the watch after %s ended before its %s window because the new quarantine was gone: %s",
+			o.Kind, s07StaleTokenWindow, o.QuarantineGone)
 	case o.Readings < 2:
 		return fmt.Sprintf("the cluster was read %d time(s) after %s was set, and the run needs two", o.Readings,
 			o.Kind)
@@ -939,7 +948,8 @@ func s07RepeatMeasurements(rec *s07Record, m map[string]any) {
 
 // s07OldTokensIgnored is whether every earlier token the run set was ignored:
 // "unknown" unless each was set and watched for its whole window with at
-// least two readings and no release by another token.
+// least two readings, no release by another token and, unless a release on
+// it was read, the quarantine not gone without a release the run read.
 func s07OldTokensIgnored(olds []*s07OldToken) string {
 	if len(olds) == 0 {
 		return evidence.Unknown
@@ -947,7 +957,7 @@ func s07OldTokensIgnored(olds []*s07OldToken) string {
 	ignored := true
 	for _, o := range olds {
 		if !o.done || o.Readings < 2 || o.OtherRelease != "" ||
-			len(o.NeverEvents) == 0 && !s07OldTokenWatched(o) {
+			len(o.NeverEvents) == 0 && (!s07OldTokenWatched(o) || o.QuarantineGone != "") {
 			return evidence.Unknown
 		}
 		ignored = ignored && o.QuarantineHeld && o.BrokersHeld && len(o.NeverEvents) == 0
