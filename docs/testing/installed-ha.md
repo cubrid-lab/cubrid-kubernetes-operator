@@ -1653,23 +1653,37 @@ After the first cut's settle wait and release, the run:
    readings while it holds, the hold of `-partition-hold`, the removal and
    the settle wait, all recorded in the second cut's own record;
 6. while the second cut holds, once it reads the new quarantine enforced
-   with the read-write path at zero, sets the release annotation to a token
-   of the first quarantine: the one the run's release consumed, or the last
-   one it saw when the Operator released the first quarantine
-   (`oldTokenReplay`). The run never sets a token that is the new
-   quarantine's own, which would release it. For 30 seconds it reads
-   whether the new quarantine stays in force and the read-write Brokers stay
-   at zero, records any release refusal, and then removes the annotation
-   with a JSON patch that tests the cluster's UID and the value first. The
-   hold lasts until this watch ended, within a minute and 30 seconds more
-   than `-partition-hold`.
+   with the read-write path at zero, sets the release annotation to tokens
+   of the first quarantine, one after the other (`oldTokenReplays`): first
+   the one the run's release consumed, when the run released, then the
+   newest one no release consumed, when the run saw one (with an automatic
+   release, that is the only one). The two reach different checks of the
+   Operator (`decideManualRelease` in
+   `internal/controller/quarantine_release.go`, recorded as
+   `operatorCheck`): the consumed token is the one
+   `status.lastWriteQuarantineRelease.releaseToken` still names, which the
+   Operator ignores and removes; the other is not the new quarantine's
+   current `status.writeQuarantine.releaseToken`, which leaves it inert. The
+   run never sets a token that is the new quarantine's own, which would
+   release it. For 30 seconds after each token it reads whether the new
+   quarantine stays in force and the read-write Brokers stay at zero,
+   records any release refusal, and then removes the annotation with a JSON
+   patch that tests the cluster's UID and the value first. The token is
+   kept before the patch that sets it, so that a patch whose answer was lost
+   is still removed. The hold lasts until these watches ended, within 2
+   minutes more than `-partition-hold`, and any token left is removed as
+   soon as the cut's fault flow returns, before the settle wait.
 
 The second cut makes no manual release: when its quarantine is one only a
 person may release, it is left in force and recorded (`quarantineAtEnd` of
 the second cut). The clients are stopped and read, the data check and the
 health window are made once, after the second cut, against the master the
 second cut settled on (`dataCheck.comparedWithMaster`), with the history of
-both cuts: every acknowledged write of either window must be on that master
+both cuts. When the second cut's master move started and the cut was then
+not made, the run reads the roles again just before the data check
+(`masterBeforeDataCheck`) and compares the rows with that master; when it
+cannot read them, the data check is not made and S07 is blocked. The data
+check covers both windows: every acknowledged write of either window must be on that master
 unless the run's manual release accepted its loss. When the second cut does
 not settle, the rows and engine logs are kept under `repeat/` instead.
 
@@ -1699,14 +1713,16 @@ second cut` in the reason):
   the move or the keepalive step, failing); any blocking observation of the
   second cut by the rules below (no trigger seen, the cut not confirmed or
   held, the second session's history insufficient, the cluster not settled);
-  no old token tried (`oldTokenReplay.notMade`); the new quarantine released
-  by another token or gone during the watch without a release the run read;
-  fewer than two readings in the watch; or the watch still running when the
-  run was judged.
+  no old token tried (`oldTokenReplays[].notMade`), or fewer tried than the
+  run had; the new quarantine released by another token or gone during a
+  watch without a release the run read; fewer than two readings in a watch,
+  or a watch that ended before its 30 seconds; or a watch still running when
+  the run was judged.
 
 The measurements add `repeat` (`made`, `not made` or `not reached`),
 `secondQuarantineNewGeneration` and `oldTokenIgnored` (`true`, `false`, or
-`unknown` where the run did not show it), and `secondCut`: the second cut's
+`unknown` where the run did not show it: `oldTokenIgnored` needs every token
+watched for its whole window with two readings), and `secondCut`: the second cut's
 own measurements by the same names as the first's (`quarantineWithin`,
 `rwPodsGoneWithin`, `establishedAcknowledgedAfterPathClosed` and the
 others), with its `target`, `masterBefore` and `masterMoved`.
@@ -1714,9 +1730,10 @@ others), with its `target`, `masterBefore` and `masterMoved`.
 The option adds the second cut's bounds to the `-timeout` check: 5 minutes
 for the starting state, 2 for the second session, the 10-minute move for
 `higher-rank-isolated`, the 10-minute keepalive step when asked for, and the
-preparation, hold, old-token watch, removal and settle of the cut. With
+preparation, hold, the two old-token watches, removal and settle of the cut.
+The scenario's `cleanupSucceeded` holds only when both cuts were removed. With
 `-partition-keepalive 30s`, `-partition-manual-release` and the other
-defaults, the variant's own bounds are 93 minutes and 20 seconds, plus
+defaults, the variant's own bounds are 93 minutes and 50 seconds, plus
 LAB01:
 
 ```sh

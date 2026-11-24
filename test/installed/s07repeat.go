@@ -50,9 +50,19 @@ const (
 	// s07RepeatKeepaliveContainer is the keepalive container of the second
 	// cut: the first cut's may have ended, and its name cannot be used again.
 	s07RepeatKeepaliveContainer = netfault.KeepaliveContainer + "-" + s07RepeatDir
-	// The kinds of the earlier token the run sets during the second cut.
-	s07OldConsumed = "the token the first cut's manual release consumed"
-	s07OldLast     = "the last token of the first cut's quarantine"
+	// The kinds of the earlier tokens the run sets during the second cut, and
+	// the Operator's check each one reaches (decideManualRelease in
+	// internal/controller/quarantine_release.go). The consumed token is the
+	// one status.lastWriteQuarantineRelease.releaseToken still names
+	// (api/v1alpha1 WriteQuarantineRelease.releaseToken): it reaches the
+	// consumed-token check, which ignores the annotation and removes it. A
+	// token of the first quarantine that no release consumed reaches the
+	// check that the annotation is not the quarantine's current
+	// status.writeQuarantine.releaseToken, which leaves it inert.
+	s07OldConsumed     = "the token the first cut's manual release consumed"
+	s07OldUnconsumed   = "a token of the first cut's quarantine that no release consumed"
+	s07CheckConsumed   = "consumed token: status.lastWriteQuarantineRelease.releaseToken names it"
+	s07CheckNotCurrent = "not the current token: status.writeQuarantine.releaseToken differs"
 	// s07SecondCut starts what the verdict says about the second cut.
 	s07SecondCut = "on the second cut: "
 )
@@ -64,8 +74,8 @@ var (
 	// a ready -rw endpoint, the starting conditions, one master and the
 	// slaves, and status naming the master.
 	s07RepeatReadyBound = 5 * time.Minute
-	// s07OldTokenSlack covers, beyond s07StaleTokenWindow, the old token's
-	// removal and the poll that ends its watch.
+	// s07OldTokenSlack covers, beyond s07StaleTokenWindow for each earlier
+	// token, the tokens' removal and the polls that end their watches.
 	s07OldTokenSlack = time.Minute
 )
 
@@ -90,19 +100,34 @@ type s07Repeat struct {
 	// SessionStarted is set once the second established session had its
 	// first operations acknowledged.
 	SessionStarted bool `json:"secondSessionStarted"`
-	// OldToken is the earlier token the run set while the second quarantine
-	// was in force.
-	OldToken *s07OldToken `json:"oldTokenReplay,omitempty"`
+	// OldTokens are the earlier tokens the run set, one after another, while
+	// the second quarantine was in force: the one the first release consumed,
+	// when the run released, and one that no release consumed, when the run
+	// saw one.
+	OldTokens []*s07OldToken `json:"oldTokenReplays,omitempty"`
+	// EndMaster and EndSlaves are the roles read just before the data check
+	// when the second cut's master move started but the cut was not made, so
+	// that the rows are compared with the master of then; EndRolesUnmet says
+	// why they could not be read.
+	EndMaster     string   `json:"masterBeforeDataCheck,omitempty"`
+	EndSlaves     []string `json:"slavesBeforeDataCheck,omitempty"`
+	EndRolesUnmet string   `json:"rolesBeforeDataCheckUnmet,omitempty"`
 	// Cut is the second cut's own record.
 	Cut *s07Record `json:"secondCut,omitempty"`
 	// earlierTokens are the release tokens of the earlier quarantines, never
-	// written to the evidence; old is the one the run sets during the second
-	// cut, with its kind and generation; launched is set once the second
-	// established session's client was started.
+	// written to the evidence; olds are those the run sets during the second
+	// cut, in order; launched is set once the second established session's
+	// client was started.
 	earlierTokens []s07SeenToken
-	old           s07SeenToken
-	oldKind       string
+	olds          []s07OldTry
 	launched      bool
+}
+
+// s07OldTry is an earlier token the run sets during the second cut, with its
+// kind and the Operator's check it reaches.
+type s07OldTry struct {
+	token       s07SeenToken
+	kind, check string
 }
 
 // s07OldToken is the run's replay of an earlier quarantine's token during the
@@ -111,6 +136,7 @@ type s07Repeat struct {
 // force with the read-write Brokers at zero, and the token's removal.
 type s07OldToken struct {
 	Kind        string `json:"kind,omitempty"`
+	Check       string `json:"operatorCheck,omitempty"`
 	TokenPrefix string `json:"tokenPrefix,omitempty"`
 	Generation  string `json:"tokenGenerationID,omitempty"`
 	// Against is the second quarantine's generation when the token was set.
@@ -133,10 +159,12 @@ type s07OldToken struct {
 	NotMade                string     `json:"notMade,omitempty"`
 	AnnotationRemovedByRun *time.Time `json:"annotationRemovedByRun,omitempty"`
 	AnnotationRemoveError  string     `json:"annotationRemoveError,omitempty"`
-	// token is the token set, never written to the evidence; done is set
-	// once the step ended.
-	token string
-	done  bool
+	// token is the token set, kept from before the patch so that one whose
+	// patch timed out is still removed, and never written to the evidence;
+	// done is set once the step ended, removed once its removal was made.
+	token   string
+	done    bool
+	removed bool
 }
 
 // validateS07Repeat refuses -partition-repeat without a partition variant
@@ -181,9 +209,9 @@ func (c HAConfig) s07RepeatBounds() time.Duration {
 	return bounds
 }
 
-// s07OldTokenHold is how much longer than -partition-hold the old token's
-// watch may hold the second cut.
-func s07OldTokenHold() time.Duration { return s07StaleTokenWindow + s07OldTokenSlack }
+// s07OldTokenHold is how much longer than -partition-hold the watches of the
+// earlier tokens, two at most, may hold the second cut.
+func s07OldTokenHold() time.Duration { return 2*s07StaleTokenWindow + s07OldTokenSlack }
 
 // s07RepeatCut is the second cut's record, or nil.
 func s07RepeatCut(rec *s07Record) *s07Record {
@@ -230,22 +258,29 @@ func s07RepeatUnready(rec *s07Record) string {
 	return ""
 }
 
-// s07EarlierTokens are the first cut's release tokens, the token its manual
-// release consumed among them, and the token the run sets during the second
-// cut: the consumed one when the run released, else the last one seen.
-func s07EarlierTokens(rec *s07Record) ([]s07SeenToken, s07SeenToken, string) {
+// s07EarlierTokens are the first cut's release tokens, with the token its
+// manual release consumed among them, and the tokens the run sets during the
+// second cut: the consumed one when the run released, then the newest one no
+// release consumed, when there is one.
+func s07EarlierTokens(rec *s07Record) ([]s07SeenToken, []s07OldTry) {
 	tokens := slices.Clone(rec.tokens)
+	var olds []s07OldTry
+	consumed := ""
 	if r := rec.ManualRelease; r != nil && r.AcceptedSeenAt != nil && r.currentToken != "" {
-		consumed := s07SeenToken{Generation: r.GenerationID, Token: r.currentToken}
-		if !slices.Contains(tokens, consumed) {
-			tokens = append(tokens, consumed)
+		consumed = r.currentToken
+		t := s07SeenToken{Generation: r.GenerationID, Token: consumed}
+		if !slices.Contains(tokens, t) {
+			tokens = append(tokens, t)
 		}
-		return tokens, consumed, s07OldConsumed
+		olds = append(olds, s07OldTry{token: t, kind: s07OldConsumed, check: s07CheckConsumed})
 	}
-	if len(tokens) == 0 {
-		return tokens, s07SeenToken{}, ""
+	for _, t := range slices.Backward(tokens) {
+		if t.Token != "" && t.Token != consumed {
+			olds = append(olds, s07OldTry{token: t, kind: s07OldUnconsumed, check: s07CheckNotCurrent})
+			break
+		}
 	}
-	return tokens, tokens[len(tokens)-1], s07OldLast
+	return tokens, olds
 }
 
 // s07MoveGenerations are the quarantine generations seen while a record's
@@ -286,7 +321,7 @@ func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
 	started := time.Now().UTC()
 	rep.StartedAt = &started
 	rep.EarlierGenerations = append(slices.Clone(rec.Generations), s07MoveGenerations(rec)...)
-	rep.earlierTokens, rep.old, rep.oldKind = s07EarlierTokens(rec)
+	rep.earlierTokens, rep.olds = s07EarlierTokens(rec)
 	state, members, err := h.waitS07RepeatReady(ctx, rec, rep)
 	if err != nil {
 		return notMade("%v", err)
@@ -333,9 +368,19 @@ func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
 		},
 	})
 	stopWatch()
+	return h.endS07SecondCut(ctx, c, outcome)
+}
+
+// endS07SecondCut ends the second cut once its fault flow returned: it first
+// removes any earlier token the run set, so that none is left through the
+// settle wait (the deferred removal in repeatS07 only backs this up), then
+// records the outcome and the timeline, and settles the cluster when the cut
+// was made and removed. It returns the steps still running after their limit.
+func (h *haRun) endS07SecondCut(ctx context.Context, c *s07Record, outcome faults.Outcome) []string {
+	h.endS07OldToken(ctx, c)
 	h.recordS07Outcome(c, outcome)
 	if err := h.writeTimeline(s07File(c.dir(), "timeline.jsonl"), outcome.Timeline); err != nil {
-		rec.note("repeat_timeline_unwritten", err.Error())
+		c.note("repeat_timeline_unwritten", err.Error())
 	}
 	if len(outcome.StillRunning) > 0 {
 		c.mu.Lock()
@@ -417,41 +462,49 @@ func (h *haRun) s07RepeatUnmet(ctx context.Context, rec *s07Record) (*startingSt
 	return state, members, "", nil
 }
 
-// stepS07OldToken advances the old token's replay on a poll while the second
-// cut holds: it sets the token once the second quarantine is enforced with
-// the read-write path at zero, watches after it, and gives it up once the
-// hold ended before that.
+// stepS07OldToken advances the earlier tokens' replay on a poll while the
+// second cut holds: it sets the first token once the second quarantine is
+// enforced with the read-write path at zero, watches after it, sets the next
+// one once a watch ended with the quarantine held, and gives up once the hold
+// ended before the first one was due.
 func (h *haRun) stepS07OldToken(ctx context.Context, c *s07Record, now time.Time) {
 	rep := c.repeat
-	o := rep.OldToken
+	n := len(rep.OldTokens)
 	switch {
-	case o == nil && s07RestartDue(c):
+	case n > 0 && !rep.OldTokens[n-1].done:
+		h.watchS07OldToken(ctx, c, rep.OldTokens[n-1], now)
+	case s07OldTokenSettled(c):
+	case n > 0 || s07RestartDue(c):
 		h.setS07OldToken(ctx, c)
-	case o == nil && now.Sub(*c.FaultConfirmedAt) >= h.cfg.PartitionHold:
-		rep.OldToken = &s07OldToken{NotMade: "no quarantine was seen enforced with the read-write path closed " +
-			"while the second cut held for -partition-hold", done: true}
-		c.note("old_token_not_made", rep.OldToken.NotMade)
-	case o != nil && !o.done:
-		h.watchS07OldToken(ctx, c, now)
+	case now.Sub(*c.FaultConfirmedAt) >= h.cfg.PartitionHold:
+		o := &s07OldToken{NotMade: "no quarantine was seen enforced with the read-write path closed while the " +
+			"second cut held for -partition-hold", done: true}
+		rep.OldTokens = append(rep.OldTokens, o)
+		c.note("old_token_not_made", o.NotMade)
 	}
 }
 
-// setS07OldToken sets the earlier quarantine's token on the run's own cluster
-// while the second quarantine is in force, unless that quarantine is not one
-// the second cut saw or its own token is the earlier one, which would release
-// it.
+// setS07OldToken sets the next earlier token on the run's own cluster while
+// the second quarantine is in force, unless that quarantine is not one the
+// second cut saw or its own token is the earlier one, which would release it.
+// The token is kept before the patch, so that a patch whose answer was lost
+// is still removed.
 func (h *haRun) setS07OldToken(ctx context.Context, c *s07Record) {
 	rep := c.repeat
-	o := &s07OldToken{Kind: rep.oldKind, Generation: rep.old.Generation, TokenPrefix: s07TokenPrefix(rep.old.Token)}
-	rep.OldToken = o
+	o := &s07OldToken{}
+	rep.OldTokens = append(rep.OldTokens, o)
 	notMade := func(format string, args ...any) {
 		o.NotMade, o.done = fmt.Sprintf(format, args...), true
 		c.note("old_token_not_made", o.NotMade)
 	}
-	if rep.old.Token == "" {
+	n := len(rep.OldTokens) - 1
+	if n >= len(rep.olds) {
 		notMade("no release token of the first cut's quarantine was seen")
 		return
 	}
+	try := rep.olds[n]
+	o.Kind, o.Check, o.Generation = try.kind, try.check, try.token.Generation
+	o.TokenPrefix = s07TokenPrefix(try.token.Token)
 	cluster, err := h.s07OwnCluster(ctx)
 	if err != nil {
 		notMade("%v", err)
@@ -462,29 +515,28 @@ func (h *haRun) setS07OldToken(ctx context.Context, c *s07Record) {
 	case q == nil || !slices.Contains(c.Generations, q.GenerationID):
 		notMade("the quarantine in force is not one the second cut saw")
 		return
-	case q.ReleaseToken == rep.old.Token:
+	case q.ReleaseToken == try.token.Token:
 		notMade("the second quarantine's own token is the earlier one; setting it would release it")
 		return
 	}
-	o.Against = q.GenerationID
-	if err := h.setS07ReleaseToken(ctx, rep.old.Token); err != nil {
+	o.Against, o.token = q.GenerationID, try.token.Token
+	if err := h.setS07ReleaseToken(ctx, o.token); err != nil {
 		o.SetError = err.Error()
 		notMade("the earlier token could not be set: %v", err)
+		h.removeS07OldToken(ctx, c, o)
 		return
 	}
-	o.token = rep.old.Token
 	set := time.Now().UTC()
 	o.SetAt, o.QuarantineHeld, o.BrokersHeld = &set, true, true
 	c.note("old_token_set", o.Kind)
 }
 
-// watchS07OldToken reads the cluster once after the earlier token was set: a
+// watchS07OldToken reads the cluster once after an earlier token was set: a
 // release of the second quarantine on it, or read-write Brokers above zero
 // while that quarantine is in force, is a never-event; a release by another
 // token or the quarantine gone ends the watch; so does s07StaleTokenWindow
 // after the token was set. The token is removed when the watch ends.
-func (h *haRun) watchS07OldToken(ctx context.Context, c *s07Record, now time.Time) {
-	o := c.repeat.OldToken
+func (h *haRun) watchS07OldToken(ctx context.Context, c *s07Record, o *s07OldToken, now time.Time) {
 	if cluster, err := h.s07OwnCluster(ctx); err == nil {
 		o.Readings++
 		q := cluster.Status.WriteQuarantine
@@ -516,32 +568,54 @@ func (h *haRun) watchS07OldToken(ctx context.Context, c *s07Record, now time.Tim
 		}
 	}
 	if !o.QuarantineHeld || !now.Before(o.SetAt.Add(s07StaleTokenWindow)) || ctx.Err() != nil {
-		o.WatchedUntil = &now
-		h.endS07OldToken(ctx, c)
+		o.WatchedUntil, o.done = &now, true
+		h.removeS07OldToken(ctx, c, o)
 	}
 }
 
-// endS07OldToken removes the earlier token the run set, unless the Operator
-// already removed it, and ends the step; it runs within s07RemoveTokenBound,
-// also after the run's context ended.
+// endS07OldToken ends every earlier token's step and removes each token the
+// run set, unless the Operator already removed it.
 func (h *haRun) endS07OldToken(ctx context.Context, c *s07Record) {
-	o := c.repeat.OldToken
-	if o == nil || o.done {
+	for _, o := range c.repeat.OldTokens {
+		o.done = true
+		h.removeS07OldToken(ctx, c, o)
+	}
+}
+
+// removeS07OldToken removes an earlier token the run set, once, when the
+// annotation still names it; it runs within s07RemoveTokenBound, also after
+// the run's context ended.
+func (h *haRun) removeS07OldToken(ctx context.Context, c *s07Record, o *s07OldToken) {
+	if o.token == "" || o.removed {
 		return
 	}
-	o.done = true
-	if o.token == "" {
-		return
-	}
+	o.removed = true
 	r := &s07ManualRelease{lastSet: o.token}
 	h.removeS07ReleaseToken(ctx, c, r)
 	o.AnnotationRemovedByRun, o.AnnotationRemoveError = r.AnnotationRemovedByRun, r.AnnotationRemoveError
 }
 
-// s07OldTokenSettled reports whether the hold may end as far as the old token
-// is concerned: the record is no second cut's, or the step ended.
+// s07OldTokenSettled reports whether the hold may end as far as the earlier
+// tokens are concerned: the record is no second cut's, or the last step
+// ended and no other is due: every token was tried, or the last was not set,
+// or its watch did not end with the quarantine held.
 func s07OldTokenSettled(rec *s07Record) bool {
-	return rec.repeat == nil || rec.repeat.OldToken != nil && rec.repeat.OldToken.done
+	if rec.repeat == nil {
+		return true
+	}
+	olds := rec.repeat.OldTokens
+	if len(olds) == 0 {
+		return false
+	}
+	last := olds[len(olds)-1]
+	return last.done && (len(olds) >= len(rec.repeat.olds) || last.NotMade != "" || !last.QuarantineHeld ||
+		len(last.NeverEvents) > 0)
+}
+
+// s07OldTokenWatched reports whether an earlier token's watch ran its whole
+// window.
+func s07OldTokenWatched(o *s07OldToken) bool {
+	return o.SetAt != nil && o.WatchedUntil != nil && !o.WatchedUntil.Before(o.SetAt.Add(s07StaleTokenWindow))
 }
 
 // s07SplitProbes splits the new-connection writes at the second cut's start:
@@ -559,12 +633,52 @@ func s07SplitProbes(probes []s07Probe, at time.Time) (first, second []s07Probe) 
 }
 
 // s07EndMaster is the master and slaves the run ended with: the second cut's
-// when it settled, the first cut's otherwise.
-func s07EndMaster(rec *s07Record) (string, []string) {
-	if c := s07RepeatCut(rec); c != nil && c.SettledAt != nil {
-		return c.FinalMaster, c.FinalSlaves
+// when it settled; the roles read before the data check when the second cut's
+// master move started and the cut was not made; the first cut's otherwise. A
+// master that could not be known is "", with the reason.
+func s07EndMaster(rec *s07Record) (string, []string, string) {
+	c := s07RepeatCut(rec)
+	switch {
+	case c != nil && c.SettledAt != nil:
+		return c.FinalMaster, c.FinalSlaves, ""
+	case c != nil && c.FaultIssuedAt == nil && c.MasterMove != nil && c.MasterMove.DeletedAt != nil:
+		if rec.Repeat.EndMaster == "" {
+			return "", nil, "the second cut moved the master and was not made, and the roles before the data " +
+				"check were not read: " + cmpOr(rec.Repeat.EndRolesUnmet, "unknown")
+		}
+		return rec.Repeat.EndMaster, rec.Repeat.EndSlaves, ""
 	}
-	return rec.FinalMaster, rec.FinalSlaves
+	return rec.FinalMaster, rec.FinalSlaves, ""
+}
+
+// readS07EndRoles reads the roles before the data check when the second
+// cut's master move started and the cut was not made: the first cut's final
+// master may not be the master any more.
+func (h *haRun) readS07EndRoles(ctx context.Context, rec *s07Record) {
+	c := s07RepeatCut(rec)
+	if c == nil || c.FaultIssuedAt != nil || c.MasterMove == nil || c.MasterMove.DeletedAt == nil {
+		return
+	}
+	state, unmet, err := h.roles(ctx)
+	switch {
+	case err != nil:
+		rec.Repeat.EndRolesUnmet = err.Error()
+	case unmet != "":
+		rec.Repeat.EndRolesUnmet = unmet
+	default:
+		rec.Repeat.EndMaster, rec.Repeat.EndSlaves = state.Master, state.Slaves
+	}
+}
+
+// s07CleanupSucceeded is the scenario's cleanup: the first cut's, and also the
+// second cut's when one was injected.
+func s07CleanupSucceeded(rec *s07Record, first *bool) *bool {
+	c := s07RepeatCut(rec)
+	if first == nil || c == nil || c.FaultIssuedAt == nil {
+		return first
+	}
+	both := *first && c.CleanupSucceeded
+	return &both
 }
 
 // s07ReusedGeneration is a generation of the second cut's quarantines that an
@@ -610,7 +724,7 @@ func s07RepeatNeverEvents(rec *s07Record) []string {
 	if s07ReusedToken(rep) {
 		never = append(never, s07SecondCut+"the quarantine's release token is one an earlier quarantine had")
 	}
-	if o := rep.OldToken; o != nil {
+	for _, o := range rep.OldTokens {
 		never = append(never, o.NeverEvents...)
 	}
 	return never
@@ -647,27 +761,43 @@ func s07RepeatBlocked(rec *s07Record) []string {
 	for _, b := range s07CutBlocked(rep.Cut) {
 		blocked = append(blocked, s07SecondCut+b)
 	}
-	o := rep.OldToken
-	switch {
-	case o == nil:
-		blocked = append(blocked, s07SecondCut+"no token of the first quarantine was tried against the new one")
-	case o.NotMade != "":
-		blocked = append(blocked, s07SecondCut+"no token of the first quarantine was tried against the new one: "+
-			o.NotMade)
-	case !o.done:
-		blocked = append(blocked, s07SecondCut+"the watch after the first quarantine's token was still running "+
-			"when the run was judged")
-	case o.OtherRelease != "":
-		blocked = append(blocked, s07SecondCut+"the new quarantine was "+o.OtherRelease+
-			" during the watch after the first quarantine's token")
-	case o.QuarantineGone != "" && len(o.NeverEvents) == 0:
-		blocked = append(blocked, s07SecondCut+"the watch after the first quarantine's token ended early: "+
-			o.QuarantineGone)
-	case o.Readings < 2:
-		blocked = append(blocked, fmt.Sprintf(s07SecondCut+"the cluster was read %d time(s) after the first "+
-			"quarantine's token was set, and the run needs two", o.Readings))
+	if len(rep.OldTokens) == 0 {
+		return append(blocked, s07SecondCut+"no token of the first quarantine was tried against the new one")
+	}
+	for _, o := range rep.OldTokens {
+		if b := s07OldTokenBlocked(o); b != "" {
+			blocked = append(blocked, s07SecondCut+b)
+		}
+	}
+	if last := rep.OldTokens[len(rep.OldTokens)-1]; last.done && last.QuarantineHeld && last.NotMade == "" &&
+		len(rep.OldTokens) < len(rep.olds) {
+		blocked = append(blocked, fmt.Sprintf(s07SecondCut+"%d of the %d tokens of the first quarantine were tried",
+			len(rep.OldTokens), len(rep.olds)))
 	}
 	return blocked
+}
+
+// s07OldTokenBlocked says why an earlier token's replay shows nothing, or "".
+func s07OldTokenBlocked(o *s07OldToken) string {
+	switch {
+	case o.NotMade != "":
+		return "no token of the first quarantine was tried against the new one: " + o.NotMade
+	case !o.done:
+		return "the watch after " + o.Kind + " was still running when the run was judged"
+	case len(o.NeverEvents) > 0:
+		return ""
+	case o.OtherRelease != "":
+		return "the new quarantine was " + o.OtherRelease + " during the watch after " + o.Kind
+	case o.QuarantineGone != "":
+		return "the watch after " + o.Kind + " ended early: " + o.QuarantineGone
+	case o.Readings < 2:
+		return fmt.Sprintf("the cluster was read %d time(s) after %s was set, and the run needs two", o.Readings,
+			o.Kind)
+	case !s07OldTokenWatched(o):
+		return fmt.Sprintf("the watch after %s ended at %s, before its %s window", o.Kind,
+			s07Seen(o.WatchedUntil), s07StaleTokenWindow)
+	}
+	return ""
 }
 
 // s07SecondBounds are the second cut's bounds: quarantine_limit from its
@@ -736,9 +866,11 @@ func s07RepeatNote(rec *s07Record) string {
 		notes = append(notes, fmt.Sprintf("new connections stopped %s after the trigger window",
 			c.NewConnectionsStoppedAt.Sub(*c.TriggerWindowStart).Round(time.Millisecond)))
 	}
-	if o := rep.OldToken; o != nil && o.SetAt != nil {
-		notes = append(notes, fmt.Sprintf("%s was read %d time(s) with the quarantine held %t and the read-write "+
-			"Brokers at zero %t", o.Kind, o.Readings, o.QuarantineHeld, o.BrokersHeld))
+	for _, o := range rep.OldTokens {
+		if o.SetAt != nil {
+			notes = append(notes, fmt.Sprintf("%s was read %d time(s) with the quarantine held %t and the "+
+				"read-write Brokers at zero %t", o.Kind, o.Readings, o.QuarantineHeld, o.BrokersHeld))
+		}
 	}
 	if c.SettledAt != nil {
 		notes = append(notes, fmt.Sprintf("the cluster settled on master %s with %s", c.FinalMaster,
@@ -779,7 +911,23 @@ func s07RepeatMeasurements(rec *s07Record, m map[string]any) {
 		m["secondQuarantineNewGeneration"] = strconv.FormatBool(s07ReusedGeneration(rep) == "" &&
 			!s07ReusedToken(rep))
 	}
-	if o := rep.OldToken; o != nil && o.SetAt != nil && o.done && o.Readings >= 2 && o.OtherRelease == "" {
-		m["oldTokenIgnored"] = strconv.FormatBool(o.QuarantineHeld && o.BrokersHeld && len(o.NeverEvents) == 0)
+	m["oldTokenIgnored"] = s07OldTokensIgnored(rep.OldTokens)
+}
+
+// s07OldTokensIgnored is whether every earlier token the run set was ignored:
+// "unknown" unless each was set and watched for its whole window with at
+// least two readings and no release by another token.
+func s07OldTokensIgnored(olds []*s07OldToken) string {
+	if len(olds) == 0 {
+		return evidence.Unknown
 	}
+	ignored := true
+	for _, o := range olds {
+		if !o.done || o.Readings < 2 || o.OtherRelease != "" ||
+			len(o.NeverEvents) == 0 && !s07OldTokenWatched(o) {
+			return evidence.Unknown
+		}
+		ignored = ignored && o.QuarantineHeld && o.BrokersHeld && len(o.NeverEvents) == 0
+	}
+	return strconv.FormatBool(ignored)
 }

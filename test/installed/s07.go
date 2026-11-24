@@ -2081,7 +2081,9 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 			strings.Join(outcome.StillRunning, ", "))
 	}
 	if outcome.CleanupSucceeded {
-		if still := h.afterS07Cut(ctx, rec); len(still) > 0 {
+		still := h.afterS07Cut(ctx, rec)
+		result.CleanupSucceeded = s07CleanupSucceeded(rec, result.CleanupSucceeded)
+		if len(still) > 0 {
 			return end(evidence.Blocked, "steps of the second cut's fault flow were still running after their "+
 				"limit: %s", strings.Join(still, ", "))
 		}
@@ -2227,6 +2229,7 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 		last = second
 	}
 	if last.SettledAt != nil {
+		h.readS07EndRoles(ctx, rec)
 		h.checkS07Data(ctx, rec)
 		h.observeS07Health(ctx, rec)
 	} else {
@@ -2297,9 +2300,13 @@ func s07PathClosedAt(rec *s07Record) *time.Time {
 // their row is on some member.
 func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 	file := s07File(rec.dir(), "data-check.json")
-	master, slaves := s07EndMaster(rec)
+	master, slaves, unknown := s07EndMaster(rec)
 	d := &s07Data{File: file, MissingByMember: map[string]int{}, Master: master}
 	rec.Data = d
+	if unknown != "" {
+		d.Error = unknown
+		return
+	}
 	target := dataTarget{members: h.members, slaves: slaves}
 	report, _, err := h.checkDataOf(ctx, h.history.String(), target, time.Now(), file)
 	if report == nil {

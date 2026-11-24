@@ -25,6 +25,7 @@ import (
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 )
 
 // The tests in this file cover -partition-repeat (#115): once the first
@@ -59,13 +60,13 @@ func TestValidateS07PartitionRepeat(t *testing.T) {
 		t.Errorf("-partition-repeat adds %s to the steps' bounds, want %s", got, cfg.s07RepeatBounds())
 	}
 	want := s07RepeatReadyBound + s06ClientStart + s07MoveBound + s07KeepaliveBound + s07PrepareBound +
-		cfg.PartitionHold + s07ConfirmSlack + s07StaleTokenWindow + s07OldTokenSlack + s07CleanupBound +
+		cfg.PartitionHold + s07ConfirmSlack + 2*s07StaleTokenWindow + s07OldTokenSlack + s07CleanupBound +
 		s07SettleBound
 	if got := cfg.s07RepeatBounds(); got != want {
 		t.Errorf("the second cut's bounds are %s, want %s", got, want)
 	}
-	if got := cfg.s07StepBounds(); got != 93*time.Minute+20*time.Second {
-		t.Errorf("the documented command's own bounds are %s, the guide says 93m20s", got)
+	if got := cfg.s07StepBounds(); got != 93*time.Minute+50*time.Second {
+		t.Errorf("the documented command's own bounds are %s, the guide says 93m50s", got)
 	}
 	cfg.Timeout = cfg.s07StepBounds()
 	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "-timeout") {
@@ -95,6 +96,10 @@ func TestValidateS07PartitionRepeat(t *testing.T) {
 // manual release consumed.
 const testFirstConsumedToken = "token-1b-consumed-by-the-release"
 
+// testFirstUnconsumedToken is a token of the first quarantine that no
+// release consumed.
+const testFirstUnconsumedToken = "token-1a-revised-away"
+
 // s07FirstCut is a first cut that settled after its quarantine of generation
 // g1 was released by the run's own manual release.
 func s07FirstCut() *s07Record {
@@ -103,7 +108,7 @@ func s07FirstCut() *s07Record {
 	released := at(*rec.SettledAt, 40)
 	rec.ReleaseSeenAt, rec.ReleaseMethod = &released, string(databasev1alpha1.WriteQuarantineReleasedManually)
 	rec.ReleaseReason, rec.QuarantineAtEnd = string(databasev1alpha1.WriteQuarantinedMasterChanged), ""
-	rec.tokens = []s07SeenToken{{"g1", "token-1a"}, {"g1", testFirstConsumedToken}}
+	rec.tokens = []s07SeenToken{{"g1", testFirstUnconsumedToken}, {"g1", testFirstConsumedToken}}
 	rec.ManualRelease = &s07ManualRelease{GenerationID: "g1", AcceptedSeenAt: &released,
 		currentToken: testFirstConsumedToken}
 	return rec
@@ -142,21 +147,25 @@ func TestS07RepeatUnready(t *testing.T) {
 	}
 }
 
-// The token tried against the second quarantine is the one the first cut's
-// release consumed; without a release by the run, the last token seen.
+// The tokens tried against the second quarantine are the one the first cut's
+// release consumed, then the newest one no release consumed; without a
+// release by the run, only the newest one seen.
 func TestS07EarlierTokens(t *testing.T) {
-	tokens, old, kind := s07EarlierTokens(s07FirstCut())
-	if old != (s07SeenToken{"g1", testFirstConsumedToken}) || kind != s07OldConsumed || len(tokens) != 2 {
-		t.Errorf("tokens %v, old %v (%s)", tokens, old, kind)
+	tokens, olds := s07EarlierTokens(s07FirstCut())
+	if len(tokens) != 2 || len(olds) != 2 ||
+		olds[0] != (s07OldTry{s07SeenToken{"g1", testFirstConsumedToken}, s07OldConsumed, s07CheckConsumed}) ||
+		olds[1] != (s07OldTry{s07SeenToken{"g1", testFirstUnconsumedToken}, s07OldUnconsumed, s07CheckNotCurrent}) {
+		t.Errorf("tokens %v, olds %v", tokens, olds)
 	}
 	rec := s07FirstCut()
 	rec.ManualRelease = nil
-	if _, old, kind = s07EarlierTokens(rec); old != (s07SeenToken{"g1", testFirstConsumedToken}) || kind != s07OldLast {
-		t.Errorf("without a release: old %v (%s)", old, kind)
+	if _, olds = s07EarlierTokens(rec); len(olds) != 1 || olds[0].token.Token != testFirstConsumedToken ||
+		olds[0].kind != s07OldUnconsumed {
+		t.Errorf("without a release: olds %v", olds)
 	}
 	rec.tokens = nil
-	if _, old, kind = s07EarlierTokens(rec); old.Token != "" || kind != "" {
-		t.Errorf("without tokens: old %v (%s)", old, kind)
+	if _, olds = s07EarlierTokens(rec); len(olds) != 0 {
+		t.Errorf("without tokens: olds %v", olds)
 	}
 }
 
@@ -183,9 +192,10 @@ func s07RepeatBase() *s07Record {
 	set := at(*c.QuarantineSeenAt, 5)
 	watched := at(set, 30)
 	rep := &s07Repeat{StartedAt: &start, MasterBefore: m0, EarlierGenerations: []string{"g1"}, SessionStarted: true,
-		Cut: c, earlierTokens: rec.tokens, old: s07SeenToken{"g1", testFirstConsumedToken}, oldKind: s07OldConsumed,
-		OldToken: &s07OldToken{Kind: s07OldConsumed, Generation: "g1", Against: "g2", SetAt: &set,
-			WatchedUntil: &watched, Readings: 9, QuarantineHeld: true, BrokersHeld: true, done: true}}
+		Cut: c, earlierTokens: rec.tokens,
+		olds: []s07OldTry{{s07SeenToken{"g1", testFirstConsumedToken}, s07OldConsumed, s07CheckConsumed}},
+		OldTokens: []*s07OldToken{{Kind: s07OldConsumed, Check: s07CheckConsumed, Generation: "g1", Against: "g2",
+			SetAt: &set, WatchedUntil: &watched, Readings: 9, QuarantineHeld: true, BrokersHeld: true, done: true}}}
 	c.repeat, rec.Repeat = rep, rep
 	return rec
 }
@@ -206,10 +216,10 @@ func TestJudgeS07WithASecondCut(t *testing.T) {
 			r.Repeat.Cut.MasterMove.Quarantine = &s07MoveQuarantine{GenerationID: "g2"}
 		}, evidence.Fail, "the quarantine has generation g2"},
 		"a token of the first quarantine on the second fails": {func(r *s07Record) {
-			r.Repeat.Cut.tokens = []s07SeenToken{{"g2", "token-1a"}}
+			r.Repeat.Cut.tokens = []s07SeenToken{{"g2", testFirstUnconsumedToken}}
 		}, evidence.Fail, "release token is one an earlier quarantine had"},
 		"a release on the first quarantine's token fails": {func(r *s07Record) {
-			r.Repeat.OldToken.NeverEvents = []string{s07SecondCut + "the new quarantine (generation g2) was released"}
+			r.Repeat.OldTokens[0].NeverEvents = []string{s07SecondCut + "the new quarantine (generation g2) was released"}
 		}, evidence.Fail, "the new quarantine (generation g2) was released"},
 		"a write after the second closure fails": {func(r *s07Record) {
 			r.Repeat.Cut.ReopenedWhileQuarantined = []string{"the write s07n90 through a new connection took effect"}
@@ -239,15 +249,23 @@ func TestJudgeS07WithASecondCut(t *testing.T) {
 		"a second cut never reached blocks": {func(r *s07Record) { r.Repeat = nil }, evidence.Blocked,
 			"did not reach the second cut"},
 		"an old token never tried blocks": {func(r *s07Record) {
-			r.Repeat.OldToken = &s07OldToken{NotMade: "no release token of the first cut's quarantine was seen",
-				done: true}
+			r.Repeat.OldTokens = []*s07OldToken{{NotMade: "no release token of the first cut's quarantine was seen",
+				done: true}}
 		}, evidence.Blocked, "no token of the first quarantine was tried against the new one: no release token"},
 		"a release by another token during the watch blocks": {func(r *s07Record) {
-			r.Repeat.OldToken.OtherRelease = "released Manual at 12:10:00 by a token the run did not set"
+			r.Repeat.OldTokens[0].OtherRelease = "released Manual at 12:10:00 by a token the run did not set"
 		}, evidence.Blocked, "by a token the run did not set during the watch"},
-		"one reading after the old token blocks": {func(r *s07Record) { r.Repeat.OldToken.Readings = 1 },
-			evidence.Blocked, "read 1 time(s) after the first quarantine's token was set"},
-		"a watch still running blocks": {func(r *s07Record) { r.Repeat.OldToken.done = false },
+		"one reading after the old token blocks": {func(r *s07Record) { r.Repeat.OldTokens[0].Readings = 1 },
+			evidence.Blocked, "read 1 time(s) after the token the first cut's manual release consumed was set"},
+		"a watch cut short of its window blocks": {func(r *s07Record) {
+			v := r.Repeat.OldTokens[0].SetAt.Add(10 * time.Second)
+			r.Repeat.OldTokens[0].WatchedUntil = &v
+		}, evidence.Blocked, "before its 30s window"},
+		"an unconsumed token not tried blocks": {func(r *s07Record) {
+			r.Repeat.olds = append(r.Repeat.olds, s07OldTry{s07SeenToken{"g1", testFirstUnconsumedToken}, s07OldUnconsumed,
+				s07CheckNotCurrent})
+		}, evidence.Blocked, "1 of the 2 tokens of the first quarantine were tried"},
+		"a watch still running blocks": {func(r *s07Record) { r.Repeat.OldTokens[0].done = false },
 			evidence.Blocked, "still running when the run was judged"},
 	}
 	for name, tc := range tests {
@@ -295,7 +313,7 @@ func TestS07RepeatMeasurements(t *testing.T) {
 		t.Errorf("second cut %v", second)
 	}
 	rec := s07RepeatBase()
-	rec.Repeat.OldToken.Readings = 1
+	rec.Repeat.OldTokens[0].Readings = 1
 	if m := s07Measurements(rec); m["oldTokenIgnored"] != evidence.Unknown {
 		t.Errorf("one reading: oldTokenIgnored %v", m["oldTokenIgnored"])
 	}
@@ -319,11 +337,11 @@ func TestS07SplitProbesAndEndMaster(t *testing.T) {
 	}
 	rec := s07RepeatBase()
 	rec.FinalMaster, rec.Repeat.Cut.FinalMaster, rec.Repeat.Cut.FinalSlaves = m1, m2, []string{m0, m1}
-	if master, slaves := s07EndMaster(rec); master != m2 || !slices.Equal(slaves, []string{m0, m1}) {
+	if master, slaves, _ := s07EndMaster(rec); master != m2 || !slices.Equal(slaves, []string{m0, m1}) {
 		t.Errorf("end master %s %v", master, slaves)
 	}
 	rec.Repeat.Cut.SettledAt = nil
-	if master, _ := s07EndMaster(rec); master != m1 {
+	if master, _, _ := s07EndMaster(rec); master != m1 {
 		t.Errorf("an unsettled second cut: end master %s", master)
 	}
 }
@@ -334,7 +352,8 @@ func TestS07SplitProbesAndEndMaster(t *testing.T) {
 func oldTokenCut(f *s07ReleaseFixture) *s07Record {
 	confirmed := time.Now().UTC()
 	enforced := confirmed
-	rep := &s07Repeat{old: s07SeenToken{"g0", "token-0-of-the-first-quarantine"}, oldKind: s07OldConsumed}
+	rep := &s07Repeat{olds: []s07OldTry{{s07SeenToken{"g0", "token-0-of-the-first-quarantine"}, s07OldConsumed,
+		s07CheckConsumed}}}
 	c := &s07Record{Variant: s07HigherRankIsolated, sub: s07RepeatDir, repeat: rep, FaultConfirmedAt: &confirmed,
 		QuarantineInForce: string(databasev1alpha1.WriteQuarantinedMasterChanged), EnforcedTime: &enforced,
 		Generations: []string{"g1"}, Path: []s07Path{{}}}
@@ -348,7 +367,7 @@ func stepOldToken(t *testing.T, f *s07ReleaseFixture, c *s07Record) {
 	t.Helper()
 	for i := 0; !s07OldTokenSettled(c); i++ {
 		if i > 1000 {
-			t.Fatalf("the old token's step did not end: %+v", c.repeat.OldToken)
+			t.Fatalf("the old token's step did not end: %+v", c.repeat.OldTokens)
 		}
 		f.h.stepS07OldToken(context.Background(), c, time.Now().UTC())
 		time.Sleep(f.h.cfg.Poll)
@@ -362,7 +381,7 @@ func TestStepS07OldTokenIsIgnored(t *testing.T) {
 	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
 	c := oldTokenCut(f)
 	stepOldToken(t, f, c)
-	o := c.repeat.OldToken
+	o := c.repeat.OldTokens[0]
 	if got := f.annotations(); !slices.Equal(got, []string{"token-0-of-the-first-quarantine"}) {
 		t.Fatalf("annotations set %q, want the first quarantine's token", got)
 	}
@@ -384,19 +403,19 @@ func TestStepS07OldTokenThatReleases(t *testing.T) {
 	f := newS07ReleaseFixture(t, releaseOn(""), nil)
 	c := oldTokenCut(f)
 	stepOldToken(t, f, c)
-	o := c.repeat.OldToken
+	o := c.repeat.OldTokens[0]
 	if len(o.NeverEvents) != 1 || !strings.Contains(o.NeverEvents[0], "was released") || o.QuarantineHeld {
 		t.Errorf("old token %+v", o)
 	}
 	f = newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
 	c = oldTokenCut(f)
 	f.h.stepS07OldToken(context.Background(), c, time.Now().UTC())
-	if c.repeat.OldToken == nil || c.repeat.OldToken.SetAt == nil {
-		t.Fatalf("the token was not set: %+v", c.repeat.OldToken)
+	if len(c.repeat.OldTokens) != 1 || c.repeat.OldTokens[0].SetAt == nil {
+		t.Fatalf("the token was not set: %+v", c.repeat.OldTokens)
 	}
 	c.Path = append(c.Path, s07Path{Desired: 1})
 	stepOldToken(t, f, c)
-	if o := c.repeat.OldToken; len(o.NeverEvents) != 1 || !strings.Contains(o.NeverEvents[0], "1 desired") {
+	if o := c.repeat.OldTokens[0]; len(o.NeverEvents) != 1 || !strings.Contains(o.NeverEvents[0], "1 desired") {
 		t.Errorf("old token with the Brokers back %+v", o)
 	}
 }
@@ -410,9 +429,9 @@ func TestStepS07OldTokenNotMade(t *testing.T) {
 		want   string
 	}{
 		"the same token": {func(f *s07ReleaseFixture, c *s07Record) {
-			c.repeat.old.Token = testCurrentToken
+			c.repeat.olds[0].token.Token = testCurrentToken
 		}, "would release it"},
-		"no old token": {func(_ *s07ReleaseFixture, c *s07Record) { c.repeat.old.Token = "" },
+		"no old token": {func(_ *s07ReleaseFixture, c *s07Record) { c.repeat.olds = nil },
 			"no release token"},
 		"another quarantine": {func(_ *s07ReleaseFixture, c *s07Record) { c.Generations = []string{"g9"} },
 			"not one the second cut saw"},
@@ -427,7 +446,7 @@ func TestStepS07OldTokenNotMade(t *testing.T) {
 			c := oldTokenCut(f)
 			tc.change(f, c)
 			stepOldToken(t, f, c)
-			if o := c.repeat.OldToken; !strings.Contains(o.NotMade, tc.want) || o.SetAt != nil {
+			if o := c.repeat.OldTokens[0]; !strings.Contains(o.NotMade, tc.want) || o.SetAt != nil {
 				t.Errorf("old token %+v, want not made with %q", o, tc.want)
 			}
 			if got := f.annotations(); len(got) != 0 {
@@ -447,13 +466,22 @@ func TestS07OldTokenSettled(t *testing.T) {
 	if s07OldTokenSettled(c) {
 		t.Error("a second cut ends its hold before the old token's step")
 	}
-	c.repeat.OldToken = &s07OldToken{}
+	c.repeat.olds = []s07OldTry{{}, {}}
+	c.repeat.OldTokens = []*s07OldToken{{QuarantineHeld: true}}
 	if s07OldTokenSettled(c) {
 		t.Error("a second cut ends its hold during the watch")
 	}
-	c.repeat.OldToken.done = true
+	c.repeat.OldTokens[0].done = true
+	if s07OldTokenSettled(c) {
+		t.Error("a second cut ends its hold before the second token was tried")
+	}
+	c.repeat.OldTokens[0].QuarantineHeld = false
 	if !s07OldTokenSettled(c) {
-		t.Error("a second cut holds after the step ended")
+		t.Error("a second cut tries another token after the quarantine was not held")
+	}
+	c.repeat.OldTokens = []*s07OldToken{{QuarantineHeld: true, done: true}, {QuarantineHeld: true, done: true}}
+	if !s07OldTokenSettled(c) {
+		t.Error("a second cut holds after every token was tried")
 	}
 }
 
@@ -517,8 +545,91 @@ func TestRepeatS07WaitsForTheStartingState(t *testing.T) {
 			"(WriteQuarantinedMasterChanged, generation g1) is in force") {
 		t.Fatalf("repeat %+v", rep)
 	}
-	if !slices.Equal(rep.EarlierGenerations, []string{"g1"}) || rep.old.Token != testFirstConsumedToken ||
-		rep.oldKind != s07OldConsumed {
-		t.Errorf("earlier generations %v, old token %v (%s)", rep.EarlierGenerations, rep.old, rep.oldKind)
+	if !slices.Equal(rep.EarlierGenerations, []string{"g1"}) || len(rep.olds) != 2 ||
+		rep.olds[0].token.Token != testFirstConsumedToken {
+		t.Errorf("earlier generations %v, old tokens %v", rep.EarlierGenerations, rep.olds)
+	}
+}
+
+// A second cut that moved the master and was then not made compares the rows
+// with the master read before the data check, not with the first cut's final
+// master; without that reading the data check is not made.
+func TestS07EndMasterAfterAMoveWithoutASecondCut(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
+	rec := s07RepeatBase()
+	c := rec.Repeat.Cut
+	deleted := time.Now().UTC()
+	c.FaultIssuedAt, c.SettledAt = nil, nil
+	c.MasterMove = &s07MasterMove{From: m0, To: m2, DeletedAt: &deleted}
+	rec.FinalMaster = m1
+	if master, _, unknown := s07EndMaster(rec); master != "" || !strings.Contains(unknown, "were not read") {
+		t.Errorf("before the roles were read: %q %q", master, unknown)
+	}
+	f.h.readS07EndRoles(context.Background(), rec)
+	master, slaves, unknown := s07EndMaster(rec)
+	if master != m0 || !slices.Equal(slaves, []string{m1, m2}) || unknown != "" {
+		t.Errorf("end master %q %v %q, want the master the fixture's members report", master, slaves, unknown)
+	}
+	moved := s07RepeatBase()
+	moved.Repeat.Cut.FaultIssuedAt, moved.Repeat.Cut.SettledAt = nil, nil
+	moved.Repeat.Cut.MasterMove = &s07MasterMove{From: m0, DeletedAt: &deleted}
+	moved.Repeat.EndRolesUnmet = "cubrid heartbeat status on ha-1 unread"
+	if v := judgeS07(moved, testS07Limits); v.Result != evidence.Blocked {
+		t.Errorf("judged %s %q", v.Result, v.Reason)
+	}
+}
+
+// The second cut removes the earlier token it set as soon as its fault flow
+// returned, before the settle wait.
+func TestEndS07SecondCutRemovesTheOldTokenBeforeTheSettle(t *testing.T) {
+	f := newS07ReleaseFixture(t, releaseOn(testCurrentToken), nil)
+	c := oldTokenCut(f)
+	f.h.stepS07OldToken(context.Background(), c, time.Now().UTC())
+	if len(c.repeat.OldTokens) != 1 || c.repeat.OldTokens[0].SetAt == nil {
+		t.Fatalf("the token was not set: %+v", c.repeat.OldTokens)
+	}
+	now := time.Now().UTC()
+	f.h.endS07SecondCut(context.Background(), c, faults.Outcome{FaultIssuedAt: now, FaultConfirmed: true,
+		CleanupSucceeded: true, Result: evidence.Pass,
+		Timeline: []faults.Step{{T: now, Kind: "fault_removed"}}})
+	removed, settled := -1, -1
+	for i, step := range c.Observed {
+		switch step.Kind {
+		case "release_token_removed":
+			removed = i
+		case "settled":
+			settled = i
+		}
+	}
+	if removed < 0 || settled < 0 || removed > settled {
+		t.Errorf("the token was removed at step %d and the cluster settled at step %d: %v", removed, settled,
+			c.Observed)
+	}
+	if v := f.cluster(t).Annotations[releaseWriteQuarantineAnnotation]; v != "" {
+		t.Errorf("the token is still set: %q", v)
+	}
+	if o := c.repeat.OldTokens[0]; !o.done || o.AnnotationRemovedByRun == nil {
+		t.Errorf("old token %+v", o)
+	}
+}
+
+// The scenario's cleanup is the first cut's and, once a second cut was
+// injected, the second cut's too.
+func TestS07CleanupSucceededCoversTheSecondCut(t *testing.T) {
+	yes := true
+	rec := s07RepeatBase()
+	if got := s07CleanupSucceeded(rec, &yes); got == nil || !*got {
+		t.Errorf("both removed: %v", got)
+	}
+	rec.Repeat.Cut.CleanupSucceeded = false
+	if got := s07CleanupSucceeded(rec, &yes); got == nil || *got {
+		t.Errorf("the second cut not removed: %v", got)
+	}
+	rec.Repeat.Cut.FaultIssuedAt = nil
+	if got := s07CleanupSucceeded(rec, &yes); got == nil || !*got {
+		t.Errorf("no second cut injected: %v", got)
+	}
+	if got := s07CleanupSucceeded(s07Base(false), nil); got != nil {
+		t.Errorf("no first cut injected: %v", got)
 	}
 }
