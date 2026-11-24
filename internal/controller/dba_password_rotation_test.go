@@ -492,11 +492,15 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 			return len(checker.calls()) > asked
 		}
 
-		By("keeping True while one slave cannot tell and the others match, without a short retry")
+		By("keeping True while one slave cannot tell and the others match, with a bounded short retry")
 		checker.setMember(slave2, instancemanager.DBAPasswordUnknown)
 		reconcileOnce(r, key)
 		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
-		Expect(askedAfterShortRetry()).To(BeFalse(), "only the primary's answer that cannot tell is retried soon")
+		for i := range dbaPasswordQuickRetries {
+			Expect(askedAfterShortRetry()).To(BeTrue(), "short retry %d of a slave that cannot tell", i+1)
+		}
+		Expect(askedAfterShortRetry()).To(BeFalse(), "a slave that cannot tell is retried soon only a few times")
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
 		checker.setMember(slave2, "")
 
 		By("asking again soon while the primary cannot tell (#1031)")
