@@ -127,6 +127,11 @@ Only `make manifests`, `make generate`, `make fmt`, `make lint-fix` and
 `make build`, `make run` and the checks above leave them as they are, so
 regenerate before testing a change to `*_types.go` or kubebuilder markers.
 
+The race detector and fuzzing with new mutations run only in an advisory
+weekly workflow, never as a pull request check;
+[docs/testing/race-and-fuzz.md](docs/testing/race-and-fuzz.md) explains the
+selection and how to run it on a branch.
+
 The Kind E2E suite runs on a cluster of its own:
 
 ```bash
