@@ -77,7 +77,7 @@ func readS07SessionFrom(t *testing.T, text string) (*haRun, *s07Record) {
 		return "", nil
 	}
 	rec := &s07Record{Variant: s07MasterIsolated}
-	h.readS07Session(context.Background(), rec, s07SessionFault, s07SessionClosed)
+	h.readS07Session(context.Background(), rec, s07OpenClient, s07SessionFault, s07SessionClosed)
 	return h, rec
 }
 

@@ -449,10 +449,10 @@ func (h *haRun) releaseS07(ctx context.Context, rec *s07Record) {
 		return
 	}
 	r.RowsBefore, r.before = h.readS07Rows(ctx, h.s07HistoryNow(ctx, rec),
-		s07File(rec.Variant, "rows-before-release.json"))
+		s07File(rec.dir(), "rows-before-release.json"))
 	defer func() {
 		r.RowsAfter, _ = h.readS07Rows(ctx, h.s07HistoryNow(ctx, rec),
-			s07File(rec.Variant, "rows-after-release.json"))
+			s07File(rec.dir(), "rows-after-release.json"))
 		r.Events = h.s07ReleaseEvents(ctx)
 	}()
 	defer h.removeS07ReleaseToken(ctx, rec, r)

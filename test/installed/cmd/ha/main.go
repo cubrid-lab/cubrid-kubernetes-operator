@@ -129,6 +129,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"cut its replacement off the cut-off member before it leads, and record whether the quarantine and the "+
 			"closed read-write path hold until the heal; the hold lasts until that step ends, within 5m; not with "+
 			"partition-slave-isolated; off by default. Counted in the -timeout check")
+	flags.BoolVar(&cfg.PartitionRepeat, "partition-repeat", false,
+		"S07: once the first cut's quarantine was released (by the run with -partition-manual-release, or by "+
+			"the Operator) and the read-write path reopened, pick the variant's member again against the new "+
+			"master, moving the master off the first member again for partition-higher-rank-isolated, cut it "+
+			"off again and check that a new quarantine generation closes the path within -quarantine-limit, that "+
+			"a token of the first quarantine does not release it and that no write is acknowledged after the "+
+			"second closure; not with partition-slave-isolated or -partition-operator-restart; off by default. "+
+			"Counted in the -timeout check")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,

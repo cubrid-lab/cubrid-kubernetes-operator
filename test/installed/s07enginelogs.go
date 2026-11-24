@@ -239,15 +239,15 @@ func (h *haRun) captureS07EngineLogs(ctx context.Context, rec *s07Record) {
 	for i, pod := range h.members {
 		memberCtx, cancelMember := share(start.Add(s07EngineLogBound/2), i)
 		c.Members[pod] = &s07MemberEngineLogs{Sources: []s07EngineLogSource{}}
-		readings[pod] = h.readS07Appliers(memberCtx, rec.Variant, pod, c.Members[pod], &read)
+		readings[pod] = h.readS07Appliers(memberCtx, rec.dir(), pod, c.Members[pod], &read)
 		cancelMember()
 	}
 	for i, pod := range h.members {
 		memberCtx, cancelMember := share(start.Add(s07EngineLogBound), i)
-		h.captureS07Member(memberCtx, rec.Variant, pod, c.Members[pod], &read)
+		h.captureS07Member(memberCtx, rec.dir(), pod, c.Members[pod], &read)
 		cancelMember()
 	}
-	h.readS07AppliersAgain(ctx, rec.Variant, c, readings, &read)
+	h.readS07AppliersAgain(ctx, rec.dir(), c, readings, &read)
 	rec.UnsettledEngineLogs = c
 }
 

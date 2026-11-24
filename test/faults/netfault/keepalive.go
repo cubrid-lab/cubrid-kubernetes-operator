@@ -28,6 +28,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // KeepaliveContainer is the ephemeral container that sets TCP keepalive in
@@ -74,15 +75,34 @@ const (
 // Keepalive is the TCP keepalive a namespace's new connections get: idle
 // Time before the first probe, Interval between probes, and Probes
 // unanswered before the kernel ends the connection.
+//
+// Container names the privileged ephemeral container that writes the values
+// and reads the connections; KeepaliveContainer when empty. A later step in
+// the same Pods needs a name of its own: an ephemeral container can be
+// neither restarted nor removed, and the earlier one stops once its sleep
+// ends, so its name cannot be used again.
 type Keepalive struct {
 	Time, Interval time.Duration
 	Probes         int
+	Container      string
+}
+
+// container is the name of the step's ephemeral container.
+func (k Keepalive) container() string {
+	if k.Container == "" {
+		return KeepaliveContainer
+	}
+	return k.Container
 }
 
 // Validate refuses values the kernel would refuse, values that are not
-// whole seconds, and a time that is not shorter than the kernel's default.
+// whole seconds, a time that is not shorter than the kernel's default, and a
+// container name the API server would refuse.
 func (k Keepalive) Validate() error {
 	switch {
+	case k.Container != "" && len(validation.IsDNS1123Label(k.Container)) > 0:
+		return fmt.Errorf("the keepalive container name %q is not a DNS label: %s", k.Container,
+			strings.Join(validation.IsDNS1123Label(k.Container), "; "))
 	case k.Time < time.Second || k.Time%time.Second != 0 || k.Time >= defaultKeepaliveTime:
 		return fmt.Errorf("the keepalive time %s must be whole seconds, at least 1s and under the kernel's "+
 			"default of %s", k.Time, defaultKeepaliveTime)
@@ -206,7 +226,7 @@ type KeepaliveCross struct {
 // record keeps what was seen.
 func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpoint, target, master Endpoint,
 	wait time.Duration) (KeepaliveRecord, error) {
-	rec := KeepaliveRecord{Requested: k.values(), Container: KeepaliveContainer, Members: []KeepaliveMember{},
+	rec := KeepaliveRecord{Requested: k.values(), Container: k.container(), Members: []KeepaliveMember{},
 		Target: target.Name, Master: master.Name, SocketsBefore: []Socket{}, Reset: []Socket{},
 		Crossing: []KeepaliveCross{}, Note: reconnectedNote}
 	fail := func(err error) (KeepaliveRecord, error) {
@@ -233,12 +253,12 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	}
 	port := strconv.Itoa(master.Port)
 	toMaster := normalAddr(master.IP) + ":" + port
-	version, err := shellIn(ctx, env, target, KeepaliveContainer, ": netfault ss-version\nss -V")
+	version, err := shellIn(ctx, env, target, k.container(), ": netfault ss-version\nss -V")
 	if err != nil {
 		return fail(fmt.Errorf("read the ss version: %w", err))
 	}
 	rec.SSVersion = strings.TrimSpace(version)
-	sockets, err := readSockets(ctx, env, target, master.Port)
+	sockets, err := readSockets(ctx, env, target, k.container(), master.Port)
 	if err != nil {
 		return fail(err)
 	}
@@ -253,7 +273,7 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 			"connection to make again under the new keepalive", target.Name, master.Name, port))
 	}
 	// An IPv4 peer may be listed as IPv4-mapped on a dual-stack socket.
-	out, err := shellIn(ctx, env, target, KeepaliveContainer, fmt.Sprintf(": netfault sockets-reset %[1]s %[2]s\n"+
+	out, err := shellIn(ctx, env, target, k.container(), fmt.Sprintf(": netfault sockets-reset %[1]s %[2]s\n"+
 		"ss -K -tnoH state established '( ( dst %[1]s or dst [::ffff:%[1]s] ) and dport = :%[2]s )'",
 		master.IP, port))
 	if err != nil {
@@ -268,7 +288,7 @@ func ShortenKeepalive(ctx context.Context, env Env, k Keepalive, members []Endpo
 	var seen []Socket
 	for {
 		start := time.Now()
-		sockets, err := readSockets(ctx, env, target, master.Port)
+		sockets, err := readSockets(ctx, env, target, k.container(), master.Port)
 		if err != nil {
 			return fail(err)
 		}
@@ -388,7 +408,7 @@ func remakeCrossing(ctx context.Context, env Env, k Keepalive, members []Endpoin
 			return fail(fmt.Errorf("%s's address %q: %w", to.Name, to.IP, err))
 		}
 		peer := netip.AddrPortFrom(addr.Unmap(), uint16(to.Port)).String()
-		sockets, err := readSockets(ctx, env, from, to.Port)
+		sockets, err := readSockets(ctx, env, from, k.container(), to.Port)
 		if err != nil {
 			return fail(err)
 		}
@@ -405,7 +425,7 @@ func remakeCrossing(ctx context.Context, env Env, k Keepalive, members []Endpoin
 			crossing = append(crossing, c)
 			continue
 		}
-		out, err := shellIn(ctx, env, from, KeepaliveContainer, fmt.Sprintf(": netfault sockets-reset %[1]s %[2]d\n"+
+		out, err := shellIn(ctx, env, from, k.container(), fmt.Sprintf(": netfault sockets-reset %[1]s %[2]d\n"+
 			"ss -K -tnoH state established '( ( dst %[1]s or dst [::ffff:%[1]s] ) and dport = :%[2]d )'",
 			to.IP, to.Port))
 		if err != nil {
@@ -425,7 +445,7 @@ func remakeCrossing(ctx context.Context, env Env, k Keepalive, members []Endpoin
 		left := pending[:0]
 		for _, r := range pending {
 			c := &crossing[r.i]
-			sockets, err := readSockets(ctx, env, r.from, r.port)
+			sockets, err := readSockets(ctx, env, r.from, k.container(), r.port)
 			if err != nil {
 				c.Unmet = err.Error()
 				return unchecked(crossing, err), err
@@ -540,13 +560,13 @@ func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive, lifetim
 		m.Error = err.Error()
 		return m, err
 	}
-	if err := attach(ctx, env, e, keepaliveContainer(env.image(), lifetime)); err != nil {
+	if err := attach(ctx, env, e, keepaliveContainer(k.container(), env.image(), lifetime)); err != nil {
 		return fail(err)
 	}
-	if err := checkNamespaceIn(ctx, env, e, KeepaliveContainer); err != nil {
+	if err := checkNamespaceIn(ctx, env, e, k.container()); err != nil {
 		return fail(err)
 	}
-	out, err := shellIn(ctx, env, e, KeepaliveContainer, ": netfault kernel\nuname -r")
+	out, err := shellIn(ctx, env, e, k.container(), ": netfault kernel\nuname -r")
 	if err != nil {
 		return fail(err)
 	}
@@ -554,20 +574,20 @@ func setKeepalive(ctx context.Context, env Env, e Endpoint, k Keepalive, lifetim
 	if err := checkKernel(m.Kernel); err != nil {
 		return fail(fmt.Errorf("%s: %w", e.Name, err))
 	}
-	before, err := readKeepalive(ctx, env, e)
+	before, err := readKeepalive(ctx, env, e, k.container())
 	if err != nil {
 		return fail(err)
 	}
 	m.Before = &before
 	want := k.values()
-	out, err = shellIn(ctx, env, e, KeepaliveContainer, fmt.Sprintf(
+	out, err = shellIn(ctx, env, e, k.container(), fmt.Sprintf(
 		": netfault keepalive-write %d %d %d\n"+
 			"{ echo %[1]d > %[4]s && echo %[2]d > %[5]s && echo %[3]d > %[6]s; } 2>&1",
 		want.Time, want.Interval, want.Probes, keepaliveSysctlTime, keepaliveSysctlInterval, keepaliveSysctlProbes))
 	if err != nil {
 		return fail(fmt.Errorf("write the keepalive values: %w: %s", err, strings.TrimSpace(out)))
 	}
-	after, err := readKeepalive(ctx, env, e)
+	after, err := readKeepalive(ctx, env, e, k.container())
 	if err != nil {
 		return fail(err)
 	}
@@ -598,9 +618,9 @@ func checkKernel(release string) error {
 	return nil
 }
 
-func keepaliveContainer(image string, lifetime time.Duration) corev1.EphemeralContainer {
+func keepaliveContainer(name, image string, lifetime time.Duration) corev1.EphemeralContainer {
 	return corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-		Name: KeepaliveContainer, Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
+		Name: name, Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
 		Command: []string{"sleep", strconv.Itoa(max(int(lifetime/time.Second), 1))},
 		// The member Pods set runAsNonRoot at Pod level, which a container
 		// inherits: one that runs as root must say false, or the kubelet
@@ -611,8 +631,8 @@ func keepaliveContainer(image string, lifetime time.Duration) corev1.EphemeralCo
 }
 
 // readKeepalive reads the namespace's three keepalive values.
-func readKeepalive(ctx context.Context, env Env, e Endpoint) (KeepaliveValues, error) {
-	out, err := shellIn(ctx, env, e, KeepaliveContainer, fmt.Sprintf(": netfault keepalive-read\ncat %s %s %s",
+func readKeepalive(ctx context.Context, env Env, e Endpoint, container string) (KeepaliveValues, error) {
+	out, err := shellIn(ctx, env, e, container, fmt.Sprintf(": netfault keepalive-read\ncat %s %s %s",
 		keepaliveSysctlTime, keepaliveSysctlInterval, keepaliveSysctlProbes))
 	if err != nil {
 		return KeepaliveValues{}, err
@@ -631,8 +651,8 @@ func readKeepalive(ctx context.Context, env Env, e Endpoint) (KeepaliveValues, e
 }
 
 // readSockets reads the endpoint's established TCP connections to port.
-func readSockets(ctx context.Context, env Env, e Endpoint, port int) ([]Socket, error) {
-	out, err := shellIn(ctx, env, e, KeepaliveContainer, fmt.Sprintf(": netfault sockets %[1]d\n"+
+func readSockets(ctx context.Context, env Env, e Endpoint, container string, port int) ([]Socket, error) {
+	out, err := shellIn(ctx, env, e, container, fmt.Sprintf(": netfault sockets %[1]d\n"+
 		"ss -tnoH state established '( dport = :%[1]d )'", port))
 	if err != nil {
 		return nil, err

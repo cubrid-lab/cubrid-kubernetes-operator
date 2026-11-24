@@ -172,6 +172,9 @@ func (c HAConfig) validateS07() error {
 	if err := c.validateS07Restart(); err != nil {
 		return err
 	}
+	if err := c.validateS07Repeat(); err != nil {
+		return err
+	}
 	if !c.partitionFault() {
 		// -partition-settle, like -partition-hold, has no effect without a
 		// partition fault; a release asked for with none is refused.
@@ -190,13 +193,13 @@ func (c HAConfig) validateS07() error {
 		return errors.New("S07 needs a positive partition hold, at least partition_duration")
 	}
 	checked := c.Fault == FaultPartitionHigherRankIsolated || c.PartitionSettle > 0 || c.PartitionManualRelease ||
-		c.PartitionKeepalive > 0 || c.PartitionOperatorRestart
+		c.PartitionKeepalive > 0 || c.PartitionOperatorRestart || c.PartitionRepeat
 	if least := c.s07StepBounds(); checked && c.Timeout <= least {
 		return fmt.Errorf("S07 %s needs a -timeout longer than %s, the bounds of its own steps "+
 			"(moving the master for higher-rank-isolated, shortening TCP keepalive when asked for, preparing, "+
 			"holding, removing and settling the cut, the Operator restart when asked for, "+
-			"the manual release when asked for, and the data check or, when the cluster does not settle, the "+
-			"rows and engine logs read before cleanup), plus the time LAB01 takes",
+			"the manual release when asked for, the second cut when asked for, and the data check or, when the "+
+			"cluster does not settle, the rows and engine logs read before cleanup), plus the time LAB01 takes",
 			s07Variant(c.Fault), least)
 	}
 	return nil
@@ -207,7 +210,7 @@ func (c HAConfig) validateS07() error {
 // shortened keepalive of -partition-keepalive, the settle wait of
 // -partition-settle, the release's steps with -partition-manual-release, and
 // the Operator restart of -partition-operator-restart, which may hold the cut
-// longer than -partition-hold.
+// longer than -partition-hold, and the second cut of -partition-repeat.
 // When the cluster does not settle, the rows snapshot and the engine log
 // capture take the data check's place.
 func (c HAConfig) s07StepBounds() time.Duration {
@@ -219,7 +222,7 @@ func (c HAConfig) s07StepBounds() time.Duration {
 	if c.PartitionKeepalive > 0 {
 		bounds += s07KeepaliveBound
 	}
-	return bounds + c.s07RestartHold()
+	return bounds + c.s07RestartHold() + c.s07RepeatBounds()
 }
 
 // s07Settle bounds the wait for the cluster to settle after the cut was
@@ -362,13 +365,14 @@ func s07SessionProblem(s *s07Session) string {
 	return ""
 }
 
-// checkS07SessionEvents says why events, complete events of s07OpenClient's
-// history, are not a consistent history of that one client, or "". Beyond
-// workload.ReadHistory's rules, the client stops at its first error and runs
-// one operation at a time, so nothing may follow a failed or unknown outcome
-// and no operation may start before the previous one was answered; only the
-// last one may be unanswered, as when the client was stopped during it.
-func checkS07SessionEvents(text string, events []workload.Event) string {
+// checkS07SessionEvents says why events, complete events of the history of
+// clientID, an established-session client, are not a consistent history of
+// that one client, or "". Beyond workload.ReadHistory's rules, the client
+// stops at its first error and runs one operation at a time, so nothing may
+// follow a failed or unknown outcome and no operation may start before the
+// previous one was answered; only the last one may be unanswered, as when the
+// client was stopped during it.
+func checkS07SessionEvents(text, clientID string, events []workload.Event) string {
 	if len(events) == 0 {
 		return "it holds no complete event"
 	}
@@ -378,8 +382,8 @@ func checkS07SessionEvents(text string, events []workload.Event) string {
 	open, ended := "", ""
 	for i, e := range events {
 		switch {
-		case e.Client != s07OpenClient:
-			return fmt.Sprintf("event %d is of client %q, not %s", i+1, e.Client, s07OpenClient)
+		case e.Client != clientID:
+			return fmt.Sprintf("event %d is of client %q, not %s", i+1, e.Client, clientID)
 		case ended != "":
 			return fmt.Sprintf("event %d (%s %s) follows the session's end at %s", i+1, e.Event, e.OpID, ended)
 		case e.Event == workload.Attempted && open != "":
@@ -398,9 +402,12 @@ func checkS07SessionEvents(text string, events []workload.Event) string {
 
 // s07Data is the post-recovery data check on every member, read directly.
 type s07Data struct {
-	Read  bool   `json:"read"`
-	Error string `json:"error,omitempty"`
-	OK    bool   `json:"ok"`
+	// Master is the final master the rows were compared with: the second
+	// cut's when -partition-repeat made one that settled.
+	Master string `json:"comparedWithMaster,omitempty"`
+	Read   bool   `json:"read"`
+	Error  string `json:"error,omitempty"`
+	OK     bool   `json:"ok"`
 	// AcknowledgedMissing counts acknowledged writes some member lacks;
 	// MissingByMember counts them on each member, and Diverged the rows
 	// that differ between members.
@@ -581,6 +588,10 @@ type s07Record struct {
 	// OperatorRestart is what the restart did and saw.
 	OperatorRestartAsked bool                `json:"operatorRestartAsked,omitempty"`
 	OperatorRestart      *s07OperatorRestart `json:"operatorRestart,omitempty"`
+	// RepeatAsked is set with -partition-repeat, and Repeat is what the
+	// second cut did and saw, with that cut's own record.
+	RepeatAsked bool       `json:"repeatAsked,omitempty"`
+	Repeat      *s07Repeat `json:"repeat,omitempty"`
 	// mu serializes the observations and the record's writes, which the run's
 	// end can make while a step of the fault is still running; cut is the
 	// state in cut.json. tokens are the release tokens of the run's
@@ -589,6 +600,13 @@ type s07Record struct {
 	mu     sync.Mutex
 	cut    *s07CutFile
 	tokens []s07SeenToken
+	// sub is the directory under the variant's that a second cut's record
+	// writes its files to, "" for the first cut; slaves are the slaves the
+	// target is picked from when set, LAB01's otherwise; repeat is, on a
+	// second cut's record, the step it belongs to.
+	sub    string
+	slaves []string
+	repeat *s07Repeat
 	// historyBefore counts the run's history by outcome when S07 started, so
 	// S07's own operations are the history's counts after it, less these.
 	historyBefore map[string]int
@@ -629,6 +647,15 @@ func (rec *s07Record) note(kind, detail string) {
 }
 
 func s07File(variant, name string) string { return s07ID + "/" + variant + "/" + name }
+
+// dir is the directory under S07 that the record's files are written to: the
+// variant's, and for a second cut a directory of its own in it.
+func (rec *s07Record) dir() string {
+	if rec.sub != "" {
+		return rec.Variant + "/" + rec.sub
+	}
+	return rec.Variant
+}
 
 // memberOrdinal is the ordinal of a StatefulSet member's name, -1 when it
 // has none. A lower ordinal comes first in ha_node_list and outranks a
@@ -817,6 +844,7 @@ func s07NeverEvents(rec *s07Record) []string {
 		never = append(never, r.NeverEvents...)
 	}
 	never = append(never, s07RestartNeverEvents(rec)...)
+	never = append(never, s07RepeatNeverEvents(rec)...)
 	// The established client's counter includes every acknowledgement after
 	// the path was first observed closed, including legitimate writes after a
 	// release. Count it as a never-event only when the same run also observed
@@ -842,8 +870,8 @@ func s07NeverEvents(rec *s07Record) []string {
 		if conflicting > 0 || missing > 0 {
 			never = append(never, fmt.Sprintf("the cluster reported HAReady and ReplicationHealthy True with no "+
 				"quarantine after the partition ended while %d conflicting row(s) were on members other than the "+
-				"final master %s and the final master lacks %d acknowledged write(s)", conflicting, rec.FinalMaster,
-				missing))
+				"final master %s and the final master lacks %d acknowledged write(s)", conflicting,
+				cmpOr(d.Master, rec.FinalMaster), missing))
 		}
 	}
 	if len(rec.ForeignTargets) > 0 {
@@ -869,7 +897,7 @@ func s07Broken(rec *s07Record) string {
 			"off, where every sweep read one reachable active master and only a lower-ranked member that is not "+
 			"the last resolved primary cut off", firstReason(rec), rec.Target.Pod)
 	}
-	return ""
+	return s07RepeatBroken(rec)
 }
 
 // s07ControlUncounted says why a quarantine in the control case is not
@@ -917,8 +945,27 @@ const s07NoTrigger = "no sweep pair showed a quarantine trigger while the partit
 // s07BlockedReasons names every observation that keeps S07 from being
 // judged, in the order the verdict names them: the first is its reason. All
 // are listed, so that a run blocked only because no trigger was seen can be
-// told from one that also missed another observation.
+// told from one that also missed another observation. The data check and the
+// health window come last: with -partition-repeat they are made once, after
+// the second cut.
 func s07BlockedReasons(rec *s07Record) []string {
+	reasons := append(s07CutBlocked(rec), s07RepeatBlocked(rec)...)
+	if rec.Data == nil || !rec.Data.Read {
+		reason := s07NotMade
+		if rec.Data != nil {
+			reason = rec.Data.Error
+		}
+		reasons = append(reasons, "the post-recovery data check on every member could not be made: "+reason)
+	}
+	if rec.HealthReadings == 0 {
+		reasons = append(reasons, "the cluster was not read in the health window after the data check")
+	}
+	return reasons
+}
+
+// s07CutBlocked names what keeps one cut from being judged, from its fault's
+// steps to its settle wait, in the order s07BlockedReasons names them.
+func s07CutBlocked(rec *s07Record) []string {
 	var reasons []string
 	add := func(when bool, reason func() string) {
 		if when {
@@ -964,16 +1011,6 @@ func s07BlockedReasons(rec *s07Record) []string {
 	add(rec.SettledAt == nil, func() string {
 		return "the cluster did not settle after the partition was removed: " + cmpOr(rec.SettleUnmet, "unknown") +
 			s07SnapshotNote(rec)
-	})
-	add(rec.Data == nil || !rec.Data.Read, func() string {
-		reason := s07NotMade
-		if rec.Data != nil {
-			reason = rec.Data.Error
-		}
-		return "the post-recovery data check on every member could not be made: " + reason
-	})
-	add(rec.HealthReadings == 0, func() string {
-		return "the cluster was not read in the health window after the data check"
 	})
 	return reasons
 }
@@ -1064,7 +1101,7 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 		return v
 	}
 	if blocked := s07BlockedReasons(rec); len(blocked) > 0 {
-		v.Result, v.Reason = evidence.Blocked, blocked[0]+s07ReleaseNote(rec)
+		v.Result, v.Reason = evidence.Blocked, blocked[0]+s07ReleaseNote(rec)+s07RepeatNote(rec)
 		if note := s07NoPromotion(rec, blocked, limits); note != "" {
 			v.NoPromotion, v.Reason = true, v.Reason+note
 		}
@@ -1080,17 +1117,21 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 		}
 		bounds = append([]faults.Bound{quarantine}, bounds...)
 	}
-	judged := faults.Judge(bounds...)
+	second := s07SecondBounds(rec, limits)
+	judged := faults.Judge(append(slices.Clone(bounds), second...)...)
 	v.Result, v.Reason = judged.Result, judged.Reason
+	if v.Result == evidence.Fail && faults.Judge(bounds...).Result != evidence.Fail {
+		v.Reason = "on the second cut, " + v.Reason
+	}
 	// Every never-event, broken expectation and blocking observation was
 	// checked above and none was found, so a fail here comes from the limits
 	// alone when ExceededOnly names them.
-	if exceeded := faults.ExceededOnly(bounds...); v.Result == evidence.Fail && exceeded != nil {
+	if exceeded := s07Exceeded(bounds, second); v.Result == evidence.Fail && exceeded != nil {
 		v.TimeLimitOnly, v.ExceededLimits = true, exceeded
 	}
 	if v.Result != evidence.Pass {
 		if v.Result == evidence.Blocked {
-			v.Reason += s07ReleaseNote(rec)
+			v.Reason += s07ReleaseNote(rec) + s07RepeatNote(rec)
 		}
 		return v
 	}
@@ -1103,7 +1144,7 @@ func judgeS07(rec *s07Record, limits s07Limits) s07Verdict {
 			"on master %s with %s", rec.Target.Pod, rec.Trigger, cmpOr(firstReason(rec), "recorded"), rec.FinalMaster,
 			cmpOr(rec.QuarantineAtEnd, "no quarantine left"))
 	}
-	v.Reason += s07DataNote(rec) + s07RestartNote(rec) + s07ReleaseNote(rec)
+	v.Reason += s07DataNote(rec) + s07RestartNote(rec) + s07ReleaseNote(rec) + s07RepeatNote(rec)
 	return v
 }
 
@@ -1218,6 +1259,7 @@ func s07Measurements(rec *s07Record) map[string]any {
 		s07ReleaseMeasurements(rec.ManualRelease, m, since)
 	}
 	s07RestartMeasurements(rec, m)
+	s07RepeatMeasurements(rec, m)
 	m["stallReason"] = cmpOr(rec.StallReason, evidence.Unknown)
 	m["acknowledgedMissing"], m["membersDiverged"] = evidence.Unknown, evidence.Unknown
 	if d := rec.Data; d != nil && d.Read {
@@ -1297,6 +1339,9 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 // shortened last, after any move.
 func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Partition, error) {
 	slaves, identities := h.rec.StartingState.Slaves, rec.MembersBefore
+	if rec.slaves != nil {
+		slaves = rec.slaves
+	}
 	if _, err := s07PickTarget(rec.Variant, rec.Master, slaves, rec.Master); errors.Is(err,
 		errS07MasterOnFirstMember) && memberOrdinal(rec.Master) == 0 {
 		if slaves, err = h.moveS07Master(ctx, rec); err != nil {
@@ -1713,14 +1758,14 @@ func parseS07Probes(log string, history workload.History, offset time.Duration) 
 	return probes
 }
 
-// readS07Session reads the history of the client that held one connection
-// open, adds it to the run's history, and records what happened to that
-// connection. faultAt and closedAt are on the client's clock; closedAt is
-// zero when the run never saw the path closed.
-func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, closedAt time.Time) {
+// readS07Session reads the history of clientID, the client that held one
+// connection open, adds it to the run's history, and records what happened to
+// that connection. faultAt and closedAt are on the client's clock; closedAt
+// is zero when the run never saw the path closed.
+func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, clientID string, faultAt, closedAt time.Time) {
 	s := &s07Session{}
 	rec.Session = s
-	text, err := h.clientRun(ctx, "cat /tmp/"+s07OpenClient+".jsonl")
+	text, err := h.clientRun(ctx, "cat /tmp/"+clientID+".jsonl")
 	if err != nil {
 		s.ReadError = err.Error()
 		return
@@ -1731,7 +1776,7 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 		// The collector stopped inside an event. The complete events are
 		// still counted, but the run cannot know what the last one said.
 		s.IncompleteTailBytes = len(raw) - len(text)
-		file := s07File(rec.Variant, "established-session-raw.jsonl")
+		file := s07File(rec.dir(), "established-session-raw.jsonl")
 		if h.write(file, []byte(raw)) == nil {
 			s.RawFile = file
 		}
@@ -1748,7 +1793,7 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 		return
 	}
 	s.Events = len(events)
-	if problem := checkS07SessionEvents(text, events); problem != "" && s.Insufficient == "" {
+	if problem := checkS07SessionEvents(text, clientID, events); problem != "" && s.Insufficient == "" {
 		s.Insufficient = problem
 	}
 	s.OpenAtEnd = len(events) > 0
@@ -1795,8 +1840,8 @@ func (h *haRun) readS07Session(ctx context.Context, rec *s07Record, faultAt, clo
 				", is before the fault: the client stopped before it"
 		}
 	}
-	if diagnostics, err := h.clientRun(ctx, "cat /tmp/"+s07OpenClient+".diag.jsonl"); err == nil {
-		file := s07File(rec.Variant, "open-connection.jsonl")
+	if diagnostics, err := h.clientRun(ctx, "cat /tmp/"+clientID+".diag.jsonl"); err == nil {
+		file := s07File(rec.dir(), "open-connection.jsonl")
 		if h.write(file, []byte(diagnostics)) == nil {
 			s.Diagnostics = file
 		}
@@ -1833,9 +1878,14 @@ func (h *haRun) whileCut(ctx context.Context, rec *s07Record, p *netfault.Partit
 	if rec.OperatorRestartAsked {
 		h.stepS07Restart(ctx, rec, p, now)
 	}
+	if rec.repeat != nil {
+		h.stepS07OldToken(ctx, rec, now)
+	}
 	// With -partition-operator-restart the hold lasts until the restart's
-	// step ended, within its own bound.
-	if time.Since(*rec.FaultConfirmedAt) < h.cfg.PartitionHold || !s07RestartSettled(rec) {
+	// step ended, within its own bound; on a second cut, until the watch of
+	// the earlier quarantine's token ended.
+	if time.Since(*rec.FaultConfirmedAt) < h.cfg.PartitionHold || !s07RestartSettled(rec) ||
+		!s07OldTokenSettled(rec) {
 		return false, nil
 	}
 	held, err := p.Confirm(ctx)
@@ -1921,6 +1971,7 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 		Conditions: []s07Condition{}, Path: []s07Path{}, Probes: []s07Probe{}, Observed: []faults.Step{}}
 	rec.historyBefore = h.historyCounts()
 	rec.OperatorRestartAsked = h.cfg.PartitionOperatorRestart
+	rec.RepeatAsked = h.cfg.PartitionRepeat
 	clientsStarted := false
 	var p *netfault.Partition
 	defer func() {
@@ -1928,14 +1979,14 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 		judged.NeverEvents = slices.Clone(result.NeverEvents)
 		defer keepMarkers(&result, judged)
 		if clientsStarted && !rec.ClientsStopped {
-			err := errors.Join(h.stopS07Probes(ctx), h.stopBackgroundClients(ctx, []string{s07OpenClient}))
+			err := errors.Join(h.stopS07Probes(ctx), h.stopBackgroundClients(ctx, s07SessionClients(rec)))
 			rec.ClientsStopped = err == nil
 			if err != nil && result.Result == evidence.Pass {
 				result.Result, result.Reason = evidence.Fail, "stop the clients: "+err.Error()
 			}
 		}
 		if clientsStarted && !rec.ClientsRead {
-			rec.ClientHistories = h.keepClientHistories(ctx, []string{s07OpenClient, "s07n"},
+			rec.ClientHistories = h.keepClientHistories(ctx, append(s07SessionClients(rec), "s07n"),
 				s07File(variant, "clients/"))
 		}
 		if p != nil {
@@ -1946,14 +1997,7 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 			v := judgeS07(rec, h.s07Limits())
 			result.Measurements, result.Limits = v.Measurements, v.Limits
 		}
-		rec.mu.Lock()
-		err := h.writeJSON(s07File(variant, "record.json"), rec)
-		if rec.cut != nil {
-			rec.cut.RemovedOnEnd = rec.RemovedOnEnd
-			err = errors.Join(err, h.writeJSON(s07File(variant, "cut.json"), rec.cut))
-		}
-		rec.mu.Unlock()
-		if err != nil {
+		if err := h.writeS07Record(rec); err != nil {
 			result.Result, result.Reason = evidence.Fail, "write S07 evidence: "+err.Error()
 		}
 		result.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
@@ -1988,7 +2032,8 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 			h.rec.Client.Node)
 	}
 	if _, err := h.clientRun(ctx, "rm -f /tmp/s07n.log /tmp/s07n.jsonl /tmp/s07n.err /tmp/s07n.stop /tmp/s07n.pid "+
-		"/tmp/"+s07OpenClient+".jsonl /tmp/"+s07OpenClient+".diag.jsonl"); err != nil {
+		"/tmp/"+s07OpenClient+".jsonl /tmp/"+s07OpenClient+".diag.jsonl /tmp/"+s07RepeatOpenClient+".jsonl "+
+		"/tmp/"+s07RepeatOpenClient+".diag.jsonl /tmp/"+s07RepeatOpenClient+".pid"); err != nil {
 		return end(evidence.Blocked, "clear the clients' files: %v", err)
 	}
 	clientsStarted = true
@@ -2036,12 +2081,47 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 			strings.Join(outcome.StillRunning, ", "))
 	}
 	if outcome.CleanupSucceeded {
-		h.settleS07(ctx, rec)
-		if h.cfg.PartitionManualRelease {
-			h.releaseS07(ctx, rec)
+		if still := h.afterS07Cut(ctx, rec); len(still) > 0 {
+			return end(evidence.Blocked, "steps of the second cut's fault flow were still running after their "+
+				"limit: %s", strings.Join(still, ", "))
 		}
 	}
 	return h.finishS07(ctx, rec, &result, end)
+}
+
+// afterS07Cut follows a cut that was removed: the settle wait, the manual
+// release with -partition-manual-release and the second cut with
+// -partition-repeat. It returns the second cut's fault flow steps that were
+// still running after their limit.
+func (h *haRun) afterS07Cut(ctx context.Context, rec *s07Record) []string {
+	h.settleS07(ctx, rec)
+	if h.cfg.PartitionManualRelease {
+		h.releaseS07(ctx, rec)
+	}
+	if h.cfg.PartitionRepeat {
+		return h.repeatS07(ctx, rec)
+	}
+	return nil
+}
+
+// writeS07Record writes record.json and each cut's cut.json, under the
+// records' locks: a step of a cut that is still running may write them.
+func (h *haRun) writeS07Record(rec *s07Record) error {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	second := s07RepeatCut(rec)
+	if second != nil {
+		second.mu.Lock()
+		defer second.mu.Unlock()
+	}
+	err := h.writeJSON(s07File(rec.dir(), "record.json"), rec)
+	for _, r := range []*s07Record{rec, second} {
+		if r != nil && r.cut != nil {
+			r.cut.RemovedOnEnd = r.RemovedOnEnd
+			err = errors.Join(err, h.writeJSON(s07File(r.dir(), "cut.json"), r.cut))
+		}
+	}
+	return err
 }
 
 // recordS07 records the S07 partition selected to follow LAB01, or settles
@@ -2094,7 +2174,7 @@ func (h *haRun) historyCounts() map[string]int {
 // judges S07.
 func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.Scenario,
 	end func(evidence.Result, string, ...any) evidence.Scenario) evidence.Scenario {
-	if err := errors.Join(h.stopS07Probes(ctx), h.stopBackgroundClients(ctx, []string{s07OpenClient})); err != nil {
+	if err := errors.Join(h.stopS07Probes(ctx), h.stopBackgroundClients(ctx, s07SessionClients(rec))); err != nil {
 		return end(evidence.Fail, "stop the clients: %v", err)
 	}
 	rec.ClientsStopped = true
@@ -2104,6 +2184,10 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 		return end(evidence.Blocked, "read the new-connection writes: %v", err)
 	}
 	rec.Probes = probes
+	second := s07RepeatCut(rec)
+	if second != nil {
+		rec.Probes, second.Probes = s07SplitProbes(probes, *rec.Repeat.StartedAt)
+	}
 	if r := rec.ManualRelease; r != nil && r.AppliedAt != nil {
 		r.FirstWriteAfter = s07FirstAcknowledgedAfter(rec.Probes, *r.AppliedAt)
 	}
@@ -2112,7 +2196,14 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 	if closed != nil {
 		closedOnClient = closed.Add(offset)
 	}
-	h.readS07Session(ctx, rec, rec.FaultIssuedAt.Add(offset), closedOnClient)
+	h.readS07Session(ctx, rec, s07OpenClient, rec.FaultIssuedAt.Add(offset), closedOnClient)
+	if second != nil && second.FaultIssuedAt != nil && rec.Repeat.SessionStarted {
+		var secondClosed time.Time
+		if at := s07PathClosedAt(second); at != nil {
+			secondClosed = at.Add(offset)
+		}
+		h.readS07Session(ctx, second, s07RepeatOpenClient, second.FaultIssuedAt.Add(offset), secondClosed)
+	}
 	rec.ClientsRead = true
 	if all, err := workload.ReadHistory(strings.NewReader(h.history.String())); err == nil {
 		h.rec.Operations = all.Counts
@@ -2128,14 +2219,24 @@ func (h *haRun) finishS07(ctx context.Context, rec *s07Record, result *evidence.
 			noteS07RunRelease(rec, cluster.Status.LastWriteQuarantineRelease, time.Now().UTC())
 		}
 	}
-	if rec.SettledAt != nil {
+	// The data check and the health window are made once, after the last cut
+	// that was made; when it did not settle, the rows and engine logs are kept
+	// with its own record.
+	last := rec
+	if second != nil && second.FaultIssuedAt != nil {
+		last = second
+	}
+	if last.SettledAt != nil {
 		h.checkS07Data(ctx, rec)
 		h.observeS07Health(ctx, rec)
 	} else {
-		h.snapshotS07Rows(ctx, rec)
-		h.captureS07EngineLogs(ctx, rec)
+		h.snapshotS07Rows(ctx, last)
+		h.captureS07EngineLogs(ctx, last)
 	}
 	h.judgeS07Probes(rec, closed)
+	if second != nil && second.FaultIssuedAt != nil {
+		h.judgeS07Probes(second, s07PathClosedAt(second))
+	}
 	noteS07RestartWrites(rec, offset)
 	v := judgeS07(rec, h.s07Limits())
 	result.Measurements, result.Limits, result.NeverEvents = v.Measurements, v.Limits, v.NeverEvents
@@ -2191,13 +2292,15 @@ func s07PathClosedAt(rec *s07Record) *time.Time {
 
 // checkS07Data applies the data rules of the run's whole history to every
 // member, read directly and not through a Broker, records what is missing
-// and what differs, and resolves the new-connection writes whose outcome
-// was unknown by whether their row is on some member.
+// and what differs from the final master (s07EndMaster), and resolves the
+// new-connection writes of both cuts whose outcome was unknown by whether
+// their row is on some member.
 func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
-	file := s07File(rec.Variant, "data-check.json")
-	d := &s07Data{File: file, MissingByMember: map[string]int{}}
+	file := s07File(rec.dir(), "data-check.json")
+	master, slaves := s07EndMaster(rec)
+	d := &s07Data{File: file, MissingByMember: map[string]int{}, Master: master}
 	rec.Data = d
-	target := dataTarget{members: h.members, slaves: rec.FinalSlaves}
+	target := dataTarget{members: h.members, slaves: slaves}
 	report, _, err := h.checkDataOf(ctx, h.history.String(), target, time.Now(), file)
 	if report == nil {
 		d.Error = "read the ledger rows: " + errString(err)
@@ -2218,13 +2321,13 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 			}
 		}
 	}
-	d.MasterMissingAcknowledged = d.MissingByMember[rec.FinalMaster]
+	d.MasterMissingAcknowledged = d.MissingByMember[master]
 	rows, err := h.readRowsOf(ctx, dataTarget{members: h.members})
 	if err != nil {
 		d.Read, d.Error = false, "read the rows to compare with the final master: "+err.Error()
 		rec.note("unknown_outcomes_unresolved", err.Error())
 	} else {
-		d.LaggingByMember, d.ConflictingByMember = classifyS07Rows(rec.FinalMaster, rows)
+		d.LaggingByMember, d.ConflictingByMember = classifyS07Rows(master, rows)
 		// Counted whenever the run set a current token: a release on it may
 		// still be read after the data check (noteS07RunRelease), and the
 		// counts are applied only once one was.
@@ -2233,7 +2336,7 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 			if r.AcceptedSeenAt == nil {
 				accepted = s07MissingOn(r.before, rec.FinalMaster)
 			}
-			d.MasterMissingAccepted, d.ConflictingAcceptedByMember = s07AcceptedLoss(rec.FinalMaster, rows, accepted)
+			d.MasterMissingAccepted, d.ConflictingAcceptedByMember = s07AcceptedLoss(master, rows, accepted)
 		}
 		present := map[string]bool{}
 		for _, member := range rows {
@@ -2242,6 +2345,9 @@ func (h *haRun) checkS07Data(ctx context.Context, rec *s07Record) {
 			}
 		}
 		resolveS07Unknowns(rec.Probes, present)
+		if c := s07RepeatCut(rec); c != nil {
+			resolveS07Unknowns(c.Probes, present)
+		}
 	}
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err == nil {
@@ -2483,7 +2589,7 @@ func (h *haRun) changeS07CutFile(rec *s07Record, change func(*s07CutFile)) {
 	change(rec.cut)
 	rec.cut.RemovedOnEnd = rec.RemovedOnEnd
 	if data, err := json.MarshalIndent(rec.cut, "", "  "); err == nil {
-		_ = h.redactor.WriteFile(h.cfg.EvidenceDir, s07File(rec.Variant, "cut.json"), append(data, '\n'))
+		_ = h.redactor.WriteFile(h.cfg.EvidenceDir, s07File(rec.dir(), "cut.json"), append(data, '\n'))
 	}
 }
 
