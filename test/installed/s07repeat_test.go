@@ -331,6 +331,59 @@ func TestS07RepeatMeasurements(t *testing.T) {
 	}
 }
 
+// A new quarantine that was no longer in force with no release the run read
+// leaves unknown whether the old token released it, so the verdict is blocked
+// and oldTokenIgnored unknown, both when it was gone part-way through the
+// watch and when it was gone at the watch's last reading at the end of its
+// window. A release on the old token read with it is still a fail.
+func TestS07OldTokenWithTheQuarantineGone(t *testing.T) {
+	gone := "at 12:10:30Z the quarantine of generation g2 was no longer in force, and no release of it was read"
+	tests := map[string]struct {
+		after   time.Duration
+		never   bool
+		result  evidence.Result
+		reason  string
+		ignored string
+	}{
+		"gone part-way through the window": {10 * time.Second, false, evidence.Blocked,
+			"the watch after the token the first cut's manual release consumed ended before its 30s window " +
+				"because the new quarantine was gone: " + gone, evidence.Unknown},
+		"gone at the last reading": {30 * time.Second, false, evidence.Blocked,
+			"the new quarantine was gone at the last reading of the watch after the token the first cut's " +
+				"manual release consumed, at the end of its 30s window, so whether that token released it is " +
+				"unknown: " + gone, evidence.Unknown},
+		"gone with a release on the old token": {30 * time.Second, true, evidence.Fail,
+			"the new quarantine (generation g2) was released", measuredFalse},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := s07RepeatBase()
+			o := rec.Repeat.OldTokens[0]
+			until := o.SetAt.Add(tc.after)
+			o.WatchedUntil, o.Readings, o.QuarantineHeld, o.QuarantineGone = &until, 2, false, gone
+			if tc.never {
+				o.NeverEvents = []string{s07SecondCut + "the new quarantine (generation g2) was released"}
+			}
+			if v := judgeS07(rec, testS07Limits); v.Result != tc.result || !strings.Contains(v.Reason, tc.reason) {
+				t.Errorf("judgeS07 = %s %q; want %s with %q", v.Result, v.Reason, tc.result, tc.reason)
+			}
+			if got := s07Measurements(rec)["oldTokenIgnored"]; got != tc.ignored {
+				t.Errorf("oldTokenIgnored %v, want %s", got, tc.ignored)
+			}
+		})
+	}
+}
+
+// An earlier token the run could not remove is a cleanup failure.
+func TestS07CleanupFailsOnAnOldTokenNotRemoved(t *testing.T) {
+	yes := true
+	rec := s07RepeatBase()
+	rec.Repeat.OldTokens[0].AnnotationRemoveError = "the cluster could not be read"
+	if got := s07CleanupSucceeded(rec, &yes); got == nil || *got {
+		t.Errorf("an old token left set: %v", got)
+	}
+}
+
 // The new-connection writes are split at the second cut's start, and the data
 // check compares the rows with the master the second cut settled on.
 func TestS07SplitProbesAndEndMaster(t *testing.T) {

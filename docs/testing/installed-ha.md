@@ -1719,14 +1719,16 @@ second cut` in the reason):
   held, the second session's history insufficient, the cluster not settled);
   no old token tried (`oldTokenReplays[].notMade`), or fewer tried than the
   run had; the new quarantine released by another token or gone during a
-  watch without a release the run read; fewer than two readings in a watch,
-  or a watch that ended before its 30 seconds; or a watch still running when
+  watch without a release the run read, also at its last reading; fewer
+  than two readings in a watch, or a watch that ended before its 30 seconds; or a watch still running when
   the run was judged.
 
 The measurements add `repeat` (`made`, `not made` or `not reached`),
 `secondQuarantineNewGeneration` and `oldTokenIgnored` (`true`, `false`, or
 `unknown` where the run did not show it: `oldTokenIgnored` needs every token
-watched for its whole window with two readings), and `secondCut`: the second cut's
+watched for its whole window with two readings, and is `unknown` when the new
+quarantine was gone without a release the run read, also at the watch's last
+reading, unless a release on the old token was read), and `secondCut`: the second cut's
 own measurements by the same names as the first's (`quarantineWithin`,
 `rwPodsGoneWithin`, `establishedAcknowledgedAfterPathClosed` and the
 others), with its `target`, `masterBefore` and `masterMoved`.
@@ -1735,7 +1737,8 @@ The option adds the second cut's bounds to the `-timeout` check: 5 minutes
 for the starting state, 2 for the second session, the 10-minute move for
 `higher-rank-isolated`, the 10-minute keepalive step when asked for, and the
 preparation, hold, the two old-token watches, removal and settle of the cut.
-The scenario's `cleanupSucceeded` holds only when both cuts were removed. With
+The scenario's `cleanupSucceeded` holds only when both cuts were removed and
+no old token the run set was left after a failed removal. With
 `-partition-keepalive 30s`, `-partition-manual-release` and the other
 defaults, the variant's own bounds are 93 minutes and 50 seconds, plus
 LAB01:
