@@ -482,13 +482,29 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
 		drain(r.Recorder.(*record.FakeRecorder))
 
-		By("keeping True while one slave cannot tell and the others match")
+		// askedAfterShortRetry reports whether the members are asked again
+		// once dbaPasswordInconclusiveRetry has passed, well before the poll.
+		askedAfterShortRetry := func() bool {
+			asked := len(checker.calls())
+			advance(dbaPasswordInconclusiveRetry)
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			return len(checker.calls()) > asked
+		}
+
+		By("keeping True while one slave cannot tell and the others match, without a short retry")
 		checker.setMember(slave2, instancemanager.DBAPasswordUnknown)
-		res := reconcileOnce(r, key)
+		reconcileOnce(r, key)
 		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
-		Expect(res.RequeueAfter).To(BeNumerically("<=", dbaPasswordInconclusiveRetry),
-			"a member that cannot tell is asked again soon (#1031)")
+		Expect(askedAfterShortRetry()).To(BeFalse(), "only the primary's answer that cannot tell is retried soon")
 		checker.setMember(slave2, "")
+
+		By("asking again soon while the primary cannot tell (#1031)")
+		checker.setMember(primary, instancemanager.DBAPasswordUnknown)
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		Expect(askedAfterShortRetry()).To(BeTrue(), "the primary that cannot tell is asked again soon")
+		checker.setMember(primary, "")
 
 		By("reporting one slave that differs while the primary and the other slave match")
 		checker.setMember(slave1, instancemanager.DBAPasswordDiffers)

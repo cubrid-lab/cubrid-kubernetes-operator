@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,13 +64,13 @@ func TestDBAPasswordHAMembers(t *testing.T) {
 		t.Fatalf("the test cluster's bootstrap is not admitted: %+v", c.Status.Databases)
 	}
 	ask, unasked := dbaPasswordHAMembers(c, res)
-	if !slices.Equal(ask, []string{pw0, pw1, pw2}) || len(unasked) != 0 {
-		t.Fatalf("ask %q, not asked %q; want every member asked", ask, unasked)
+	if !slices.Equal(ask, []string{pw1, pw0, pw2}) || len(unasked) != 0 {
+		t.Fatalf("ask %q, not asked %q; want every member asked, the primary first", ask, unasked)
 	}
 
 	c.Status.Instances[2].Ready, c.Status.Instances[2].Role = false, databasev1alpha1.RoleUnknown
 	ask, unasked = dbaPasswordHAMembers(c, res)
-	if !slices.Equal(ask, []string{pw0, pw1}) || !slices.Equal(unasked, []string{pw2}) {
+	if !slices.Equal(ask, []string{pw1, pw0}) || !slices.Equal(unasked, []string{pw2}) {
 		t.Fatalf("ask %q, not asked %q; want pw-2 not asked", ask, unasked)
 	}
 
@@ -91,7 +93,7 @@ func TestDBAPasswordRotationUnaskedMemberIsNoMatch(t *testing.T) {
 	c, _ := dbaMembersCluster()
 	c.UID = "pw-uid"
 	c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
-		LocalObjectReference: corev1.LocalObjectReference{Name: "pw-secret"}, Key: "password"}
+		LocalObjectReference: corev1.LocalObjectReference{Name: "pw-secret"}, Key: dbaTestKey}
 	setCondition(c, conditionDBAPasswordSecretResolved, metav1.ConditionFalse, reasonDBAPasswordRotationUnsupported,
 		"reported")
 	checker := &fakeDBAPasswordChecker{}
@@ -116,4 +118,94 @@ func TestDBAPasswordRotationUnaskedMemberIsNoMatch(t *testing.T) {
 	if got.Status != metav1.ConditionTrue || got.Reason != reasonDBAPasswordSecretResolved {
 		t.Fatalf("condition %s/%s, want True once every member matches", got.Status, got.Reason)
 	}
+}
+
+// Only an answer of the primary (members[0]) that cannot tell is retried
+// after dbaPasswordInconclusiveRetry (#1031). A slave that cannot tell, such
+// as one whose Instance Manager predates #1012 and answers Unknown on every
+// check, leaves the normal poll, so that it does not bring a login on every
+// member every 30 seconds. A member that differs is reported whatever the
+// others answer, also next to a call that failed.
+func TestDBAPasswordRotationRetriesSoonOnlyForThePrimary(t *testing.T) {
+	const poll = 2 * time.Minute
+	for _, tc := range []struct {
+		name       string
+		primary    instancemanager.DBAPasswordState
+		slaveErr   bool
+		slave      instancemanager.DBAPasswordState
+		other      instancemanager.DBAPasswordState
+		wantWait   time.Duration
+		wantReason string
+	}{
+		{name: "a slave of an older Instance Manager answers Unknown", primary: instancemanager.DBAPasswordMatches,
+			slave: instancemanager.DBAPasswordUnknown, other: instancemanager.DBAPasswordMatches,
+			wantWait: poll, wantReason: reasonDBAPasswordRotationUnsupported},
+		{name: "the call to a slave fails", primary: instancemanager.DBAPasswordMatches, slaveErr: true,
+			other: instancemanager.DBAPasswordMatches, wantWait: poll, wantReason: reasonDBAPasswordRotationUnsupported},
+		{name: "the primary answers Unknown", primary: instancemanager.DBAPasswordUnknown,
+			slave: instancemanager.DBAPasswordMatches, other: instancemanager.DBAPasswordMatches,
+			wantWait: dbaPasswordInconclusiveRetry, wantReason: reasonDBAPasswordRotationUnsupported},
+		{name: "one slave differs and the call to the other fails", primary: instancemanager.DBAPasswordMatches,
+			slaveErr: true, other: instancemanager.DBAPasswordDiffers, wantWait: poll,
+			wantReason: reasonDBAPasswordRotationUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := dbaMembersCluster()
+			c.UID = "pw-uid"
+			c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "pw-secret"}, Key: dbaTestKey}
+			// The condition starts True for the case of a member that differs,
+			// and reported otherwise, so that a wrong match would show.
+			start := tc.other != instancemanager.DBAPasswordDiffers
+			if start {
+				setCondition(c, conditionDBAPasswordSecretResolved, metav1.ConditionFalse,
+					reasonDBAPasswordRotationUnsupported, "reported")
+			} else {
+				setCondition(c, conditionDBAPasswordSecretResolved, metav1.ConditionTrue,
+					reasonDBAPasswordSecretResolved, "resolved")
+			}
+			checker := &failingSlaveChecker{fakeDBAPasswordChecker: &fakeDBAPasswordChecker{}}
+			checker.setMember(pw1, tc.primary)
+			checker.setMember(pw2, tc.other)
+			if tc.slaveErr {
+				checker.failing = pw0
+			} else {
+				checker.setMember(pw0, tc.slave)
+			}
+			recorder := record.NewFakeRecorder(10)
+			now := time.Now()
+			r := &CubridClusterReconciler{Recorder: recorder, DBAPassword: checker, DBAPasswordPoll: poll,
+				Clock: func() time.Time { return now }}
+
+			if wait := r.reconcileDBAPasswordRotation(context.Background(), c, []string{pw1, pw0, pw2},
+				nil); wait != tc.wantWait {
+				t.Errorf("next check in %s, want %s", wait, tc.wantWait)
+			}
+			got := meta.FindStatusCondition(c.Status.Conditions, conditionDBAPasswordSecretResolved)
+			if got.Status != metav1.ConditionFalse || got.Reason != tc.wantReason {
+				t.Fatalf("condition %s/%s, want False/%s", got.Status, got.Reason, tc.wantReason)
+			}
+			if !start {
+				if !strings.Contains(got.Message, "refused on "+pw2+" and accepted on "+pw1) {
+					t.Errorf("message %q does not name the member that refused and the one that accepted", got.Message)
+				}
+				if len(recorder.Events) != 1 {
+					t.Errorf("%d Events, want one Warning Event", len(recorder.Events))
+				}
+			}
+		})
+	}
+}
+
+// failingSlaveChecker is fakeDBAPasswordChecker whose call to failing fails.
+type failingSlaveChecker struct {
+	*fakeDBAPasswordChecker
+	failing string
+}
+
+func (f *failingSlaveChecker) CheckDBAPassword(ctx context.Context, podName, namespace string) (instancemanager.DBAPasswordCheck, error) {
+	if podName == f.failing {
+		return instancemanager.DBAPasswordCheck{}, errors.New("connection refused")
+	}
+	return f.fakeDBAPasswordChecker.CheckDBAPassword(ctx, podName, namespace)
 }

@@ -128,8 +128,9 @@ it can still test guesses. The `DBAPasswordRotationUnsupported` Condition tells
 them whether a guess matched the database's stored password: it appears when
 the value is not the password and is absent when it is. A new value is checked
 about once per poll (5 minutes by default) while a member can be asked; on an
-HA cluster that needs a resolved primary, and every member is asked. A check that cannot tell is retried
-after about 30 seconds. The time the kubelet takes to update the mounted file
+HA cluster that needs a resolved primary, and every member is asked. A check
+of the standalone member or the HA primary that cannot tell is retried after
+about 30 seconds. The time the kubelet takes to update the mounted file
 (about a minute) also limits the rate. See
 [Changing the password is not supported](#changing-the-password-is-not-supported),
 which describes how a changed value is reported.
@@ -348,9 +349,25 @@ the database by hand with `ALTER USER`.
   server is not running, an HA member is neither the active master nor a
   slave with a standby server, the Instance Manager cannot be reached,
   another check is running, or csql neither accepted nor refused the login):
-  the Condition is left as it is, and the Operator asks again after about 30
-  seconds instead of waiting out the 5-minute poll. It is never reported as a
-  changed password, nor as a match.
+  the Condition is left as it is. When the member that cannot tell is the
+  standalone member or the HA primary, the Operator asks again after about 30
+  seconds instead of waiting out the 5-minute poll. A slave that cannot tell
+  waits for the next poll: a slave whose Instance Manager is older than the
+  Operator (for example while the DB Pods have not yet been replaced after an
+  Operator upgrade, or with a pinned `spec.image`) answers that it cannot
+  tell on every check, and a shorter retry would log in on every member every
+  30 seconds. It is never reported as a changed password, nor as a match.
+
+**After upgrading to an Operator that asks every member** (#1012): an HA
+cluster whose slaves really hold another password than the Secret's, for
+example after an earlier manual `set_password` ran on the primary only,
+changes from `True` to `False` with `DBAPasswordRotationUnsupported` and
+records a Warning Event naming the slaves that refused the value. This is
+intended: such a slave would refuse the Secret's password after a failover.
+Change the password on those members, or put their password back on the
+others, until every member accepts the Secret's value. Until every member's
+Instance Manager is of the new build, its slaves answer that they cannot
+tell, and the Condition stays as it was.
 
 A change is therefore reported within about 5 minutes, plus the time the
 kubelet takes to update the mounted file (up to its sync period, about a

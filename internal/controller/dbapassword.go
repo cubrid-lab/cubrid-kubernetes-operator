@@ -269,7 +269,8 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 // reconcileDBAPasswordRotation asks members, the members of a cluster with a
 // DBA password Secret that may be asked now, whether the Secret's value is
 // still each one's DBA password, and returns the delay after which to ask
-// again; zero for a cluster without the reference. unasked are the members
+// again; zero for a cluster without the reference. members[0] is the
+// standalone member or the HA primary. unasked are the members
 // that answer for the password too but may not be asked now, such as an HA
 // slave that is not ready; each counts as an answer that cannot tell. members
 // is empty when no member may be asked now (dbaPasswordStandaloneMember,
@@ -296,8 +297,12 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 // The new value is never applied, and neither the StatefulSet nor its Pods
 // are changed. The members are asked at most once per poll per cluster, or
 // once per dbaPasswordInconclusiveRetry after an Unknown answer or a failed
-// call of a member that was asked; only the time of the next check is kept,
-// in memory, so an operator that restarts asks again at once.
+// call of members[0]; only the time of the next check is kept, in memory, so
+// an operator that restarts asks again at once. A slave that cannot tell does
+// not shorten the poll: a slave whose Instance Manager is older than #1012,
+// or one that stays in a transition, answers Unknown on every check, and
+// would otherwise bring a login on every member every 30 seconds for as long
+// as it does.
 func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
 	cluster *databasev1alpha1.CubridCluster, members, unasked []string) time.Duration {
 	ref := cluster.Spec.DBAPasswordSecretRef
@@ -340,7 +345,7 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		case errs[i] != nil:
 			log.V(1).Info("Could not check the DBA password Secret against the database", "member", member,
 				"error", errs[i].Error())
-			inconclusive = true
+			inconclusive = inconclusive || i == 0
 		case checks[i].State == instancemanager.DBAPasswordDiffers:
 			differed = append(differed, member)
 		case checks[i].State == instancemanager.DBAPasswordMatches:
@@ -348,7 +353,7 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		default:
 			log.V(1).Info("Could not tell whether the DBA password Secret is the database's password", "member", member,
 				"reason", checks[i].Reason)
-			inconclusive = true
+			inconclusive = inconclusive || i == 0
 		}
 	}
 	switch {
@@ -381,8 +386,9 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		log.V(1).Info("Could not ask every member whether the DBA password Secret is its password",
 			"notAsked", strings.Join(unasked, ","))
 	}
-	// An answer that cannot tell said nothing about the password; the
-	// members are asked again sooner than the poll (#1031).
+	// An answer of the standalone member or the primary that cannot tell
+	// said nothing about the password; the members are asked again sooner
+	// than the poll (#1031).
 	if inconclusive {
 		retry := min(dbaPasswordInconclusiveRetry, poll)
 		r.dbaPasswordNextCheck.Store(cluster.UID, now.Add(retry))
@@ -401,7 +407,8 @@ func dbaPasswordStandaloneMember(cluster *databasev1alpha1.CubridCluster, sts *a
 }
 
 // dbaPasswordHAMembers are the members of an HA cluster asked about its DBA
-// password Secret, and those that may not be asked now. Every member keeps
+// password Secret, the primary first, and those that may not be asked now.
+// Every member keeps
 // its own copy of the password, which a password changed on one member does
 // not reach (POC-74), so every member is asked (#1012): the primary that res
 // resolved in this pass, which heartbeat reports as the master and whose role
@@ -430,12 +437,15 @@ func dbaPasswordHAMembers(cluster *databasev1alpha1.CubridCluster, res PrimaryRe
 	if in, ok := instances[res.CurrentPrimary]; !ok || !in.Ready || in.Role != databasev1alpha1.RoleMaster {
 		return nil, nil
 	}
-	var ask, unasked []string
+	// The primary comes first: only its answer that cannot tell is retried
+	// soon (reconcileDBAPasswordRotation).
+	ask := []string{res.CurrentPrimary}
+	var unasked []string
 	for _, name := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
 		in, ok := instances[name]
 		switch {
-		case name == res.CurrentPrimary,
-			ok && in.Ready && in.Role == databasev1alpha1.RoleSlave:
+		case name == res.CurrentPrimary:
+		case ok && in.Ready && in.Role == databasev1alpha1.RoleSlave:
 			ask = append(ask, name)
 		default:
 			unasked = append(unasked, name)
