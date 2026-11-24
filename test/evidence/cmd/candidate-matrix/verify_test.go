@@ -52,6 +52,7 @@ const (
 	listedState        = "listed"
 	unexplained        = "no judged result accounts for"
 	failoverUnmeasured = "failoverWithin is not measured"
+	otherImages        = "image digests are not the candidate's"
 )
 
 // A candidate whose every registered v0.1 variant passed, with each measured
@@ -346,10 +347,10 @@ func TestVerifierBlocksResultsOfAnotherCandidate(t *testing.T) {
 	}{
 		{"other operator image", func(runs []evidence.Summary) {
 			runs[1].Environment.OperatorImageDigest = "sha256:" + strings.Repeat("5", 64)
-		}, "image digests are not the candidate's"},
+		}, otherImages},
 		{"other CUBRID image", func(runs []evidence.Summary) {
 			runs[1].Environment.CubridImageDigest = "sha256:" + strings.Repeat("6", 64)
-		}, "image digests are not the candidate's"},
+		}, otherImages},
 		{"unknown image", func(runs []evidence.Summary) {
 			runs[1].Environment.CubridImageDigest = ""
 		}, "image digests are not recorded"},

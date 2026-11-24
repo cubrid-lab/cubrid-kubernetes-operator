@@ -163,7 +163,15 @@ into the bundles. The rules, failing closed:
   every file the index lists or archives must be present, non-empty and
   match its SHA-256 digest. The run must have finished, belong to a
   registered lane (not `kind-filtered`), and record the candidate's full
-  commit and both image digests. It must have passed its lane, or every
+  commit and both image digests. A run records each image either as a bare
+  `sha256:<64 lowercase hex>` (Kind) or as the Pod image ID
+  `<registry/repository>@sha256:<64 lowercase hex>` (installed VM-lab runs);
+  a tag, a missing or short digest, uppercase, text after the hex or a
+  second `@` records no digest. The candidate's digests stay bare, and the
+  verifier compares only the digest part with them: the repository is not
+  compared, because the digest alone identifies the image content. The
+  index `environment` still repeats `summary.json` verbatim. It must have
+  passed its lane, or every
   problem it or the evidence reader records must belong to a result the
   verifier judged as not Go; any other problem, such as a credential in
   the evidence, a step without its label or a suite deadline, blocks the

@@ -443,9 +443,9 @@ func runProblem(c candidate, source run, actual evidence.RecordedRun, junitStatu
 		return "the source commit is not recorded"
 	case env.Commit != c.Commit:
 		return "the source commit is not the candidate's"
-	case !digestPattern.MatchString(env.Operator) || !digestPattern.MatchString(env.CUBRID):
+	case !imagePattern.MatchString(env.Operator) || !imagePattern.MatchString(env.CUBRID):
 		return "the image digests are not recorded"
-	case env.images != c.images:
+	case !sameImages(env.images, c.images):
 		return "the image digests are not the candidate's"
 	}
 	return ""
