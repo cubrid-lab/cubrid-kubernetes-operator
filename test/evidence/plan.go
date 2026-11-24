@@ -78,7 +78,8 @@ func (s *Summary) Settle(req Requirement, result Result, reason string) bool {
 // Selected reports whether the run's label, semantic version, focus, skip
 // and file filters select the spec, the way Ginkgo applies them to a suite
 // with the given description. Programmatic focus (FIt, FDescribe) is not
-// taken into account; the suite does not use it.
+// taken into account; the suite does not use it. A focus, skip or file
+// filter that cannot be parsed selects nothing.
 func Selected(report types.SpecReport, suite types.SuiteConfig, description string) bool {
 	if suite.LabelFilter != "" {
 		if ok, err := report.MatchesLabelFilter(suite.LabelFilter); err != nil || !ok {
@@ -91,11 +92,16 @@ func Selected(report types.SpecReport, suite types.SuiteConfig, description stri
 		}
 	}
 	text := description + " " + report.FullText()
-	if len(suite.FocusStrings) > 0 && !regexp.MustCompile(strings.Join(suite.FocusStrings, "|")).MatchString(text) {
-		return false
+	if len(suite.FocusStrings) > 0 {
+		// An invalid pattern selects nothing, so it can never yield a pass.
+		if re, err := regexp.Compile(strings.Join(suite.FocusStrings, "|")); err != nil || !re.MatchString(text) {
+			return false
+		}
 	}
-	if len(suite.SkipStrings) > 0 && regexp.MustCompile(strings.Join(suite.SkipStrings, "|")).MatchString(text) {
-		return false
+	if len(suite.SkipStrings) > 0 {
+		if re, err := regexp.Compile(strings.Join(suite.SkipStrings, "|")); err != nil || re.MatchString(text) {
+			return false
+		}
 	}
 	locations := append(append([]types.CodeLocation{}, report.ContainerHierarchyLocations...), report.LeafNodeLocation)
 	if len(suite.FocusFiles) > 0 {

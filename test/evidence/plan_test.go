@@ -99,6 +99,12 @@ func TestSelected(t *testing.T) {
 		"focus":                         {types.SuiteConfig{FocusStrings: []string{"S03"}}, true, false},
 		"focus on the suite and spec":   {types.SuiteConfig{FocusStrings: []string{"^e2e suite Manager HA"}}, true, true},
 		"skip":                          {types.SuiteConfig{SkipStrings: []string{"S01"}}, true, false},
+		"invalid focus pattern":         {types.SuiteConfig{FocusStrings: []string{"["}}, false, false},
+		"invalid focus among valid":     {types.SuiteConfig{FocusStrings: []string{"S03", "["}}, false, false},
+		"invalid skip pattern":          {types.SuiteConfig{SkipStrings: []string{"["}}, false, false},
+		"invalid skip among valid":      {types.SuiteConfig{SkipStrings: []string{"S01", "("}}, false, false},
+		"valid multiple focus":          {types.SuiteConfig{FocusStrings: []string{"S03", "S01"}}, true, true},
+		"valid multiple skip":           {types.SuiteConfig{SkipStrings: []string{"S01", "S02"}}, true, false},
 		"semantic version filter":       {types.SuiteConfig{SemVerFilter: "1.0.0"}, false, true},
 		"focus file of another file":    {types.SuiteConfig{FocusFiles: []string{"s00_test.go"}}, false, false},
 	}
