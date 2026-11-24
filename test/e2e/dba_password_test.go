@@ -1283,9 +1283,19 @@ spec:
 			It("changes the DBA password by hand on every member through kubectl exec on a terminal, while rows "+
 				"are written", func() {
 				restored := membersOf(restoredName)
-				primary, err := h.clusterField(restoredName, "{.status.currentPrimary}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(primary).To(BeElementOf(restored), "no primary is resolved")
+				// The cluster was healthy when the earlier step read it, but a
+				// role probe a member misses right after the restore leaves no
+				// primary resolved for a few seconds (PrimaryObservationIncomplete),
+				// so the step waits for a healthy cluster with a resolved primary
+				// instead of reading it once.
+				var primary string
+				Eventually(func(g Gomega) {
+					haHealthy(g, restoredName)
+					var err error
+					primary, err = h.clusterField(restoredName, "{.status.currentPrimary}")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(primary).To(BeElementOf(restored), "no primary is resolved")
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
 				changePrimary = primary
 
 				By("creating a user without a password, and the table it writes, on the primary " + primary)
