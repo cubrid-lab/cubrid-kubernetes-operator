@@ -160,6 +160,11 @@ type HAConfig struct {
 	// master again under those values (#982). Zero, the default, leaves the
 	// kernel's values.
 	PartitionKeepalive time.Duration
+	// PartitionOperatorRestart makes S07, once the quarantine is enforced
+	// while the cut holds, delete the manager Pod, extend the cut to its
+	// replacement, and record whether the quarantine and the closed
+	// read-write path hold across the restart.
+	PartitionOperatorRestart bool
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12

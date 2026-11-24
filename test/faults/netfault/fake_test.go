@@ -198,6 +198,8 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 		return "", nil
 	case opInject:
 		return n.inject(ns, script)
+	case "repoint":
+		return n.repoint(ns, script)
 	case "remove":
 		n.remove(ns)
 		return "", nil
@@ -416,6 +418,25 @@ func (n *fakeNet) inject(ns *fakeNS, script string) (string, error) {
 	if n.lateInject {
 		// A second injection, abandoned and not stopped, lands later.
 		ns.pending = lines
+	}
+	return "", nil
+}
+
+// repoint answers ReplacePeer's script: it appends the drop rules and the
+// counting rule to the chains already there.
+func (n *fakeNet) repoint(ns *fakeNS, script string) (string, error) {
+	if ns.removed {
+		return faultRemoved, errors.New("command terminated with exit code 3")
+	}
+	for _, m := range ruleArg.FindAllStringSubmatch(script, -1) {
+		switch m[1] {
+		case chainIn:
+			ns.in = append(ns.in, m[2])
+		case chainOut:
+			ns.out = append(ns.out, m[2])
+		case chainSeen:
+			ns.seenRules = append(ns.seenRules, m[2])
+		}
 	}
 	return "", nil
 }

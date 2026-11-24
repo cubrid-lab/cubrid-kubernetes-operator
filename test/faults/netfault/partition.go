@@ -103,6 +103,22 @@ type Record struct {
 	// after the injection.
 	Rules        map[string][]string `json:"rules,omitempty"`
 	Observations []Observation       `json:"observations"`
+	// Replacements are the peers ReplacePeer replaced while the fault was
+	// on.
+	Replacements []Replacement `json:"replacements,omitempty"`
+}
+
+// Replacement is a peer that ReplacePeer replaced: the old and the new
+// endpoint's name, Pod and IP, and when the new one's rules were read back.
+// The old address's drop rules stay installed until the removal.
+type Replacement struct {
+	T       time.Time `json:"t"`
+	From    string    `json:"from"`
+	FromPod string    `json:"fromPod"`
+	FromIP  string    `json:"fromIP"`
+	To      string    `json:"to"`
+	ToPod   string    `json:"toPod"`
+	ToIP    string    `json:"toIP"`
 }
 
 // Partition drops traffic between Target and each peer of Cuts, and keeps the
@@ -128,9 +144,13 @@ type Partition struct {
 
 	mu       sync.Mutex
 	prepared bool
-	since    map[string]rules // each entered endpoint's counters at the start of the phase
-	window   map[string]rules // a passive path's counters at its last decided reading
-	rec      Record
+	injected bool
+	// retired are the cuts ReplacePeer replaced: their drop rules stay
+	// installed, but they are no longer probed.
+	retired []Cut
+	since   map[string]rules // each entered endpoint's counters at the start of the phase
+	window  map[string]rules // a passive path's counters at its last decided reading
+	rec     Record
 }
 
 // Name says what the partition drops.
@@ -150,6 +170,7 @@ func (p *Partition) Record() Record {
 	r.Fault, r.Target = p.Name(), p.Target.Name
 	r.Rules = maps.Clone(r.Rules)
 	r.Observations = slices.Clone(r.Observations)
+	r.Replacements = slices.Clone(r.Replacements)
 	return r
 }
 
@@ -318,7 +339,7 @@ func (p *Partition) observed(e Endpoint) []string {
 // there.
 func (p *Partition) dropRules() map[string][]string {
 	by := map[string][]string{}
-	for _, c := range p.Cuts {
+	for _, c := range append(slices.Clone(p.retired), p.Cuts...) {
 		if c.Direction == In || c.Direction == Both {
 			by[p.Target.Name] = append(by[p.Target.Name], dropInRule(c.Peer.IP))
 		}
@@ -499,9 +520,77 @@ func (p *Partition) Inject(ctx context.Context) error {
 		read[e.Name] = dropLines(r)
 	}
 	p.mu.Lock()
-	p.rec.Rules = read
+	p.rec.Rules, p.injected = read, true
 	p.mu.Unlock()
 	return p.snapshot(ctx)
+}
+
+// ReplacePeer replaces, while the fault is on, the peer named name of a cut
+// both ways whose Pod the faults never enter, such as the manager Pod after
+// it was deleted, by peer, a Pod the faults never enter either. It checks
+// that peer is the Pod it names, installs in the target the drop rules and
+// the counting rule for peer's address, reads every drop rule back, and from
+// then on probes the cut with peer. The old address's drop rules stay until
+// the removal, because a deleted Pod's process can outlive its object. It
+// refuses a partition that was not injected or whose removal began, and a
+// peer at an address the partition already names.
+func (p *Partition) ReplacePeer(ctx context.Context, name string, peer Endpoint) error {
+	p.mu.Lock()
+	injected := p.injected
+	p.mu.Unlock()
+	if !injected {
+		return errors.New("the partition was not injected")
+	}
+	i := slices.IndexFunc(p.Cuts, func(c Cut) bool { return c.Peer.Name == name })
+	switch {
+	case i < 0:
+		return fmt.Errorf("the partition cuts no peer named %s", name)
+	case p.Cuts[i].Peer.Entered() || p.Cuts[i].Direction != Both:
+		return fmt.Errorf("%s: only a peer cut both ways that the faults do not enter can be replaced", name)
+	case peer.Entered() || peer.Pod == "":
+		return fmt.Errorf("%s: the replacement must be a Pod the faults do not enter", peer.Name)
+	case slices.ContainsFunc(p.retired, func(c Cut) bool { return c.Peer.IP == peer.IP }):
+		return fmt.Errorf("%s has the address %s of a peer it replaced", peer.Name, peer.IP)
+	}
+	old := p.Cuts[i]
+	next := &Partition{Target: p.Target, Cuts: slices.Clone(p.Cuts), Keep: p.Keep}
+	next.Cuts[i].Peer = peer
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	if _, err := currentPod(ctx, p.Env, peer); err != nil {
+		return err
+	}
+	if err := checkNamespace(ctx, p.Env, p.Target); err != nil {
+		return err
+	}
+	script := ": netfault repoint\nset -e\n" +
+		"[ ! -e " + removedMarker + " ] || { echo 'the fault was removed'; exit 3; }\n" +
+		"iptables -w 5 " + dropInRule(peer.IP) + "\n" +
+		"iptables -w 5 " + dropOutRule(peer.IP) + "\n" +
+		"iptables -w 5 " + seenRule(peer.IP)
+	if _, err := shell(ctx, p.Env, p.Target, script); err != nil {
+		return fmt.Errorf("install the drop rules for %s: %w", peer.Name, err)
+	}
+	p.Cuts[i] = Cut{Peer: peer, Direction: Both}
+	p.retired = append(p.retired, old)
+	r, err := p.checkDropRules(ctx, p.Target)
+	if err != nil {
+		return err
+	}
+	if !r.has(seenRule(peer.IP)) {
+		return fmt.Errorf("%s: the counting rule for %s is not installed: %v", p.Target.Name, peer.IP, r.lines)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rec.Rules = maps.Clone(p.rec.Rules)
+	p.rec.Rules[p.Target.Name] = dropLines(r)
+	p.rec.Replacements = append(p.rec.Replacements, Replacement{T: time.Now().UTC(), From: old.Peer.Name,
+		FromPod: old.Peer.Pod, FromIP: old.Peer.IP, To: peer.Name, ToPod: peer.Pod, ToIP: peer.IP})
+	for _, path := range []Path{{peer, p.Target}, {p.Target, peer}, {old.Peer, p.Target}, {p.Target, old.Peer}} {
+		delete(p.window, path.String())
+	}
+	return nil
 }
 
 // checkDropRules fails unless the endpoint's drop chains hold exactly its

@@ -732,3 +732,100 @@ func TestPartitionRemoveOnEnd(t *testing.T) {
 		})
 	}
 }
+
+// The manager Pod replaced while the fault is on: ReplacePeer cuts the
+// replacement's address in the target, keeps the old address cut, and the
+// cut is then confirmed with the replacement and removed completely.
+func TestPartitionReplacePeer(t *testing.T) {
+	const replacementIP, replacementPod = "10.42.2.82", "manager-2"
+	n := newFakeNet(testPods)
+	env := testEnv(t, n)
+	p := isolateMaster(n, env)
+	replacement := Endpoint{Name: "operator-replacement", Namespace: operatorNS, Pod: replacementPod,
+		UID: "uid-" + replacementPod, IP: replacementIP, Port: 8081, NoEnter: true}
+	if err := p.ReplacePeer(context.Background(), "operator", replacement); err == nil ||
+		!strings.Contains(err.Error(), "not injected") {
+		t.Fatalf("ReplacePeer before the injection returned %v", err)
+	}
+	if err := p.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ReplacePeer(context.Background(), "operator", replacement); err == nil ||
+		!strings.Contains(err.Error(), "is gone") {
+		t.Fatalf("ReplacePeer with no replacement Pod returned %v", err)
+	}
+	if err := env.Client.Create(context.Background(), testPod(operatorNS, replacementPod, replacementIP)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ReplacePeer(context.Background(), "ha-1", replacement); err == nil {
+		t.Fatal("ReplacePeer replaced an entered member")
+	}
+	delete(n.senders, operatorIP)
+	n.senders[replacementIP] = testPods[target]
+	if err := p.ReplacePeer(context.Background(), "operator", replacement); err != nil {
+		t.Fatal(err)
+	}
+	r := p.Record()
+	want := []string{dropInRule(testPods["ha-1"]), dropInRule(testPods["ha-2"]), dropInRule(operatorIP),
+		dropOutRule(operatorIP), dropInRule(replacementIP), dropOutRule(replacementIP), jumpIn, jumpOut}
+	got := slices.Clone(r.Rules[target])
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("rules after the replacement: %v, want %v", got, want)
+	}
+	if len(r.Replacements) != 1 || r.Replacements[0].FromIP != operatorIP || r.Replacements[0].ToIP != replacementIP {
+		t.Errorf("replacements %+v", r.Replacements)
+	}
+	if ok, err := p.Confirm(context.Background()); !ok || err != nil {
+		t.Fatalf("Confirm with the replacement returned %v, %v", ok, err)
+	}
+	r = p.Record()
+	requireSeen(t, r, PhaseFault, "ha-0 -> operator-replacement", SeenCut, MethodConnect)
+	requireSeen(t, r, PhaseFault, "operator-replacement -> ha-0", SeenCut, MethodPassive)
+	if err := p.ReplacePeer(context.Background(), "operator-replacement", Endpoint{Name: "again",
+		Namespace: operatorNS, Pod: operatorPod, UID: "uid-" + operatorPod, IP: operatorIP, Port: 8081,
+		NoEnter: true}); err == nil || !strings.Contains(err.Error(), "replaced") {
+		t.Fatalf("ReplacePeer back to a replaced address returned %v", err)
+	}
+	if err := p.Remove(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r = p.Record()
+	requireSeen(t, r, PhaseRemoved, "operator-replacement -> ha-0", SeenOpen, MethodPassive)
+	requireClean(t, n)
+}
+
+// A removal that began first keeps ReplacePeer from installing anything.
+func TestPartitionReplacePeerAfterTheRemoval(t *testing.T) {
+	const replacementIP, replacementPod = "10.42.2.82", "manager-2"
+	n := newFakeNet(testPods)
+	env := testEnv(t, n)
+	p := isolateMaster(n, env)
+	if err := p.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RemoveDrops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Client.Create(context.Background(), testPod(operatorNS, replacementPod, replacementIP)); err != nil {
+		t.Fatal(err)
+	}
+	err := p.ReplacePeer(context.Background(), "operator", Endpoint{Name: "operator-replacement",
+		Namespace: operatorNS, Pod: replacementPod, UID: "uid-" + replacementPod, IP: replacementIP, Port: 8081,
+		NoEnter: true})
+	if err == nil {
+		t.Fatal("ReplacePeer installed rules after the removal")
+	}
+	if left := n.installed(testPods[target]); slices.ContainsFunc(left, func(l string) bool {
+		return strings.Contains(l, replacementIP) && !strings.Contains(l, chainSeen)
+	}) {
+		t.Errorf("drop rules for the replacement after the removal: %v", left)
+	}
+}
