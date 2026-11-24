@@ -31,6 +31,8 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
@@ -41,7 +43,11 @@ import (
 // 8, on every pass (checkQuarantineInvariants). Every fixture names where its
 // times and roles were recorded. A state the record does not give is never
 // filled in with a guess: it is either left out of the replay or listed as
-// unknown, in which case every listed possibility is replayed.
+// unknown for a segment of the timeline. Each listed state is then replayed
+// in turn, held for the whole segment; a change between two listed states
+// within a segment is not replayed. The last resolved primary is derived
+// pass by pass from the replayed answers by resolvePrimary, as the
+// controller derives it, from the value each fixture starts with.
 //
 // Provenance of the fixtures:
 //
@@ -92,9 +98,11 @@ import (
 //     cadences between the recorded instants; the time at which the Operator
 //     first lost ha-0 after the cut was issued is unknown (it is replayed
 //     both ways until the recorded quarantine start); the last resolved
-//     primary is not recorded and is taken as ha-1 after the master move,
-//     the only value consistent with the recorded absence of a quarantine
-//     during that move; no out-of-service taint was set in any run.
+//     primary is not recorded. The replay starts with ha-1: ha-1 was the
+//     only active master, with both other members slaves, for 39 to 43 s
+//     before each cut, so the controller would have recorded it by then,
+//     and rule 2 names ha-0, which outranks ha-1, whichever member is the
+//     last resolved primary. No out-of-service taint was set in any run.
 //
 // The Kind run of #938 is replayed in quarantine_missed_probe_test.go and the
 // POC-50 heartbeat samples in quarantine_evidence_replay_test.go.
@@ -102,16 +110,17 @@ import (
 // replayClusterUID is the cluster UID of every replay.
 const replayClusterUID = "replay-cluster-uid"
 
-// replayPass is one replayed pass: its time, the answers it used and the
-// decision.
+// replayPass is one replayed pass: its time, the answers it used, the last
+// resolved primary it was decided with and the decision.
 type replayPass struct {
-	at       time.Time
-	obs      map[string]RoleObservation
-	decision quarantineDecision
+	at           time.Time
+	obs          map[string]RoleObservation
+	lastResolved string
+	decision     quarantineDecision
 }
 
 // quarantineReplay carries what the status, and the Operator's memory for
-// PendingSince, would hold from one pass to the next.
+// PendingSince and the exemption owner, would hold from one pass to the next.
 type quarantineReplay struct {
 	t             *testing.T
 	label         string
@@ -122,12 +131,16 @@ type quarantineReplay struct {
 	quarantine    *databasev1alpha1.WriteQuarantine
 	lastRelease   *databasev1alpha1.WriteQuarantineRelease
 	pendingSince  map[string]pendingMark
-	nonces        int
-	passes        []replayPass
+	// exemptionOwner is the token of the manual release this reconciler
+	// accepted (ownExemption); no replay accepts one, so it stays empty.
+	exemptionOwner string
+	nonces         int
+	passes         []replayPass
 }
 
 // newQuarantineReplay is a replay of members, each in one Pod for the whole
-// replay, with no status recorded yet.
+// replay, with no status recorded yet but lastResolved as
+// status.lastResolvedPrimary.
 func newQuarantineReplay(t *testing.T, label string, members []string, lastResolved string) *quarantineReplay {
 	r := &quarantineReplay{t: t, label: label, members: members, lastResolved: lastResolved,
 		identities: map[string]memberIdentity{}}
@@ -138,14 +151,18 @@ func newQuarantineReplay(t *testing.T, label string, members []string, lastResol
 }
 
 // pass decides one pass at now from obs, checks the invariants and keeps what
-// the status would hold after it.
+// the status would hold after it. As the controller does, the pass is
+// decided with the last resolved primary from before it, and the primary
+// resolved from the same answers (resolvePrimary) then becomes the last
+// resolved primary.
 func (r *quarantineReplay) pass(now time.Time, obs map[string]RoleObservation) quarantineDecision {
 	r.t.Helper()
 	in := quarantineInput{
 		Now: now, ClusterUID: replayClusterUID, Members: r.members, Observations: obs,
 		Identities: r.identities, LastResolvedPrimary: r.lastResolved, Verifications: r.verifications,
-		Quarantine: r.quarantine.DeepCopy(), LastRelease: r.lastRelease.DeepCopy(), ExemptionOwned: true,
-		PendingSince: r.pendingSince,
+		Quarantine: r.quarantine.DeepCopy(), LastRelease: r.lastRelease.DeepCopy(),
+		ExemptionOwned: r.exemptionOwner != "" && r.exemptionOwner == releaseTokenOf(r.lastRelease),
+		PendingSince:   r.pendingSince,
 		Nonce: func() (string, error) {
 			r.nonces++
 			return fmt.Sprintf("replay-nonce-%d", r.nonces), nil
@@ -156,90 +173,163 @@ func (r *quarantineReplay) pass(now time.Time, obs map[string]RoleObservation) q
 		r.t.Fatalf("%s at %s: %v", r.label, now.Format(time.RFC3339Nano), err)
 	}
 	checkQuarantineInvariants(r.t, fmt.Sprintf("%s at %s", r.label, now.Format(time.RFC3339Nano)), in, d)
-	r.passes = append(r.passes, replayPass{at: now, obs: obs, decision: d})
+	r.passes = append(r.passes, replayPass{at: now, obs: obs, lastResolved: r.lastResolved, decision: d})
 	r.verifications, r.quarantine, r.pendingSince = d.Verifications, d.Quarantine, d.PendingSince
 	r.lastRelease = d.LastRelease
 	if d.Released != nil {
 		r.lastRelease = d.Released
 	}
+	if res := resolvePrimary(r.members, obs, now); res.Status == metav1.ConditionTrue && res.CurrentPrimary != "" {
+		r.lastResolved = res.CurrentPrimary
+	}
 	return d
+}
+
+// answerIsFresh reports whether o is an answer received within the 15 s
+// observation TTL of ADR-0005, section 3, of now.
+func answerIsFresh(o RoleObservation, now time.Time) bool {
+	age := now.Sub(o.ObservedAt)
+	return o.Reachable && !o.ObservedAt.IsZero() && age <= roleObservationTTL && age >= -roleObservationTTL
+}
+
+// claimsActiveMaster reports whether o is a fresh claim of an active master
+// (ADR-0005, section 8, "Active master").
+func claimsActiveMaster(o RoleObservation, now time.Time) bool {
+	return answerIsFresh(o, now) && o.Role == databasev1alpha1.RoleMaster && o.ActiveMasterClaim
+}
+
+// answersNonMaster reports whether o is a fresh, trusted slave or replica
+// answer that claims no active master.
+func answersNonMaster(o RoleObservation, now time.Time) bool {
+	return answerIsFresh(o, now) && !o.TokenRefused && !o.Unreadable && !o.Conflicting && !o.ActiveMasterClaim &&
+		(o.Role == databasev1alpha1.RoleSlave || o.Role == databasev1alpha1.RoleReplica)
 }
 
 // checkQuarantineInvariants checks one decision against the safety
 // invariants of ADR-0005, section 8, that hold on every pass whatever came
-// before it.
+// before it. The active masters are counted from the pass's answers, not
+// taken from the decision, and the decision's pending members are checked
+// against those answers too.
 func checkQuarantineInvariants(t *testing.T, label string, in quarantineInput, d quarantineDecision) {
 	t.Helper()
-	before := in.Quarantine
-	autoRelease := func(q *databasev1alpha1.WriteQuarantine) bool {
-		return q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified ||
-			q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning
+	var masters []string
+	for _, m := range in.Members {
+		if claimsActiveMaster(in.Observations[m], in.Now) {
+			masters = append(masters, m)
+		}
+	}
+	if !slices.Equal(masters, d.ActiveMasters) {
+		t.Fatalf("%s: the answers show the active masters %v, the decision %v", label, masters, d.ActiveMasters)
+	}
+	// A pending member answered as no active master in this pass, and the
+	// last resolved primary is never pending.
+	for _, p := range d.Pending {
+		if p == in.LastResolvedPrimary || !answersNonMaster(in.Observations[p], in.Now) {
+			t.Fatalf("%s: %s is pending (last resolved primary %q, answer %+v)", label, p, in.LastResolvedPrimary,
+				in.Observations[p])
+		}
 	}
 	// Rule 1: two or more active masters always leave a quarantine in force
 	// that is not released automatically.
-	if len(d.ActiveMasters) > 1 && (d.Quarantine == nil || d.Released != nil || autoRelease(d.Quarantine)) {
-		t.Fatalf("%s: active masters %v, but quarantine %+v and release %+v", label, d.ActiveMasters,
-			d.Quarantine, d.Released)
+	if len(masters) > 1 && (d.Quarantine == nil || d.Released != nil || automaticRelease(d.Quarantine)) {
+		t.Fatalf("%s: active masters %v, but quarantine %+v and release %+v", label, masters, d.Quarantine, d.Released)
 	}
-	// The write path is opened again only by a release, and only beside
-	// exactly one active master, with the members' Pods read, from a
-	// quarantine that has an automatic release.
+	before := in.Quarantine
 	if before != nil && d.Quarantine == nil && d.Released == nil {
 		t.Fatalf("%s: the %s quarantine ended without a release", label, before.Reason)
 	}
 	if d.Released != nil {
-		switch {
-		case before == nil:
-			t.Fatalf("%s: a release without a quarantine: %+v", label, d.Released)
-		case d.Quarantine != nil:
-			t.Fatalf("%s: released, but a quarantine is still in force: %+v", label, d.Quarantine)
-		case len(d.ActiveMasters) != 1:
-			t.Fatalf("%s: released beside the active masters %v", label, d.ActiveMasters)
-		case in.IdentitiesUnknown:
-			t.Fatalf("%s: released without the members' Pods", label)
-		case !autoRelease(before):
-			t.Fatalf("%s: a %s quarantine was released automatically", label, before.Reason)
-		case d.Released.Method != databasev1alpha1.WriteQuarantineReleasedAutomatically:
-			t.Fatalf("%s: release method %q in a decision", label, d.Released.Method)
-		}
+		checkQuarantineRelease(t, label, in, d, masters)
 	}
 	// A quarantine without an automatic release keeps its reason.
-	if before != nil && !autoRelease(before) && (d.Quarantine == nil || d.Quarantine.Reason != before.Reason) {
+	if before != nil && !automaticRelease(before) && (d.Quarantine == nil || d.Quarantine.Reason != before.Reason) {
 		t.Fatalf("%s: the %s quarantine became %+v", label, before.Reason, d.Quarantine)
 	}
 	if before == nil {
-		checkQuarantineStart(t, label, in, d)
+		checkQuarantineStart(t, label, in, d, masters)
+	}
+}
+
+// automaticRelease reports whether q is of a reason released automatically.
+func automaticRelease(q *databasev1alpha1.WriteQuarantine) bool {
+	return q.Reason == databasev1alpha1.WriteQuarantinedMemberUnverified ||
+		q.Reason == databasev1alpha1.WriteQuarantinedMemberReturning
+}
+
+// checkQuarantineRelease checks a release: the write path is opened again
+// only from a quarantine that has an automatic release, with the members'
+// Pods read, beside exactly one active master that is the quarantine's
+// recorded master, with every other member verified in this pass: a fresh
+// non-master answer, or a confirmed termination or fence the decision names.
+func checkQuarantineRelease(t *testing.T, label string, in quarantineInput, d quarantineDecision, masters []string) {
+	t.Helper()
+	before := in.Quarantine
+	switch {
+	case before == nil:
+		t.Fatalf("%s: a release without a quarantine: %+v", label, d.Released)
+	case d.Quarantine != nil:
+		t.Fatalf("%s: released, but a quarantine is still in force: %+v", label, d.Quarantine)
+	case len(masters) != 1 || masters[0] != before.ObservedMaster:
+		t.Fatalf("%s: released beside the active masters %v; the quarantine recorded %s", label, masters,
+			before.ObservedMaster)
+	case in.IdentitiesUnknown:
+		t.Fatalf("%s: released without the members' Pods", label)
+	case !automaticRelease(before):
+		t.Fatalf("%s: a %s quarantine was released automatically", label, before.Reason)
+	case d.Released.Method != databasev1alpha1.WriteQuarantineReleasedAutomatically:
+		t.Fatalf("%s: release method %q in a decision", label, d.Released.Method)
+	}
+	for _, m := range in.Members {
+		if m == masters[0] {
+			continue
+		}
+		covered := slices.Contains(d.Confirmed, m) || slices.Contains(d.Fenced, m)
+		if slices.Contains(d.Unverified, m) || !covered && !answersNonMaster(in.Observations[m], in.Now) {
+			t.Fatalf("%s: released while %s is not verified (answer %+v)", label, m, in.Observations[m])
+		}
 	}
 }
 
 // checkQuarantineStart checks a decision taken with no quarantine in force:
 // rule 2 starts one when it applies, and nothing but rules 1 and 2 does.
-func checkQuarantineStart(t *testing.T, label string, in quarantineInput, d quarantineDecision) {
+func checkQuarantineStart(t *testing.T, label string, in quarantineInput, d quarantineDecision, masters []string) {
 	t.Helper()
+	ranked := func(u, m string) bool {
+		return slices.Index(in.Members, u) < slices.Index(in.Members, m) || u == in.LastResolvedPrimary
+	}
 	// Rule 2: exactly one active master M and an unverified member that
 	// outranks M or is the last resolved primary, other than a pending one,
 	// start a quarantine in this pass.
-	if len(d.ActiveMasters) == 1 && !in.IdentitiesUnknown {
-		m := d.ActiveMasters[0]
+	if len(masters) == 1 && !in.IdentitiesUnknown && d.Quarantine == nil {
 		for _, u := range d.Unverified {
-			outranks := slices.Index(in.Members, u) < slices.Index(in.Members, m)
-			if (outranks || u == in.LastResolvedPrimary) && !slices.Contains(d.Pending, u) && d.Quarantine == nil {
+			if ranked(u, masters[0]) && !slices.Contains(d.Pending, u) {
 				t.Fatalf("%s: %s is unverified beside the only active master %s, and no quarantine started",
-					label, u, m)
+					label, u, masters[0])
 			}
 		}
 	}
-	// Rule 3: nothing else starts one.
-	if d.Quarantine != nil {
-		named := len(d.ActiveMasters) > 1
-		if len(d.ActiveMasters) == 1 {
-			for _, member := range d.Quarantine.Members {
-				named = named || slices.Contains(d.Unverified, member.Name)
+	// Rule 3: nothing else starts one. A rule 2 quarantine is recorded
+	// beside the one active master and names only unverified members that
+	// outrank it or are the last resolved primary, at least one of them not
+	// pending.
+	q := d.Quarantine
+	switch {
+	case q == nil, len(masters) > 1:
+	case len(masters) == 0:
+		t.Fatalf("%s: a %s quarantine started with no active master", label, q.Reason)
+	case q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || q.ObservedMaster != masters[0]:
+		t.Fatalf("%s: a %s quarantine started beside %s, recording %s", label, q.Reason, masters[0], q.ObservedMaster)
+	default:
+		trigger := false
+		for _, member := range q.Members {
+			if !slices.Contains(d.Unverified, member.Name) || !ranked(member.Name, masters[0]) {
+				t.Fatalf("%s: the quarantine names %s, which is not an unverified member that outranks %s or "+
+					"is the last resolved primary %q", label, member.Name, masters[0], in.LastResolvedPrimary)
 			}
+			trigger = trigger || !slices.Contains(d.Pending, member.Name)
 		}
-		if !named {
-			t.Fatalf("%s: a %s quarantine started without a trigger (active masters %v, unverified %v)",
-				label, d.Quarantine.Reason, d.ActiveMasters, d.Unverified)
+		if !trigger {
+			t.Fatalf("%s: a quarantine started for pending members only: %v", label, memberNamesOf(q.Members))
 		}
 	}
 }
@@ -767,18 +857,22 @@ func (p poc40Run) timeline(t *testing.T) labTimeline {
 	t.Helper()
 	fault := labTime(t, "2026-10-27", p.fault)
 	removal := fault.Add(seconds(p.removal))
-	cutHA0, transitionHA0 := one(labUnreachable), []labState{labActive, labUnreachable}
+	// At the removal each member listed both ha-0 and ha-1 as master for 1
+	// to 2 s, so ha-0 may answer that way in either case.
+	cutHA0, faultHA0 := one(labUnreachable), []labState{labActive, labUnreachable}
+	removalHA0 := []labState{labActive, labUnreachable, labActiveListsHA1}
 	if p.asymmetric {
-		cutHA0, transitionHA0 = one(labActiveListsHA1), []labState{labActive, labActiveListsHA1}
+		cutHA0, faultHA0 = one(labActiveListsHA1), []labState{labActive, labActiveListsHA1}
+		removalHA0 = faultHA0
 	}
 	return labTimeline{
 		name: "POC-40 " + p.name, lastResolved: labHA0,
 		segments: []labSegment{
 			{from: fault.Add(-30 * time.Second), states: labStates(one(labActive), one(labSlave), one(labSlave))},
-			{from: fault, states: labStates(transitionHA0, []labState{labSlave, labNoRole}, one(labSlave))},
+			{from: fault, states: labStates(faultHA0, []labState{labSlave, labNoRole}, one(labSlave))},
 			{from: fault.Add(seconds(p.ha1Master)), states: labStates(cutHA0, []labState{labToBeActive, labNoRole},
 				one(labSlave))},
-			{from: removal, states: labStates(transitionHA0, []labState{labToBeActive, labNoRole, labSlave},
+			{from: removal, states: labStates(removalHA0, []labState{labToBeActive, labNoRole, labSlave},
 				one(labSlave))},
 			{from: removal.Add(seconds(p.ha1Slave)), states: labStates(one(labActive), one(labSlave), one(labSlave))},
 		},
@@ -863,21 +957,24 @@ type higherRankRun struct {
 	// issued; started: the quarantine's recorded start; heal: the cut
 	// removed; end: the last recorded sweep.
 	slaveAgain, cut, started, heal, end string
-	// healedHA0 is what ha-0 answered after the heal.
-	healedHA0 labState
+	// healedHA0 is what ha-0 answered after the heal; more than one state
+	// is unknown.
+	healedHA0 []labState
 }
 
 var higherRankRuns = []higherRankRun{
 	// 10:43: started 10:47:19, new-connection writes stopped within 11.9 s of
-	// the cut; after the heal ha-0's state was classified "other" only.
+	// the cut; after the heal ha-0's state was classified "other" only, so
+	// it is replayed as an answer without a role and as the heartbeat
+	// master with a registered_and_to_be_active server of the later runs.
 	{name: "10:43", slaveAgain: "10:46:26", cut: "10:47:07", started: "10:47:19", heal: "10:50:22",
-		end: "10:55:22", healedHA0: labNoRole},
+		end: "10:55:22", healedHA0: []labState{labNoRole, labToBeActive}},
 	// 13:00: started 13:01:30, 12.1 s after the cut was issued.
 	{name: "13:00", slaveAgain: "13:00:35", cut: "13:01:17.9", started: "13:01:30", heal: "13:04:35",
-		end: "13:09:38", healedHA0: labToBeActive},
+		end: "13:09:38", healedHA0: one(labToBeActive)},
 	// 14:20: started 14:24:01, 6.6 s after the cut was issued.
 	{name: "14:20", slaveAgain: "14:23:15", cut: "14:23:54.4", started: "14:24:01", heal: "14:27:06",
-		end: "14:52:45", healedHA0: labToBeActive},
+		end: "14:52:45", healedHA0: one(labToBeActive)},
 }
 
 func (h higherRankRun) timeline(t *testing.T) labTimeline {
@@ -896,7 +993,7 @@ func (h higherRankRun) timeline(t *testing.T) labTimeline {
 			{from: at(h.started), states: labStates(one(labUnreachable), one(labActive), one(labSlave))},
 			// At the heal ha-1 answered slave and ha-2 slave; ha-0 stayed
 			// heartbeat master with no active server.
-			{from: at(h.heal), states: labStates(one(h.healedHA0), one(labSlave), one(labSlave))},
+			{from: at(h.heal), states: labStates(h.healedHA0, one(labSlave), one(labSlave))},
 		},
 		end:      at(h.end),
 		recorded: []time.Time{at(h.started)},
@@ -932,6 +1029,11 @@ func TestQuarantineReplayOfVMLabHigherRankCuts(t *testing.T) {
 						}
 					case start != nil && (p.decision.Quarantine == nil || p.decision.Released != nil):
 						t.Fatalf("%s: quarantine not in force at %s: %+v", r.label, p.at, p.decision)
+					}
+					// The resolver never moves the last resolved primary
+					// off ha-1 before the heal.
+					if p.at.Before(heal) && p.lastResolved != labHA1 {
+						t.Fatalf("%s: last resolved primary %q at %s", r.label, p.lastResolved, p.at)
 					}
 					if p.at.Before(heal) && p.decision.Quarantine != nil &&
 						p.decision.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
