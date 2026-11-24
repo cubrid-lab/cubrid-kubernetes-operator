@@ -56,6 +56,13 @@ const (
 	// is the S07 time quarantine_limit judges.
 	partitionHeldFor = "partitionHeldFor"
 	quarantineWithin = "quarantineWithin"
+	// partitionDirection is the direction of traffic an S07 run cut: both,
+	// inbound or outbound.
+	partitionDirection = "partitionDirection"
+	// partitionFamily is the network-partition scenario, whose registered
+	// variants cut traffic both ways (bothWays).
+	partitionFamily = "S07"
+	bothWays        = "both"
 	// The times failover_limit judges in S03 and S04, and the
 	// S03 and S04 times that must reach stable_period.
 	recoveryTime      = "recoveryTime"
@@ -518,6 +525,8 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 		return scopeUnmapped, verdictReview, "the registry or the v0.1 scope does not map this result"
 	case problem != "":
 		return scope, verdictNoGo, problem
+	case sc.ID == partitionFamily && directionProblem(sc) != "":
+		return scope, verdictNoGo, directionProblem(sc)
 	case cleanupFailed:
 		return scope, verdictNoGo, "the cleanup did not succeed"
 	case scope == scopeMustMeasure && (sc.TimeLimitOnly || sc.NoPromotion):
@@ -547,6 +556,27 @@ func judgeV01(result evidence.RecordedResult, problem string) (v01Scope, release
 		return scope, verdictGo, "executed, measured and no safety rule broken"
 	}
 	return scope, verdictGo, "pass supported by its evidence"
+}
+
+// directionProblem is why an S07 result is not a both-ways network cut, the
+// only cut its registered variants describe, or "". The runner records the
+// direction it cut as the measurement partitionDirection; a result without
+// it was recorded before one-way cuts existed and cut both ways. A value that
+// is not a direction name fails closed.
+func directionProblem(sc evidence.Scenario) string {
+	value, recorded := sc.Measurements[partitionDirection]
+	if !recorded {
+		return ""
+	}
+	direction, ok := value.(string)
+	switch {
+	case !ok || direction == "":
+		return fmt.Sprintf("partitionDirection is not a direction name (%T %v), so the network cut is not shown "+
+			"to be the registered both-ways variant", value, value)
+	case direction != bothWays:
+		return "a one-way network cut (partitionDirection " + direction + ") is not the registered both-ways variant"
+	}
+	return ""
 }
 
 // disclosedProblem is why a must-measure result marked as caused by time
