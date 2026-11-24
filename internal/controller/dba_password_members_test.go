@@ -38,6 +38,11 @@ const (
 	pw0 = "pw-0"
 	pw1 = "pw-1"
 	pw2 = "pw-2"
+
+	// pwUID and pwSecret are the UID of dbaMembersCluster and the name of its
+	// DBA password Secret in the rotation tests.
+	pwUID    = "pw-uid"
+	pwSecret = "pw-secret"
 )
 
 // dbaMembersCluster is a three-member HA cluster whose bootstrap admitted
@@ -87,13 +92,13 @@ func TestDBAPasswordHAMembers(t *testing.T) {
 }
 
 // A member that is not asked counts as an answer that cannot tell: the
-// others matching does not set the condition back to True, and it does not
-// shorten the poll on its own.
+// others matching does not set the condition back to True, and the members
+// are asked again soon, as after a slave that cannot tell.
 func TestDBAPasswordRotationUnaskedMemberIsNoMatch(t *testing.T) {
 	c, _ := dbaMembersCluster()
-	c.UID = "pw-uid"
+	c.UID = pwUID
 	c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
-		LocalObjectReference: corev1.LocalObjectReference{Name: "pw-secret"}, Key: dbaTestKey}
+		LocalObjectReference: corev1.LocalObjectReference{Name: pwSecret}, Key: dbaTestKey}
 	setCondition(c, conditionDBAPasswordSecretResolved, metav1.ConditionFalse, reasonDBAPasswordRotationUnsupported,
 		"reported")
 	checker := &fakeDBAPasswordChecker{}
@@ -104,8 +109,8 @@ func TestDBAPasswordRotationUnaskedMemberIsNoMatch(t *testing.T) {
 		Clock: func() time.Time { return now }}
 
 	if wait := r.reconcileDBAPasswordRotation(context.Background(), c, []string{pw0, pw1},
-		[]string{pw2}); wait != poll {
-		t.Errorf("next check in %s, want the poll %s", wait, poll)
+		[]string{pw2}); wait != dbaPasswordInconclusiveRetry {
+		t.Errorf("next check in %s, want the short retry %s", wait, dbaPasswordInconclusiveRetry)
 	}
 	got := meta.FindStatusCondition(c.Status.Conditions, conditionDBAPasswordSecretResolved)
 	if got.Status != metav1.ConditionFalse || got.Reason != reasonDBAPasswordRotationUnsupported {
@@ -120,13 +125,13 @@ func TestDBAPasswordRotationUnaskedMemberIsNoMatch(t *testing.T) {
 	}
 }
 
-// Only an answer of the primary (members[0]) that cannot tell is retried
-// after dbaPasswordInconclusiveRetry (#1031). A slave that cannot tell, such
-// as one whose Instance Manager predates #1012 and answers Unknown on every
-// check, leaves the normal poll, so that it does not bring a login on every
-// member every 30 seconds. A member that differs is reported whatever the
-// others answer, also next to a call that failed.
-func TestDBAPasswordRotationRetriesSoonOnlyForThePrimary(t *testing.T) {
+// An answer that cannot tell, of the primary (#1031) or of a slave, is
+// retried after dbaPasswordInconclusiveRetry rather than after the poll: in a
+// Kind e2e run the Secret was put back, two members answered Matches, and
+// the condition stayed False for minutes. A member that differs settles the
+// check: it is reported whatever the others answer, also next to a call that
+// failed, and the members wait for the poll.
+func TestDBAPasswordRotationRetriesSoonAfterAnAnswerThatCannotTell(t *testing.T) {
 	const poll = 2 * time.Minute
 	for _, tc := range []struct {
 		name       string
@@ -139,9 +144,10 @@ func TestDBAPasswordRotationRetriesSoonOnlyForThePrimary(t *testing.T) {
 	}{
 		{name: "a slave of an older Instance Manager answers Unknown", primary: instancemanager.DBAPasswordMatches,
 			slave: instancemanager.DBAPasswordUnknown, other: instancemanager.DBAPasswordMatches,
-			wantWait: poll, wantReason: reasonDBAPasswordRotationUnsupported},
+			wantWait: dbaPasswordInconclusiveRetry, wantReason: reasonDBAPasswordRotationUnsupported},
 		{name: "the call to a slave fails", primary: instancemanager.DBAPasswordMatches, slaveErr: true,
-			other: instancemanager.DBAPasswordMatches, wantWait: poll, wantReason: reasonDBAPasswordRotationUnsupported},
+			other: instancemanager.DBAPasswordMatches, wantWait: dbaPasswordInconclusiveRetry,
+			wantReason: reasonDBAPasswordRotationUnsupported},
 		{name: "the primary answers Unknown", primary: instancemanager.DBAPasswordUnknown,
 			slave: instancemanager.DBAPasswordMatches, other: instancemanager.DBAPasswordMatches,
 			wantWait: dbaPasswordInconclusiveRetry, wantReason: reasonDBAPasswordRotationUnsupported},
@@ -151,9 +157,9 @@ func TestDBAPasswordRotationRetriesSoonOnlyForThePrimary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := dbaMembersCluster()
-			c.UID = "pw-uid"
+			c.UID = pwUID
 			c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "pw-secret"}, Key: dbaTestKey}
+				LocalObjectReference: corev1.LocalObjectReference{Name: pwSecret}, Key: dbaTestKey}
 			// The condition starts True for the case of a member that differs,
 			// and reported otherwise, so that a wrong match would show.
 			start := tc.other != instancemanager.DBAPasswordDiffers
@@ -194,6 +200,123 @@ func TestDBAPasswordRotationRetriesSoonOnlyForThePrimary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A slave that cannot tell brings at most dbaPasswordQuickRetries short
+// retries in a row, then the poll, so that a slave whose Instance Manager
+// predates #1012 and answers Unknown on every check does not bring a login on
+// every member every 30 seconds forever. The count starts again after a
+// check that settled, and an answer of the primary that cannot tell is
+// retried soon every time, as before.
+func TestDBAPasswordRotationBoundsTheShortRetriesOfASlave(t *testing.T) {
+	const poll = 2 * time.Minute
+	c, _ := dbaMembersCluster()
+	c.UID = pwUID
+	c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: pwSecret}, Key: dbaTestKey}
+	setCondition(c, conditionDBAPasswordSecretResolved, metav1.ConditionTrue, reasonDBAPasswordSecretResolved,
+		"resolved")
+	checker := &fakeDBAPasswordChecker{}
+	checker.set(instancemanager.DBAPasswordMatches, "", nil)
+	now := time.Now()
+	newReconciler := func() *CubridClusterReconciler {
+		return &CubridClusterReconciler{Recorder: record.NewFakeRecorder(100), DBAPassword: checker,
+			DBAPasswordPoll: poll, Clock: func() time.Time { return now }}
+	}
+	r := newReconciler()
+	members := []string{pw1, pw0, pw2}
+	// check asks the members after d, and returns the delay to the next check.
+	check := func(d time.Duration) time.Duration {
+		t.Helper()
+		now = now.Add(d)
+		asked := len(checker.calls())
+		wait := r.reconcileDBAPasswordRotation(context.Background(), c, members, nil)
+		if got := len(checker.calls()) - asked; got != len(members) {
+			t.Fatalf("%d members asked, want %d", got, len(members))
+		}
+		return wait
+	}
+	reason := func() string {
+		return meta.FindStatusCondition(c.Status.Conditions, conditionDBAPasswordSecretResolved).Reason
+	}
+
+	// The Secret is changed: every member refuses it.
+	checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+	if wait := check(0); wait != poll || reason() != reasonDBAPasswordRotationUnsupported {
+		t.Fatalf("next check in %s, reason %s; want the poll and the change reported", wait, reason())
+	}
+
+	// The Secret is put back; the primary and one slave match, and the other
+	// slave cannot tell, as in the Kind e2e run.
+	checker.set(instancemanager.DBAPasswordMatches, "", nil)
+	checker.setMember(pw2, instancemanager.DBAPasswordUnknown)
+	if wait := check(poll); wait != dbaPasswordInconclusiveRetry {
+		t.Fatalf("next check in %s after a slave that cannot tell, want %s", wait, dbaPasswordInconclusiveRetry)
+	}
+	if reason() != reasonDBAPasswordRotationUnsupported {
+		t.Fatalf("reason %s, want the change kept reported while a slave cannot tell", reason())
+	}
+	checker.setMember(pw2, "")
+	if wait := check(dbaPasswordInconclusiveRetry); wait != poll || reason() != reasonDBAPasswordSecretResolved {
+		t.Fatalf("next check in %s, reason %s; want the poll and True once every member matches", wait, reason())
+	}
+
+	// A slave that cannot tell on every check: exactly dbaPasswordQuickRetries
+	// short retries, then the poll, also on the checks after it.
+	checker.setMember(pw2, instancemanager.DBAPasswordUnknown)
+	// slaveCannotTell checks first after first.
+	slaveCannotTell := func(first time.Duration) {
+		t.Helper()
+		wait := check(first)
+		for i := range dbaPasswordQuickRetries {
+			if wait != dbaPasswordInconclusiveRetry {
+				t.Fatalf("check %d: next check in %s, want the short retry %s", i+1, wait,
+					dbaPasswordInconclusiveRetry)
+			}
+			wait = check(wait)
+		}
+		for range 2 {
+			if wait != poll {
+				t.Fatalf("next check in %s after %d short retries, want the poll %s", wait,
+					dbaPasswordQuickRetries, poll)
+			}
+			wait = check(wait)
+		}
+	}
+	slaveCannotTell(poll)
+
+	// A check that settles starts the count again: every member matching...
+	checker.setMember(pw2, "")
+	if wait := check(poll); wait != poll {
+		t.Fatalf("next check in %s once every member matches, want the poll", wait)
+	}
+	checker.setMember(pw2, instancemanager.DBAPasswordUnknown)
+	slaveCannotTell(poll)
+
+	// ...or a member that refuses the value, even while the other slave still
+	// cannot tell.
+	checker.setMember(pw0, instancemanager.DBAPasswordDiffers)
+	if wait := check(poll); wait != poll || reason() != reasonDBAPasswordRotationUnsupported {
+		t.Fatalf("next check in %s, reason %s; want the poll and the change reported", wait, reason())
+	}
+	checker.setMember(pw0, "")
+	slaveCannotTell(poll)
+
+	// An operator that restarts keeps nothing: it asks at once, and starts
+	// the count again.
+	r = newReconciler()
+	slaveCannotTell(0)
+
+	// The primary that cannot tell is retried soon on every check, however
+	// many short retries were made.
+	checker.setMember(pw1, instancemanager.DBAPasswordUnknown)
+	wait := check(poll)
+	for range 2 * dbaPasswordQuickRetries {
+		if wait != dbaPasswordInconclusiveRetry {
+			t.Fatalf("next check in %s while the primary cannot tell, want %s", wait, dbaPasswordInconclusiveRetry)
+		}
+		wait = check(wait)
 	}
 }
 
