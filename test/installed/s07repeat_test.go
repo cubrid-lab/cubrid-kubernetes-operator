@@ -19,9 +19,14 @@ package installed
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -631,5 +636,82 @@ func TestS07CleanupSucceededCoversTheSecondCut(t *testing.T) {
 	}
 	if got := s07CleanupSucceeded(s07Base(false), nil); got != nil {
 		t.Errorf("no first cut injected: %v", got)
+	}
+}
+
+// The second held session starts only after the second cut's preparation,
+// with its move of the master settled, as the first cut's session starts
+// after the first move: on the VM lab on 2026-11-24 a session opened before
+// the move held a connection to the master the move replaced and ended with
+// -581 before the second cut. A preparation that fails starts no session.
+func TestPrepareS07SecondStartsTheSessionAfterTheMove(t *testing.T) {
+	ctx := context.Background()
+	// withIPs gives every member Pod a running status with an address, as
+	// the kubelet does, also the first member's new Pod after the move.
+	withIPs := func(f *haFixture, c client.Client) {
+		for i, pod := range testS07Members {
+			stored := &corev1.Pod{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: pod}, stored); err != nil {
+				t.Error(err)
+				continue
+			}
+			stored.Status.Phase, stored.Status.PodIP = corev1.PodRunning, "10.42.0."+strconv.Itoa(11+i)
+			if err := c.Status().Update(ctx, stored); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	h, f := s07MoveFixture(t, func(f *haFixture, c client.WithWatch) {
+		failOver(f, c)
+		withIPs(f, c)
+	})
+	withIPs(f, f.store)
+	manager := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "manager-1", Namespace: h.cfg.OperatorNamespace,
+		UID: "manager-uid"}, Status: corev1.PodStatus{PodIP: "10.42.0.30"}}
+	if err := f.store.Create(ctx, manager); err != nil {
+		t.Fatal(err)
+	}
+	h.rec.OperatorAfter = managerIdentity{Pods: []imageIdentity{{Pod: "manager-1", UID: "manager-uid"}}}
+	// LAB01's roles; the second cut picks from the slaves it is given.
+	h.rec.StartingState = &startingState{Master: m1, Slaves: []string{m0, m2}}
+	var started []time.Time
+	f.clientHook = func(script string) (string, error, bool) {
+		if strings.Contains(script, "CLIENT_ID="+s07RepeatOpenClient) {
+			f.mu.Lock()
+			started = append(started, time.Now().UTC())
+			f.mu.Unlock()
+		}
+		return "", nil, false
+	}
+	rep := &s07Repeat{}
+	rec := &s07Record{Variant: s07HigherRankIsolated, Repeat: rep}
+	state := &startingState{Master: m0, Slaves: []string{m1, m2}}
+	c, p, err := h.prepareS07Second(ctx, rec, rep, state, nil)
+	if err != nil || p == nil {
+		t.Fatalf("prepare the second cut: %v", err)
+	}
+	move := c.MasterMove
+	if move == nil || move.SettledAt == nil || c.Master != m1 || c.Target.Pod != m0 {
+		t.Fatalf("move %+v, master %s, target %s", move, c.Master, c.Target.Pod)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(started) != 1 || started[0].Before(*move.SettledAt) || !rep.launched || !rep.SessionStarted ||
+		rep.SessionStartedAt == nil || rep.SessionStartedAt.Before(*move.SettledAt) {
+		t.Errorf("the second session started at %v, %+v; the move settled at %s", started, rep, move.SettledAt)
+	}
+
+	h2, f2 := s07MoveFixture(t, failOver)
+	h2.rec.StartingState = h.rec.StartingState
+	f2.clientHook = func(script string) (string, error, bool) {
+		if strings.Contains(script, "CLIENT_ID="+s07RepeatOpenClient) {
+			t.Error("the second session started although the preparation failed")
+		}
+		return "", nil, false
+	}
+	rep2 := &s07Repeat{}
+	if _, _, err := h2.prepareS07Second(ctx, &s07Record{Variant: s07HigherRankIsolated, Repeat: rep2}, rep2, state,
+		nil); err == nil || !strings.Contains(err.Error(), "prepare the second cut") || rep2.launched {
+		t.Errorf("a failed preparation: %v, launched %t", err, rep2.launched)
 	}
 }

@@ -1619,11 +1619,7 @@ After the first cut's settle wait and release, the run:
    last reading, the starting conditions hold, CUBRID reports one master and
    the other members as its slaves, and status names that master as
    `currentPrimary` and `lastResolvedPrimary`;
-2. starts a second established-session client, `s07open2`, which holds one
-   connection to `<cluster>-rw` and stops at its first error like `s07open`,
-   and waits for its first acknowledgements. The new-connection writes have
-   gone on all along; those started from here on are the second cut's;
-3. picks the member to cut off again by the variant's own rule against the
+2. picks the member to cut off again by the variant's own rule against the
    master and `status.lastResolvedPrimary` of now (`masterBeforeSecondCut`).
    For `higher-rank-isolated` that is again the highest-ranked slave above
    the master. After an accepted manual release, the master is usually the
@@ -1636,7 +1632,7 @@ After the first cut's settle wait and release, the run:
    cutting off the master (`master-isolated`) depends on CUBRID promoting
    another member, which the lab has not shown, and a lower-ranked slave
    is the control, which must not quarantine;
-4. with `-partition-keepalive`, shortens keepalive again before the second
+3. with `-partition-keepalive`, shortens keepalive again before the second
    cut and resets the connections the cut crosses, as before the first. The
    move replaced the first member's Pod, so its network namespace has the
    kernel's values again, and connections made since (from it, and its
@@ -1648,6 +1644,14 @@ After the first cut's settle wait and release, the run:
    first step set read them as already set and get them again; connections
    already on the new schedule are listed and left alone
    (`secondCut.partitionKeepalive`);
+4. only then, as before the first cut, starts a second established-session
+   client, `s07open2`, which holds one connection to `<cluster>-rw` and
+   stops at its first error like `s07open`, and waits for its first
+   acknowledgements. A session opened before the move would hold a
+   connection to the master the move replaces and end before the cut, as
+   the first VM-lab run of the option did on 2026-11-24 (error `-581`). The
+   new-connection writes have gone on all along; those started from the
+   beginning of step 1 on are the second cut's;
 5. builds a new partition for that member and runs it through the same
    steps as the first: the checks before the cut, the cut, sweeps and
    readings while it holds, the hold of `-partition-hold`, the removal and
