@@ -2717,9 +2717,11 @@ it needs more.
   quarantine, records detection, the Broker scale-down, the Broker Pods'
   termination, the empty `-rw` EndpointSlices, `enforcedTime`, new-connection
   and established-session SQL and the release separately, removes the fault
-  however the run ends and checks every member's rows. It covers neither the
-  `asymmetric` variant nor the persistence, release-token and return checks
-  above. A judged run passes the VM-lab values of the limits above; without
+  however the run ends and checks every member's rows. It makes the
+  `asymmetric` shape only with its opt-in `-partition-direction`, which cuts
+  the member off the other members in one direction within one of the three
+  variants ([one-way cuts](installed-ha.md#s07-network-partition)), and it
+  covers none of the persistence, release-token and return checks above. A judged run passes the VM-lab values of the limits above; without
   them it is a baseline. Its first lab runs, on 2026-11-17 UTC, are recorded
   with the lane ([first lab runs](installed-ha.md#first-lab-runs)): the
   control started no quarantine, and a 2-minute symmetric cut of the master

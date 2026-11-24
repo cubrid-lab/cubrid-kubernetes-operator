@@ -376,7 +376,7 @@ func (h *haRun) prepareS07Second(ctx context.Context, rec *s07Record, rep *s07Re
 	c := &s07Record{Variant: rec.Variant, sub: s07RepeatDir, repeat: rep, Master: state.Master,
 		slaves: slices.Clone(state.Slaves), MembersBefore: members, MembersAfter: []imageIdentity{},
 		Sweeps: []s07Sweep{}, Conditions: []s07Condition{}, Path: []s07Path{}, Probes: []s07Probe{},
-		Observed: []faults.Step{}, ClockOffsets: rec.ClockOffsets}
+		Observed: []faults.Step{}, ClockOffsets: rec.ClockOffsets, PartitionDirection: rec.PartitionDirection}
 	rep.Cut = c
 	rec.note("repeat_started", "master "+state.Master)
 	p, err := h.prepareS07(ctx, c)

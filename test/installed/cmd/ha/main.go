@@ -137,6 +137,12 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"a token of the first quarantine does not release it and that no write is acknowledged after the "+
 			"second closure; not with partition-slave-isolated or -partition-operator-restart; off by default. "+
 			"Counted in the -timeout check")
+	flags.StringVar(&cfg.PartitionDirection, "partition-direction", "both",
+		"S07: the direction the cut-off member is cut off the other two members in: both (the default), inbound "+
+			"(their packets to it are dropped where it receives them, its own still arrive) or outbound (its "+
+			"packets to them are dropped where they receive them, theirs still arrive); the manager Pod is cut both "+
+			"ways in every direction. A one-way drop still fails a TCP connection both ways; the confirmation "+
+			"probes the dropped direction cut and the other open. Recorded as partitionDirection and in cut.json")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,
