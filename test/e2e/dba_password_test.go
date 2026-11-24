@@ -35,9 +35,10 @@ import (
 // dbaPasswordBrokerClientManifest is a client outside the cluster's
 // namespace that logs in as dba through the two Broker Services with
 // pycubrid, the CUBRID driver for Python. Through each Service a login with
-// the empty password has to be refused for its password; a login with the
-// password from the client's Secret has to be accepted and read the marker
-// row. With WRITE_MARKER=1 the client first writes that row through -rw. It
+// the empty password, and with the value of the Secret dba-password-old when
+// the client namespace holds one, has to be refused for its password; a login
+// with the password from the client's Secret has to be accepted and read the
+// marker row. With WRITE_MARKER=1 the client first writes that row through -rw. It
 // prints DBA-PASSWORD-BROKER-OK when all of this holds. The password reaches
 // the client only from its Secret and is never printed. The arguments are the
 // client namespace, the Pod name, the cluster, the cluster's namespace, the
@@ -62,6 +63,9 @@ spec:
         - name: DBA_PASSWORD
           valueFrom:
             secretKeyRef: {name: dba-password, key: password}
+        - name: OLD_DBA_PASSWORD
+          valueFrom:
+            secretKeyRef: {name: dba-password-old, key: password, optional: true}
         - {name: PIP_DISABLE_PIP_VERSION_CHECK, value: "1"}
       command: ["sh", "-c"]
       args:
@@ -90,20 +94,25 @@ spec:
           # it is -171, and its message names the password. Any other failure
           # says nothing about the password and is tried again, as a Broker
           # may not accept connections yet.
+          refused = {"empty": ""}
+          if os.environ.get("OLD_DBA_PASSWORD"):
+              refused["old"] = os.environ["OLD_DBA_PASSWORD"]
           for name in services:
-              for attempt in range(60):
-                  try:
-                      login(name, "").close()
-                  except Exception as exc:
-                      if getattr(exc, "errno", None) == -171 or "password" in str(exc).lower():
-                          print("empty password refused through", name, ":", repr(exc))
-                          break
-                      print("empty password through", name, ", attempt", attempt, ":", repr(exc))
-                      time.sleep(2)
+              for which, pw in refused.items():
+                  for attempt in range(60):
+                      try:
+                          login(name, pw).close()
+                      except Exception as exc:
+                          if getattr(exc, "errno", None) == -171 or "password" in str(exc).lower():
+                              print(which, "password refused through", name, ":", repr(exc))
+                              break
+                          print(which, "password through", name, ", attempt", attempt, ":", repr(exc))
+                          time.sleep(2)
+                      else:
+                          sys.exit("the " + which + " DBA password was accepted through " + name)
                   else:
-                      sys.exit("the empty DBA password was accepted through " + name)
-              else:
-                  sys.exit("a login with the empty DBA password was never refused for its password through " + name)
+                      sys.exit("a login with the " + which + " DBA password was never refused for its password "
+                               "through " + name)
 
           if os.environ["WRITE_MARKER"] == "1":
               rw = login("-rw", password)
@@ -616,9 +625,15 @@ const diskScanDone = "DBA-PASSWORD-DISK-SCAN-DONE"
 // failed (exit 2 or more, such as an unreadable file) are reported, so a
 // search that could not look is never taken for a clean one.
 func (h dbaPasswordHelpers) expectNoDBAPasswordOnDisk(member string) {
+	h.expectNoDBAPasswordUnder(member, `"$IM_OPERATIONS_DIR" "$CUBRID/log" /tmp`)
+}
+
+// expectNoDBAPasswordUnder is expectNoDBAPasswordOnDisk's search in dirs, the
+// shell words of the directories to search in the DB container.
+func (h dbaPasswordHelpers) expectNoDBAPasswordUnder(member, dirs string) {
 	out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
 		`if [ ! -r "$0" ] || [ ! -s "$0" ]; then echo "PATTERN UNREADABLE $0"; exit 0; fi; `+
-			`for d in "$IM_OPERATIONS_DIR" "$CUBRID/log" /tmp; do `+
+			`for d in `+dirs+`; do `+
 			`if [ -z "$d" ] || [ ! -d "$d" ]; then echo "MISSING directory '$d'"; continue; fi; `+
 			`found=$(grep -rlaF -f "$0" -- "$d" 2>&1); rc=$?; `+
 			`if [ "$rc" -ge 2 ]; then echo "SCAN ERROR in $d (grep exit $rc): $found"; `+
@@ -626,8 +641,7 @@ func (h dbaPasswordHelpers) expectNoDBAPasswordOnDisk(member string) {
 		dbaPasswordFile, diskScanDone)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), out)
 	ExpectWithOffset(1, strings.TrimSpace(out)).To(Equal(diskScanDone),
-		"on %s, the operation store, $CUBRID/log or /tmp holds the DBA password, or the search could not look:\n%s",
-		member, out)
+		"on %s, one of %s holds the DBA password, or the search could not look:\n%s", member, dirs, out)
 }
 
 // bucketScanObjects prefixes the count of objects expectNoDBAPasswordInBucket
@@ -685,6 +699,10 @@ func operatorLogArgs() []string {
 // database keeps its source's password (docs/poc/RESULTS.md, POC-61, Q4;
 // #819), and seeds no other member.
 //
+// Last, the DBA password of the restored cluster is changed by hand on every
+// member with the draft procedure of docs/operations/dba-password.md, while
+// rows are written, and the Secret is changed after it (#1012).
+//
 // Kind runs all members on one node and causes no network cut or power loss.
 // copylogdb's reconnects with a password set were checked on the VM lab
 // through a standby restart and a failover only (#801).
@@ -724,6 +742,11 @@ func dbaPasswordHAScenario() {
 				// database whose password is not the requested one
 				// (internal/instancemanager/dbapassword.go).
 				notRequested = "DBA password is not the requested one"
+				// newPassword is the value the restored cluster's DBA password
+				// is changed to by hand (#1012); oldSecret holds the value it
+				// replaces for the Broker client, which must be refused.
+				newPassword = "E2e-Dba-Password-1012-new"
+				oldSecret   = "dba-password-old"
 			)
 			members := []string{clusterName + "-0", clusterName + "-1", clusterName + "-2"}
 			membersOf := func(cluster string) []string {
@@ -804,6 +827,42 @@ spec:
 					places["the log of "+member] = []string{"-n", haNamespace, "logs", member, "--all-containers",
 						"--tail=-1"}
 				}
+			}
+			// passwordCondition reads the status and the reason of the DBA
+			// password Condition of cluster.
+			passwordCondition := func(g Gomega, cluster string) (string, string) {
+				status, err := h.clusterField(cluster,
+					`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].status}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				reason, err := h.clusterField(cluster,
+					`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].reason}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				return status, reason
+			}
+			// fileHolds waits until the mounted password file of member holds
+			// value, compared in the container with the value read from stdin.
+			fileHolds := func(member, value string) {
+				EventuallyWithOffset(1, func() error {
+					cmd := exec.Command("kubectl", "-n", haNamespace, "exec", "-i", member, "-c", "cubrid", "--",
+						"bash", "-c", `IFS= read -r v; [ "$v" = "$(cat "$0")" ]`, dbaPasswordFile)
+					cmd.Stdin = strings.NewReader(value + "\n")
+					_, err := utils.RunQuiet(cmd)
+					return err
+				}, 3*time.Minute, 3*time.Second).Should(Succeed(), "the kubelet did not update the file on %s", member)
+			}
+			// restartOperator restarts the Operator, so that it asks a member
+			// about the DBA password at once instead of waiting out the
+			// 5-minute poll. A restart loses the Operator's log, so it is first
+			// searched for each of values.
+			restartOperator := func(values ...string) {
+				for _, value := range values {
+					expectNoDBAPassword(value, map[string][]string{"the Operator log": operatorLogArgs()})
+				}
+				_, err := utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "restart", operatorDeployment))
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+				_, err = utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "status", operatorDeployment,
+					"--timeout=3m"))
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
 			}
 
 			BeforeAll(func() {
@@ -963,35 +1022,13 @@ spec:
 				primary, err := h.clusterField(clusterName, "{.status.currentPrimary}")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(primary).To(BeElementOf(members), "no primary is resolved")
-				resolved := func(g Gomega) (string, string) {
-					status, err := h.clusterField(clusterName,
-						`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].status}`)
-					g.Expect(err).NotTo(HaveOccurred())
-					reason, err := h.clusterField(clusterName,
-						`{.status.conditions[?(@.type=="DBAPasswordSecretResolved")].reason}`)
-					g.Expect(err).NotTo(HaveOccurred())
-					return status, reason
-				}
+				resolved := func(g Gomega) (string, string) { return passwordCondition(g, clusterName) }
 				// changeTo puts value into the Secret, waits until the primary's
-				// mounted file holds it, compared in the container with the value
-				// read from stdin, and restarts the Operator.
+				// mounted file holds it and restarts the Operator.
 				changeTo := func(value string) {
 					h.apply(dbaPasswordSecret(haNamespace, secretName, value))
-					Eventually(func() error {
-						cmd := exec.Command("kubectl", "-n", haNamespace, "exec", "-i", primary, "-c", "cubrid", "--",
-							"bash", "-c", `IFS= read -r v; [ "$v" = "$(cat "$0")" ]`, dbaPasswordFile)
-						cmd.Stdin = strings.NewReader(value + "\n")
-						_, err := utils.RunQuiet(cmd)
-						return err
-					}, 3*time.Minute, 3*time.Second).Should(Succeed(), "the kubelet did not update the file on %s", primary)
-					// A restart loses the Operator's log, so it is read first.
-					expectNoDBAPassword(password, map[string][]string{"the Operator log": operatorLogArgs()})
-					expectNoDBAPassword(changed, map[string][]string{"the Operator log": operatorLogArgs()})
-					_, err := utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "restart", operatorDeployment))
-					Expect(err).NotTo(HaveOccurred())
-					_, err = utils.Run(exec.Command("kubectl", "-n", namespace, "rollout", "status", operatorDeployment,
-						"--timeout=3m"))
-					Expect(err).NotTo(HaveOccurred())
+					fileHolds(primary, value)
+					restartOperator(password, changed)
 				}
 
 				By("changing the Secret's value after the cluster became Ready")
@@ -1215,6 +1252,223 @@ spec:
 				}
 				By("reading every object of the seed bucket, the backups and their manifests, for the password")
 				h.expectNoDBAPasswordInBucket(membersOf(restoredName)[0], seedBucket)
+			})
+
+			// The steps below change the DBA password of the restored cluster by
+			// hand, as docs/operations/dba-password.md, "A manual change on an HA
+			// cluster (draft)", describes (#1012, POC-74): the statement file is
+			// copied into every member through stdin with mode 0600, csql runs
+			// through `kubectl exec -it` on a pseudo-terminal, the current
+			// password is typed at its prompt, and the file is loaded with ;read
+			// and run with ;run, on the primary and then, with --sysadm
+			// --write-on-standby, on each slave. The Secret is changed last. They
+			// reuse this running three-member cluster instead of bootstrapping
+			// another one. Nothing here restarts a member or fails over.
+			var (
+				changePrimary string
+				changeWriter  *rowWriter
+				stopWriter    func()
+				before171     = map[string]int{}
+				failBefore    = map[string]int{}
+			)
+			It("changes the DBA password by hand on every member through kubectl exec on a terminal, while rows "+
+				"are written", func() {
+				restored := membersOf(restoredName)
+				primary, err := h.clusterField(restoredName, "{.status.currentPrimary}")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(primary).To(BeElementOf(restored), "no primary is resolved")
+				changePrimary = primary
+
+				By("creating a user without a password, and the table it writes, on the primary " + primary)
+				out, err := h.csqlOn(primary, withPassword, "CREATE USER "+pwChangeWriter+"; "+
+					"CREATE TABLE dba_pwchange (id INT PRIMARY KEY, phase VARCHAR(16)); "+
+					"GRANT SELECT, INSERT ON dba_pwchange TO "+pwChangeWriter)
+				Expect(err).NotTo(HaveOccurred(), out)
+				Expect(out).NotTo(ContainSubstring("ERROR"), out)
+
+				By("counting the -171 lines of every member's copiers and appliers, and each slave's applier fail count")
+				for _, member := range restored {
+					lines, files := h.passwordErrors(member)
+					before171[member] = lines
+					_, _ = fmt.Fprintf(GinkgoWriter, "%s: %d -171 lines in %d copier and applier logs\n", member,
+						lines, files)
+					if member == primary {
+						continue
+					}
+					Expect(files).To(BeNumerically(">", 0), "%s has no copier or applier log", member)
+					Eventually(func(g Gomega) {
+						failBefore[member], err = h.applierFailCount(member, primary)
+						g.Expect(err).NotTo(HaveOccurred())
+					}, time.Minute, 3*time.Second).Should(Succeed())
+				}
+
+				By("writing rows before the change, and starting to write while it runs")
+				changeWriter = &rowWriter{namespace: haNamespace, member: primary, database: database}
+				for id := 1; id <= 5; id++ {
+					changeWriter.write(id, "before")
+				}
+				stopWriter = changeWriter.start(1001, "during")
+				DeferCleanup(func() { stopWriter() })
+
+				By("copying the statement file into every member through stdin, readable by its owner only")
+				for _, member := range restored {
+					cmd := exec.Command("kubectl", "-n", haNamespace, "exec", "-i", member, "-c", "cubrid", "--",
+						"bash", "-c", `umask 077; cat > "$0"`, pwChangeFile)
+					cmd.Stdin = strings.NewReader(pwChangeStatement(newPassword))
+					_, err := utils.Run(cmd)
+					Expect(err).NotTo(HaveOccurred())
+					out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "stat", "-c", "%a %u", pwChangeFile)
+					Expect(err).NotTo(HaveOccurred(), out)
+					Expect(strings.TrimSpace(out)).To(Equal("600 1000"), member)
+				}
+
+				// change runs csql on member's terminal, logged in with the current
+				// password, and loads and runs the file there.
+				change := func(member string, options ...string) {
+					t, err := runCSQLDialog(kubectlExecTerminal(haNamespace, member,
+						append(options, "-u", "dba", database+"@localhost")...),
+						password, []string{";read " + pwChangeFile, ";run", ";exit"}, 3*time.Minute)
+					shown, found := redactValues(t.all, password, newPassword)
+					_, _ = fmt.Fprintf(GinkgoWriter, "csql on a terminal on %s:\n%s\n", member, shown)
+					Expect(err).NotTo(HaveOccurred(), "csql on %s: %s", member, shown)
+					Expect(found).To(BeZero(), "the terminal of csql on %s showed a DBA password", member)
+					Expect(t.afterPassword).NotTo(ContainSubstring(dbaPasswordRefused), member)
+					Expect(t.afterPassword).To(ContainSubstring("The file has been read into the command buffer."),
+						member)
+					Expect(t.afterPassword).To(ContainSubstring(pwChangeDone), member)
+				}
+				By("changing the password on the primary " + primary)
+				change(primary)
+				for _, member := range restored {
+					if member != primary {
+						By("changing the password on the slave " + member + " with --sysadm --write-on-standby")
+						change(member, "--sysadm", "--write-on-standby")
+					}
+				}
+
+				By("removing the statement file from every member")
+				for _, member := range restored {
+					out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
+						`rm -f "$0" && [ ! -e "$0" ] && echo REMOVED`, pwChangeFile)
+					Expect(err).NotTo(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring("REMOVED"), member)
+				}
+
+				By("writing a few seconds longer, then stopping")
+				time.Sleep(5 * time.Second)
+				stopWriter()
+			})
+
+			It("accepts the new password and refuses the old one on every member, at csql's prompt", func() {
+				for _, member := range membersOf(restoredName) {
+					By("logging in with each value on " + member)
+					Expect(h.terminalLogin(member, newPassword, password)).To(Equal("accepted"),
+						"%s refused the new password", member)
+					Expect(h.terminalLogin(member, password, newPassword)).To(Equal("refused"),
+						"%s did not refuse the old password", member)
+				}
+				By("writing rows after the change")
+				Expect(changeWriter).NotTo(BeNil(), "the change did not run")
+				for id := 2001; id <= 2005; id++ {
+					changeWriter.write(id, "after")
+				}
+			})
+
+			It("has every row written before, during and after the change on every member, with no new -171 line "+
+				"and no applier failure", func() {
+				Expect(changeWriter).NotTo(BeNil(), "the change did not run")
+				acked, unknown := changeWriter.ackedRows()
+				_, _ = fmt.Fprintf(GinkgoWriter, "acknowledged writes: %v; writes with an unknown outcome: %d\n",
+					acked, unknown)
+				phases := map[string]int{}
+				for _, id := range acked {
+					switch {
+					case id < 1000:
+						phases["before"]++
+					case id < 2000:
+						phases["during"]++
+					default:
+						phases["after"]++
+					}
+				}
+				for _, phase := range []string{"before", "during", "after"} {
+					Expect(phases[phase]).To(BeNumerically(">", 0), "no write was acknowledged %s the change", phase)
+				}
+				for _, member := range membersOf(restoredName) {
+					Eventually(func(g Gomega) {
+						ids, err := h.memberRowIDs(member)
+						g.Expect(err).NotTo(HaveOccurred())
+						g.Expect(ids).To(ContainElements(acked), "%s lacks acknowledged rows", member)
+					}, 3*time.Minute, 3*time.Second).Should(Succeed())
+					lines, _ := h.passwordErrors(member)
+					Expect(lines).To(Equal(before171[member]),
+						"the copiers or appliers of %s logged error -171 after the change", member)
+					if member == changePrimary {
+						continue
+					}
+					count, err := h.applierFailCount(member, changePrimary)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(count).To(Equal(failBefore[member]), "the applier of %s failed after the change", member)
+				}
+				Eventually(func(g Gomega) { haHealthy(g, restoredName) }, 3*time.Minute, 3*time.Second).
+					Should(Succeed())
+			})
+
+			// The Operator's check asks the primary whether the Secret's value
+			// logs in. Until the Secret is changed it reports the database's new
+			// password as an unsupported rotation; once it holds the new value,
+			// the check matches and the Condition is True again. The Operator is
+			// restarted before each, so that it asks at once.
+			It("reports the change until the Secret holds the new password, and True once it does", func() {
+				By("restarting the Operator while the Secret still holds the old value")
+				restartOperator(password, newPassword)
+				Eventually(func(g Gomega) {
+					status, reason := passwordCondition(g, restoredName)
+					g.Expect(status).To(Equal("False"))
+					g.Expect(reason).To(Equal("DBAPasswordRotationUnsupported"))
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+
+				By("putting the new value into the Secret, last, and waiting until every member's file holds it")
+				h.apply(dbaPasswordSecret(haNamespace, secretName, newPassword))
+				for _, member := range membersOf(restoredName) {
+					fileHolds(member, newPassword)
+				}
+				restartOperator(password, newPassword)
+				Eventually(func(g Gomega) {
+					status, reason := passwordCondition(g, restoredName)
+					g.Expect(status).To(Equal("True"))
+					g.Expect(reason).To(Equal("DBAPasswordSecretResolved"))
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+			})
+
+			It("refuses the old password and accepts the new one through the read-write and the read-only Service",
+				func() {
+					By("giving the Broker client the new value, and the old one to be refused")
+					h.apply(dbaPasswordSecret(clientNamespace, oldSecret, password))
+					h.apply(dbaPasswordSecret(clientNamespace, secretName, newPassword))
+					h.brokerLogins(restoredName, "broker-client-ha-changed", false)
+				})
+
+			It("writes neither value into the cluster, a StatefulSet, an Event, a Broker client, the Operator log, a "+
+				"member's log, or a member's files and database", func() {
+				places := map[string][]string{
+					"the restored cluster":     {"-n", haNamespace, "get", "cubridcluster", restoredName, "-o", "json"},
+					"the restored StatefulSet": {"-n", haNamespace, "get", "statefulset", restoredName, "-o", "json"},
+					"the Events":               {"-n", haNamespace, "get", "events", "-o", "json"},
+					"the Broker clients":       {"-n", clientNamespace, "get", "pods", "-o", "json"},
+					"the Operator log":         operatorLogArgs(),
+				}
+				memberLogs(places, restoredName)
+				expectNoDBAPassword(newPassword, places)
+				expectNoDBAPassword(password, places)
+				// Every member's file holds the new value by now (fileHolds), so
+				// the searches below look for it.
+				for _, member := range membersOf(restoredName) {
+					By("searching the operation store, $CUBRID/log, /tmp and the databases of " + member +
+						" for the new password")
+					h.expectNoDBAPasswordOnDisk(member)
+					h.expectNoDBAPasswordUnder(member, `"$CUBRID_DATABASES"`)
+				}
 			})
 		})
 }

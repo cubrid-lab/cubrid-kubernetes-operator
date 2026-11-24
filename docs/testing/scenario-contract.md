@@ -1374,10 +1374,10 @@ the one inside it may still do:
 
 | Deadline | Default | What happens |
 |---|---|---|
-| Suite (`E2E_SUITE_TIMEOUT`) | 65 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). Of the nodes already running at the deadline, one that takes a context has that context cancelled and gets the same grace to return; one that takes no context gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
-| Test process (`E2E_GO_TIMEOUT`) | 73 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
-| CI step | 80 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
-| CI job | 90 minutes | Last resort. Nothing after it is guaranteed |
+| Suite (`E2E_SUITE_TIMEOUT`) | 80 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). Of the nodes already running at the deadline, one that takes a context has that context cancelled and gets the same grace to return; one that takes no context gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
+| Test process (`E2E_GO_TIMEOUT`) | 88 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
+| CI step | 95 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
+| CI job | 105 minutes | Last resort. Nothing after it is guaranteed |
 
 A run the suite's deadline stopped does not pass: its summary names the
 abandoned step as a problem, and a result the abandoned step records after
@@ -1386,6 +1386,15 @@ its step has been reported is not kept. The 20 successful runs on `main` from
 spent 34.5 to 42.8 minutes in the suite (median 39.4), and the CI step around it
 36.5 to 45.5. The defaults are starting values with headroom over that
 measurement, not measured budgets.
+
+They were raised from 65, 73, 80 and 90 minutes to 80, 88, 95 and 105 minutes
+(2026-11-24 UTC), keeping the gaps between them. Full runs on GitHub-hosted
+runners had reached 3456 s (run 45281784007, main) and 3778 s (run
+45300361348, with the manual DBA password change steps of #1012, which took
+about 3 minutes) of suite time. Run 45281800361 on main was stopped by the
+65-minute deadline after 3928 s, with two steps not run. The new suite
+deadline leaves about 15 minutes over 3928 s and the 3 minutes those steps
+add. No check was skipped or shortened; reducing the run time is #1109.
 
 ### `junit.xml`
 

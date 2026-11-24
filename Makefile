@@ -146,9 +146,13 @@ E2E_EVIDENCE_DIR ?= $(CURDIR)/e2e-evidence
 # cleanup node gets after it, and Go's process timeout, which kills without any
 # cleanup. The CI step and job limits lie outside them. See
 # docs/testing/scenario-contract.md, section "A run that does not finish".
-E2E_SUITE_TIMEOUT ?= 65m
+# 80m leaves about 15 minutes over the slowest suite measured: 3456 s and
+# 3778 s for full runs, and 3928 s for a run the old 65m deadline stopped
+# (runs 45281784007, 45300361348, 45281800361), before the manual DBA password
+# change steps added about 3 minutes (#1012). Shortening the run is #1109.
+E2E_SUITE_TIMEOUT ?= 80m
 E2E_GRACE_PERIOD ?= 1m
-E2E_GO_TIMEOUT ?= 73m
+E2E_GO_TIMEOUT ?= 88m
 
 .PHONY: setup-test-e2e
 setup-test-e2e: container-tool kind ## Create the Kind cluster KIND_CLUSTER if it does not exist, for E2E_REUSE_CLUSTER=1 runs
