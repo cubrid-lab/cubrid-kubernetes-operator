@@ -1129,9 +1129,10 @@ S07 with that variant. It runs on the `vm-lab` level only.
   described below.
 
 The lane does not cover the contract's `asymmetric` variant, the replication
-lag of S08, or the persistence, Operator-restart, release-token,
-out-of-service-taint and return-to-service checks of S07. It makes no manual
-release.
+lag of S08, or the persistence, release-token, out-of-service-taint and
+return-to-service checks of S07. It makes no manual release and restarts no
+Operator unless asked to (`-partition-manual-release` and
+`-partition-operator-restart` below).
 
 **Why `higher-rank-isolated`.** The first `master-isolated` run on the lab
 (below) produced no quarantine trigger, and the POCs explain why a cut of a
@@ -1461,6 +1462,130 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   -fault partition-higher-rank-isolated -partition-keepalive 30s -partition-settle 10m -timeout 60m'
 ```
 
+**Operator restart while the quarantine is in force.** A fourth opt-in
+option, `-partition-operator-restart`, tests the rule of ADR-0005 section 8
+that a recorded quarantine stays in force across an Operator restart: the
+replacement enforces it on its first pass, and a restart never releases it
+([#115](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115)).
+It is refused without a partition fault and with `partition-slave-isolated`,
+the control, which must not quarantine. While the cut holds, the run:
+
+1. waits until it reads the quarantine in `status.writeQuarantine` with an
+   `enforcedTime` and the read-write path closed in its own last reading: no
+   desired replica, no read-write Broker Pod and no `-rw` endpoint;
+2. reads the quarantine again (generation, reason, revision and, kept in
+   memory only, the release token), checks that the installed manager has one
+   Pod and that it is the Pod the cut names (by UID, through the Deployment
+   LAB01 recorded), and that this Pod holds the leader Lease (`-leader-lease`).
+   Otherwise nothing is deleted, and `operatorRestart.notMade` says why;
+3. deletes that Pod as S06 `restart` does: without a grace period, with its
+   UID as a precondition. Its Lease is not released, so the replacement
+   cannot lead before the Lease's 15 seconds expire (`cmd/main.go`);
+4. polls every 250 ms, for up to a minute, for the replacement: the one
+   other Pod with an address that a ReplicaSet of the same Deployment
+   controls;
+5. cuts the replacement off the cut-off member like the old Pod: the
+   `netfault` container adds drop rules for its address both ways, and a
+   counting rule, in the cut-off member and reads every rule back
+   (`partition.replacements`). The old address stays dropped until the
+   removal, because a Pod deleted without a grace period can outlive its
+   object. Without this step the replacement, at a new address, could reach
+   the cut-off member, and its observations would no longer be those of a
+   partitioned Operator;
+6. reads the Lease again: when its holder is still the old Pod
+   (`cutBeforeReplacementLed`), the replacement had not led, and so had not
+   reconciled, before the cut covered it. From then on the run reads the
+   replacement as the manager Pod the cut names. When the replacement
+   already holds the Lease, the run is blocked, and the step ends at once
+   rather than holding the cut longer;
+7. records when the replacement is `Ready`, when it holds the Lease, with the
+   Lease's acquire time, and its first fresh status: a
+   `status.lastObservedTime` after that acquire time, both on the
+   replacement's clock (`afterRestart` keeps the quarantine and the
+   conditions then). The old process can outlive its Pod and write a status
+   on its own node's clock, so when the two Pods are on different nodes, the
+   run takes the difference of the two nodes' clock offsets it read through
+   the member and client Pods (`managerNodesClockSkew`). A status counts as
+   the replacement's only when it is that much later than the acquisition, or
+   one second later (the bound the run accepts for the nodes it read) when a
+   node's offset was not read. A difference over one second blocks the run
+   (`clockSkewTooLarge`); and
+8. keeps reading for 30 seconds after that status, with at least two whole
+   readings. The hold ends at `-partition-hold` or when this step ended,
+   whichever is later, within 5 minutes of the deletion; the cut is then
+   confirmed again, with the replacement's address, and removed as usual.
+
+From the deletion until the heal, every reading of the cluster and the
+read-write path records the first one with no quarantine
+(`quarantineLost`), a quarantine of another generation (`generationChanged`),
+or the read-write path not closed: a desired replica, a Broker Pod or a
+`-rw` endpoint (`readWritePathReopened`). A changed release token
+(`releaseTokenReplaced`), as at a rebase or an escalation of the same
+generation, is recorded, not judged. After the clients stop, the
+new-connection writes started and answered in that time are counted by
+outcome, and the established session's acknowledgements in it, on the
+client's clock. The run then goes on as without the option: the heal, the
+settle wait, the manual release when asked for, and the data check.
+
+What the option judges, on top of the rules below:
+
+- **Fail** (never-events): the quarantine lost, replaced by another
+  generation, or the read-write path not closed in any reading from the
+  deletion until the heal; a write through a new connection that took effect
+  (acknowledged or `unknown-present`) or an established-session
+  acknowledgement in that time. These are counted only when
+  `cutBeforeReplacementLed` is set; without it, what the replacement did may
+  rest on observations of the cut-off member.
+- **Blocked**, never passed: no restart made (`notMade`, such as no
+  enforced quarantine while the cut held for `-partition-hold`, or a Lease
+  not held by the Pod the cut names); a restart not followed to its end
+  (`unmet`: no replacement within a minute, the cut not extended to it, the
+  replacement gone, another image, or no fresh status within 4 minutes and
+  30 seconds of the deletion, or a step or watch still running when the run
+  was judged); `cutBeforeReplacementLed` not shown; the two managers' node
+  clocks more than one second apart; fewer than two whole readings after the
+  replacement's fresh status; and writes
+  in that time not read, or new-connection writes with an outcome the data
+  check could not resolve. A restart that leaves the old Pod gone without the
+  cut on its replacement is also seen as a changed manager Pod, which blocks
+  S07 as before.
+
+The measurements add `operatorRestart` (`made`, `not made`, `incomplete` or
+`not reached`), `operatorRestartAfterFaultWithin` (from the cut's issue),
+and, from the deletion, `replacementCutWithin`, `replacementReadyWithin`,
+`replacementLeaseWithin` and `replacementFreshStatusWithin`;
+`quarantineHeldAcrossRestart`, `quarantineGenerationKeptAcrossRestart` and
+`rwBrokersHeldAtZeroAcrossRestart` (`true`, `false`, or `unknown` without
+`cutBeforeReplacementLed` and two whole readings after the fresh status);
+`quarantineReasonAfterRestart` and `routingReadyAfterRestart` from the fresh
+status; and `writesTookEffectDuringRestart` and
+`establishedAcknowledgedDuringRestart`. `operatorRestart` in `record.json`
+keeps every step's time, the old and new Pods with their addresses and the
+Lease holders, and `cut.json` names the replacement and when its rules were
+read back.
+
+The option adds its 5-minute bound to the steps' bounds in the `-timeout`
+check, as the hold may last that much longer. With the 10-minute move and
+the other defaults, the variant's own bounds are 34 minutes and 20 seconds,
+plus LAB01:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated -partition-operator-restart \
+  -quarantine-limit 30s -partition-duration 2m -timeout 50m'
+```
+
+It needs, beyond the lane's own, `delete` and `list` on Pods, `get` on the
+manager Deployment and its ReplicaSets in the Operator's namespace, and
+`get` on its leader Lease, as S06 `restart` does.
+
+The installed Operator is shared: while the manager restarts, it reconciles
+no cluster in any namespace, from the deletion until the replacement holds
+the Lease and has synced, about 15 to 30 seconds. A lab campaign
+announcement for a run with the option must name the manager Pod's deletion
+and that pause next to the network cut.
+
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
 installed-ha-network-partition-higher-rank-isolated` select the same runs.
@@ -1726,7 +1851,9 @@ installed-ha-network-partition-higher-rank-isolated` select the same runs.
 On every sweep the run also reads the manager Pod the cut names. Once it is
 gone, replaced or has another IP (`operatorChangedAt`), the cut no longer
 isolates the Operator as intended: the run counts no trigger after it and
-S07 is blocked. A client node whose clock offset was not read blocks S07
+S07 is blocked. The run's own restart with `-partition-operator-restart`
+is not such a change once the cut covers the replacement, which the cut then
+names. A client node whose clock offset was not read blocks S07
 before the clients start, and the clients' files of an earlier run are
 removed before they do.
 
@@ -1859,7 +1986,8 @@ Evidence, under `S07/<variant>/`:
   its exit code and outcome, the established session, the settle (with
   `settleWaitExpired` when it did not), the data check or, when the cluster
   did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`),
-  the keepalive set with `-partition-keepalive` (`partitionKeepalive`), and the run's
+  the keepalive set with `-partition-keepalive` (`partitionKeepalive`), the
+  Operator restart of `-partition-operator-restart` (`operatorRestart`), and the run's
   observations in time order (`observed`);
 - `cut.json`: the cut's state alone, written before the injection and at
   its removal;

@@ -787,7 +787,7 @@ func s07ReleaseMeasurements(r *s07ManualRelease, m map[string]any, since func(st
 	m["manualRelease"] = "accepted"
 	switch {
 	case r.NotMade != "":
-		m["manualRelease"] = "not made"
+		m["manualRelease"] = s07NotMade
 	case r.AcceptedSeenAt == nil:
 		m["manualRelease"] = "not accepted"
 	}
