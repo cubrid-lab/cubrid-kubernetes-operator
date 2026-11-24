@@ -103,3 +103,126 @@ func TestOtherQuarantineMembersExcludesOnlyTheReplacedMember(t *testing.T) {
 		t.Errorf("summary of no quarantine %q", got)
 	}
 }
+
+// missedProbeCluster is the cluster the rebuild step reads when the slave
+// hab-1 missed one role probe while hab-0, whose storage the step replaced,
+// rejoined: the quarantine records both, the master hab-2 is resolved, and
+// hab-1 answered slave in the latest observation from the Pod it had before
+// the step (#1139).
+func missedProbeCluster(observed time.Time) *databasev1alpha1.CubridCluster {
+	at := metav1.NewTime(observed)
+	q := rebuildQuarantine("",
+		databasev1alpha1.WriteQuarantineMember{Name: "hab-0", PodUID: "new-0", ObservedRole: "no answer"},
+		databasev1alpha1.WriteQuarantineMember{Name: "hab-1", PodUID: "pod-1", RestartCount: 2, ObservedRole: "no role"})
+	q.ReleaseToken = "token"
+	return &databasev1alpha1.CubridCluster{Status: databasev1alpha1.CubridClusterStatus{
+		CurrentPrimary:   "hab-2",
+		LastObservedTime: &at,
+		Conditions:       []metav1.Condition{{Type: s03PrimaryResolved, Status: metav1.ConditionTrue}},
+		Instances: []databasev1alpha1.InstanceStatus{
+			{Name: "hab-0", Role: databasev1alpha1.RoleUnknown},
+			{Name: "hab-1", Role: databasev1alpha1.RoleSlave, LastObservedTime: &at},
+			{Name: "hab-2", Role: databasev1alpha1.RoleMaster, LastObservedTime: &at},
+		},
+		WriteQuarantine: q,
+	}}
+}
+
+// The rebuild step releases a quarantine that records the emptied member and
+// another slave only under the conditions the maintainer set on #1139: one
+// resolved active master that the quarantine does not record, and every
+// other recorded member answering slave from the Pod and container start it
+// had before the step. Anything else is refused, and a refusal that waiting
+// cannot change ends the step.
+func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
+	observed := time.Date(2026, 11, 24, 3, 0, 0, 0, time.UTC)
+	now := observed.Add(5 * time.Second)
+	before := map[string]memberIdentity{"hab-1": {podUID: "pod-1", restartCount: 2},
+		"hab-2": {podUID: "pod-2"}}
+	same := map[string]memberIdentity{"hab-1": {podUID: "pod-1", restartCount: 2}}
+
+	if refusal, final := missedProbeReleaseRefusal(missedProbeCluster(observed), "hab-0", "new-0", "hab-2",
+		before, same, now); refusal != "" || final {
+		t.Fatalf("every condition holds: refused %q (final %t)", refusal, final)
+	}
+
+	// A quarantine recording only the other slave, started after a first
+	// release, cannot end by itself either, and is released alike.
+	only := missedProbeCluster(observed)
+	only.Status.WriteQuarantine.Members = only.Status.WriteQuarantine.Members[1:]
+	if refusal, _ := missedProbeReleaseRefusal(only, "hab-0", "new-0", "hab-2", before, same, now); refusal != "" {
+		t.Errorf("the other slave alone: refused %q", refusal)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		change  func(c *databasev1alpha1.CubridCluster)
+		current map[string]memberIdentity
+		want    string
+		final   bool
+	}{
+		{name: "the master is recorded", want: "records the master hab-2",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.WriteQuarantine.Members = append(c.Status.WriteQuarantine.Members,
+					databasev1alpha1.WriteQuarantineMember{Name: "hab-2", PodUID: "pod-2"})
+			}},
+		{name: "the other member is not a slave", want: `the role of hab-1 is "unknown"`,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[1].Role = databasev1alpha1.RoleUnknown }},
+		{name: "the other member did not answer in the latest observation", want: "did not answer",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				old := metav1.NewTime(observed.Add(-30 * time.Second))
+				c.Status.Instances[1].LastObservedTime = &old
+			}},
+		{name: "the other member's Pod was replaced", want: "condition 2", final: true,
+			current: map[string]memberIdentity{"hab-1": {podUID: "pod-1b"}}},
+		{name: "the other member's container restarted", want: "condition 2", final: true,
+			current: map[string]memberIdentity{"hab-1": {podUID: "pod-1", restartCount: 3}}},
+		{name: "the quarantine records another Pod of the other member", want: "condition 2", final: true,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.WriteQuarantine.Members[1].PodUID = "pod-1b" }},
+		{name: "no member is master", want: "members whose role is master are []",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[2].Role = databasev1alpha1.RoleUnknown }},
+		{name: "two members are master", want: "members whose role is master are [hab-1 hab-2]",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[1].Role = databasev1alpha1.RoleMaster }},
+		{name: "the primary is not resolved", want: "PrimaryResolved is False",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.Conditions[0].Status = metav1.ConditionFalse
+			}},
+		{name: "the observation is stale", want: "more than 60 seconds old",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				old := metav1.NewTime(now.Add(-61 * time.Second))
+				c.Status.LastObservedTime = &old
+			}},
+		{name: "the master moved", want: "not hab-2", final: true,
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.CurrentPrimary = "hab-1"
+				c.Status.Instances[1].Role, c.Status.Instances[2].Role = databasev1alpha1.RoleMaster,
+					databasev1alpha1.RoleSlave
+				c.Status.WriteQuarantine.Members = c.Status.WriteQuarantine.Members[:1]
+				c.Status.WriteQuarantine.Members = append(c.Status.WriteQuarantine.Members,
+					databasev1alpha1.WriteQuarantineMember{Name: "hab-2", PodUID: "pod-2"})
+			}},
+		{name: "the emptied member is recorded in its old Pod", want: "not in its new Pod",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.WriteQuarantine.Members[0].PodUID = "old-0" }},
+		{name: "another reason", want: "WriteQuarantinedMasterChanged", final: true,
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.WriteQuarantine.Reason = databasev1alpha1.WriteQuarantinedMasterChanged
+			}},
+		{name: "the emptied member alone", want: "no member besides hab-0",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.WriteQuarantine.Members = c.Status.WriteQuarantine.Members[:1]
+			}},
+	} {
+		c := missedProbeCluster(observed)
+		if tc.change != nil {
+			tc.change(c)
+		}
+		current := same
+		if tc.current != nil {
+			current = tc.current
+		}
+		refusal, final := missedProbeReleaseRefusal(c, "hab-0", "new-0", "hab-2", before, current, now)
+		if !strings.Contains(refusal, tc.want) || final != tc.final {
+			t.Errorf("%s: refused %q (final %t), want %q (final %t)", tc.name, refusal, final, tc.want, tc.final)
+		}
+	}
+}
