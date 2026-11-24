@@ -420,8 +420,9 @@ current #308 execution order; the decision is recorded on #954.
   unresolved finding, or backlog. A gate may remain open for required
   real-environment or independent release evidence. A task closes on merge
   when its scoped acceptance criteria, regression tests and applicable
-  final-head checks are met; separate candidate evidence belongs to the
-  gate. For multi-PR tasks, earlier PRs may use `Refs #N` until completion.
+  final-head checks are met, including any real SQL or VM-lab evidence
+  required by the task's own acceptance. Separate candidate qualification
+  evidence belongs to the gate. For multi-PR tasks, earlier PRs may use `Refs #N` until completion.
 - Each PR links its bounded task (`Closes #N` when complete, otherwise
   `Refs #N`) and the relevant gate when applicable. A gate-only evidence PR
   may use `Refs #N`. A PR without an owning issue needs a maintainer
@@ -434,7 +435,9 @@ current #308 execution order; the decision is recorded on #954.
 - Consolidate duplicate trackers only after transferring all outstanding
   acceptance obligations and linking the historical issue. Closing a task
   or consolidating a tracker is not a scenario pass. Do not reopen completed
-  implementation for a later candidate campaign.
+  implementation merely for a later candidate campaign; reopen or otherwise
+  track a confirmed defect found in that implementation under the existing
+  regression rules.
 - Use repository-local `gate` and `known limitation` labels and `v0.1` /
   `v0.2` milestones once provisioned. These are acceptance/scheduling
   metadata, not workflow-status labels, and must not replace the canonical
