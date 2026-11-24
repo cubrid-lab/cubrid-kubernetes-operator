@@ -1325,8 +1325,8 @@ spec:
 				// change runs csql on member's terminal, logged in with the current
 				// password, and loads and runs the file there.
 				change := func(member string, options ...string) {
-					t, err := runCSQLDialog(kubectlExecTerminal(haNamespace, member,
-						append(options, "-u", "dba", database+"@localhost")...),
+					t, err := runCSQLDialog(kubectlExecTerminal(haNamespace, member, database,
+						append(options, "-u", "dba")...),
 						password, []string{";read " + pwChangeFile, ";run", ";exit"}, 3*time.Minute)
 					shown, found := redactValues(t.all, password, newPassword)
 					_, _ = fmt.Fprintf(GinkgoWriter, "csql on a terminal on %s:\n%s\n", member, shown)

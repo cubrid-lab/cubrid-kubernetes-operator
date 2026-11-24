@@ -69,3 +69,33 @@ func TestDBAPasswordLoginsConnectOverTCP(t *testing.T) {
 		t.Errorf("csql is not given the database and the statement: %q", args)
 	}
 }
+
+// TestDBAPasswordTerminalConnectsOverTCP checks the same for the csql sessions
+// on a pseudo-terminal, where the DBA password is typed at csql's prompt: the
+// login check and the password change on the primary and on a slave. Over the
+// local Unix socket csql could print its whole result and then the -199/-111
+// pair of a lost session (POC-70, #238). Both build their command with
+// kubectlExecTerminal.
+func TestDBAPasswordTerminalConnectsOverTCP(t *testing.T) {
+	for name, options := range map[string][]string{
+		"login check":                    {"-u", "dba", "-c", "SELECT 1"},
+		"password change on the primary": {"-u", "dba"},
+		"password change on a slave":     {"--sysadm", "--write-on-standby", "-u", "dba"},
+	} {
+		args := kubectlExecTerminal("ns", "dbaha-0", "appdb", options...).Args
+		if strings.Contains(strings.Join(args, " "), "localhost") {
+			t.Errorf("%s: csql connects through the local socket: %q", name, args)
+		}
+		if !slices.ContainsFunc(args, func(a string) bool { return strings.Contains(a, `"$0@$(hostname)"`) }) {
+			t.Errorf("%s: csql does not connect by the member's hostname: %q", name, args)
+		}
+		if !slices.Contains(args, "-it") || !slices.Contains(args, "appdb") {
+			t.Errorf("%s: csql is not run on a terminal with the database: %q", name, args)
+		}
+		for _, o := range options {
+			if !slices.Contains(args, o) {
+				t.Errorf("%s: csql is not given the option %q: %q", name, o, args)
+			}
+		}
+	}
+}
