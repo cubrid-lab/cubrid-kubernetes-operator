@@ -898,17 +898,23 @@ spec:
 
 			AfterAll(func() {
 				if CurrentSpecReport().Failed() {
-					for _, args := range [][]string{
+					dumps := [][]string{
 						{"get", "cubridcluster", "-o", "yaml"},
 						{"get", "cubridbackup", "-o", "yaml"},
 						{"get", "pods", "-o", "wide"},
-						{"logs", members[0], "--tail=200"},
-						{"logs", members[1], "--tail=200"},
-						{"logs", restoredName + "-0", "--tail=200"},
-						{"logs", restoredName + "-1", "--tail=200"},
-						{"logs", otherName + "-0", "--tail=200"},
-						{"get", "events", "--sort-by=.lastTimestamp"},
-					} {
+					}
+					// Every member's log, so that each member's answer to a
+					// password check is shown: the condition needs all of them.
+					for _, member := range members {
+						dumps = append(dumps, []string{"logs", member, "--tail=200"})
+					}
+					dumps = append(dumps,
+						[]string{"logs", restoredName + "-0", "--tail=200"},
+						[]string{"logs", restoredName + "-1", "--tail=200"},
+						[]string{"logs", otherName + "-0", "--tail=200"},
+						[]string{"get", "events", "--sort-by=.lastTimestamp"},
+					)
+					for _, args := range dumps {
 						out, _ := h.kubectl(append(args, "--request-timeout=10s")...)
 						_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 					}
