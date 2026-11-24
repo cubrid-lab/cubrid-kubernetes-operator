@@ -38,10 +38,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No Go cache: this job compiles nothing, and saving one would take
+      # the shared key before the jobs that build.
       - name: Setup Go
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Check DESIGN.md wording, the ADR indexes and the ROADMAP.md limits
         run: make check-docs
@@ -60,10 +63,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # The Go module and build cache is kept under a key of this workflow's
+      # own. With go.sum alone the key is shared by every workflow, and the
+      # first job to save it was the few-second document check, so Go jobs
+      # restored about 13 MB and compiled every dependency again (#1109).
       - name: Setup Go
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/test.yml
 
       # make verify runs check-generated, format-check, vet, lint, check-docs and test.
       # None of them writes the workspace: check-generated regenerates CRDs,
