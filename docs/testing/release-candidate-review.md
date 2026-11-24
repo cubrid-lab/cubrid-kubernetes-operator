@@ -192,6 +192,11 @@ into the bundles. The rules, failing closed:
   established S07 session after the managed `-rw` path was observed closed
   must be `0`, and S03 `graceful` must miss no acknowledged write. The raw
   verdict is always shown as recorded.
+- The registered S07 variants cut network traffic both ways. An S07 record
+  whose `partitionDirection` measurement is `inbound`, `outbound` or any
+  value other than the name `both` (an empty or non-string value included)
+  is No-Go, whatever its verdict or marker; a record without the
+  measurement predates one-way cuts and is judged as a both-ways cut.
 - A must-measure record whose raw `fail` the runner recorded as caused by
   time limits alone (`timeLimitOnly: true` with `exceededLimits` in
   `summary.json`) is **MEASURED, DISCLOSED** and counts as Go for the
