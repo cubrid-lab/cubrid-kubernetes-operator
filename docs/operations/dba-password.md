@@ -322,9 +322,11 @@ It has been tried only in local Docker and is not supported yet.
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
 ([HA clusters](#ha-clusters)), the Operator asks the Instance Manager of that
-member, or of every member of the HA cluster, at most once every 5 minutes per
-cluster and at once after the Operator restarts, whether the value is still
-that member's DBA password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
+member, or of every member of the HA cluster, once every 5 minutes per
+cluster, at once after the Operator restarts, and again after 30 seconds when
+a check could not tell (every time for the standalone member or the primary,
+and at most three checks in a row when only a slave could not tell), whether
+the value is still that member's DBA password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
 through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
 and types the file's value at csql's `Enter Password` prompt on a
 pseudo-terminal, as the password step does. The login changes nothing, and no
