@@ -73,6 +73,47 @@ type OperationStore struct {
 	// read. The first successful read of one that has not ended fails it,
 	// as reconcileOnStart would have.
 	interrupted map[string]bool
+	// referenced returns the IDs of the operations that something outside
+	// the store still names (SetReferenced). Records are pruned only while
+	// it is set (pruneLocked).
+	referenced func() (map[string]bool, error)
+	// clock is the time pruning judges by; tests replace it.
+	clock func() time.Time
+	// startedAt is when this store was opened. Every record counts as read
+	// then: a read by a process before a restart is not known.
+	startedAt time.Time
+	// lastRead holds, by operation ID, when a caller last read the record
+	// (markRead). The Operator reads a finished record by its ID for as long
+	// as it waits for the step after it, which may be held for any time.
+	lastRead map[string]time.Time
+}
+
+// now is the time by the store's clock.
+func (s *OperationStore) now() time.Time {
+	if s.clock != nil {
+		return s.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// markRead records that a caller has just read the record of operation id,
+// so that it is kept for at least operationRetention from now.
+func (s *OperationStore) markRead(id string) {
+	if s.lastRead == nil {
+		s.lastRead = map[string]time.Time{}
+	}
+	s.lastRead[id] = s.now()
+}
+
+// SetReferenced turns on the pruning of expired records (pruneLocked).
+// referenced returns the operation IDs that something outside the store
+// still names, such as the ownership marker of a database directory; their
+// records are never pruned. An error from it prunes nothing. It is called
+// with the store's lock held and must not call the store.
+func (s *OperationStore) SetReferenced(referenced func() (map[string]bool, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.referenced = referenced
 }
 
 // unreadableRecord is a record that could not be read, why, and whether
@@ -116,6 +157,7 @@ func NewOperationStore(dir string) (*OperationStore, error) {
 		return nil, fmt.Errorf("create operation store dir: %w", err)
 	}
 	s := &OperationStore{dir: dir}
+	s.startedAt = s.now()
 	if err := s.reconcileOnStart(); err != nil {
 		return nil, err
 	}
@@ -164,6 +206,7 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 			if _, unwritten := s.unsettled[op.ID]; unwritten {
 				return nil, false, errUnwrittenEnd(op.ID, nil)
 			}
+			s.markRead(op.ID)
 			return op, true, nil
 		}
 	}
@@ -179,6 +222,10 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 			return nil, false, ErrOperationInProgress
 		}
 	}
+
+	// Only now, after the key was looked up: an expired record under the
+	// request's own key is answered above, never pruned and then re-run.
+	s.pruneLocked(ops, s.now())
 
 	id, err := newOperationID()
 	if err != nil {
@@ -241,6 +288,7 @@ func (s *OperationStore) FindByKey(idempotencyKey string) ([]*Operation, error) 
 			if _, unwritten := s.unsettled[op.ID]; unwritten {
 				return nil, errUnwrittenEnd(op.ID, nil)
 			}
+			s.markRead(op.ID)
 			found = append(found, op)
 		}
 	}
@@ -259,7 +307,11 @@ func (s *OperationStore) Get(id string) (*Operation, error) {
 	if err := s.settleLocked(id, true); err != nil {
 		return nil, errUnwrittenEnd(id, err)
 	}
-	return s.readLocked(id)
+	op, err := s.readLocked(id)
+	if err == nil {
+		s.markRead(id)
+	}
+	return op, err
 }
 
 // Update applies mutate to the stored operation and persists it atomically.
@@ -358,6 +410,132 @@ func (s *OperationStore) logWriteFailure(op *Operation, err error, level slog.Le
 	}
 	s.logger.Log(context.Background(), level, "Could not write the operation record", "event", eventStoreWriteFailed,
 		"operationID", op.ID, "kind", string(op.Kind), "state", string(op.State), "err", err.Error())
+}
+
+// operationRetention is the idempotency horizon of the store: how long a
+// record stays after its operation ended (Completed or Failed) and after it
+// was last read, before it may be pruned. The horizon is counted from the
+// latest of the record's UpdatedAt, the last read of the record by a caller
+// (Get, Peek, FindByKey, or FindOrCreate answering its key) and the time the
+// store was opened. Within it, a repeat of the same idempotency key is
+// answered with the recorded operation and never runs it again, and a read
+// by operation ID finds the record, also across a restart.
+//
+// The Operator uses a record in two ways. It sends a key until the
+// resource records the operation's ID; it stops waiting for an operation
+// it started or cannot find after backupTargetWait,
+// backupOperationMissingWait and recoveryOperationMissingWait (30 minutes
+// each, internal/controller). It also reads a finished record by its ID for
+// as long as it waits for the step after it: the seed backup of an HA
+// bootstrap and the backup of a member rebuild are read on every pass while
+// their restore may be held for any time (an engine series hold, a
+// capability hold, the wait for the only active master). Backups leave no
+// ownership marker, so such a record is kept by those reads: it expires only
+// once nothing has read it for the whole horizon. Thirty days also leave
+// room for an Operator that was down, or a member that could not be
+// reached, for weeks; a restart of the manager starts the horizon again for
+// every record. A record is removed whole rather than replaced by a smaller
+// tombstone: a tombstone that answers a retried key with the original
+// outcome keeps most of the record, and would itself need a horizon.
+const operationRetention = 30 * 24 * time.Hour
+
+// removeOperationRecord removes one record file; tests replace it to stop a
+// pruning partway, as a crash would.
+var removeOperationRecord = os.Remove
+
+// pruneLocked removes the records of ops whose operation ended, and that no
+// caller read, more than operationRetention before now (see there), and
+// keeps every other record:
+//   - one that has not ended, or whose end is kept in memory only (Settle);
+//   - one without a usable UpdatedAt;
+//   - one that referenced names, such as the operation an ownership marker
+//     names: a database directory, a completed restore that is started again
+//     after a restart, or a member rebuild that waits for its release, is
+//     judged by that record, and without it is refused as unknown.
+//
+// Nothing is pruned when referenced is not set or fails, or when now is
+// before the UpdatedAt of a record: the clock then went back, and ages
+// measured by it are not known. A clock that jumps forward is not detected;
+// it can only shorten the horizon by the size of the jump. Records the
+// latest listing could not read are not in ops and are never pruned; one
+// the start could not read has been failed and written again (readLocked)
+// before it is in ops, which makes it young.
+//
+// Each record is removed with one unlink, then the directory is synced. A
+// crash at any point leaves every record either whole or absent, never
+// partly written; a record whose removal was not yet durable may come back,
+// and is pruned again later. No step writes another record, so a crash never
+// makes a key that is still within the horizon look new. A failure is logged
+// and stops the pruning; it never fails the request.
+func (s *OperationStore) pruneLocked(ops []*Operation, now time.Time) {
+	if s.referenced == nil {
+		return
+	}
+	var expired []*Operation
+	for _, op := range ops {
+		if now.Before(op.UpdatedAt) {
+			s.logPruneSkipped(fmt.Errorf("the clock (%s) is before the last change of operation %s (%s)",
+				now.Format(time.RFC3339), op.ID, op.UpdatedAt.Format(time.RFC3339)),
+				"operationID", op.ID, "updatedAt", op.UpdatedAt.Format(time.RFC3339))
+			return
+		}
+	}
+	for _, op := range ops {
+		_, unwritten := s.unsettled[op.ID]
+		if !op.State.IsTerminal() || unwritten || op.UpdatedAt.IsZero() {
+			continue
+		}
+		last := op.UpdatedAt
+		for _, t := range []time.Time{s.startedAt, s.lastRead[op.ID]} {
+			if t.After(last) {
+				last = t
+			}
+		}
+		if now.Sub(last) <= operationRetention {
+			continue
+		}
+		expired = append(expired, op)
+	}
+	if len(expired) == 0 {
+		return
+	}
+	referenced, err := s.referenced()
+	if err != nil {
+		s.logPruneSkipped(err)
+		return
+	}
+	removed := false
+	for _, op := range expired {
+		if referenced[op.ID] {
+			continue
+		}
+		if err := removeOperationRecord(filepath.Join(s.dir, op.ID+".json")); err != nil && !os.IsNotExist(err) {
+			s.logPruneSkipped(fmt.Errorf("remove the record of operation %s: %w", op.ID, err))
+			break
+		}
+		removed = true
+		delete(s.lastRead, op.ID)
+		if s.logger != nil {
+			s.logger.Info("Removed the record of an operation that ended before the idempotency horizon",
+				"event", eventRecordPruned, "operationID", op.ID, "kind", string(op.Kind),
+				"state", string(op.State), "updatedAt", op.UpdatedAt.Format(time.RFC3339))
+		}
+	}
+	if removed {
+		if err := syncOperationDir(s.dir); err != nil {
+			s.logPruneSkipped(fmt.Errorf("sync the operation directory: %w", err))
+		}
+	}
+}
+
+// logPruneSkipped records why expired records were kept for now, with
+// attrs naming the record that stopped the pruning, when one did.
+func (s *OperationStore) logPruneSkipped(err error, attrs ...any) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.With(attrs...).Warn("Kept expired operation records; the next request tries again",
+		"event", eventPruneSkipped, "err", err.Error())
 }
 
 // reasonRestarted is the failure reason of an operation that was running
@@ -474,6 +652,7 @@ func (s *OperationStore) Peek(id string) (*Operation, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.markRead(id)
 	if mutate, ok := s.unsettled[id]; ok {
 		mutate(op)
 		return op, nil

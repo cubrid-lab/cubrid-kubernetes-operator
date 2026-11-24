@@ -255,6 +255,7 @@ func (s *Server) WithOperationStore(store *OperationStore) *Server {
 	if s.logger != nil {
 		store.SetLogger(s.logger)
 	}
+	store.SetReferenced(s.markedOperations)
 	return s
 }
 
