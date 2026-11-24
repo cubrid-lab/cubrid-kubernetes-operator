@@ -459,6 +459,18 @@ The Operator is restarted so that it checks at once instead of after its
 5-minute poll. The step does not restart a member, fail over, or test a
 member that is down during the change.
 
+It passed in its first run (2026-11-24 UTC, E2E run
+[45300361348](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/45300361348),
+CUBRID 11.4.7.1995, PR #1137): `2 command(s) successfully processed.` on all
+three members; the new password accepted and the old one refused on each, and
+through `-rw` and `-ro` (`-171` for the old value); 21 acknowledged writes (5
+before, 11 during, 5 after, none with an unknown outcome) on every member; the
+Condition `False` with `DBAPasswordRotationUnsupported`, then `True`; and no
+value found by any of the searches. The copier and applier logs of two of the
+three members already held `-171` lines before the change (6 and 4 lines, the
+third none); where they came from was not examined, and the change added none.
+These steps took about 3 minutes of the run.
+
 ### Restarting after a changed value
 
 What a start of a DB container does with the password depends on the member:
