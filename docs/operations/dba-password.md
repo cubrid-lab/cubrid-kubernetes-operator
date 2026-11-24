@@ -343,12 +343,13 @@ it asks again at its next reconcile and reports the same state.
 ### A manual change on an HA cluster (draft)
 
 > [!CAUTION]
-> **Draft, verified only in local Docker.** The steps below were tried on a
-> three-member CUBRID 11.4.7.1995 HA group in Docker, outside Kubernetes, with
-> `docker exec -it` standing in for `kubectl exec -it`
-> ([POC-74](../poc/poc74/README.md), two trials, #1012). They have **not** been
-> run on Kind or the VM lab, with the Operator, or with the Brokers, and they
-> are not a supported procedure. Do not rely on them for a production cluster.
+> **Draft.** The steps below were tried on a three-member CUBRID 11.4.7.1995
+> HA group in Docker, outside Kubernetes, with `docker exec -it` standing in
+> for `kubectl exec -it` ([POC-74](../poc/poc74/README.md), two trials, #1012),
+> and a Kind e2e step runs them on a three-member HA cluster with the Operator
+> and its Brokers ([Tested on Kind](#tested-on-kind)). They have **not** been
+> run on the VM lab, and they are not a supported procedure. Do not rely on
+> them for a production cluster.
 
 **Do not use `ALTER USER dba PASSWORD` on a running HA member.** CUBRID
 replicates `ALTER USER`, like every DDL statement, as its SQL text. In POC-74
@@ -421,6 +422,42 @@ Not covered by POC-74: the Brokers and the `-rw` and `-ro` Services, drivers,
 `kubectl exec` itself, a member that is down or being seeded during the change
 (it keeps the old password), a lagging slave, what `--write-on-standby` (an
 option not listed in csql's help) changes beyond the password, and the VM lab.
+
+#### Tested on Kind
+
+The last steps of the Kind HA scenario with a DBA password
+(`test/e2e/dba_password_test.go`, label `dba-password-ha`) run steps 2 to 7
+on the running three-member cluster that scenario restored from a backup,
+with no new cluster:
+
+- the statement file goes into each member's DB container through
+  `kubectl exec -i` and standard input, and must have mode `600`;
+- csql runs with the commands of steps 3, 4 and 6, through `kubectl exec -it`
+  on a pseudo-terminal that the test opens, and the test types the current
+  password only after csql printed `Enter Password`; it types `;read`,
+  `;run` and `;exit` after each prompt, and expects `2 command(s)
+  successfully processed.` on every member;
+- a user without a password writes one row about every half second on the
+  primary before, during and after the change.
+
+It then requires that the new password logs in on every member and the old
+one is refused; that every acknowledged row is on every member; that the
+copiers and appliers logged no new `-171` line and each slave's applier fail
+count (`cubrid applyinfo`) did not grow; that `HAReady` and
+`ReplicationHealthy` are `True`; that, after an Operator restart with the old
+value still in the Secret, `DBAPasswordSecretResolved` is `False` with
+`DBAPasswordRotationUnsupported`, and, once the Secret holds the new value,
+every member's mounted file holds it and an Operator restart sets it back to
+`True`; that a Broker client logging in through `-rw` and `-ro` is refused
+with the old value and the empty one and accepted with the new one; and that
+neither value is in the cluster, the StatefulSet, the Events, the Broker
+client Pods, the Operator log, a member's log, the operation store,
+`$CUBRID/log`, `/tmp` or the database directory (`$CUBRID_DATABASES`) of a
+member. No transcript the test prints holds either value.
+
+The Operator is restarted so that it checks at once instead of after its
+5-minute poll. The step does not restart a member, fail over, or test a
+member that is down during the change.
 
 ### Restarting after a changed value
 
