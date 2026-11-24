@@ -98,6 +98,15 @@ type s07OperatorRestart struct {
 	ReplacementNode     string     `json:"replacementNode,omitempty"`
 	ReplacementIPSeenAt *time.Time `json:"replacementIPSeenAt,omitempty"`
 	ReplacementCutAt    *time.Time `json:"replacementCutAt,omitempty"`
+	// OldNode is the old manager Pod's node; ManagerClockSkew how far the
+	// replacement's node's clock is from it ("same node", or unknown when
+	// either offset was not read), and ClockSkewTooLarge set when that is
+	// over maxClockOffset. A status time is taken as the replacement's own
+	// only when it is later than its Lease acquisition by the skew, or by
+	// maxClockOffset when the skew is unknown.
+	OldNode           string `json:"oldNode,omitempty"`
+	ManagerClockSkew  string `json:"managerNodesClockSkew,omitempty"`
+	ClockSkewTooLarge string `json:"clockSkewTooLarge,omitempty"`
 	// LeaseHolderAtCut is the Lease's holder read right after the cut
 	// covered the replacement; CutBeforeLeader is set when it was still the
 	// old Pod, so the replacement had not led yet.
@@ -150,8 +159,9 @@ type s07OperatorRestart struct {
 	SessionAcknowledged *int           `json:"establishedAcknowledgedWhileCut,omitempty"`
 	// done is set once the step ended; token is the release token when the
 	// step started, never written to the evidence.
-	done  bool
-	token string
+	done        bool
+	token       string
+	freshMargin time.Duration
 }
 
 // s07RestartStatus is the quarantine and the conditions in a reading.
@@ -199,7 +209,9 @@ func (h *haRun) stepS07Restart(ctx context.Context, rec *s07Record, p *netfault.
 	r := rec.OperatorRestart
 	switch {
 	case r == nil && s07RestartDue(rec):
-		h.restartS07Operator(ctx, rec, p, now)
+		h.restartS07Operator(ctx, rec, func(ctx context.Context, peer netfault.Endpoint) error {
+			return p.ReplacePeer(ctx, s07CutPeerOf(p, rec.Operator), peer)
+		}, now)
 	case r == nil && now.Sub(*rec.FaultConfirmedAt) >= h.cfg.PartitionHold:
 		rec.OperatorRestart = &s07OperatorRestart{done: true, NotMade: "no quarantine was seen enforced with the " +
 			"read-write path closed while the cut held for -partition-hold"}
@@ -207,6 +219,17 @@ func (h *haRun) stepS07Restart(ctx context.Context, rec *s07Record, p *netfault.
 	case r != nil && !r.done:
 		h.followS07Restart(ctx, rec, time.Now().UTC())
 	}
+}
+
+// s07CutPeerOf is the name the partition gives the peer it cuts that the
+// faults do not enter and whose Pod is pod, or "".
+func s07CutPeerOf(p *netfault.Partition, pod string) string {
+	for _, c := range p.Cuts {
+		if c.Peer.NoEnter && c.Peer.Pod == pod {
+			return c.Peer.Name
+		}
+	}
+	return ""
 }
 
 // s07RestartHold is how much longer than -partition-hold the restart may
@@ -231,11 +254,13 @@ func s07RestartSettled(rec *s07Record) bool {
 // status, the Pod is the installed manager's one Pod with the UID the cut
 // names, and that Pod holds the Lease. It then waits, polling every
 // s07RestartPoll, for the replacement Pod's address, extends the cut to it
-// and reads the Lease again: the replacement must not hold it yet. On
-// success the run follows the replacement as the manager Pod the cut names.
-func (h *haRun) restartS07Operator(ctx context.Context, rec *s07Record, p *netfault.Partition, now time.Time) {
+// through replace and reads the Lease again: the replacement must not hold it
+// yet, or the step ends there, blocked. On success the run follows the
+// replacement as the manager Pod the cut names.
+func (h *haRun) restartS07Operator(ctx context.Context, rec *s07Record,
+	replace func(context.Context, netfault.Endpoint) error, now time.Time) {
 	r := &s07OperatorRestart{EnforcedSeenAt: &now, OldPod: rec.Operator, OldUID: rec.OperatorUID,
-		OldIP: rec.OperatorIP}
+		OldIP: rec.OperatorIP, OldNode: s07ManagerNode(h.rec.OperatorAfter)}
 	rec.OperatorRestart = r
 	notMade := func(format string, args ...any) {
 		r.NotMade, r.done = fmt.Sprintf(format, args...), true
@@ -307,13 +332,8 @@ func (h *haRun) restartS07Operator(ctx context.Context, rec *s07Record, p *netfa
 	r.ReplacementNode, r.ReplacementIPSeenAt = pod.Spec.NodeName, &seen
 	peer := netfault.Endpoint{Name: s07ReplacementPeer, Namespace: pod.Namespace, Pod: pod.Name, UID: string(pod.UID),
 		IP: pod.Status.PodIP, Port: s07OperatorPort, NoEnter: true}
-	name := ""
-	for _, c := range p.Cuts {
-		if c.Peer.NoEnter && c.Peer.Pod == r.OldPod {
-			name = c.Peer.Name
-		}
-	}
-	if err := p.ReplacePeer(ctx, name, peer); err != nil {
+	s07ManagerClocks(r, rec.ClockOffsets)
+	if err := replace(ctx, peer); err != nil {
 		unmet("extend the cut to the replacement manager Pod %s: %v", pod.Name, err)
 		return
 	}
@@ -327,6 +347,48 @@ func (h *haRun) restartS07Operator(ctx context.Context, rec *s07Record, p *netfa
 	})
 	rec.note("operator_replacement_cut", fmt.Sprintf("%s at %s; Lease holder then %q", pod.Name, pod.Status.PodIP,
 		holder))
+	if !r.CutBeforeLeader {
+		// The result is blocked already: holding the cut longer shows
+		// nothing more.
+		r.done = true
+		rec.note("operator_restart_ended", "the replacement was not shown cut off before it led")
+	}
+}
+
+// s07ManagerNode is the node of the manager Pod LAB01 recorded.
+func s07ManagerNode(m managerIdentity) string {
+	if len(m.Pods) != 1 {
+		return ""
+	}
+	return m.Pods[0].Node
+}
+
+// s07ManagerClocks records how far apart the clocks of the old and the new
+// manager's nodes are, from the offsets the run read through the Pods on
+// them, and how much later than the replacement's Lease acquisition a status
+// time must be to be taken as the replacement's own: a status the old process
+// wrote on a clock ahead of the replacement's could otherwise look fresh.
+// Nodes that are the same need no margin; an offset the run did not read
+// needs maxClockOffset, the skew the run accepts on the nodes it read.
+func s07ManagerClocks(r *s07OperatorRestart, offsets map[string]float64) {
+	r.freshMargin = 0
+	from, fromOK := offsets[r.OldNode]
+	to, toOK := offsets[r.ReplacementNode]
+	switch {
+	case r.OldNode != "" && r.OldNode == r.ReplacementNode:
+		r.ManagerClockSkew = "same node"
+	case fromOK && toOK:
+		skew := time.Duration((to - from) * float64(time.Second))
+		r.ManagerClockSkew = skew.Round(time.Millisecond).String()
+		r.freshMargin = skew.Abs()
+		if skew.Abs() > maxClockOffset {
+			r.ClockSkewTooLarge = fmt.Sprintf("the clocks of the old manager's node %s and the replacement's node %s "+
+				"differ by %s, over %s", r.OldNode, r.ReplacementNode, r.ManagerClockSkew, maxClockOffset)
+		}
+	default:
+		r.ManagerClockSkew = evidence.Unknown
+		r.freshMargin = maxClockOffset
+	}
 }
 
 // followS07Restart reads the replacement manager after the cut covered it:
@@ -431,7 +493,7 @@ func noteS07RestartReading(rec *s07Record, cluster *databasev1alpha1.CubridClust
 			now.Format(time.RFC3339), after, path.Desired, path.Pods, path.ActivePods, path.ReadyPods, path.Endpoints)
 	}
 	if observed := cluster.Status.LastObservedTime; r.FreshStatusSeenAt == nil && r.LeaseAcquireTime != nil &&
-		observed != nil && observed.After(*r.LeaseAcquireTime) {
+		observed != nil && observed.After(r.LeaseAcquireTime.Add(r.freshMargin)) {
 		last := observed.UTC()
 		r.FreshStatusSeenAt, r.LastObservedTime = &now, &last
 		r.After = s07StatusOf(cluster, now)
@@ -541,8 +603,19 @@ func s07RestartBlocked(rec *s07Record) []string {
 		return []string{"the Operator restart was not made: " + r.NotMade}
 	case r.Unmet != "":
 		return []string{"the Operator restart was not followed to its end: " + r.Unmet}
+	case !r.done:
+		return []string{"the Operator restart was not followed to its end: its step was still running when the " +
+			"run was judged"}
 	}
 	var blocked []string
+	if r.CutBeforeLeader && r.WatchedUntil == nil {
+		blocked = append(blocked, "the Operator restart was not followed to its end: the watch after the "+
+			"replacement's fresh status did not end")
+	}
+	if r.ClockSkewTooLarge != "" {
+		blocked = append(blocked, r.ClockSkewTooLarge+": the run cannot tell the replacement's status from the old "+
+			"manager's")
+	}
 	if !r.CutBeforeLeader {
 		blocked = append(blocked, fmt.Sprintf("the run could not show that the cut covered the replacement manager "+
 			"before it led (the leader Lease's holder then: %q): what it did may rest on the cut-off member",

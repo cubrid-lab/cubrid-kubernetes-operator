@@ -338,8 +338,11 @@ func (p *Partition) observed(e Endpoint) []string {
 // dropRules returns, by endpoint name, the drop rules the partition installs
 // there.
 func (p *Partition) dropRules() map[string][]string {
+	p.mu.Lock()
+	cuts := append(slices.Clone(p.retired), p.Cuts...)
+	p.mu.Unlock()
 	by := map[string][]string{}
-	for _, c := range append(slices.Clone(p.retired), p.Cuts...) {
+	for _, c := range cuts {
 		if c.Direction == In || c.Direction == Both {
 			by[p.Target.Name] = append(by[p.Target.Name], dropInRule(c.Peer.IP))
 		}
@@ -572,8 +575,10 @@ func (p *Partition) ReplacePeer(ctx context.Context, name string, peer Endpoint)
 	if _, err := shell(ctx, p.Env, p.Target, script); err != nil {
 		return fmt.Errorf("install the drop rules for %s: %w", peer.Name, err)
 	}
+	p.mu.Lock()
 	p.Cuts[i] = Cut{Peer: peer, Direction: Both}
 	p.retired = append(p.retired, old)
+	p.mu.Unlock()
 	r, err := p.checkDropRules(ctx, p.Target)
 	if err != nil {
 		return err
@@ -671,6 +676,7 @@ func (p *Partition) Confirm(ctx context.Context) (bool, error) {
 const removeScript = ": netfault remove\n" +
 	"touch " + removedMarker + "\n" +
 	"pkill -f 'netfault [i]nject' 2>/dev/null\n" +
+	"pkill -f 'netfault [r]epoint' 2>/dev/null\n" +
 	"while iptables -w 5 -D INPUT -j " + chainIn + " 2>/dev/null; do :; done\n" +
 	"while iptables -w 5 -D OUTPUT -j " + chainOut + " 2>/dev/null; do :; done\n" +
 	"for c in " + chainIn + " " + chainOut + "; do\n" +

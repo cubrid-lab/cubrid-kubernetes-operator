@@ -19,6 +19,7 @@ package installed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults/netfault"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -263,6 +265,10 @@ func TestJudgeS07WithAnOperatorRestart(t *testing.T) {
 		"the established session during the restart not read blocks": {func(r *s07Record) {
 			r.OperatorRestart.SessionAcknowledged = nil
 		}, evidence.Blocked, "established session's writes"},
+		"a step still running when judged blocks": {func(r *s07Record) { r.OperatorRestart.done = false },
+			evidence.Blocked, "still running when the run was judged"},
+		"a watch that did not end blocks": {func(r *s07Record) { r.OperatorRestart.WatchedUntil = nil },
+			evidence.Blocked, "the watch after the replacement's fresh status did not end"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -358,7 +364,7 @@ const restartLease = "manager-leader"
 
 // restartRun is an S07 run whose manager is the fixture's manager Pod,
 // holding the leader Lease as holder, with an enforced quarantine.
-func restartRun(t *testing.T, holder string) (*haRun, *s07Record, client.Client) {
+func restartRun(t *testing.T, holder string, hooks interceptor.Funcs) (*haRun, *s07Record, client.Client) {
 	t.Helper()
 	cfg := restartConfig(t)
 	cfg.LeaderLease = restartLease
@@ -369,7 +375,7 @@ func restartRun(t *testing.T, holder string) (*haRun, *s07Record, client.Client)
 				GenerationID: "g1", Reason: databasev1alpha1.WriteQuarantinedMemberUnverified, EnforcedTime: &enforced}}},
 		&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: restartLease, Namespace: cfg.OperatorNamespace},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder}}}
-	c := testClient(t, cfg.Config, interceptor.Funcs{}, objects...)
+	c := testClient(t, cfg.Config, hooks, objects...)
 	h := &haRun{Runner: &Runner{Client: c}, cfg: cfg, redactor: evidence.NewRedactor()}
 	manager, err := h.observeManager(t.Context(), cfg.Config)
 	if err != nil {
@@ -387,7 +393,7 @@ func restartRun(t *testing.T, holder string) (*haRun, *s07Record, client.Client)
 // after the cut covers it.
 func TestRestartS07OperatorDeletesNothingWithoutTheLease(t *testing.T) {
 	for name, holder := range map[string]string{"another holder": "manager-other_abc", "no holder": ""} {
-		h, rec, c := restartRun(t, holder)
+		h, rec, c := restartRun(t, holder, interceptor.Funcs{})
 		h.restartS07Operator(t.Context(), rec, nil, time.Now().UTC())
 		r := rec.OperatorRestart
 		if r == nil || !strings.Contains(r.NotMade, "leader Lease") || !r.done || r.DeletedAt != nil {
@@ -398,7 +404,7 @@ func TestRestartS07OperatorDeletesNothingWithoutTheLease(t *testing.T) {
 			t.Errorf("%s: the manager Pod is gone: %v", name, err)
 		}
 	}
-	h, rec, c := restartRun(t, testManagerPodName+"_abc")
+	h, rec, c := restartRun(t, testManagerPodName+"_abc", interceptor.Funcs{})
 	rec.OperatorUID = "another"
 	h.restartS07Operator(t.Context(), rec, nil, time.Now().UTC())
 	if r := rec.OperatorRestart; !strings.Contains(r.NotMade, "not the one Pod") || r.DeletedAt != nil {
@@ -417,7 +423,7 @@ func TestRestartS07OperatorWithoutAReplacement(t *testing.T) {
 	bound := s07RestartCutBound
 	s07RestartCutBound = 50 * time.Millisecond
 	t.Cleanup(func() { s07RestartCutBound = bound })
-	h, rec, c := restartRun(t, testManagerPodName+"_abc")
+	h, rec, c := restartRun(t, testManagerPodName+"_abc", interceptor.Funcs{})
 	h.restartS07Operator(t.Context(), rec, nil, time.Now().UTC())
 	r := rec.OperatorRestart
 	if r.DeletedAt == nil || !strings.Contains(r.Unmet, "no replacement manager Pod") || !r.done ||
@@ -437,7 +443,7 @@ func TestRestartS07OperatorWithoutAReplacement(t *testing.T) {
 // Deployment controls, once it has an address; a Pod of another owner is not
 // it.
 func TestS07ReplacementManager(t *testing.T) {
-	h, _, c := restartRun(t, "")
+	h, _, c := restartRun(t, "", interceptor.Funcs{})
 	ns := h.cfg.OperatorNamespace
 	pod := func(name, ip, rs string) *corev1.Pod {
 		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("uid-" + name),
@@ -480,5 +486,264 @@ func TestS07ReplacementManager(t *testing.T) {
 	h.rec.OperatorAfter.DeploymentUID = "another"
 	if _, err := h.s07ReplacementManager(context.Background(), testManagerPodName); err == nil {
 		t.Error("a Deployment LAB01 did not record was accepted")
+	}
+}
+
+// restartReplacementPod is the manager Pod that replaces the fixture's: Ready,
+// at an address, on another node, with the fixture's image, controlled by its
+// ReplicaSet.
+const (
+	restartReplacementPod  = "manager-pod-2"
+	restartReplacementNode = "node-9"
+	restartReplacementIP   = "10.42.2.30"
+)
+
+func replacementPod(ns, imageID string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: restartReplacementPod, Namespace: ns,
+		UID: types.UID("uid-" + restartReplacementPod), Labels: map[string]string{testAppLabel: testManagerName},
+		OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", "manager-rs", "replicaset")}},
+		Spec: corev1.PodSpec{NodeName: restartReplacementNode},
+		Status: corev1.PodStatus{PodIP: restartReplacementIP,
+			Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: managerContainer, ImageID: imageID}}}}
+}
+
+// createPod creates pod with its status.
+func createPod(t *testing.T, c client.Client, pod *corev1.Pod) {
+	t.Helper()
+	status := pod.Status
+	if err := c.Create(t.Context(), pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status = status
+	if err := c.Status().Update(t.Context(), pod); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setLeaseHolder makes holder hold the restart tests' Lease since acquired.
+func setLeaseHolder(t *testing.T, c client.Client, ns, holder string, acquired time.Time) {
+	t.Helper()
+	lease := &coordinationv1.Lease{}
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: restartLease}, lease); err != nil {
+		t.Fatal(err)
+	}
+	at := metav1.NewMicroTime(acquired)
+	lease.Spec.HolderIdentity, lease.Spec.AcquireTime = &holder, &at
+	if err := c.Update(t.Context(), lease); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// replacedOnDelete is a fake API whose Deployment replaces the manager Pod
+// as soon as it is deleted.
+func replacedOnDelete(t *testing.T) interceptor.Funcs {
+	return interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object,
+		opts ...client.DeleteOption) error {
+		if err := c.Delete(ctx, obj, opts...); err != nil {
+			return err
+		}
+		if _, ok := obj.(*corev1.Pod); ok && obj.GetName() == testManagerPodName {
+			createPod(t, c, replacementPod(obj.GetNamespace(), "containerd://sha256:"+strings.Repeat("b", 64)))
+		}
+		return nil
+	}}
+}
+
+// The manager Pod is deleted, the cut is extended to its replacement, and
+// whether the replacement had led then is read from the Lease: still held by
+// the old Pod shows it had not; held by the replacement shows it had, and the
+// step ends at once, blocked. A cut that cannot be extended ends it unmet.
+func TestRestartS07OperatorCutsTheReplacement(t *testing.T) {
+	old := testManagerPodName + "_abc"
+	tests := map[string]struct {
+		replace func(t *testing.T, c client.Client, ns string) error
+		check   func(t *testing.T, r *s07OperatorRestart, rec *s07Record)
+	}{
+		"the old Pod still holds the Lease": {nil, func(t *testing.T, r *s07OperatorRestart, rec *s07Record) {
+			if !r.CutBeforeLeader || r.done || r.LeaseHolderAtCut != old || rec.Operator != restartReplacementPod ||
+				rec.OperatorIP != restartReplacementIP || r.ManagerClockSkew != "200ms" || r.ClockSkewTooLarge != "" ||
+				r.freshMargin.Round(time.Millisecond) != 200*time.Millisecond {
+				t.Errorf("restart %+v, run follows %s at %s", r, rec.Operator, rec.OperatorIP)
+			}
+		}},
+		"the replacement already holds the Lease": {func(t *testing.T, c client.Client, ns string) error {
+			setLeaseHolder(t, c, ns, restartReplacementPod+"_def", time.Now())
+			return nil
+		}, func(t *testing.T, r *s07OperatorRestart, _ *s07Record) {
+			if r.CutBeforeLeader || !r.done || r.LeaseHolderAtCut != restartReplacementPod+"_def" {
+				t.Errorf("restart %+v", r)
+			}
+			if got := s07RestartBlocked(&s07Record{OperatorRestartAsked: true, OperatorRestart: r}); len(got) == 0 ||
+				!strings.Contains(got[0], "before it led") {
+				t.Errorf("blocked %v", got)
+			}
+		}},
+		"the cut cannot be extended": {func(*testing.T, client.Client, string) error {
+			return errors.New("the fault was removed")
+		}, func(t *testing.T, r *s07OperatorRestart, rec *s07Record) {
+			if !strings.Contains(r.Unmet, "extend the cut") || !r.done || rec.Operator != testManagerPodName {
+				t.Errorf("restart %+v, run follows %s", r, rec.Operator)
+			}
+		}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			h, rec, c := restartRun(t, old, replacedOnDelete(t))
+			rec.ClockOffsets = map[string]float64{testRoomyNode: 0.1, restartReplacementNode: 0.3}
+			var peer netfault.Endpoint
+			h.restartS07Operator(t.Context(), rec, func(_ context.Context, e netfault.Endpoint) error {
+				peer = e
+				if tc.replace != nil {
+					return tc.replace(t, c, h.cfg.OperatorNamespace)
+				}
+				return nil
+			}, time.Now().UTC())
+			r := rec.OperatorRestart
+			if r.DeletedAt == nil || r.Replacement != restartReplacementPod || r.OldNode != testRoomyNode ||
+				r.ReplacementNode != restartReplacementNode {
+				t.Fatalf("restart %+v", r)
+			}
+			if peer.Name != s07ReplacementPeer || peer.IP != restartReplacementIP || peer.UID != "uid-"+restartReplacementPod ||
+				!peer.NoEnter || peer.Port != s07OperatorPort {
+				t.Errorf("the cut was extended to %+v", peer)
+			}
+			tc.check(t, r, rec)
+		})
+	}
+}
+
+// The margin a status time needs over the Lease's acquisition follows the
+// clocks of the two managers' nodes, and a skew over maxClockOffset blocks.
+func TestS07ManagerClocks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		old, replacement string
+		offsets          map[string]float64
+		skew             string
+		margin           time.Duration
+		tooLarge         bool
+	}{
+		"the same node":    {"n1", "n1", nil, "same node", 0, false},
+		"read offsets":     {"n1", "n2", map[string]float64{"n1": 0.5, "n2": -0.2}, "-700ms", 700 * time.Millisecond, false},
+		"too far apart":    {"n1", "n2", map[string]float64{"n1": 0.8, "n2": -0.8}, "-1.6s", 1600 * time.Millisecond, true},
+		"an unread offset": {"n1", "n2", map[string]float64{"n1": 0.1}, evidence.Unknown, maxClockOffset, false},
+	} {
+		r := &s07OperatorRestart{OldNode: tc.old, ReplacementNode: tc.replacement}
+		s07ManagerClocks(r, tc.offsets)
+		if r.ManagerClockSkew != tc.skew || r.freshMargin.Round(time.Millisecond) != tc.margin ||
+			(r.ClockSkewTooLarge != "") != tc.tooLarge {
+			t.Errorf("%s: skew %q, margin %s, too large %q", name, r.ManagerClockSkew, r.freshMargin,
+				r.ClockSkewTooLarge)
+		}
+	}
+	rec := s07RestartBase()
+	rec.OperatorRestart.ClockSkewTooLarge = "the clocks differ by 1.6s"
+	if v := judgeS07(rec, testS07Limits); v.Result != evidence.Blocked || !strings.Contains(v.Reason, "1.6s") {
+		t.Errorf("judged %s %q", v.Result, v.Reason)
+	}
+	// A status the old manager wrote within the margin is not the
+	// replacement's.
+	base := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	deleted, acquired := at(base, 30), at(base, 46)
+	q := &databasev1alpha1.WriteQuarantine{GenerationID: "g1"}
+	rec = &s07Record{OperatorRestart: &s07OperatorRestart{DeletedAt: &deleted, Generation: "g1",
+		LeaseAcquireTime: &acquired, freshMargin: time.Second}}
+	noteS07RestartReading(rec, restartReading(q, acquired.Add(500*time.Millisecond)), s07Path{}, at(base, 48), true)
+	if rec.OperatorRestart.FreshStatusSeenAt != nil {
+		t.Error("a status within the clock margin of the acquisition was taken as the replacement's")
+	}
+	noteS07RestartReading(rec, restartReading(q, acquired.Add(1500*time.Millisecond)), s07Path{}, at(base, 50), true)
+	if rec.OperatorRestart.FreshStatusSeenAt == nil {
+		t.Error("a status past the clock margin was not taken as the replacement's")
+	}
+}
+
+// followRun is a run after the cut covered the replacement, deleted ago.
+func followRun(t *testing.T, imageID string, deleted time.Duration) (*haRun, *s07Record, client.Client) {
+	t.Helper()
+	h, rec, c := restartRun(t, testManagerPodName+"_abc", interceptor.Funcs{})
+	createPod(t, c, replacementPod(h.cfg.OperatorNamespace, imageID))
+	at := time.Now().UTC().Add(-deleted)
+	rec.OperatorRestart = &s07OperatorRestart{DeletedAt: &at, Replacement: restartReplacementPod,
+		ReplacementUID: "uid-" + restartReplacementPod, CutBeforeLeader: true}
+	return h, rec, c
+}
+
+// The replacement is followed until the watch after its fresh status ends,
+// or the step ends unmet: no fresh status, too few readings, another image,
+// or the replacement gone.
+func TestFollowS07Restart(t *testing.T) {
+	image := "containerd://sha256:" + strings.Repeat("b", 64)
+	h, rec, c := followRun(t, image, 20*time.Second)
+	acquired := time.Now().UTC().Add(-5 * time.Second)
+	setLeaseHolder(t, c, h.cfg.OperatorNamespace, restartReplacementPod+"_def", acquired)
+	now := time.Now().UTC()
+	h.followS07Restart(t.Context(), rec, now)
+	r := rec.OperatorRestart
+	if r.ReadyAt == nil || r.LeaseSeenAt == nil || !r.LeaseAcquireTime.Equal(acquired.Truncate(time.Microsecond)) ||
+		r.done {
+		t.Fatalf("restart %+v", r)
+	}
+	fresh := now.Add(-s07RestartWatch)
+	r.FreshStatusSeenAt, r.ReadingsAfterFreshStatus = &fresh, 2
+	h.followS07Restart(t.Context(), rec, now)
+	if !r.done || r.WatchedUntil == nil || r.Unmet != "" {
+		t.Errorf("the watch did not end: %+v", r)
+	}
+
+	for name, tc := range map[string]struct {
+		image   string
+		deleted time.Duration
+		change  func(*s07OperatorRestart)
+		unmet   string
+	}{
+		"no fresh status": {image, s07RestartBound - s07RestartWatch, nil, "no fresh status"},
+		"too few readings": {image, s07RestartBound, func(r *s07OperatorRestart) {
+			fresh := time.Now().UTC().Add(-time.Second)
+			r.FreshStatusSeenAt, r.ReadingsAfterFreshStatus = &fresh, 1
+		}, "only 1 whole reading"},
+		"another image": {"containerd://sha256:" + strings.Repeat("c", 64), time.Second, nil, "environment changed"},
+		"the replacement gone": {image, time.Second, func(r *s07OperatorRestart) { r.Replacement = "gone" },
+			"gone or was replaced"},
+	} {
+		h, rec, _ := followRun(t, tc.image, tc.deleted)
+		if tc.change != nil {
+			tc.change(rec.OperatorRestart)
+		}
+		h.followS07Restart(t.Context(), rec, time.Now().UTC())
+		if r := rec.OperatorRestart; !r.done || !strings.Contains(r.Unmet, tc.unmet) {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+}
+
+// The restart is given up once -partition-hold passed without an enforced
+// quarantine, and while its step runs the hold goes on past -partition-hold.
+func TestStepS07RestartAndTheHold(t *testing.T) {
+	h, rec, _ := followRun(t, "containerd://sha256:"+strings.Repeat("b", 64), time.Second)
+	r := rec.OperatorRestart
+	rec.OperatorRestart = nil
+	confirmed := time.Now().UTC().Add(-time.Minute)
+	rec.FaultConfirmedAt = &confirmed
+	h.stepS07Restart(t.Context(), rec, nil, time.Now().UTC())
+	if rec.OperatorRestart != nil || s07RestartSettled(rec) {
+		t.Fatalf("within -partition-hold: %+v", rec.OperatorRestart)
+	}
+	h.stepS07Restart(t.Context(), rec, nil, confirmed.Add(h.cfg.PartitionHold))
+	if got := rec.OperatorRestart; got == nil || !got.done || !strings.Contains(got.NotMade, "-partition-hold") ||
+		!s07RestartSettled(rec) {
+		t.Fatalf("after -partition-hold: %+v", got)
+	}
+
+	// The hold is past -partition-hold, and the replacement is followed
+	// without ending the hold: whileCut neither holds nor confirms the cut.
+	long := time.Now().UTC().Add(-2 * h.cfg.PartitionHold)
+	rec.FaultConfirmedAt, rec.OperatorRestart, rec.Target = &long, r, imageIdentity{Pod: m0}
+	h.guard = func(context.Context) error { return nil }
+	h.members, h.Command = testS07Members, s07Answers(map[string]string{m0: s07Slave, m1: s07ActiveMaster,
+		m2: s07Slave})
+	held, err := h.whileCut(t.Context(), rec, nil)
+	if held || err != nil || r.done || r.ReadyAt == nil || rec.HoldEndedAt != nil {
+		t.Errorf("whileCut = %v, %v; restart %+v", held, err, r)
 	}
 }

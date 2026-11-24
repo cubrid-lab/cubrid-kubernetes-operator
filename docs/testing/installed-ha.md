@@ -1495,11 +1495,21 @@ the control, which must not quarantine. While the cut holds, the run:
 6. reads the Lease again: when its holder is still the old Pod
    (`cutBeforeReplacementLed`), the replacement had not led, and so had not
    reconciled, before the cut covered it. From then on the run reads the
-   replacement as the manager Pod the cut names;
+   replacement as the manager Pod the cut names. When the replacement
+   already holds the Lease, the run is blocked, and the step ends at once
+   rather than holding the cut longer;
 7. records when the replacement is `Ready`, when it holds the Lease, with the
    Lease's acquire time, and its first fresh status: a
-   `status.lastObservedTime` after that acquire time, both on the Operator's
-   clock (`afterRestart` keeps the quarantine and the conditions then); and
+   `status.lastObservedTime` after that acquire time, both on the
+   replacement's clock (`afterRestart` keeps the quarantine and the
+   conditions then). The old process can outlive its Pod and write a status
+   on its own node's clock, so when the two Pods are on different nodes, the
+   run takes the difference of the two nodes' clock offsets it read through
+   the member and client Pods (`managerNodesClockSkew`). A status counts as
+   the replacement's only when it is that much later than the acquisition, or
+   one second later (the bound the run accepts for the nodes it read) when a
+   node's offset was not read. A difference over one second blocks the run
+   (`clockSkewTooLarge`); and
 8. keeps reading for 30 seconds after that status, with at least two whole
    readings. The hold ends at `-partition-hold` or when this step ended,
    whichever is later, within 5 minutes of the deletion; the cut is then
@@ -1531,8 +1541,10 @@ What the option judges, on top of the rules below:
   not held by the Pod the cut names); a restart not followed to its end
   (`unmet`: no replacement within a minute, the cut not extended to it, the
   replacement gone, another image, or no fresh status within 4 minutes and
-  30 seconds of the deletion); `cutBeforeReplacementLed` not shown; fewer
-  than two whole readings after the replacement's fresh status; and writes
+  30 seconds of the deletion, or a step or watch still running when the run
+  was judged); `cutBeforeReplacementLed` not shown; the two managers' node
+  clocks more than one second apart; fewer than two whole readings after the
+  replacement's fresh status; and writes
   in that time not read, or new-connection writes with an outcome the data
   check could not resolve. A restart that leaves the old Pod gone without the
   cut on its replacement is also seen as a changed manager Pod, which blocks
@@ -1564,10 +1576,15 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   -quarantine-limit 30s -partition-duration 2m -timeout 50m'
 ```
 
-It needs, beyond the lane's own, `delete` on Pods and `list` on Pods and
-ReplicaSets in the Operator's namespace, and `get` on its leader Lease, as
-S06 `restart` does. A lab campaign announcement for a run with the option
-must name the manager Pod's deletion next to the network cut.
+It needs, beyond the lane's own, `delete` and `list` on Pods, `get` on the
+manager Deployment and its ReplicaSets in the Operator's namespace, and
+`get` on its leader Lease, as S06 `restart` does.
+
+The installed Operator is shared: while the manager restarts, it reconciles
+no cluster in any namespace, from the deletion until the replacement holds
+the Lease and has synced, about 15 to 30 seconds. A lab campaign
+announcement for a run with the option must name the manager Pod's deletion
+and that pause next to the network cut.
 
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
