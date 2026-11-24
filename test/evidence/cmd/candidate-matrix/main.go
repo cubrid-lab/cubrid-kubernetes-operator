@@ -44,6 +44,11 @@ const (
 var (
 	commitPattern = regexp.MustCompile("^[a-f0-9]{40}$")
 	digestPattern = regexp.MustCompile("^sha256:[a-f0-9]{64}$")
+	// A recorded image is the bare digest or the Pod imageID form
+	// "<registry/repository>@sha256:<hex>"; the repository needs a path and
+	// is never compared, only the digest after the @ is.
+	imagePattern = regexp.MustCompile("^(?:[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?::[0-9]+)?" +
+		"(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+@)?(sha256:[a-f0-9]{64})$")
 	hashPattern   = regexp.MustCompile("^[a-f0-9]{64}$")
 	namePattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 	sourcePattern = regexp.MustCompile(
@@ -147,8 +152,8 @@ func generate(out io.Writer, indexPath, runRoot string) error {
 		report := inspect(manifest.Candidate, source, filepath.Join(runRoot, source.ID))
 		fmt.Fprintf(&matrix, "| %s | %s | %s | `%s` | `%s` | `%s` | %s | [Evidence](%s) |\n",
 			source.ID, source.Level, source.Lane, displayIdentity(source.Environment.Commit, commitPattern),
-			displayIdentity(source.Environment.Operator, digestPattern),
-			displayIdentity(source.Environment.CUBRID, digestPattern), report.status, source.Source)
+			displayIdentity(source.Environment.Operator, imagePattern),
+			displayIdentity(source.Environment.CUBRID, imagePattern), report.status, source.Source)
 		for _, result := range report.results {
 			fmt.Fprintf(&rows, "| %s | %s | %s | %s | %s | %s | %s |\n",
 				source.ID, scenarioLabel(result.scenario), result.Variant, scopeOf(result.scenario),
@@ -250,6 +255,20 @@ func verdict(value evidence.Result) string {
 	default:
 		return ""
 	}
+}
+
+// imageDigest returns the digest of a recorded image, or "" when image is
+// neither a bare digest nor a repository-qualified one.
+func imageDigest(image string) string {
+	if m := imagePattern.FindStringSubmatch(image); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// sameImages reports whether both recorded images carry the candidate's digests.
+func sameImages(recorded, c images) bool {
+	return imageDigest(recorded.Operator) == c.Operator && imageDigest(recorded.CUBRID) == c.CUBRID
 }
 
 func displayIdentity(value string, pattern *regexp.Regexp) string {
@@ -365,9 +384,9 @@ func runStatus(c candidate, source run, actual evidence.RecordedRun, junitStatus
 		states = append(states, "OTHER REVISION")
 	}
 	switch {
-	case !digestPattern.MatchString(env.Operator) || !digestPattern.MatchString(env.CUBRID):
+	case !imagePattern.MatchString(env.Operator) || !imagePattern.MatchString(env.CUBRID):
 		states = append(states, "UNKNOWN IMAGES")
-	case env.images != c.images:
+	case !sameImages(env.images, c.images):
 		states = append(states, "OTHER IMAGES")
 	}
 	if junitStatus != "" {
