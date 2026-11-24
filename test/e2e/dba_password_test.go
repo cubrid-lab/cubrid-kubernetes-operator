@@ -911,6 +911,9 @@ spec:
 					dumps = append(dumps,
 						[]string{"logs", restoredName + "-0", "--tail=200"},
 						[]string{"logs", restoredName + "-1", "--tail=200"},
+						// The third member of the restored cluster, whose
+						// answer was missing from a failed run.
+						[]string{"logs", restoredName + "-2", "--tail=200"},
 						[]string{"logs", otherName + "-0", "--tail=200"},
 						[]string{"get", "events", "--sort-by=.lastTimestamp"},
 					)
