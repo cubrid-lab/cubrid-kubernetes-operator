@@ -65,17 +65,22 @@ func (s *Server) dbaPassword(w http.ResponseWriter, r *http.Request) {
 // kept, so a password changed by hand with ALTER USER is seen as well.
 //
 // A standalone member is checked while its server runs. An HA member is
-// checked only while heartbeat reports it as the master with its server
-// registered_and_active: the operator asks the cluster's primary, the password
-// was set on it, and a slave or a member in transition answers Unknown. The
-// same login in client mode, csql -u dba <db>@localhost, logs in on every
-// member of an HA cluster in the Kind HA scenario with a DBA password
-// (test/e2e/dba_password_test.go, CUBRID 11.4.7.1995).
+// checked while heartbeat reports it as the master with its server
+// registered_and_active, or as a slave with its server
+// registered_and_standby: each member keeps its own copy of the password, a
+// password set with set_password on one member does not reach the others
+// (docs/poc/RESULTS.md, POC-74), and the operator asks every member. The login
+// goes to the member's own server, so a slave answers for its own password.
+// The same login in client mode, csql -u dba <db>@localhost, logs in on every
+// member of an HA cluster, slaves included, in the Kind HA scenario with a
+// DBA password (test/e2e/dba_password_test.go, CUBRID 11.4.7.1995).
 //
 // A check that cannot tell answers Unknown, never Differs: the member was
 // told no database, the file is not set or cannot be used, the server does
-// not run or is not the active master, an operation that stops the server
-// runs, or the login was neither accepted nor refused for its password. One
+// not run, the member is neither the active master nor a slave with a standby
+// server (a transition, a replica, no confirmed role), an operation that
+// stops the server runs, or the login was neither accepted nor refused for
+// its password. One
 // check runs at a time; one that arrives while another runs answers Unknown at
 // once rather than wait, so callers cannot pile up logins. The operator asks
 // again later.
@@ -140,8 +145,9 @@ func (s *Server) runDBAPasswordCheck(ctx context.Context) DBAPasswordCheck {
 // dbaCheckDatabase returns the database to log in to when its server may be
 // asked now, or "" and why not. A standalone server must be listed by
 // `cubrid server status`. An HA member must be reported by `cubrid heartbeat
-// status` as the master whose server is registered_and_active; the server
-// status of an HA member is not used, since no POC records its form there.
+// status` as the master whose server is registered_and_active, or as a slave
+// whose server is registered_and_standby; the server status of an HA member
+// is not used, since no POC records its form there.
 func (s *Server) dbaCheckDatabase(ctx context.Context) (string, string) {
 	if s.standaloneDB != "" {
 		running, err := ServerRunning(ctx, s.cli, s.standaloneDB)
@@ -154,14 +160,15 @@ func (s *Server) dbaCheckDatabase(ctx context.Context) (string, string) {
 		return s.standaloneDB, ""
 	}
 	st := HeartbeatStatus(ctx, s.cli)
-	if st.Role != RoleMaster || !st.ServerActive {
-		why := "heartbeat reports role " + string(st.Role)
-		if st.Reason != "" {
-			why += " (" + st.Reason + ")"
-		}
-		return "", "the member is not the active master of its HA cluster: " + why
+	switch {
+	case st.Role == RoleMaster && st.ServerActive, st.Role == RoleSlave && st.ServerStandby:
+		return s.replicationDB, ""
 	}
-	return s.replicationDB, ""
+	why := "heartbeat reports role " + string(st.Role)
+	if st.Reason != "" {
+		why += " (" + st.Reason + ")"
+	}
+	return "", "the member is neither the active master nor a slave with a standby server: " + why
 }
 
 // logDBAPasswordCheck logs a check's answer, at info when it differs from the
