@@ -98,8 +98,11 @@ type s07Repeat struct {
 	// the second cut: the first cut's and any seen while the master moved.
 	EarlierGenerations []string `json:"earlierGenerations,omitempty"`
 	// SessionStarted is set once the second established session had its
-	// first operations acknowledged.
-	SessionStarted bool `json:"secondSessionStarted"`
+	// first operations acknowledged, at SessionStartedAt: after the second
+	// cut's preparation, its move of the master included, as before the
+	// first cut.
+	SessionStarted   bool       `json:"secondSessionStarted"`
+	SessionStartedAt *time.Time `json:"secondSessionStartedAt,omitempty"`
 	// OldTokens are the earlier tokens the run set, one after another, while
 	// the second quarantine was in force: the one the first release consumed,
 	// when the run released, and one that no release consumed, when the run
@@ -299,9 +302,10 @@ func s07MoveGenerations(rec *s07Record) []string {
 
 // repeatS07 makes the second cut of -partition-repeat once the first cut's
 // record allows it (s07RepeatUnready): it waits for the state the second cut
-// starts from, starts the second established session, builds a new record
-// with the master and slaves then and runs the cut through the same steps as
-// the first, the move of the master and the shortened keepalive included,
+// starts from, builds a new record with the master and slaves then, prepares
+// the cut as the first one is (the move of the master and the shortened
+// keepalive included) and only then starts the second established session
+// (prepareS07Second), and runs the cut through the same steps as the first,
 // with the old token's watch in its hold; then it settles the cluster. It
 // returns the fault flow's steps that were still running after their limit.
 func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
@@ -327,19 +331,7 @@ func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
 		return notMade("%v", err)
 	}
 	rep.MasterBefore = state.Master
-	rep.launched = true
-	if err := h.startBackgroundClientWith(ctx, s07RepeatOpenClient, "APP_RECONNECT_POLICY=stop-after-error "+
-		"APP_CONNECTION_DIAGNOSTICS=/tmp/"+s07RepeatOpenClient+".diag.jsonl "); err != nil {
-		return notMade("start the second established-session client: %v", err)
-	}
-	rep.SessionStarted = true
-	c := &s07Record{Variant: rec.Variant, sub: s07RepeatDir, repeat: rep, Master: state.Master,
-		slaves: slices.Clone(state.Slaves), MembersBefore: members, MembersAfter: []imageIdentity{},
-		Sweeps: []s07Sweep{}, Conditions: []s07Condition{}, Path: []s07Path{}, Probes: []s07Probe{},
-		Observed: []faults.Step{}, ClockOffsets: rec.ClockOffsets}
-	rep.Cut = c
-	rec.note("repeat_started", "master "+state.Master)
-	p, err := h.prepareS07(ctx, c)
+	c, p, err := h.prepareS07Second(ctx, rec, rep, state, members)
 	if p != nil {
 		defer func() {
 			r := p.Record()
@@ -349,7 +341,7 @@ func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
 		}()
 	}
 	if err != nil {
-		return notMade("prepare the second cut: %v", err)
+		return notMade("%v", err)
 	}
 	defer h.endS07OldToken(ctx, c)
 	stopWatch := h.removeOnEnd(ctx, c, p)
@@ -369,6 +361,37 @@ func (h *haRun) repeatS07(ctx context.Context, rec *s07Record) []string {
 	})
 	stopWatch()
 	return h.endS07SecondCut(ctx, c, outcome)
+}
+
+// prepareS07Second builds the second cut's record and prepares its cut as
+// the first cut is prepared: the member picked against the master of now, the
+// move of the master off the first member when needed, and the shortened
+// keepalive when asked for. Only then, as before the first cut, does it start
+// the second held session and wait for its first acknowledgements: a session
+// opened before the move would hold a connection to the master the move
+// replaces, and end before the cut. It returns the partition once one was
+// built, also with an error.
+func (h *haRun) prepareS07Second(ctx context.Context, rec *s07Record, rep *s07Repeat, state *startingState,
+	members []imageIdentity) (*s07Record, *netfault.Partition, error) {
+	c := &s07Record{Variant: rec.Variant, sub: s07RepeatDir, repeat: rep, Master: state.Master,
+		slaves: slices.Clone(state.Slaves), MembersBefore: members, MembersAfter: []imageIdentity{},
+		Sweeps: []s07Sweep{}, Conditions: []s07Condition{}, Path: []s07Path{}, Probes: []s07Probe{},
+		Observed: []faults.Step{}, ClockOffsets: rec.ClockOffsets}
+	rep.Cut = c
+	rec.note("repeat_started", "master "+state.Master)
+	p, err := h.prepareS07(ctx, c)
+	if err != nil {
+		return c, p, fmt.Errorf("prepare the second cut: %w", err)
+	}
+	rep.launched = true
+	if err := h.startBackgroundClientWith(ctx, s07RepeatOpenClient, "APP_RECONNECT_POLICY=stop-after-error "+
+		"APP_CONNECTION_DIAGNOSTICS=/tmp/"+s07RepeatOpenClient+".diag.jsonl "); err != nil {
+		return c, p, fmt.Errorf("start the second established-session client: %w", err)
+	}
+	now := time.Now().UTC()
+	rep.SessionStarted, rep.SessionStartedAt = true, &now
+	c.note("second_session_started", s07RepeatOpenClient)
+	return c, p, nil
 }
 
 // endS07SecondCut ends the second cut once its fault flow returned: it first
