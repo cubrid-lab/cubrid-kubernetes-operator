@@ -97,7 +97,8 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 // own DB Pods to the Instance Manager (a rebuilt member asks its source member
 // whether it is the active master; Brokers and other clusters' Pods are not
 // admitted); the cluster's DB Pods to the server and heartbeat ports, for HA
-// replication; and the cluster's Brokers to the server port. The kubelet's
+// replication; and the cluster's Brokers to the server port. The members and
+// Brokers may also reach TCP 7 for CUBRID's peer-alive probe. The kubelet's
 // probes come from the node, which NetworkPolicy implementations commonly
 // admit; it is not part of the policy. A recreated member waits until its
 // peers admit it before it starts CUBRID (peerWaitContainer).
@@ -108,6 +109,7 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 	rules = append(rules,
 		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolTCP, cubridServerPort),
+			npPort(corev1.ProtocolTCP, peerAliveEchoPort),
 		}},
 		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolUDP, haHeartbeatPort),
@@ -136,12 +138,14 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 
 // brokerNetworkPolicy admits the clients to the Broker ports of both access
 // modes: the peers spec.networkPolicy.clients names, or else the Pods of the
-// cluster's namespace.
+// cluster's namespace. It also admits the cluster's members to TCP 7, for
+// CUBRID's peer-alive probe of the CAS hosts.
 func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.NetworkPolicySpec {
 	clients := []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}
 	if np := cluster.Spec.NetworkPolicy; np != nil && len(np.Clients) > 0 {
 		clients = np.Clients
 	}
+	members := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)}}
 	return networkingv1.NetworkPolicySpec{
 		PodSelector: metav1.LabelSelector{MatchLabels: brokerLabelsFor(cluster)},
 		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
@@ -151,9 +155,21 @@ func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.N
 				npPort(corev1.ProtocolTCP, brokerRWPort),
 				npPort(corev1.ProtocolTCP, brokerROPort),
 			},
+		}, {
+			// The member probes the host of each CAS connected to it.
+			From:  []networkingv1.NetworkPolicyPeer{members},
+			Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolTCP, peerAliveEchoPort)},
 		}},
 	}
 }
+
+// peerAliveEchoPort is the TCP echo port CUBRID connects to when it checks
+// whether an idle peer's host is alive (check_peer_alive, default both): the
+// server probes its clients' hosts, a client (a Broker's CAS, a replicating
+// member) probes the server's. Nothing listens on it, so an admitted probe
+// gets an RST, which counts as alive. A probe the policy drops gets no answer,
+// and CUBRID then treats the peer as dead and closes its idle session (#1158).
+const peerAliveEchoPort = 7
 
 func npPort(protocol corev1.Protocol, port int32) networkingv1.NetworkPolicyPort {
 	p := intOrString(port)

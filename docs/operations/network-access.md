@@ -9,8 +9,18 @@ For each `CubridCluster` the operator keeps two ingress NetworkPolicies:
 
 | Policy | Selects | Admits |
 |---|---|---|
-| `<cluster>-database` | the DB Pods | the operator's Pods and the cluster's own DB Pods (not its Brokers) to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP |
-| `<cluster>-broker` | the Broker Pods | clients to the Broker ports 33000/TCP (read-write) and 33001/TCP (read-only): the Pods of the cluster's namespace, or the peers listed in `spec.networkPolicy.clients` instead |
+| `<cluster>-database` | the DB Pods | the operator's Pods and the cluster's own DB Pods (not its Brokers) to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP; the cluster's own DB and Broker Pods to the echo port 7/TCP (see below) |
+| `<cluster>-broker` | the Broker Pods | clients to the Broker ports 33000/TCP (read-write) and 33001/TCP (read-only): the Pods of the cluster's namespace, or the peers listed in `spec.networkPolicy.clients` instead; and the cluster's own DB Pods to the echo port 7/TCP |
+
+**Why port 7.** CUBRID checks whether an idle peer is still alive by connecting to
+TCP port 7 (echo) on the peer's host (`check_peer_alive`, default `both`): a
+member probes the Broker Pods whose CAS are connected to it, a CAS and a
+replicating member probe the member they are connected to. Nothing listens on
+port 7, so the probe gets a refusal, which counts as alive. If a NetworkPolicy
+drops the probe instead, CUBRID treats the peer as dead and closes its idle
+session: a connection held through the Broker then fails on its next statement
+with `-199 Server no longer responding` (#1158). A cluster that brings its own
+policies must admit the same.
 
 ```yaml
 spec:

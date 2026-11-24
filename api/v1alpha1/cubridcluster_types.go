@@ -309,8 +309,9 @@ type CubridNetworkPolicy struct {
 	// enabled makes the operator keep the policies: the DB Pods accept the
 	// Instance Manager port from the operator only, and the server and HA
 	// ports from the cluster's own DB and Broker Pods; the Broker Pods accept
-	// their ports from clients. When false, the policies the operator created
-	// are removed.
+	// their ports from clients. Both accept TCP 7 from the cluster's own Pods,
+	// for CUBRID's peer-alive probe. When false, the policies the operator
+	// created are removed.
 	// +kubebuilder:default=true
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
