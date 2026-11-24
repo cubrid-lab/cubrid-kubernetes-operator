@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -419,6 +420,36 @@ spec:
 					g.Expect(status).To(ContainSubstring("registered_and_standby"))
 				}
 			}, 10*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		// The Operator sets the keepalive sysctls on every member Pod
+		// (#982), so the log copy connections between the members find a
+		// dead peer within about a minute instead of about 2 hours.
+		It("shortens TCP keepalive in every member Pod", func() {
+			members := append([]string{first}, peers...)
+			for _, member := range members {
+				out, err := kubectl("exec", member, "-c", "cubrid", "--",
+					"cat", "/proc/sys/net/ipv4/tcp_keepalive_time")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(Equal(strconv.Itoa(memberKeepaliveLimitSeconds)),
+					"tcp_keepalive_time in %s", member)
+			}
+
+			By("checking the keepalive timers of the log copy connections")
+			Eventually(func(g Gomega) {
+				for _, member := range members {
+					out, err := kubectl("exec", member, "-c", "cubrid", "--", "sh", "-c", memberSocketsScript)
+					g.Expect(err).NotTo(HaveOccurred())
+					if strings.TrimSpace(out) == ssMissing {
+						_, _ = fmt.Fprintf(GinkgoWriter, "%s has no ss: its connections' timers are not checked\n", member)
+						continue
+					}
+					counted, problems := memberKeepaliveCheck(out)
+					g.Expect(problems).To(BeEmpty(), "%s:\n%s", member, out)
+					g.Expect(counted).To(BeNumerically(">", 0),
+						"%s has no connection to another member's port 1523 with a keepalive timer:\n%s", member, out)
+				}
+			}, time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("replicates a row written on the master to both slaves", Label(haSetup), func() {

@@ -8,7 +8,7 @@ narrow for the MVP and are widened only after they are validated in CI.
 | Component | MVP target | Notes |
 |---|---|---|
 | CUBRID | 11.4.x; reference engine 11.4.7.1995 | Engine-version migration is out of MVP scope (ADR-0009). The Instance Manager Dockerfile pins the official linux/amd64 engine base to `cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604`, which runs CUBRID 11.4.7.1995. The POCs up to POC-61 ran the earlier build 11.4.6.1963 (`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`). The version series alone does not select or pin the runtime image. |
-| Kubernetes | 1.37 dependency/envtest target; supported range unverified | Kubernetes modules target 1.37. The Kind e2e runs on the kind version and node image pinned in the `Makefile` (`KIND_VERSION`, `KIND_NODE_IMAGE`: kind v0.33.0, `kindest/node:v1.37.0`). Record executed versions and evidence before claiming support. |
+| Kubernetes | 1.37 dependency/envtest target; supported range unverified | Kubernetes modules target 1.37. The Kind e2e runs on the kind version and node image pinned in the `Makefile` (`KIND_VERSION`, `KIND_NODE_IMAGE`: kind v0.33.0, `kindest/node:v1.37.0`). Record executed versions and evidence before claiming support. The member Pods need Kubernetes 1.29 or later and a node kernel of 4.5 or later for their TCP keepalive sysctls ([below](#tcp-keepalive-of-member-pods-982)). |
 | Architecture | amd64 | arm64 is not targeted for the MVP. The official CUBRID image is linux/amd64 only. The operator image and the wiring scenario with a fake Instance Manager can be built and run on arm64, but no CI job does so (every workflow runs on `ubuntu-latest`), and the real-engine scenarios are recorded as `not_run` there. |
 | Go toolchain | see `go.mod` | Pinned via `go.mod`; CI uses `go-version-file: go.mod`. |
 | Storage | PVC, `ReadWriteOnce` | Per-instance data volume (ADR-0004, #17). The experimental v0.1 claim covers only the node-local `rancher.io/local-path` StorageClass of the three-VM k3s lab. |
@@ -121,6 +121,51 @@ support claim. Release candidates, versioned tags, signing and publication
 are tracked in #123 and #124. The built-in default Instance Manager image
 stays `:dev`; to use a development image, pass it to the manager with
 `--instance-manager-image`.
+
+## TCP keepalive of member Pods (#982)
+
+Every member Pod, HA or standalone, sets three Pod sysctls in
+`securityContext.sysctls`: `net.ipv4.tcp_keepalive_time=30`,
+`net.ipv4.tcp_keepalive_intvl=10` and `net.ipv4.tcp_keepalive_probes=3`
+(`memberSysctls` in `internal/controller/cubridcluster_controller.go`). A
+connection whose peer stays silent then ends after about one minute instead
+of the kernel default of about 2 hours. CUBRID only turns `SO_KEEPALIVE` on
+and leaves the schedule to the kernel, and its log copy process
+(`copylogdb`) waits for the server's reply with no timeout in sync mode. On
+the VM lab, after a network partition, a member whose log copy was left on
+a half-open connection stayed `to-be-active` after the heal in 8 of 9 runs
+with the kernel default, and became active in all 8 runs with these values
+([#982](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/982),
+[#716](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/716)).
+Shorter keepalive does not prevent the loss of acknowledged writes after
+such a failover (#702).
+
+**Requirements.** The three sysctls are safe sysctls from Kubernetes 1.29,
+so they need no kubelet `--allowed-unsafe-sysctls`, and Pod Security
+admits them under `restricted` from policy version 1.29. The Kubernetes
+documentation requires a node kernel of 4.5 or later. On an older cluster
+or kernel the member does not start: Pod Security `restricted` before
+policy version 1.29 refuses the Pod at admission, and a kubelet that does
+not count the sysctls as safe refuses it with `SysctlForbidden`. An envtest checks that a member Pod is admitted in a
+namespace that enforces `restricted`, and the Kind HA scenario checks the
+value inside each member. Only Kind's `kindest/node:v1.37.0` has run these
+Pods; the VM lab's k3s has not yet.
+
+The Broker Pods set no sysctls: the server's end of each Broker connection
+is in a member Pod, which has the short keepalive.
+
+**Upgrading an existing cluster.** The sysctls change the member Pod
+template, so the StatefulSet gets a new revision on the first reconcile by
+a build that sets them. The StatefulSet uses `OnDelete`, so no running Pod
+changes by itself, and a member keeps the kernel default until its Pod is
+replaced. The rolling-update plan replaces outdated slaves one at a time,
+waiting for each replacement to be Ready, and then stops at
+`MasterUpdatePending` until a planned failover moves the master
+([ADR-0009](adr/0009-update-vs-upgrade.md)). The manager as built from
+`cmd/main.go` does not delete Pods itself: `Updating` reports
+`AutomaticReplacementDisabled` and the change takes effect when a Pod is
+replaced by hand, slaves first and one at a time, the master last. A
+standalone cluster's single Pod is reported the same way.
 
 ## Versioning
 

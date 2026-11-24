@@ -1349,6 +1349,23 @@ and anything is cut, the run:
    under `crossingConnections`, and one that is not made again blocks the
    run with the pair's name.
 
+**Member Pods that already carry the sysctls.** An Operator build that
+sets `net.ipv4.tcp_keepalive_time=30`, `tcp_keepalive_intvl=10` and
+`tcp_keepalive_probes=3` on every member Pod
+([compatibility](../compatibility.md#tcp-keepalive-of-member-pods-982),
+#982) makes the option redundant for those Pods: the values are in each
+Pod's network namespace before any container starts, so every connection,
+the log copies included, already has the short schedule. The reset in
+step 3 makes again a connection that already had it, and step 4 finds the
+crossing connections already short and leaves them alone. The run
+does not check for that and behaves as described here: it still writes the
+values it is given (a duration other than 30 seconds replaces the Pod's
+idle time for the rest of the run), resets connections and records them.
+Such a run is not a comparison with the kernel's default keepalive; that
+needs member Pods of a build without the sysctls. Whether the option
+should stay as a comparison or refuse to run on such Pods is a pending
+decision on #982.
+
 The `netsysctl` container is privileged because the container runtime
 mounts `/proc/sys` read-only in every other container: the `netfault`
 container, with `NET_ADMIN` and `NET_RAW` only, gets `Read-only file
