@@ -794,8 +794,7 @@ role probe, for example when its `cubrid heartbeat status` takes longer than
 the Instance Manager's 4-second limit and is stopped. If that slave outranks
 the active master, the single missed answer is enough to record it in a
 `WriteQuarantinedMemberUnverified` quarantine (rule 2 of
-[the write quarantine](#the-write-quarantine)), beside the emptied member or
-in a quarantine of its own. The Operator does not remove the slave when it
+[the write quarantine](#the-write-quarantine)) beside the emptied member. The Operator does not remove the slave when it
 answers again, and the automatic release needs every member other than the
 active master verified, which the emptied member cannot be while it has no
 database. So the quarantine does not end, and no rebuild is offered while it
@@ -820,7 +819,9 @@ nothing unless all three conditions hold at the moment of the release.
 
    Go on only if the reason is `WriteQuarantinedMemberUnverified`, and the
    members are the emptied member (in its new Pod) and slaves that missed a
-   probe.
+   probe. This procedure does not cover a quarantine that records such a
+   slave without the emptied member, for example one started after the
+   emptied member's quarantine was released; investigate that slave instead.
 3. **Condition 1: one active master is resolved, and the quarantine does not
    record it.** `PrimaryResolved` is `True`, `currentPrimary` names the only
    member whose role is `master`, it is not among the recorded members, and

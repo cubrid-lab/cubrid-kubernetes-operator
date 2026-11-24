@@ -146,14 +146,6 @@ func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 		t.Fatalf("every condition holds: refused %q (final %t)", refusal, final)
 	}
 
-	// A quarantine recording only the other slave, started after a first
-	// release, cannot end by itself either, and is released alike.
-	only := missedProbeCluster(observed)
-	only.Status.WriteQuarantine.Members = only.Status.WriteQuarantine.Members[1:]
-	if refusal, _ := missedProbeReleaseRefusal(only, "hab-0", "new-0", "hab-2", before, same, now); refusal != "" {
-		t.Errorf("the other slave alone: refused %q", refusal)
-	}
-
 	for _, tc := range []struct {
 		name    string
 		change  func(c *databasev1alpha1.CubridCluster)
@@ -206,6 +198,12 @@ func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 		{name: "another reason", want: "WriteQuarantinedMasterChanged", final: true,
 			change: func(c *databasev1alpha1.CubridCluster) {
 				c.Status.WriteQuarantine.Reason = databasev1alpha1.WriteQuarantinedMasterChanged
+			}},
+		// A quarantine recording only the other slave, as one started after
+		// a first release, is outside the decision on #1139.
+		{name: "the other slave alone", want: "does not record hab-0",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.WriteQuarantine.Members = c.Status.WriteQuarantine.Members[1:]
 			}},
 		{name: "the emptied member alone", want: "no member besides hab-0",
 			change: func(c *databasev1alpha1.CubridCluster) {

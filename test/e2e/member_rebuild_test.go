@@ -97,7 +97,8 @@ type memberIdentity struct {
 // storage the step replaced (emptied, now in the Pod emptiedPodUID), with or
 // without that member. Such a quarantine does not end by itself either: the
 // automatic release needs emptied verified too. The maintainer allowed the
-// release on #1139 only when, in this read:
+// release on #1139 only for a quarantine that records emptied together with
+// another slave, and only when, in this read:
 //
 //  1. one active master is resolved (PrimaryResolved is True, currentPrimary
 //     is the only member whose role is master, and the status is no older
@@ -124,6 +125,14 @@ func missedProbeReleaseRefusal(c *databasev1alpha1.CubridCluster, emptied, empti
 	}
 	if len(otherQuarantineMembers(q, emptied)) == 0 {
 		return fmt.Sprintf("the quarantine records no member besides %s", emptied), false
+	}
+	// A quarantine of other slaves alone, as one started after the emptied
+	// member's quarantine was released, is not covered by the decision on
+	// #1139, so the step leaves it alone and fails once it outlasts the grace.
+	if !slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+		return m.Name == emptied
+	}) {
+		return fmt.Sprintf("the quarantine does not record %s, whose storage this step replaced", emptied), false
 	}
 	// The emptied member, when recorded, is recorded in its new Pod: a record
 	// of an earlier Pod is revised, with a new token, once the Operator sees
@@ -671,7 +680,13 @@ func memberRebuildStep(r *haRun) {
 					// the member rejoined, the quarantine records it too, and
 					// the step releases it only under the conditions of
 					// waitOthers (#1139).
-					releasedGeneration = q.GenerationID
+					// Only a quarantine that records the member is this step's
+					// to release and to report as its release.
+					if slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+						return m.Name == member
+					}) {
+						releasedGeneration = q.GenerationID
+					}
 					waitOthers(g, c, others, "")
 					g.Expect(q.Members).To(HaveLen(1), "the members of %s", quarantineSummary(q))
 					// The release covers the Pod the quarantine records; a
@@ -708,8 +723,10 @@ func memberRebuildStep(r *haRun) {
 
 			By("waiting for the read-write Brokers to be available again")
 			// The other slave can miss a role probe after the release too,
-			// which starts a new quarantine for it (#1139); waitOthers
-			// releases it under the same conditions.
+			// which starts a new quarantine that records it alone (#1139).
+			// The decision on #1139 does not cover releasing that one, so
+			// waitOthers refuses it and the step fails once it outlasts
+			// otherQuarantineGrace.
 			others = &otherMembersWait{member: member, grace: otherQuarantineGrace}
 			Eventually(func(g Gomega) {
 				c, err := readCluster()
