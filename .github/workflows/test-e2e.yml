@@ -32,7 +32,7 @@ jobs:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     # Outside the step limit below, so that the evidence upload still runs.
-    timeout-minutes: 90
+    timeout-minutes: 105
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,10 +75,13 @@ jobs:
           done
           bin/kind version
 
-      # Outside the run's own deadlines in the Makefile (E2E_GO_TIMEOUT 73m),
-      # with room for creating the Kind cluster and building before the run.
+      # Outside the run's own deadlines in the Makefile (E2E_SUITE_TIMEOUT 80m,
+      # E2E_GO_TIMEOUT 88m), with room for creating the Kind cluster and
+      # building before the run. Raised with them from 80 to 95 minutes, and
+      # the job from 90 to 105, when the suite reached 3928 s of its 65m
+      # (docs/testing/scenario-contract.md, "A run that does not finish"; #1109).
       - name: Running Test e2e
-        timeout-minutes: 80
+        timeout-minutes: 95
         env:
           E2E_EVIDENCE_DIR: ${{ github.workspace }}/e2e-evidence
         run: make test-e2e
