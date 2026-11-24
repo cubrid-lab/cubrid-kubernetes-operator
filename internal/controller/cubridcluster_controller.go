@@ -208,10 +208,11 @@ type CubridClusterReconciler struct {
 	// podUnconfirmed holds, per Pod UID, a database Pod the Pod watch saw
 	// deleted without a confirmed termination (notePodDeleted).
 	podUnconfirmed sync.Map
-	// dbaPasswordNextCheck holds, per cluster UID, when its member may next
+	// dbaPasswordNextCheck holds, per cluster UID, when its members may next
 	// be asked whether the DBA password Secret's value is the database's
-	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
-	// does not log in to the database once each.
+	// password, and how many short retries were made in a row
+	// (reconcileDBAPasswordRotation, dbaPasswordSchedule), so that a burst
+	// of reconciles does not log in to the database once each.
 	dbaPasswordNextCheck sync.Map
 }
 

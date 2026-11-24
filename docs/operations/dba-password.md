@@ -130,7 +130,8 @@ the value is not the password and is absent when it is. A new value is checked
 about once per poll (5 minutes by default) while a member can be asked; on an
 HA cluster that needs a resolved primary, and every member is asked. A check
 of the standalone member or the HA primary that cannot tell is retried after
-about 30 seconds. The time the kubelet takes to update the mounted file
+about 30 seconds; a check in which an HA slave cannot tell or is not asked is
+retried after about 30 seconds at most three times in a row. The time the kubelet takes to update the mounted file
 (about a minute) also limits the rate. See
 [Changing the password is not supported](#changing-the-password-is-not-supported),
 which describes how a changed value is reported.
@@ -321,9 +322,11 @@ It has been tried only in local Docker and is not supported yet.
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
 ([HA clusters](#ha-clusters)), the Operator asks the Instance Manager of that
-member, or of every member of the HA cluster, at most once every 5 minutes per
-cluster and at once after the Operator restarts, whether the value is still
-that member's DBA password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
+member, or of every member of the HA cluster, once every 5 minutes per
+cluster, at once after the Operator restarts, and again after 30 seconds when
+a check could not tell (every time for the standalone member or the primary,
+and at most three checks in a row when only a slave could not tell), whether
+the value is still that member's DBA password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
 through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
 and types the file's value at csql's `Enter Password` prompt on a
 pseudo-terminal, as the password step does. The login changes nothing, and no
@@ -351,12 +354,17 @@ the database by hand with `ALTER USER`.
   another check is running, or csql neither accepted nor refused the login):
   the Condition is left as it is. When the member that cannot tell is the
   standalone member or the HA primary, the Operator asks again after about 30
-  seconds instead of waiting out the 5-minute poll. A slave that cannot tell
-  waits for the next poll: a slave whose Instance Manager is older than the
-  Operator (for example while the DB Pods have not yet been replaced after an
-  Operator upgrade, or with a pinned `spec.image`) answers that it cannot
-  tell on every check, and a shorter retry would log in on every member every
-  30 seconds. It is never reported as a changed password, nor as a match.
+  seconds instead of waiting out the 5-minute poll, for as long as it cannot
+  tell. When an HA slave cannot tell, or is not asked, and no member refused
+  the login, the Operator also asks every member again after about 30
+  seconds, but at most three times in a row; after that it waits for the
+  5-minute poll, until a check settles again (a member refuses the login, or
+  every member is asked and accepts it). The bound exists because a slave
+  whose Instance Manager is older than the Operator (for example while the DB
+  Pods have not yet been replaced after an Operator upgrade, or with a pinned
+  `spec.image`) answers that it cannot tell on every check, and an unbounded
+  retry would log in on every member every 30 seconds. A member that cannot
+  tell is never reported as a changed password, nor as a match.
 
 **After upgrading to an Operator that asks every member** (#1012): an HA
 cluster whose slaves really hold another password than the Secret's, for
