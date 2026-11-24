@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,15 +74,146 @@ func rebuildTarget(master string, slaves, members []string) (member string, outr
 // single role probe that the other slave misses while the emptied member
 // rejoins is enough to record it (ADR-0005, section 8, rule accepted in
 // #1019), and the Operator does not remove a member from a quarantine when it
-// answers again: such a quarantine ends only when it is released as a whole,
-// which needs every recorded member verified for about ten seconds. A member
-// with an empty volume never answers, so a quarantine that records it beside
-// another member does not end, and no rebuild is offered while it is in force
-// (#1139). The step does not release such a quarantine, because a manual
-// release accepts possible loss of writes for every recorded member; it waits
-// this long for the quarantine to end, then fails with what the quarantine
-// records instead of waiting out a longer bound.
+// answers again: such a quarantine ends automatically only when every member
+// other than the active master is verified for about ten seconds
+// (releaseCheck in internal/controller/quarantine.go). A member with an empty
+// volume never answers, so the quarantine does not end by itself, and no
+// rebuild is offered while it is in force (#1139). The step releases it as an
+// administrator would only under the conditions missedProbeReleaseRefusal
+// checks; it waits this long for them to hold and for the Operator to accept
+// the release, then fails with what the quarantine records instead of
+// waiting out a longer bound.
 const otherQuarantineGrace = 90 * time.Second
+
+// memberIdentity is a member's Pod UID and the restart count of its database
+// container, the identity a write quarantine records for each member.
+type memberIdentity struct {
+	podUID       string
+	restartCount int32
+}
+
+// missedProbeReleaseRefusal decides whether the rebuild step may release the
+// write quarantine in force in c, which records members besides the one whose
+// storage the step replaced (emptied, now in the Pod emptiedPodUID), with or
+// without that member. Such a quarantine does not end by itself either: the
+// automatic release needs emptied verified too. The maintainer allowed the
+// release on #1139 only for a quarantine that records emptied together with
+// another slave, and only when, in this read:
+//
+//  1. one active master is resolved (PrimaryResolved is True, currentPrimary
+//     is the only member whose role is master, and the status is no older
+//     than 60 seconds at now), it is the master the step started with, and
+//     the quarantine does not record it;
+//  2. every recorded member other than emptied answered slave in the latest
+//     observation (its lastObservedTime is the cluster's), and its Pod UID and
+//     container restart count, read now and recorded by the quarantine, are
+//     those it had before the step started (before).
+//
+// The third condition, the documented annotation with the current token, is
+// how the caller releases. It returns why the release is refused, empty when
+// it may be made; final is set when the refusal cannot change by waiting, as
+// for a member whose Pod was replaced or restarted.
+func missedProbeReleaseRefusal(c *databasev1alpha1.CubridCluster, emptied, emptiedPodUID, master string,
+	before, current map[string]memberIdentity, now time.Time) (refusal string, final bool) {
+	q := c.Status.WriteQuarantine
+	switch {
+	case q == nil:
+		return "no write quarantine is in force", false
+	case q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified:
+		return fmt.Sprintf("the quarantine's reason is %s, not %s", q.Reason,
+			databasev1alpha1.WriteQuarantinedMemberUnverified), true
+	}
+	if len(otherQuarantineMembers(q, emptied)) == 0 {
+		return fmt.Sprintf("the quarantine records no member besides %s", emptied), false
+	}
+	// A quarantine of other slaves alone, as one started after the emptied
+	// member's quarantine was released, is not covered by the decision on
+	// #1139, so the step leaves it alone and fails once it outlasts the grace.
+	if !slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+		return m.Name == emptied
+	}) {
+		return fmt.Sprintf("the quarantine does not record %s, whose storage this step replaced", emptied), false
+	}
+	// The emptied member, when recorded, is recorded in its new Pod: a record
+	// of an earlier Pod is revised, with a new token, once the Operator sees
+	// the new one.
+	if i := slices.IndexFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+		return m.Name == emptied
+	}); i >= 0 && q.Members[i].PodUID != emptiedPodUID {
+		return fmt.Sprintf("the quarantine records %s in the Pod %q, not in its new Pod", emptied, q.Members[i].PodUID),
+			false
+	}
+
+	// Condition 1: one active master is resolved and is not recorded.
+	s := c.Status
+	instance := func(name string) *databasev1alpha1.InstanceStatus {
+		if j := slices.IndexFunc(s.Instances, func(x databasev1alpha1.InstanceStatus) bool {
+			return x.Name == name
+		}); j >= 0 {
+			return &s.Instances[j]
+		}
+		return nil
+	}
+	var masters []string
+	for _, x := range s.Instances {
+		if x.Role == databasev1alpha1.RoleMaster {
+			masters = append(masters, x.Name)
+		}
+	}
+	resolved := conditionIs(c, "PrimaryResolved", "True")
+	switch {
+	case resolved != nil:
+		return "condition 1 (one resolved active master) is not met: " + resolved.Error(), false
+	case s.LastObservedTime == nil || now.Sub(s.LastObservedTime.Time) > 60*time.Second:
+		return "condition 1 (one resolved active master) is not met: status.lastObservedTime is unset or more " +
+			"than 60 seconds old", false
+	case len(masters) != 1 || masters[0] != s.CurrentPrimary:
+		return fmt.Sprintf("condition 1 (one resolved active master) is not met: currentPrimary is %q and the "+
+			"members whose role is master are %v", s.CurrentPrimary, masters), false
+	case s.CurrentPrimary != master:
+		return fmt.Sprintf("condition 1 (one resolved active master) is not met: the master is %s, not %s, "+
+			"the master this step started with", s.CurrentPrimary, master), true
+	case slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+		return m.Name == master
+	}):
+		return fmt.Sprintf("condition 1 (one resolved active master) is not met: the quarantine records the "+
+			"master %s", master), false
+	}
+
+	// Condition 2: every other recorded member answers slave from the Pod
+	// and container start it had before the step.
+	for _, m := range q.Members {
+		if m.Name == emptied {
+			continue
+		}
+		was, known := before[m.Name]
+		if !known {
+			return fmt.Sprintf("condition 2 (the other recorded members answer slave from the same Pod) is not "+
+				"met: the Pod of %s was not read before the step", m.Name), true
+		}
+		if got, read := current[m.Name]; !read || got != was || m.PodUID != was.podUID ||
+			m.RestartCount != was.restartCount {
+			return fmt.Sprintf("condition 2 (the other recorded members answer slave from the same Pod) is not "+
+				"met: %s was in the Pod %s (restart count %d) before the step; it is now in %q (%d), and the "+
+				"quarantine records %q (%d)", m.Name, was.podUID, was.restartCount, got.podUID, got.restartCount,
+				m.PodUID, m.RestartCount), true
+		}
+		x := instance(m.Name)
+		switch {
+		case x == nil:
+			return fmt.Sprintf("condition 2 (the other recorded members answer slave from the same Pod) is not "+
+				"met: status.instances has no %s", m.Name), false
+		case x.Role != databasev1alpha1.RoleSlave:
+			return fmt.Sprintf("condition 2 (the other recorded members answer slave from the same Pod) is not "+
+				"met: the role of %s is %q, not slave", m.Name, x.Role), false
+		case x.LastObservedTime == nil || !x.LastObservedTime.Equal(s.LastObservedTime):
+			return fmt.Sprintf("condition 2 (the other recorded members answer slave from the same Pod) is not "+
+				"met: %s did not answer in the latest observation (%s)", m.Name,
+				s.LastObservedTime.UTC().Format(time.RFC3339)), false
+		}
+	}
+	return "", false
+}
 
 // quarantineSummary describes q for a test message: its reason, start time,
 // revision, the members it records with the role each was observed with, and
@@ -147,8 +279,8 @@ func (w *otherMembersWait) observe(q *databasev1alpha1.WriteQuarantine,
 	}
 	if waited := now.Sub(w.since); waited > w.grace {
 		failure = fmt.Sprintf("a write quarantine has recorded %s besides %s, whose storage this step replaced, "+
-			"for %s; it cannot end while %s has no database, this step does not release it, and no rebuild "+
-			"is offered while it is in force: %s",
+			"for %s; it cannot end by itself while %s has no database, and no rebuild is offered while it "+
+			"is in force: %s",
 			strings.Join(others, ", "), w.member, waited.Round(time.Second), w.member, quarantineSummary(q))
 	}
 	return others, failure
@@ -227,6 +359,38 @@ func memberRebuildStep(r *haRun) {
 		claim := "data-" + member
 		_, _ = fmt.Fprintf(GinkgoWriter, "rebuilding %s; the master is %s; %s outranks the master and needs "+
 			"a manual release of the write quarantine: %t\n", member, master, member, outranksMaster)
+		// readIdentity returns a member's Pod UID and the restart count of
+		// its database container; both empty when it has no Pod.
+		readIdentity := func(m string) (memberIdentity, error) {
+			out, err := r.kubectlQuiet(context.Background(), "get", "pod", m, "--ignore-not-found",
+				"-o", `jsonpath={.metadata.uid}{"\t"}{.status.containerStatuses[?(@.name=="cubrid")].restartCount}`)
+			if err != nil || strings.TrimSpace(out) == "" {
+				return memberIdentity{}, err
+			}
+			f := strings.Split(strings.TrimSpace(out), "\t")
+			id := memberIdentity{podUID: f[0]}
+			if len(f) == 2 && f[1] != "" {
+				n, err := strconv.ParseInt(f[1], 10, 32)
+				if err != nil {
+					return memberIdentity{}, fmt.Errorf("the restart count of %s: %q: %w", m, out, err)
+				}
+				id.restartCount = int32(n)
+			}
+			return id, nil
+		}
+		// The other members' Pods and container starts before the step: a
+		// quarantine that records one of them is released only while it is
+		// unchanged (missedProbeReleaseRefusal).
+		identitiesBefore := map[string]memberIdentity{}
+		for _, m := range r.members {
+			if m == member {
+				continue
+			}
+			id, err := readIdentity(m)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(id.podUID).NotTo(BeEmpty(), "the Pod %s", m)
+			identitiesBefore[m] = id
+		}
 
 		readCluster := func() (*databasev1alpha1.CubridCluster, error) {
 			out, err := r.kubectlQuiet(context.Background(), "get", "cubridcluster", r.cluster,
@@ -392,6 +556,96 @@ func memberRebuildStep(r *haRun) {
 		Expect(newVolume).NotTo(Equal("holds database files"),
 			"the new claim of %s already holds the database before any rebuild", member)
 
+		// No release annotation is left behind either.
+		DeferCleanup(func() {
+			_, _ = r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
+				releaseWriteQuarantineAnnotation+"-")
+		})
+		// A single role probe that the other slave misses while the emptied
+		// member rejoins records it in the write quarantine (#1139); such a
+		// quarantine cannot end by itself while the emptied member has no
+		// database, and no rebuild is offered while it is in force. The step
+		// releases it as an administrator would (docs/observability.md,
+		// "Manual release"), only while missedProbeReleaseRefusal finds the
+		// conditions the maintainer set on #1139 met in a fresh read. It sets
+		// the documented annotation with the current token; the Operator's
+		// own release checks still decide. When the conditions stop holding
+		// before the Operator accepted the release, the annotation is removed
+		// again. The data check at the end of the step still reads every
+		// acknowledged row on every member, so a release cannot hide a loss.
+		missedSet := ""
+		missedProbeReleases := []string{}
+		releaseAfterMissedProbe := func(g Gomega, c *databasev1alpha1.CubridCluster) (refusal string) {
+			q := c.Status.WriteQuarantine
+			current := map[string]memberIdentity{}
+			for _, m := range otherQuarantineMembers(q, member) {
+				id, err := readIdentity(m)
+				g.Expect(err).NotTo(HaveOccurred())
+				current[m] = id
+			}
+			refusal, final := missedProbeReleaseRefusal(c, member, newPodUID, master, identitiesBefore, current,
+				time.Now())
+			if refusal != "" {
+				if missedSet != "" {
+					_, err := r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
+						releaseWriteQuarantineAnnotation+"-")
+					g.Expect(err).NotTo(HaveOccurred())
+					missedSet = ""
+				}
+				if final {
+					StopTrying(fmt.Sprintf("a write quarantine records %s besides %s, and the step may not "+
+						"release it: %s; released nothing: %s", strings.Join(otherQuarantineMembers(q, member), ", "),
+						member, refusal, quarantineSummary(q))).Now()
+				}
+				return refusal
+			}
+			g.Expect(q.ReleaseToken).NotTo(BeEmpty(), "status.writeQuarantine.releaseToken")
+			// The token is redacted from the test output.
+			redactor.Add(q.ReleaseToken)
+			if q.ReleaseToken != missedSet {
+				_, err := r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
+					releaseWriteQuarantineAnnotation+"="+q.ReleaseToken, "--overwrite")
+				g.Expect(err).NotTo(HaveOccurred())
+				missedSet = q.ReleaseToken
+				entry := fmt.Sprintf("set the release annotation with the current token of the %s; the master "+
+					"%s is the one resolved active master and is not recorded, and every recorded member other "+
+					"than %s answered slave in the latest observation from the Pod and container start it had "+
+					"before the step; the Operator's own release checks decide",
+					quarantineSummary(q), master, member)
+				AddReportEntry("write quarantine release requested after a missed role probe", entry)
+				_, _ = fmt.Fprintf(GinkgoWriter, "%s\n", entry)
+				missedProbeReleases = append(missedProbeReleases,
+					fmt.Sprintf("%s revision %d (%s)", q.GenerationID, q.Revision,
+						strings.Join(otherQuarantineMembers(q, member), ", ")))
+			}
+			return ""
+		}
+		// waitOthers handles, in one read c of a wait, a quarantine that
+		// records members besides the emptied one: it releases it when the
+		// conditions hold, ends the read while it is in force, and fails the
+		// step, with when appended to the message, once others has measured
+		// it for longer than otherQuarantineGrace.
+		waitOthers := func(g Gomega, c *databasev1alpha1.CubridCluster, others *otherMembersWait, when string) {
+			q := c.Status.WriteQuarantine
+			if len(otherQuarantineMembers(q, member)) == 0 {
+				others.observe(q, time.Now())
+				return
+			}
+			refusal := releaseAfterMissedProbe(g, c)
+			if _, failure := others.observe(q, time.Now()); failure != "" {
+				if refusal != "" {
+					failure += "; the conditions for releasing it were not met: " + refusal + "; released nothing"
+				} else {
+					failure += "; the release annotation names its current token, and the Operator has not " +
+						"accepted it"
+				}
+				StopTrying(failure + when).Now()
+			}
+			g.Expect(refusal).To(BeEmpty(), "the release of %s", quarantineSummary(q))
+			g.Expect(q).To(BeNil(), "status.writeQuarantine after the release annotation was set: %s",
+				quarantineSummary(q))
+		}
+
 		releasedGeneration := ""
 		if outranksMaster {
 			// The member outranks the only active master and gives no role,
@@ -404,10 +658,6 @@ func memberRebuildStep(r *haRun) {
 			// was replaced by an empty one, so the member holds no database
 			// and no acknowledged write can be lost by the release.
 			By("releasing the write quarantine " + member + " started, as an administrator who replaced its storage")
-			DeferCleanup(func() {
-				_, _ = r.kubectl(context.Background(), "annotate", "cubridcluster", r.cluster,
-					releaseWriteQuarantineAnnotation+"-")
-			})
 			lastSet := ""
 			others := &otherMembersWait{member: member, grace: otherQuarantineGrace}
 			Eventually(func(g Gomega) {
@@ -421,25 +671,23 @@ func memberRebuildStep(r *haRun) {
 					}
 					// A manual release accepts, for every member the
 					// quarantine records, that writes only that member
-					// acknowledged may be lost. The step accepts that only
-					// for the member whose storage it replaced, so it
-					// releases a quarantine that records that member alone
-					// and never one that records another member as well. The
+					// acknowledged may be lost. The step accepts that
+					// without further conditions only for the member whose
+					// storage it replaced, which holds no database. The
 					// master and a second slave answered when the member was
 					// chosen, so the member is never the last resolved
 					// primary. When the other slave missed a role probe while
-					// the member rejoined, the quarantine records it too; the
-					// step then keeps reading, setting nothing, for as long as
-					// otherQuarantineGrace allows that quarantine to end, and
-					// fails, releasing nothing, with what it records (#1139).
-					extra, failure := others.observe(q, time.Now())
-					if failure != "" {
-						StopTrying(failure + "; released nothing").Now()
+					// the member rejoined, the quarantine records it too, and
+					// the step releases it only under the conditions of
+					// waitOthers (#1139).
+					// Only a quarantine that records the member is this step's
+					// to release and to report as its release.
+					if slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
+						return m.Name == member
+					}) {
+						releasedGeneration = q.GenerationID
 					}
-					if len(extra) > 0 {
-						g.Expect(extra).To(BeEmpty(), "members besides %s in the quarantine, which this step "+
-							"does not release: %s", member, quarantineSummary(q))
-					}
+					waitOthers(g, c, others, "")
 					g.Expect(q.Members).To(HaveLen(1), "the members of %s", quarantineSummary(q))
 					// The release covers the Pod the quarantine records; a
 					// record made before the new Pod existed is revised, with
@@ -475,14 +723,15 @@ func memberRebuildStep(r *haRun) {
 
 			By("waiting for the read-write Brokers to be available again")
 			// The other slave can miss a role probe after the release too,
-			// which starts a new quarantine for it (#1139).
+			// which starts a new quarantine that records it alone (#1139).
+			// The decision on #1139 does not cover releasing that one, so
+			// waitOthers refuses it and the step fails once it outlasts
+			// otherQuarantineGrace.
 			others = &otherMembersWait{member: member, grace: otherQuarantineGrace}
 			Eventually(func(g Gomega) {
 				c, err := readCluster()
 				g.Expect(err).NotTo(HaveOccurred())
-				if _, failure := others.observe(c.Status.WriteQuarantine, time.Now()); failure != "" {
-					StopTrying(failure + "; it started after the release").Now()
-				}
+				waitOthers(g, c, others, "; it started after the release")
 				g.Expect(c.Status.WriteQuarantine).To(BeNil(), "status.writeQuarantine after the release: %s",
 					quarantineSummary(c.Status.WriteQuarantine))
 				out, err := r.kubectlQuiet(context.Background(), "get", "deployment", r.cluster+"-broker-rw",
@@ -505,16 +754,15 @@ func memberRebuildStep(r *haRun) {
 		var offer databasev1alpha1.MemberRebuildOffer
 		// No rebuild is offered while a write quarantine is in force. One
 		// that records another member besides this one cannot end while
-		// this member has no database, so the wait reports it once
-		// otherQuarantineGrace has passed instead of waiting out its bound
+		// this member has no database; waitOthers releases it under the
+		// conditions the maintainer set, or reports it once
+		// otherQuarantineGrace has passed instead of waiting out this bound
 		// (#1139).
 		offerOthers := &otherMembersWait{member: member, grace: otherQuarantineGrace}
 		Eventually(func(g Gomega) {
 			c, err := readCluster()
 			g.Expect(err).NotTo(HaveOccurred())
-			if _, failure := offerOthers.observe(c.Status.WriteQuarantine, time.Now()); failure != "" {
-				StopTrying(failure).Now()
-			}
+			waitOthers(g, c, offerOthers, "")
 			i := slices.IndexFunc(c.Status.MemberRebuildOffers, func(o databasev1alpha1.MemberRebuildOffer) bool {
 				return o.Member == member
 			})
@@ -575,8 +823,20 @@ func memberRebuildStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			last := c.Status.LastMemberRebuild
 			if last != nil && last.Token == offer.Token && last.State != databasev1alpha1.MemberRebuildCompleted {
-				StopTrying(fmt.Sprintf("the rebuild of %s ended %s: %s (%s)", member, last.State, last.Message,
-					quarantineSummary(c.Status.WriteQuarantine))).Now()
+				msg := fmt.Sprintf("the rebuild of %s ended %s: %s (%s)", member, last.State, last.Message,
+					quarantineSummary(c.Status.WriteQuarantine))
+				// A quarantine that records the other slave can also start
+				// while the restore runs, and fails the rebuild (#1139). The
+				// step does not release it and request again: the claim of a
+				// rebuild whose restore was started and failed is never
+				// offered again (docs/observability.md, "Rebuilding a
+				// member"), so only new storage would allow another request.
+				if others := otherQuarantineMembers(c.Status.WriteQuarantine, member); len(others) > 0 {
+					msg += fmt.Sprintf("; the write quarantine also records %s, and this step does not release "+
+						"it to retry: a claim whose restore started and failed is not offered for a rebuild again",
+						strings.Join(others, ", "))
+				}
+				StopTrying(msg).Now()
 			}
 			g.Expect(last).NotTo(BeNil(), "status.lastMemberRebuild")
 			g.Expect(last.Token).To(Equal(offer.Token), "status.lastMemberRebuild is this rebuild")
@@ -680,6 +940,9 @@ func memberRebuildStep(r *haRun) {
 		if outranksMaster {
 			release = "released manually, " + member + " outranks the master (quarantine " + releasedGeneration + ")"
 		}
+		if len(missedProbeReleases) > 0 {
+			release += "; release requested after a missed role probe: " + strings.Join(missedProbeReleases, "; ")
+		}
 		summary := fmt.Sprintf("rebuilt member: %s\nsource: %s\nwrite quarantine: %s\n"+
 			"lost claim: %s (volume %s)\nnew claim: %s\n"+
 			"offer published after the loss: %s\nrebuild from the request to Completed: %s\n"+
@@ -700,6 +963,7 @@ func memberRebuildStep(r *haRun) {
 				"rebuildRequestedToCompleted":                 rebuilt.Round(time.Millisecond).String(),
 				"rebuildRequestedToAllRowsChecked":            allRows.Round(time.Millisecond).String(),
 				"writeQuarantineReleasedManually":             outranksMaster,
+				"writeQuarantineReleasesAfterMissedProbe":     missedProbeReleases,
 				"rebuiltMemberApplierFailCount":               failCount,
 				"rowsOnRebuiltMember":                         report.Members[member].Rows,
 				"acknowledgedMissing":                         report.AcknowledgedMissing,

@@ -787,6 +787,82 @@ The annotation is the supported way to release a quarantine.
 The guarantee rests on the status: an object restored without its status,
 or an Operator build that does not know the field, does not keep it.
 
+**When a healthy slave missed one role probe during a member rebuild.**
+While a member whose storage was replaced rejoins the cluster
+([Rebuilding a member](#rebuilding-a-member)), another slave can miss one
+role probe, for example when its `cubrid heartbeat status` takes longer than
+the Instance Manager's 4-second limit and is stopped. If that slave outranks
+the active master, the single missed answer is enough to record it in a
+`WriteQuarantinedMemberUnverified` quarantine (rule 2 of
+[the write quarantine](#the-write-quarantine)) beside the emptied member. The Operator does not remove the slave when it
+answers again, and the automatic release needs every member other than the
+active master verified, which the emptied member cannot be while it has no
+database. So the quarantine does not end, and no rebuild is offered while it
+is in force. The release below is the procedure for this case only; release
+nothing unless all three conditions hold at the moment of the release.
+
+1. Before replacing the member's storage, record the Pod UID and database
+   container restart count of every other member:
+
+   ```sh
+   NS="<namespace>"
+   kubectl -n "$NS" get pods -l app.kubernetes.io/instance=<name>,app.kubernetes.io/component=database -o \
+     jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.uid}{" "}{.status.containerStatuses[?(@.name=="cubrid")].restartCount}{"\n"}{end}'
+   ```
+2. Read what the quarantine records: its reason, the members with the Pod
+   UID and restart count of each, and the master it was started beside.
+
+   ```sh
+   kubectl -n "$NS" get cubridcluster <name> -o \
+     jsonpath='{.status.writeQuarantine.reason}{"\n"}{range .status.writeQuarantine.members[*]}{.name}{" "}{.podUID}{" "}{.restartCount}{" "}{.observedRole}{"\n"}{end}'
+   ```
+
+   Go on only if the reason is `WriteQuarantinedMemberUnverified`, and the
+   members are the emptied member (in its new Pod) and slaves that missed a
+   probe. This procedure does not cover a quarantine that records such a
+   slave without the emptied member, for example one started after the
+   emptied member's quarantine was released; investigate that slave instead.
+3. **Condition 1: one active master is resolved, and the quarantine does not
+   record it.** `PrimaryResolved` is `True`, `currentPrimary` names the only
+   member whose role is `master`, it is not among the recorded members, and
+   `status.lastObservedTime` is less than 60 seconds old (see
+   [Freshness](#freshness)):
+
+   ```sh
+   kubectl -n "$NS" get cubridcluster <name> -o \
+     jsonpath='{.status.conditions[?(@.type=="PrimaryResolved")].status}{" "}{.status.currentPrimary}{" "}{.status.lastObservedTime}{"\n"}{range .status.instances[*]}{.name}{" "}{.role}{" "}{.lastObservedTime}{"\n"}{end}'
+   ```
+
+4. **Condition 2: every recorded member other than the emptied one answers
+   `slave` from the same Pod as before.** In the output of step 3, its role
+   is `slave` and its `lastObservedTime` equals `status.lastObservedTime`,
+   which means it answered in the latest observation. Its Pod UID and restart
+   count, read again as in step 1, are the ones recorded before the storage
+   was replaced, and the quarantine (step 2) records the same values. A
+   member that restarted or was replaced in between does not qualify, because
+   its data can no longer be assumed unchanged.
+5. **Condition 3: release through the annotation with the current token**,
+   as shown above. Read the token right after the checks; if the quarantine
+   was revised in the meantime its token changed, and the checks are made
+   again for the new revision. The Operator's own checks still apply: it
+   refuses the release without exactly one active master, and ignores it if a
+   recorded member's Pod or restart count changed.
+6. After the Operator accepted the release (`status.lastWriteQuarantineRelease`
+   names the quarantine's generation with the method `Manual`), request the
+   rebuild when it is offered, and once the rebuilt member answers as a slave,
+   check on every member, read directly and not through `-rw`, that every row
+   your application knows was acknowledged is present, as in
+   [retained-volume recovery, step 5](operations/retained-volume-recovery.md#5-check-the-data-on-every-member).
+   A release does not show that no write was lost; only this check does.
+
+If any condition does not hold, do not release: wait for it to hold, or
+investigate the member that does not meet it. If the quarantine started
+while the rebuild's restore was running, the rebuild ends `Failed`, and its
+claim is not offered for a rebuild again; releasing the quarantine does not
+change that. The Kind E2E member rebuild step applies these conditions before
+it releases such a quarantine
+([#1139](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1139)).
+
 ## Freshness
 
 A standalone cluster's member is asked for its engine version in every
