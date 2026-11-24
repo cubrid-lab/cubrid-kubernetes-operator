@@ -31,6 +31,7 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults/netfault"
 )
 
 // The tests in this file cover -partition-repeat (#115): once the first
@@ -737,11 +738,15 @@ func TestPrepareS07SecondStartsTheSessionAfterTheMove(t *testing.T) {
 		return "", nil, false
 	}
 	rep := &s07Repeat{}
-	rec := &s07Record{Variant: s07HigherRankIsolated, Repeat: rep}
+	rec := &s07Record{Variant: s07HigherRankIsolated, Repeat: rep, PartitionDirection: s07DirectionInbound}
 	state := &startingState{Master: m0, Slaves: []string{m1, m2}}
 	c, p, err := h.prepareS07Second(ctx, rec, rep, state, nil)
 	if err != nil || p == nil {
 		t.Fatalf("prepare the second cut: %v", err)
+	}
+	if c.PartitionDirection != s07DirectionInbound || p.Cuts[0].Direction != netfault.In {
+		t.Errorf("the second cut is %q, cutting %s, want the first cut's direction", c.PartitionDirection,
+			p.Cuts[0].Direction)
 	}
 	move := c.MasterMove
 	if move == nil || move.SettledAt == nil || c.Master != m1 || c.Target.Pod != m0 {

@@ -1102,7 +1102,8 @@ status.
 With `-fault partition-master-isolated`, `-fault partition-slave-isolated`
 or `-fault partition-higher-rank-isolated` the run goes on after LAB01
 passed, on the same cluster, with S07 of the scenario contract: one member is
-cut off, both ways, from the other two members and from the manager Pod, and
+cut off from the other two members (both ways unless `-partition-direction`
+below asks for one way) and, both ways, from the manager Pod, and
 the run records what the Operator's write quarantine (ADR-0005 section 8)
 does with real SQL. The lane is then `lab-installed-ha-s07-master-isolated`,
 `lab-installed-ha-s07-slave-isolated` or
@@ -1128,8 +1129,10 @@ S07 with that variant. It runs on the `vm-lab` level only.
   member, no slave outranks it, so the run first moves the master, as
   described below.
 
-The lane does not cover the contract's `asymmetric` variant, the replication
-lag of S08, or the persistence, release-token, out-of-service-taint and
+The contract's `asymmetric` variant is not a lane of its own: the opt-in
+`-partition-direction` below makes any of the three variants cut the member
+off the other members in one direction only, recorded with the variant's
+evidence. The lane does not cover the replication lag of S08, or the persistence, release-token, out-of-service-taint and
 return-to-service checks of S07. It makes no manual release, restarts no
 Operator and cuts only once unless asked to (`-partition-manual-release`,
 `-partition-operator-restart` and `-partition-repeat` below).
@@ -1223,7 +1226,8 @@ real partition between the database members would let it. The faults:
   the counting rules, follows within two minutes. A fault not seen removed
   fails S07.
 - leave `cut.json` on disk before the injection is sent: the namespace, the
-  member cut off and its IP, the peers, the manager Pod and its IP, and when
+  member cut off and its IP, the peers, the manager Pod and its IP, the
+  direction of each cut, and when
   the injection was requested; it is written again when the cut was removed
   (`removedAt`, or `removeError`).
 
@@ -1247,6 +1251,66 @@ The run namespace is created with Pod Security `enforce=privileged`, and
 `warn` and `audit` at `restricted`, for the ephemeral container with
 `NET_ADMIN` and `NET_RAW`. The labels are in `LAB01/record.json`.
 
+**One-way cuts.** `-partition-direction` chooses the direction of the cut
+between the cut-off member and each of the other two members:
+
+- `both`, the default: the cut above, unchanged.
+- `inbound`: the packets the other two members send to the cut-off member
+  are dropped as they arrive in the cut-off member's network namespace. What
+  the cut-off member sends them still arrives.
+- `outbound`: the packets the cut-off member sends to the other two members
+  are dropped as they arrive in each of their network namespaces. What they
+  send it still arrives.
+
+Every drop is made where the packets arrive, as for the cut both ways, so a
+sender's own send calls succeed and it sees what a real loss shows it:
+nothing. The manager Pod is cut both ways in every direction: the faults
+never enter it, so the direction a one-way cut keeps open could not be
+probed there (the network faults refuse such a cut); its traffic with the
+member is TCP, which a drop in either direction breaks anyway; and
+`-partition-operator-restart` extends a cut both ways to the replacement
+Pod. The option works with all three variants, the control included, and
+with `-partition-keepalive`, `-partition-manual-release`,
+`-partition-operator-restart` and `-partition-repeat` (the second cut uses
+the same direction); none of them depends on the direction of the member
+cuts. A value other than `both`, `inbound` or `outbound` is refused, and so
+is a one-way direction without an S07 partition fault.
+
+The drop rules match addresses, not connection state. A one-way drop
+therefore also breaks every TCP connection between the cut-off member and
+the other members in both directions, because the handshake replies or
+acknowledgements of one side are lost. What stays one-way is datagram
+traffic, such as CUBRID's heartbeat messages over UDP, and the first packet
+of each TCP connection. This is the intended shape: it reproduces what the
+heartbeat and the Operator's connections see when one direction is lost.
+What CUBRID and the Operator do under a one-way cut on the VM lab has not
+been measured by this lane. POC-40 dropped a first member's packets to the
+slaves, without cutting the Operator, in two runs and saw no second active
+server; no run of this lane has used the option yet.
+
+A one-way cut is confirmed for each direction, before the hold counts: the
+dropped direction must be seen cut (the receiver counted no packet from the
+sender after its drop rule, no probe connect got an answer, and the drop
+rule's counter grew), and the direction kept open must be seen open (the
+receiver counted the sender's probe packets, although the probe's TCP
+connect gets no answer). A cut whose dropped direction is still open, or
+whose kept direction is found cut too, is not confirmed, and S07 ends
+blocked as for any cut that is not confirmed. The removal takes away exactly
+the drop rules the direction installed: in the cut-off member for
+`inbound`, in the other two members for `outbound`, and the manager Pod's
+in the cut-off member for every direction; then it probes every path open
+again.
+
+The direction is recorded as `partitionDirection` in `record.json` and in
+the measurements (the second cut's too, under `repeat.secondCut`), and as
+`memberDirection` and `operatorDirection` in `cut.json`; `partition.fault`
+names each cut with the network faults' own direction (`in`, `out` or
+`both`, from the cut-off member's side). A one-way run is recorded under the
+variant's lane and directory like a run both ways, so check
+`partitionDirection` to tell them apart. A `record.json` or `cut.json`
+written before the option existed has none of these fields; its cuts were
+both ways.
+
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
   ...the LAB01 inputs above... -level vm-lab \
@@ -1254,7 +1318,9 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   [-quarantine-limit <duration>] [-partition-duration <duration>]'
 ```
 
-Use `-fault partition-slave-isolated` for the control. The cut of a member
+Use `-fault partition-slave-isolated` for the control. Add
+`-partition-direction inbound` or `-partition-direction outbound` to any of
+these commands for a one-way cut. The cut of a member
 that outranks the master, with the master moved off the first member first
 when it is there:
 
@@ -2123,7 +2189,8 @@ termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
 interruption for new connections), `releaseSeenWithin`, `rwReopenedWithin`;
 `quarantineStartTime`, `enforcedTime` and `releaseTime` as status gives them,
 on the Operator's clock; `quarantineReason`, `releaseMethod`,
-`quarantineAtEnd`, `finalMaster` and `operatorChange`; `newConnectionWrites`,
+`quarantineAtEnd`, `finalMaster`, `operatorChange` and `partitionDirection`
+(`both`, `inbound` or `outbound`); `newConnectionWrites`,
 the new-connection writes counted by outcome (`acknowledged`, `failed`,
 `no answer`, `unknown-present`, `unknown-absent`, or `unknown` when not
 resolved); and for `s07open`
@@ -2146,7 +2213,8 @@ setting the current token: `manualReleaseSeenWithin`,
 
 Evidence, under `S07/<variant>/`:
 
-- `record.json`: the member cut off and why, the move of the master before
+- `record.json`: the member cut off and why, the direction of the cut
+  (`partitionDirection`), the move of the master before
   it (`masterMove`, `higher-rank-isolated` only), the manager Pod, the clock
   offsets, every sweep with each member's role and raw heartbeat state, the
   members the Operator could not reach and the trigger, the quarantine's reasons and revisions,
@@ -2160,8 +2228,9 @@ Evidence, under `S07/<variant>/`:
   second cut of `-partition-repeat` (`repeat`, with the second cut's own
   record as `repeat.secondCut`), and the run's observations in time order
   (`observed`);
-- `cut.json`: the cut's state alone, written before the injection and at
-  its removal;
+- `cut.json`: the cut's state alone, with the directions of the member and
+  manager Pod cuts (`memberDirection`, `operatorDirection`), written before
+  the injection and at its removal;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
   instead of `data-check.json`, and `engine-logs/<member>/`, when the

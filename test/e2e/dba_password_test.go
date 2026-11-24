@@ -911,6 +911,9 @@ spec:
 					dumps = append(dumps,
 						[]string{"logs", restoredName + "-0", "--tail=200"},
 						[]string{"logs", restoredName + "-1", "--tail=200"},
+						// The third member of the restored cluster, whose
+						// answer was missing from a failed run.
+						[]string{"logs", restoredName + "-2", "--tail=200"},
 						[]string{"logs", otherName + "-0", "--tail=200"},
 						[]string{"get", "events", "--sort-by=.lastTimestamp"},
 					)
@@ -1026,9 +1029,19 @@ spec:
 			// does not wait out the poll (#845). A match needs every member to
 			// match (#1012), so the value put back must have reached every file.
 			It("reports a changed Secret value as an unsupported rotation, and True again once it is put back", func() {
-				primary, err := h.clusterField(clusterName, "{.status.currentPrimary}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(primary).To(BeElementOf(members), "no primary is resolved")
+				// An earlier step restarts the Operator, and the status names no
+				// primary until it has asked the members again, so wait for it.
+				var primary string
+				Eventually(func(g Gomega) {
+					var err error
+					primary, err = h.clusterField(clusterName, "{.status.currentPrimary}")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(primary).To(BeElementOf(members), "no primary is resolved")
+					resolved, err := h.clusterField(clusterName,
+						`{.status.conditions[?(@.type=="PrimaryResolved")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(resolved).To(Equal("True"), "PrimaryResolved is not True")
+				}, 3*time.Minute, 5*time.Second).Should(Succeed())
 				resolved := func(g Gomega) (string, string) { return passwordCondition(g, clusterName) }
 				// changeTo puts value into the Secret, waits until every member's
 				// mounted file holds it and restarts the Operator.
@@ -1283,9 +1296,19 @@ spec:
 			It("changes the DBA password by hand on every member through kubectl exec on a terminal, while rows "+
 				"are written", func() {
 				restored := membersOf(restoredName)
-				primary, err := h.clusterField(restoredName, "{.status.currentPrimary}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(primary).To(BeElementOf(restored), "no primary is resolved")
+				// An earlier step restarts the Operator, and the status names no
+				// primary until it has asked the members again, so wait for it.
+				var primary string
+				Eventually(func(g Gomega) {
+					var err error
+					primary, err = h.clusterField(restoredName, "{.status.currentPrimary}")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(primary).To(BeElementOf(restored), "no primary is resolved")
+					resolved, err := h.clusterField(restoredName,
+						`{.status.conditions[?(@.type=="PrimaryResolved")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(resolved).To(Equal("True"), "PrimaryResolved is not True")
+				}, 3*time.Minute, 5*time.Second).Should(Succeed())
 				changePrimary = primary
 
 				By("creating a user without a password, and the table it writes, on the primary " + primary)

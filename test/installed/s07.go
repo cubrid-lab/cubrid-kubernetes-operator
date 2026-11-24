@@ -175,6 +175,9 @@ func (c HAConfig) validateS07() error {
 	if err := c.validateS07Repeat(); err != nil {
 		return err
 	}
+	if err := c.validateS07Direction(); err != nil {
+		return err
+	}
 	if !c.partitionFault() {
 		// -partition-settle, like -partition-hold, has no effect without a
 		// partition fault; a release asked for with none is refused.
@@ -447,6 +450,11 @@ type s07Record struct {
 	OperatorUID   string          `json:"operatorPodUID"`
 	OperatorIP    string          `json:"operatorPodIP"`
 	MembersBefore []imageIdentity `json:"membersBefore"`
+	// PartitionDirection is the direction the target was cut off the other
+	// members in (-partition-direction): both, inbound or outbound. The
+	// manager Pod is cut both ways in every direction. A record without it
+	// was written before the option existed, and its cut was both ways.
+	PartitionDirection string `json:"partitionDirection"`
 	// MasterMove is the move of the master off the first member that
 	// higher-rank-isolated made before it picked the member to cut off.
 	MasterMove *s07MasterMove `json:"masterMove,omitempty"`
@@ -1238,6 +1246,7 @@ func s07Measurements(rec *s07Record) map[string]any {
 	}
 	m["newConnectionWrites"] = classes
 	m["operatorChange"] = cmpOr(rec.OperatorChange, "none seen")
+	m["partitionDirection"] = rec.direction()
 	m["establishedSession"] = evidence.Unknown
 	m["establishedAcknowledgedAfterFault"] = evidence.Unknown
 	m["establishedAcknowledgedAfterPathClosed"] = evidence.Unknown
@@ -1332,8 +1341,9 @@ func (h *haRun) s07Operator(ctx context.Context) (netfault.Endpoint, error) {
 }
 
 // prepareS07 picks the member to cut off and builds the partition: that
-// member cut both ways from every other member and from the manager Pod,
-// the other members still reaching each other. Nothing is cut yet; for
+// member cut from every other member in the record's direction
+// (-partition-direction) and from the manager Pod both ways, the other
+// members still reaching each other. Nothing is cut yet; for
 // higher-rank-isolated with the master on the first member, the master is
 // moved first. With -partition-keepalive, the members' TCP keepalive is
 // shortened last, after any move.
@@ -1380,7 +1390,7 @@ func (h *haRun) prepareS07(ctx context.Context, rec *s07Record) (*netfault.Parti
 			return nil, err
 		}
 		others = append(others, e)
-		p.Cuts = append(p.Cuts, netfault.Cut{Peer: e, Direction: netfault.Both})
+		p.Cuts = append(p.Cuts, netfault.Cut{Peer: e, Direction: s07MemberCut(rec.PartitionDirection)})
 	}
 	for _, a := range others {
 		for _, b := range others {
@@ -1972,6 +1982,7 @@ func (h *haRun) runS07(ctx context.Context) (result evidence.Scenario) {
 	rec.historyBefore = h.historyCounts()
 	rec.OperatorRestartAsked = h.cfg.PartitionOperatorRestart
 	rec.RepeatAsked = h.cfg.PartitionRepeat
+	rec.PartitionDirection = h.cfg.s07Direction()
 	clientsStarted := false
 	var p *netfault.Partition
 	defer func() {
@@ -2522,6 +2533,12 @@ type s07CutFile struct {
 	OperatorPod       string     `json:"operatorPod"`
 	OperatorIP        string     `json:"operatorIP"`
 	InjectRequestedAt *time.Time `json:"injectRequestedAt,omitempty"`
+	// MemberDirection is the direction the target is cut off the peers in
+	// (-partition-direction), OperatorDirection the manager Pod's, always
+	// both. A cut.json without them was written before the option existed,
+	// and both its cuts were both ways.
+	MemberDirection   string `json:"memberDirection"`
+	OperatorDirection string `json:"operatorDirection"`
 	// The replacement manager Pod that -partition-operator-restart cut off
 	// too, and when its drop rules were read back.
 	ReplacementOperatorPod string     `json:"replacementOperatorPod,omitempty"`
@@ -2571,9 +2588,11 @@ func (c *s07Cut) writeState(change func(*s07CutFile)) {
 		for _, cut := range c.Cuts {
 			if cut.Peer.NoEnter {
 				f.OperatorPod, f.OperatorIP = cut.Peer.Pod, cut.Peer.IP
+				f.OperatorDirection = s07CutDirection(cut.Direction)
 				continue
 			}
 			f.Peers = append(f.Peers, cut.Peer.Pod)
+			f.MemberDirection = s07CutDirection(cut.Direction)
 		}
 		c.rec.cut = f
 	}

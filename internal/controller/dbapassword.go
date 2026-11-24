@@ -322,14 +322,14 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 //     check, as since #1031: the condition of a standalone cluster depends on
 //     that one answer, and the primary is the member whose answer a client
 //     sees;
-//   - after a check in which no member answered Differs but a slave could not
-//     tell or was not asked, at most dbaPasswordQuickRetries checks in a row;
-//     the checks after them wait for the poll. A slave whose Instance Manager
-//     is older than #1012, or one that stays in a transition, answers Unknown
-//     on every check, and without the bound would bring a login on every
-//     member every 30 seconds for as long as it does. The count starts again
-//     after a check that settled: one in which a member answered Differs, or
-//     every member was asked and answered Matches.
+//   - after a check in which a slave could not tell or was not asked, also
+//     when another member answered Differs, at most dbaPasswordQuickRetries
+//     checks in a row; the checks after them wait for the poll. A slave whose
+//     Instance Manager is older than #1012, or one that stays in a
+//     transition, answers Unknown on every check, and without the bound would
+//     bring a login on every member every 30 seconds for as long as it does.
+//     The count starts again after a check that settled: one in which every
+//     member was asked and answered Matches or Differs.
 //
 // Only the time of the next check and that count are kept, in memory, in the
 // entry that already throttles the checks, so an operator that restarts asks
@@ -390,7 +390,12 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 			primaryInconclusive = primaryInconclusive || i == 0
 		}
 	}
-	settled := len(differed) > 0 || (len(matched) == len(members) && len(unasked) == 0)
+	// A check settles only when every member was asked and answered for
+	// certain. A member that differs does not settle it on its own: another
+	// member that could not tell, or was not asked, would otherwise wait a
+	// whole poll, and its own answer would be missing from the message all
+	// that time (Kind E2E run 45388185821).
+	settled := len(matched)+len(differed) == len(members) && len(unasked) == 0
 	switch {
 	case len(differed) > 0:
 		msg := fmt.Sprintf("the key %q of the Secret %s is not the database's current DBA password: the Secret's value "+

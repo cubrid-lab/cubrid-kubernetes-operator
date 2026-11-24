@@ -131,7 +131,8 @@ about once per poll (5 minutes by default) while a member can be asked; on an
 HA cluster that needs a resolved primary, and every member is asked. A check
 of the standalone member or the HA primary that cannot tell is retried after
 about 30 seconds; a check in which an HA slave cannot tell or is not asked is
-retried after about 30 seconds at most three times in a row. The time the kubelet takes to update the mounted file
+retried after about 30 seconds at most three times in a row, also when
+another member refused the value. The time the kubelet takes to update the mounted file
 (about a minute) also limits the rate. See
 [Changing the password is not supported](#changing-the-password-is-not-supported),
 which describes how a changed value is reported.
@@ -348,18 +349,20 @@ the database by hand with `ALTER USER`.
   `DBAPasswordSecretResolved`. On an HA cluster this needs the answer of every
   member; a member that was not asked or could not tell is never counted as a
   match.
-- **The check cannot tell** on a member, and no member refused the login (the
+- **The check cannot tell** on a member (the
   server is not running, an HA member is neither the active master nor a
   slave with a standby server, the Instance Manager cannot be reached,
   another check is running, or csql neither accepted nor refused the login):
-  the Condition is left as it is. When the member that cannot tell is the
+  that member's answer leaves the Condition as it is; a refusal on another
+  member is still reported at once. When the member that cannot tell is the
   standalone member or the HA primary, the Operator asks again after about 30
   seconds instead of waiting out the 5-minute poll, for as long as it cannot
-  tell. When an HA slave cannot tell, or is not asked, and no member refused
-  the login, the Operator also asks every member again after about 30
-  seconds, but at most three times in a row; after that it waits for the
-  5-minute poll, until a check settles again (a member refuses the login, or
-  every member is asked and accepts it). The bound exists because a slave
+  tell. When an HA slave cannot tell, or is not asked, the Operator also asks
+  every member again after about 30 seconds, also when another member
+  refused the login, so that the message soon carries that member's own
+  answer, but at most three times in a row; after that it waits for the
+  5-minute poll, until a check settles again (every member is asked and
+  either accepts or refuses the login). The bound exists because a slave
   whose Instance Manager is older than the Operator (for example while the DB
   Pods have not yet been replaced after an Operator upgrade, or with a pinned
   `spec.image`) answers that it cannot tell on every check, and an unbounded
