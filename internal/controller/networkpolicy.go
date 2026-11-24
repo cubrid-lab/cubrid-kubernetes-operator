@@ -97,8 +97,7 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 // own DB Pods to the Instance Manager (a rebuilt member asks its source member
 // whether it is the active master; Brokers and other clusters' Pods are not
 // admitted); the cluster's DB Pods to the server and heartbeat ports, for HA
-// replication; and the cluster's Brokers to the server port. The members and
-// Brokers may also reach TCP 7 for CUBRID's peer-alive probe. The kubelet's
+// replication; and the cluster's Brokers to the server port. The kubelet's
 // probes come from the node, which NetworkPolicy implementations commonly
 // admit; it is not part of the policy. A recreated member waits until its
 // peers admit it before it starts CUBRID (peerWaitContainer).
@@ -109,7 +108,6 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 	rules = append(rules,
 		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolTCP, cubridServerPort),
-			npPort(corev1.ProtocolTCP, peerAliveEchoPort),
 		}},
 		networkingv1.NetworkPolicyIngressRule{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolUDP, haHeartbeatPort),
@@ -164,11 +162,12 @@ func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.N
 }
 
 // peerAliveEchoPort is the TCP echo port CUBRID connects to when it checks
-// whether an idle peer's host is alive (check_peer_alive, default both): the
-// server probes its clients' hosts, a client (a Broker's CAS, a replicating
-// member) probes the server's. Nothing listens on it, so an admitted probe
-// gets an RST, which counts as alive. A probe the policy drops gets no answer,
-// and CUBRID then treats the peer as dead and closes its idle session (#1158).
+// whether an idle peer's host is alive (check_peer_alive, default both).
+// Nothing listens on it, so an admitted probe gets an RST, which counts as
+// alive. A probe the policy drops gets no answer, and CUBRID then treats the
+// peer as dead and closes its idle session (#1158). Only a member's probe of
+// the Broker Pods is admitted, the path shown to close sessions; probes to
+// the members stay unadmitted until #1158 shows they are needed.
 const peerAliveEchoPort = 7
 
 func npPort(protocol corev1.Protocol, port int32) networkingv1.NetworkPolicyPort {

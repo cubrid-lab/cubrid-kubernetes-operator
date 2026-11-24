@@ -198,8 +198,8 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 	// (echo) and treats a peer whose probe gets no answer as dead
 	// (check_peer_alive, default both). Nothing listens on port 7, so an
 	// admitted probe gets an RST, which counts as alive; a dropped one makes
-	// the server close the peer's idle session (#1158).
-	It("lets the cluster's own Pods answer CUBRID's peer-alive echo probe, and nothing else", func() {
+	// the member close the CAS's idle session (#1158).
+	It("lets the cluster's members reach the Brokers' echo port for the peer-alive probe, and nothing else", func() {
 		create(haCluster("np-echo"))
 		create(haCluster("np-echo-other"))
 		nps := policies()
@@ -207,11 +207,8 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 		member := npSource{namespace: ns, pod: db}
 
 		for _, broker := range brokerPods("np-echo") {
-			b := npSource{namespace: ns, pod: broker}
 			Expect(npAdmits(nps, broker, member, 7, tcp)).To(BeTrue(), "a member probes the Broker hosting its client")
-			Expect(npAdmits(nps, db, b, 7, tcp)).To(BeTrue(), "a Broker's CAS probes the member it is connected to")
 		}
-		Expect(npAdmits(nps, db, member, 7, tcp)).To(BeTrue(), "HA members probe each other")
 
 		strangers := map[string]npSource{
 			"a Pod in the same namespace":     {namespace: ns, pod: someClient},
@@ -220,7 +217,6 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 			"a Broker Pod of another cluster": {namespace: ns, pod: brokerPods("np-echo-other")[0]},
 		}
 		for who, src := range strangers {
-			Expect(npAdmits(nps, db, src, 7, tcp)).To(BeFalse(), "%s reaches the member's TCP 7", who)
 			for _, broker := range brokerPods("np-echo") {
 				Expect(npAdmits(nps, broker, src, 7, tcp)).To(BeFalse(), "%s reaches the Broker's TCP 7", who)
 			}
@@ -254,6 +250,8 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 			Expect(npAdmits(nps, broker, named, 33000, tcp)).To(BeTrue())
 			Expect(npAdmits(nps, broker, named, 33001, tcp)).To(BeTrue())
 			Expect(npAdmits(nps, broker, local, 33000, tcp)).To(BeFalse(), "the list replaces the namespace default")
+			Expect(npAdmits(nps, broker, named, 7, tcp)).To(BeFalse(), "a named client does not get the members' echo port")
+			Expect(npAdmits(nps, broker, local, 7, tcp)).To(BeFalse(), "nor does a Pod of the namespace")
 		}
 		db := dbPod("np-clients")
 		Expect(npAdmits(nps, db, named, 1523, tcp)).To(BeFalse(), "a named client still goes through the Brokers")
