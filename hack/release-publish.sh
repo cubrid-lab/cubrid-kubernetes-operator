@@ -14,10 +14,11 @@
 #            Then every file already on the draft is deleted, every file in
 #            ASSET_DIR is uploaded, and the draft is checked as below.
 #   publish  the version check must answer resume: the draft, no tag and no
-#            published release. The draft is checked again; only then is it
-#            marked published, which makes GitHub create the tag at
-#            EXPECTED_SHA. The tag must then point at EXPECTED_SHA and the
-#            release must be published.
+#            published release. The draft is checked again and the tag must
+#            still be absent; only then is it marked published, which makes
+#            GitHub create the tag at EXPECTED_SHA. The tag must then point at
+#            EXPECTED_SHA, and the published release must hold exactly the
+#            verified files.
 # The draft check: the release is still a draft of TAG targeting
 # EXPECTED_SHA, holds exactly the files of ASSET_DIR, and each downloads to
 # the bytes ASSET_DIR/SHA256SUMS lists.
@@ -180,20 +181,27 @@ list_assets() {
   jq -c '.[] | {id, name, state}' "$work/body" > "$work/assets"
 }
 
-# check_draft requires release id to be a draft of TAG targeting EXPECTED_SHA
-# whose files are exactly ASSET_DIR's, each with the listed bytes.
-check_draft() {
-  local id=$1 code want have name aid
+# check_release requires release id to be, with state "draft", a draft of TAG
+# targeting EXPECTED_SHA, or with state "published", the published release of
+# TAG; and its files to be exactly ASSET_DIR's, each with the listed bytes.
+check_release() {
+  local id=$1 state=$2 code want have name aid filter
+  # $tag and $sha are jq variables, not shell ones.
+  # shellcheck disable=SC2016
+  if [ "$state" = draft ]; then
+    filter='.draft == true and .tag_name == $tag and .target_commitish == $sha'
+  else
+    filter='.draft == false and .tag_name == $tag'
+  fi
   code=$(call GET "$API_URL/repos/$REPOSITORY/releases/$id")
-  if [ "$code" != 200 ] || ! jq -e --arg tag "$TAG" --arg sha "$EXPECTED_SHA" \
-    '.draft == true and .tag_name == $tag and .target_commitish == $sha' "$work/body" > /dev/null 2>&1; then
-    fail "Release $id is no longer a draft of $TAG for $EXPECTED_SHA (answered $code): $(detail)"
+  if [ "$code" != 200 ] || ! jq -e --arg tag "$TAG" --arg sha "$EXPECTED_SHA" "$filter" "$work/body" > /dev/null 2>&1; then
+    fail "Release $id is not the $state release of $TAG for $EXPECTED_SHA (answered $code): $(detail)"
   fi
   list_assets "$id"
   want=$(printf '%s\n' "${assets[@]}" | sort)
   have=$(jq -r 'select(.state == "uploaded") | .name' "$work/assets" | sort)
   if [ "$want" != "$have" ] || [ "$(wc -l < "$work/assets")" -ne "${#assets[@]}" ]; then
-    fail "The draft of $TAG holds [${have//$'\n'/ }], not the verified files [${want//$'\n'/ }]"
+    fail "The $state release of $TAG holds [${have//$'\n'/ }], not the verified files [${want//$'\n'/ }]"
   fi
   for name in "${assets[@]}"; do
     aid=$(jq -r --arg n "$name" 'select(.name == $n) | .id' "$work/assets")
@@ -203,13 +211,13 @@ check_draft() {
     code=$(call GET "$API_URL/repos/$REPOSITORY/releases/assets/$aid" -L)
     accept=application/vnd.github+json
     if [ "$code" != 200 ]; then
-      fail "Could not download $name from the draft of $TAG (answered $code)"
+      fail "Could not download $name from the $state release of $TAG (answered $code)"
     fi
     if [ "$(sha256sum "$work/body" | cut -d' ' -f1)" != "$(sha256sum "$ASSET_DIR/$name" | cut -d' ' -f1)" ]; then
-      fail "$name on the draft of $TAG is not the verified file"
+      fail "$name on the $state release of $TAG is not the verified file"
     fi
   done
-  echo "The draft of $TAG for $EXPECTED_SHA holds exactly the verified files: ${assets[*]}"
+  echo "The $state release of $TAG for $EXPECTED_SHA holds exactly the verified files: ${assets[*]}"
 }
 
 if [ "$mode" = draft ]; then
@@ -235,7 +243,7 @@ if [ "$mode" = draft ]; then
       ;;
     *) fail "The version check answered no state" ;;
   esac
-  # Only a draft's files are replaced; check_draft below refuses anything else.
+  # Only a draft's files are replaced; check_release below refuses anything else.
   code=$(call GET "$API_URL/repos/$REPOSITORY/releases/$id")
   if [ "$code" != 200 ] || ! jq -e '.draft == true' "$work/body" > /dev/null 2>&1; then
     fail "Release $id of $TAG is not a draft; its files are not touched"
@@ -254,7 +262,7 @@ if [ "$mode" = draft ]; then
       fail "Could not attach $name to the draft of $TAG (answered $code): $(detail). Nothing is published; a rerun replaces the draft's files"
     fi
   done
-  check_draft "$id"
+  check_release "$id" draft
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "release_id=$id" >> "$GITHUB_OUTPUT"
   fi
@@ -267,7 +275,13 @@ if [ "$state" != resume ]; then
   fail "$TAG has no draft for $EXPECTED_SHA; only a checked draft is published"
 fi
 id=$(find_draft)
-check_draft "$id"
+check_release "$id" draft
+# Publishing makes GitHub create the tag. A tag made since the version check,
+# by hand or by another workflow, would be taken over silently: refuse it.
+code=$(call GET "$API_URL/repos/$REPOSITORY/git/ref/tags/$TAG")
+if [ "$code" != 404 ] || [ "$(jq -r '.message? // empty' "$work/body" 2> /dev/null)" != "Not Found" ]; then
+  fail "Tag $TAG appeared or could not be checked just before publication (answered $code); nothing was published"
+fi
 code=$(call PATCH "$API_URL/repos/$REPOSITORY/releases/$id" \
   --data-binary "$(jq -n --arg tag "$TAG" --arg sha "$EXPECTED_SHA" '{tag_name: $tag, target_commitish: $sha, draft: false}')")
 if [ "$code" != 200 ]; then
@@ -284,4 +298,7 @@ if [ "$code" != 200 ] || ! jq -e --arg ref "refs/tags/$TAG" --arg sha "$EXPECTED
   '.ref == $ref and .object.type == "commit" and .object.sha == $sha' "$work/body" > /dev/null 2>&1; then
   fail "$TAG was published, but its tag does not point at $EXPECTED_SHA (answered $code): $(detail). A maintainer checks the release by hand"
 fi
+# The published release must still hold exactly the verified files. With
+# immutable releases turned on, they can no longer change after this.
+check_release "$id" published
 echo "Published $TAG at $EXPECTED_SHA"

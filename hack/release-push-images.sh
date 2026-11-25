@@ -8,8 +8,9 @@
 #
 # RECORD (release-dry-run.json of the verified build) gives each image's
 # digest and the SHA-256 of its archive ARCHIVE_DIR/<image>.oci.tar. Before
-# anything is pushed, every archive must match its recorded checksum and the
-# registry is asked for every image's TAG:
+# anything is pushed, every archive must match its recorded checksum, the image
+# manifest inside it must have the recorded digest, and the registry is asked
+# for every image's TAG:
 #   404 MANIFEST_UNKNOWN or NAME_UNKNOWN  absent: push it.
 #   200 with the recorded digest          present: an earlier attempt of this
 #                                         run pushed it; it is not pushed again.
@@ -107,6 +108,13 @@ for image in $IMAGES; do
   archive="$ARCHIVE_DIR/$image.oci.tar"
   if [ ! -f "$archive" ] || [ "$(sha256sum "$archive" | cut -d' ' -f1)" != "$sum" ]; then
     echo "::error::The archive of $image is missing or is not the one the verified build recorded"
+    exit 1
+  fi
+  # The manifest inside the archive is what skopeo pushes; its digest must be
+  # the digest the build reported, whatever the archive's checksum says.
+  if ! manifest=$(skopeo inspect --raw "oci-archive:$archive" | sha256sum | cut -d' ' -f1) ||
+    [ "sha256:$manifest" != "$digest" ]; then
+    echo "::error::The archive of $image does not hold the manifest $digest the build reported"
     exit 1
   fi
   expected[$image]=$digest

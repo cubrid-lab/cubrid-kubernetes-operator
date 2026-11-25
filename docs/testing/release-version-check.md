@@ -98,19 +98,26 @@ repository. In order, it:
    from the same Dockerfiles as `make docker-build` and
    `make docker-build-instance-manager`, into OCI archives on the runner,
    with no push, no registry login, no build cache and no build record
-   artifact, labelled with the commit time;
+   artifact, labelled with the commit time; then, before any of the
+   candidate's code runs, records each archive's SHA-256 and requires the
+   image manifest inside it (`skopeo inspect --raw`) to have the digest the
+   build reported;
 5. builds the installer image check (`hack/check-installer-image`) from the
    workflow's own commit, which the version check's sparse checkout also
    clones with its `go.mod` and `go.sum`, so an older candidate without the
    checker is still checked;
 6. builds the installer manifest with `make build-installer` for the
-   manager image and the Instance Manager image the release would publish
-   (`IMG` and `IM_IMG`), and stops if that changed a tracked file (the
-   commit's generated files are stale);
-7. runs the installer image check on `install.yaml` and writes
+   manager image and the Instance Manager image the release would publish,
+   each named by tag and built digest
+   (`IMG=<registry>/manager:vX.Y.Z@sha256:...`, and the same for `IM_IMG`),
+   and stops if that changed a tracked file (the commit's generated files
+   are stale);
+7. requires the archives to still have the checksums of step 4 (the
+   candidate's `make` ran in between), runs the installer image check on
+   `install.yaml` with `-require-digest`, and writes
    `release-dry-run.json`: the commit, version, each image's digest, image
-   ID and archive checksum, the installer's SHA-256, and which Instance
-   Manager image the installer makes the manager use, with
+   ID and the archive checksum of step 4, the installer's SHA-256, and which
+   Instance Manager image the installer makes the manager use, with
    `usesBuiltInstanceManagerImage`;
 8. uploads `install.yaml`, `release-dry-run.json` and `SHA256SUMS` as the
    run's artifact;
@@ -141,7 +148,10 @@ annotation or container. Each manifest document must be a single object: a
 the check fails. It exits 3 when the manager sets no
 `--instance-manager-image`; the record then names the manager's built-in
 default image. Any other failure is recorded as "not verified" with the
-checker's reason.
+checker's reason. With `-require-digest`, which the dry run passes, both
+expected references must end in `@sha256:<64 hex digits>`; since the
+installer must name exactly those references, an installer that names an
+image by tag alone is "not verified".
 
 `make build-installer` appends exactly one
 `--instance-manager-image=<IM_IMG>` to the manager's `args` (`config/`
@@ -150,7 +160,9 @@ registry and tag: `IMG=<registry>/manager:<tag>` gives
 `<registry>/instance-manager:<tag>`; an `IMG` without a tag or pinned by
 digest stops it with a request to set `IM_IMG`. The dry run passes `IM_IMG`
 explicitly, so for a candidate commit that contains this Makefile step 9
-is expected to pass.
+is expected to pass. kustomize 5.8.1 keeps a `name:tag@sha256:...` `IMG` as
+given in the manager's `image` (observed locally with `make build-installer`
+on 2026-11-26 UTC), and `IM_IMG` is written verbatim into the flag.
 
 A candidate commit older than that Makefile renders an installer without
 the flag: the manager would fall back to the mutable built-in default
@@ -180,7 +192,8 @@ Its limits:
 - **The digests identify this build only.** The base images are mutable
   tags, so a later build of the same commit can produce other digests. The
   image archives are not kept.
-- The installer manifest names the manager image by tag, not by digest.
+- The installer names both images by tag and digest, and the digests are
+  those of this build; the record keeps the tag references.
 - It does not exercise release-please, the GitHub App token, a draft
   release or publication on GitHub. The draft and publication steps are
   tested only against a stand-in API (see below); the image steps against
@@ -200,7 +213,8 @@ Three workflows take part, and only the last one publishes.
   keeps it from creating a tag or a GitHub Release, so no merge publishes
   anything, the merge of the release PR included. It writes with an
   installation token of the repository's GitHub App, so that CI runs on the
-  release PR; `GITHUB_TOKEN` gets no permission.
+  release PR; `GITHUB_TOKEN` gets no permission. The job runs in the
+  environment `release-pr`, which holds the App's credential.
 - `.github/workflows/release-dry-run.yml` builds and checks the artifacts
   without publishing, as [above](#release-dry-run).
 - `.github/workflows/publish.yml` (*Publish Release*) publishes. A
@@ -213,10 +227,13 @@ Three workflows take part, and only the last one publishes.
 `publish.yml` has no push, pull request or schedule trigger. Its jobs run in
 this order, and a failure stops every later step:
 
-1. **`release-commit`** (read-only) refuses a malformed input; refuses to
-   continue unless the `production` environment has at least one required
-   reviewer (GitHub would otherwise create the environment unprotected);
-   checks that the workflow revision and the commit are on `main`; and
+1. **`release-commit`** (read-only) runs only in this repository and only
+   when the workflow was started from `refs/heads/main`. It refuses a
+   malformed input; refuses to continue unless the `production` environment
+   has required reviewers on every reviewer rule with self-review prevented,
+   no admin bypass and a deployment branch policy (GitHub would otherwise
+   create the environment unprotected); checks that the workflow revision
+   and the commit are on `main`; and
    checks that the commit is the release PR's merge for this version:
    `.release-please-manifest.json` at the commit sets the version and at its
    first parent does not. A later ordinary commit, which still names the same
@@ -232,23 +249,29 @@ this order, and a failure stops every later step:
    publication gates of issue #94 first (the
    [release candidate review](release-candidate-review.md)): the required
    scenario evidence, the license acceptance and the disclosure of the API
-   group risk. It is the only job that can write (`contents`, `packages` and
-   `pull-requests`), and it runs only the workflow's own copies of the
-   scripts. In order it:
-   1. checks the downloaded files against the verified `SHA256SUMS` and
+   group risk. It is the only job that writes, and it runs only the
+   workflow's own copies of the scripts. The release (draft, files,
+   publication and label) is written with a token of the release App,
+   minted from the `production` environment's secrets; its own
+   `GITHUB_TOKEN` has only `contents: read` and `packages: write`, for the
+   image push. In order it:
+   1. checks that the App credential is present and mints the App token;
+   2. checks the downloaded files against the verified `SHA256SUMS` and
       requires the record to be this version and commit;
-   2. runs the version check with its write token, which also sees drafts:
-      a tag, a published release, a draft for another commit or several
-      drafts stop the run;
-   3. pushes the verified image archives with `hack/release-push-images.sh`
+   3. runs the version check with the App token, which can write and so
+      also sees drafts: a tag, a published release, a draft for another
+      commit or several drafts stop the run;
+   4. pushes the verified image archives with `hack/release-push-images.sh`
       (below);
-   4. drafts the release with `hack/release-publish.sh draft`: the files are
+   5. drafts the release with `hack/release-publish.sh draft`: the files are
       `install.yaml` and its `SHA256SUMS`, and the notes end with the two
       image digests;
-   5. publishes it with `hack/release-publish.sh publish`, only after the
-      draft is checked again; publishing makes GitHub create the version's
-      tag at the commit, which is then required;
-   6. moves the release PR's label from `autorelease: pending` to
+   6. publishes it with `hack/release-publish.sh publish`, only after the
+      draft is checked again and the version's tag is confirmed absent right
+      before the publishing request; publishing makes GitHub create the
+      tag at the commit, which is then required, and the published release
+      must still hold exactly the verified files;
+   7. moves the release PR's label from `autorelease: pending` to
       `autorelease: tagged`, so that release-please opens the next release
       PR.
 
@@ -263,6 +286,8 @@ this order, and a failure stops every later step:
 | A draft file differs from the verified one | Not published; the rerun replaces the draft's files |
 | The answer to the publication was lost | The step decides from what GitHub then shows: a published release whose tag points at the commit |
 | The version is already published, or its tag exists | Refused before anything is written; nothing is overwritten |
+| The tag appeared after the draft was checked | Refused right before the publishing request; the draft stays a draft |
+| A file of the just-published release is not the verified one | The step fails; a maintainer removes the release by hand (with immutable releases on, the files cannot change after publication) |
 | Only the label step failed | Refused, because the version is now published; a maintainer moves the label by hand |
 
 Rerun the **failed job** (*Re-run failed jobs*), not the whole run: the
@@ -275,7 +300,9 @@ repository. Image tags that a failed run pushed are public on GHCR, but no
 release refers to them.
 
 `hack/release-push-images.sh` checks every archive against the recorded
-checksum and asks the registry for every tag before the first push: a tag
+checksum, requires the image manifest inside it (`skopeo inspect --raw`) to
+have the recorded build digest, and asks the registry for every tag before
+the first push: a tag
 the registry answers `MANIFEST_UNKNOWN` or `NAME_UNKNOWN` for is pushed with
 `skopeo copy --preserve-digests`; a tag that holds the recorded digest is
 not pushed again; a tag that holds another digest, or any answer it does not
@@ -290,17 +317,73 @@ resumes it. A draft is checked by its state (still a draft, of this tag,
 targeting the commit), by its exact set of files, and by downloading every
 file and comparing its SHA-256 with `SHA256SUMS`.
 
+### What protects publication
+
+The `production` environment is **not** the only boundary, and on its own
+it is not a hard one. A job gets the permissions its `permissions:` block
+asks for whether or not it names an environment, so a copy of `publish.yml`
+on another branch with the `environment:` line removed would get the same
+`GITHUB_TOKEN`. What the environment does protect is its secrets: they
+reach only a job that runs in it, after its reviewers approve, from a
+branch its deployment branch rule allows. Publication therefore rests on
+these together:
+
+- **The release App token comes from `production`'s secrets.** The draft,
+  its files, the publication (which creates the tag) and the label are
+  written with it. `publish-production`'s own `GITHUB_TOKEN` cannot write
+  repository contents.
+- **A `v*` tag ruleset** that blocks creating, updating and deleting tags
+  matching `v*` for everyone except the release App (its only bypass
+  actor). A token without that bypass, such as a branch workflow's
+  `GITHUB_TOKEN` with `contents: write`, can make a draft but cannot
+  publish it, because publishing creates the tag. Whether the ruleset
+  stops a draft's publication this way has not been observed on this
+  repository; the first real publication checks it.
+- **Immutable releases**, turned on in the repository settings, so that a
+  published release's files and tag cannot be changed afterwards. The
+  publish step checks the published files once more; immutability keeps
+  them so.
+- **Main-only deployment branch rules** on `production` and `release-pr`,
+  so a workflow from another branch cannot read their secrets.
+- **The reviewer guard** in `release-commit` (above).
+
+**GHCR is the exception.** GHCR does not accept a GitHub App installation
+token, so the images are pushed with the job's `GITHUB_TOKEN`
+(`packages: write`), and the environment does not protect that permission.
+Any workflow in this repository can ask for `packages: write`;
+`dev-images.yml` already has it on the same packages. A workflow on another
+branch, written by someone who can push to this repository, could
+therefore push a `v*` image tag without any approval. GHCR has no tag
+protection to prevent it. `release-push-images.sh` refuses to publish over
+a tag that holds other bytes, and the installer names both images by
+digest, so an installed release runs the verified images even if a tag is
+moved later. A personal access token stored in `production` would avoid
+this, but it is broader than the App and was not chosen (2026-11-13
+decision).
+
 ### What an admin provisions
 
 - **The GitHub App** that the maintainer chose on 2026-11-13, installed on
   this repository only, with *Contents: read and write* and *Pull requests:
-  read and write*. Its Client ID goes in the repository secret
-  `RELEASE_APP_CLIENT_ID` and its private key in `RELEASE_APP_PRIVATE_KEY`.
-  Until both exist, *Release PR* warns and updates no release PR. No token
-  is stored in the repository.
-- **The `production` environment** with required reviewers and a deployment
-  branch rule that allows `main` only. `publish.yml` refuses to run while it
-  has no required reviewer.
+  read and write*. No token is stored in the repository.
+- **The environment `release-pr`**: no reviewers, and a deployment branch
+  rule that allows `main` only. Its secrets `RELEASE_APP_CLIENT_ID` (the
+  App's Client ID) and `RELEASE_APP_PRIVATE_KEY` (its private key) are used
+  by *Release PR*. Until both exist, *Release PR* warns and updates no
+  release PR.
+- **The environment `production`**: required reviewers with *Prevent
+  self-review* on, *Allow administrators to bypass* off, and a deployment
+  branch rule that allows `main` only. It holds the same two secrets for
+  the publish job; a second App with the same permissions also works.
+  `publish.yml` refuses to run unless the reviewer settings are as listed,
+  and the publish job fails without the secrets.
+- **A tag ruleset** on `v*` (creation, update and deletion restricted) whose
+  only bypass actor is the release App.
+- **Immutable releases**, turned on in the repository settings.
+
+The `release-commit` job checks the reviewer settings and the presence of a
+branch policy, not which branches the policy allows; that, the ruleset and
+immutable releases are an admin's to keep.
 
 ### How the publishing path is tested
 
@@ -310,19 +393,28 @@ files and tags: a first draft and publication; a failed upload, after which
 publication is refused and the rerun resumes the same draft; a lost answer to
 the draft's creation and to the publication; a published release, a tag
 without a release and a draft for another commit, each refused without a
-write; a draft file changed after the check; and files that do not match
-`SHA256SUMS`. It runs `hack/release-push-images.sh` against a stand-in
-registry and a stand-in skopeo: a push that fails after the first image and
-its reruns; a taken tag, a changed archive and a registry error, each
-refused before any push; and the registry token exchange. It also reads the
-workflows: `publish.yml` has only the manual trigger, only
-`publish-production` can write and runs in `production`, and the writing
-steps come in the order above; `release-please.yml` leaves the action's
-`release-type` input out, skips the GitHub Release and gives `GITHUB_TOKEN`
-no permission, and the configuration keeps `release-type: go`.
+write; a draft file changed after the check; a tag that appears right
+before publication; a published file that is not the verified one; and
+files that do not match `SHA256SUMS`. It runs `hack/release-push-images.sh`
+against a stand-in registry and a stand-in skopeo: a push that fails after
+the first image and its reruns; a taken tag, a changed archive, an archive
+whose manifest is not the built digest and a registry error, each refused
+before any push; and the registry token exchange. It also reads the
+workflows: `publish.yml` has only the manual trigger and runs only from
+`main`; only `publish-production` can write and read secrets, runs in
+`production` and writes the release with the App token; the writing steps
+come in the order above; the reviewer guard refuses an environment without
+reviewers, with self-review allowed, with admin bypass or without a branch
+policy; and the dry run hashes the archives before the candidate's code
+runs and builds the installer with digest-pinned images.
+`release-please.yml` runs in `release-pr`, leaves the action's
+`release-type` input out, skips the GitHub Release and gives
+`GITHUB_TOKEN` no permission, and the configuration keeps
+`release-type: go`.
 
 Not shown by these tests or by the dry run: the real GitHub API's answers to
 the draft, upload and publication requests; that publishing a draft creates
-the tag at its target commit on this repository; a push to GHCR; the App
-token; and release-please opening the release PR. The first real
-publication is the first observation of these.
+the tag at its target commit on this repository; the tag ruleset and
+immutable releases in effect; a push to GHCR; the App token; and
+release-please opening the release PR. The first real publication is the
+first observation of these.

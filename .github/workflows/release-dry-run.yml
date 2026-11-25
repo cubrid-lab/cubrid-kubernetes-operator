@@ -221,6 +221,34 @@ jobs:
             org.opencontainers.image.version=${{ inputs.version }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
+      # Right after the builds and before any of the candidate's code runs
+      # (make, below): the checksum of each archive, and the digest of the
+      # image manifest inside it, which must be the digest the build reported.
+      # The record and the publish job hold the archives to these values, so
+      # an archive replaced later in the job is refused.
+      - name: Record the archive checksums before any candidate code runs
+        id: archives
+        env:
+          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
+          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+        run: |
+          command -v skopeo > /dev/null || { echo "::error::skopeo is not installed on the runner"; exit 1; }
+          check() {
+            local archive="$RUNNER_TEMP/images/$1.oci.tar" manifest
+            if [[ ! "$2" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The $1 build reported no digest"
+              exit 1
+            fi
+            manifest="sha256:$(skopeo inspect --raw "oci-archive:$archive" | sha256sum | cut -d' ' -f1)"
+            if [ "$manifest" != "$2" ]; then
+              echo "::error::The $1 archive holds manifest $manifest, not the built digest $2"
+              exit 1
+            fi
+            echo "$3=$(sha256sum "$archive" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          }
+          check manager "$MANAGER_DIGEST" manager
+          check instance-manager "$IM_DIGEST" instance-manager
+
       # No module cache: setup-go would otherwise save one under main's scope,
       # state that outlives the run.
       - name: Setup Go
@@ -245,11 +273,16 @@ jobs:
       # IM_IMG names the Instance Manager image built above, so the manager's
       # --instance-manager-image does not depend on make's default. A commit
       # whose Makefile ignores IM_IMG still fails the requirement below.
+      # Both images are named by tag and the digest the build reported
+      # (name:tag@sha256:...), so an installed release runs exactly these
+      # bytes even if the tag is later moved.
       - name: Build the installer manifest
         env:
           VERSION: ${{ inputs.version }}
+          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
+          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
         run: |
-          make build-installer IMG="$REGISTRY/manager:$VERSION" IM_IMG="$REGISTRY/instance-manager:$VERSION"
+          make build-installer IMG="$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" IM_IMG="$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
           # The cloned version check is not part of the commit.
           changed=$(git status --porcelain -- . ':!.release-check')
           if [ -n "$changed" ]; then
@@ -279,6 +312,8 @@ jobs:
           MANAGER_ID: ${{ steps.manager.outputs.imageid }}
           IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
           IM_ID: ${{ steps.instance-manager.outputs.imageid }}
+          MANAGER_ARCHIVE: ${{ steps.archives.outputs.manager }}
+          IM_ARCHIVE: ${{ steps.archives.outputs.instance-manager }}
         run: |
           for d in "$MANAGER_DIGEST" "$IM_DIGEST"; do
             if [[ ! "$d" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -286,12 +321,21 @@ jobs:
               exit 1
             fi
           done
-          im_ref="$REGISTRY/instance-manager:$VERSION"
+          sum() { sha256sum "$1" | cut -d' ' -f1; }
+          # The archives must still be the ones hashed before make ran.
+          if [ "$(sum "$RUNNER_TEMP/images/manager.oci.tar")" != "$MANAGER_ARCHIVE" ] ||
+            [ "$(sum "$RUNNER_TEMP/images/instance-manager.oci.tar")" != "$IM_ARCHIVE" ]; then
+            echo "::error::An image archive changed after it was hashed, while the candidate's code ran"
+            exit 1
+          fi
+          im_ref="$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
           # A substring anywhere in the YAML is not proof: another resource
           # could mention this image while the manager still uses :dev.
+          # -require-digest: both images must be pinned by the built digest.
           if reason=$("$RUNNER_TEMP/check-installer-image" \
+            -require-digest \
             -manifest dist/install.yaml \
-            -manager "$REGISTRY/manager:$VERSION" \
+            -manager "$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" \
             -instance-manager "$im_ref" 2>&1); then
             rc=0
           else
@@ -316,14 +360,13 @@ jobs:
           out="$RUNNER_TEMP/release-dry-run"
           mkdir -p "$out"
           cp dist/install.yaml "$out/install.yaml"
-          sum() { sha256sum "$1" | cut -d' ' -f1; }
           jq -n \
             --arg version "$VERSION" --arg commit "$SHA" --arg created "$CREATED" --arg built "$BUILT" \
             --arg workflowCommit "$WORKFLOW_SHA" --arg runId "$RUN_ID" --arg runAttempt "$RUN_ATTEMPT" \
             --arg managerRef "$REGISTRY/manager:$VERSION" --arg managerDigest "$MANAGER_DIGEST" \
-            --arg managerId "$MANAGER_ID" --arg managerArchive "$(sum "$RUNNER_TEMP/images/manager.oci.tar")" \
-            --arg imRef "$im_ref" --arg imDigest "$IM_DIGEST" \
-            --arg imId "$IM_ID" --arg imArchive "$(sum "$RUNNER_TEMP/images/instance-manager.oci.tar")" \
+            --arg managerId "$MANAGER_ID" --arg managerArchive "$MANAGER_ARCHIVE" \
+            --arg imRef "$REGISTRY/instance-manager:$VERSION" --arg imDigest "$IM_DIGEST" \
+            --arg imId "$IM_ID" --arg imArchive "$IM_ARCHIVE" \
             --arg installer "$(sum "$out/install.yaml")" \
             --argjson imBuilt "$im_built" --arg imUsed "$im_used" \
             '{

@@ -14,10 +14,12 @@ name: Release PR
 #
 # The PR is written with an installation token of the repository's GitHub
 # App, not with GITHUB_TOKEN or a personal token: CI on a PR that
-# GITHUB_TOKEN opens or updates does not start on its own. An admin provisions the App and stores its Client ID
-# and private key as the repository secrets RELEASE_APP_CLIENT_ID and
-# RELEASE_APP_PRIVATE_KEY (docs/testing/release-version-check.md). Until then
-# this job warns and updates no PR.
+# GITHUB_TOKEN opens or updates does not start on its own. An admin
+# provisions the App and stores its Client ID and private key as the secrets
+# RELEASE_APP_CLIENT_ID and
+# RELEASE_APP_PRIVATE_KEY of the `release-pr` environment
+# (docs/testing/release-version-check.md). Until then this job warns and
+# updates no PR.
 on:
   push:
     branches: [main]
@@ -36,6 +38,10 @@ jobs:
     name: Open or update the release PR
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The App credential is a secret of this environment, which an admin
+    # limits to main and gives no reviewers, so that a workflow on another
+    # branch cannot read it.
+    environment: release-pr
     # The App token does all the writing; GITHUB_TOKEN gets nothing.
     permissions: {}
     steps:

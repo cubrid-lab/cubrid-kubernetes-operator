@@ -45,8 +45,9 @@ concurrency:
 
 jobs:
   release-commit:
-    # A fork has no right to these package names or to this release.
-    if: github.repository == 'cubrid-lab/cubrid-kubernetes-operator'
+    # A fork has no right to these package names or to this release, and only
+    # the workflow on main publishes.
+    if: github.repository == 'cubrid-lab/cubrid-kubernetes-operator' && github.ref == 'refs/heads/main'
     name: Check that the commit is the merged release PR
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -73,20 +74,26 @@ jobs:
           fi
 
       # GitHub creates an environment that a job names but that does not
-      # exist yet, without any protection. Publishing must wait for a person,
-      # so an environment without required reviewers stops the run here.
+      # exist yet, without any protection. Publishing must wait for another
+      # person, so the run stops here unless the production environment has
+      # required reviewers on every reviewer rule, self-review prevented,
+      # no admin bypass, and a deployment branch policy.
       - name: Require reviewers on the production environment
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          if ! rules=$(gh api "repos/$REPOSITORY/environments/production" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers | length] | add // 0'); then
-            echo "::error::Could not read the production environment; an admin creates it with required reviewers"
+          if ! gh api "repos/$REPOSITORY/environments/production" > "$RUNNER_TEMP/production.json"; then
+            echo "::error::Could not read the production environment; an admin creates it as docs/testing/release-version-check.md describes"
             exit 1
           fi
-          if ! [[ "$rules" =~ ^[0-9]+$ ]] || [ "$rules" -lt 1 ]; then
-            echo "::error::The production environment has no required reviewers; an admin adds them before anything is published"
+          if ! jq -e '
+            ([.protection_rules[]? | select(.type == "required_reviewers")]) as $rules
+            | ($rules | length) > 0
+              and all($rules[]; (.reviewers | length) > 0 and .prevent_self_review == true)
+              and .can_admins_bypass == false
+              and .deployment_branch_policy != null' "$RUNNER_TEMP/production.json" > /dev/null; then
+            echo "::error::The production environment needs required reviewers with self-review prevented, no admin bypass and a deployment branch policy; nothing is published until an admin sets them"
             exit 1
           fi
 
@@ -167,14 +174,19 @@ jobs:
     timeout-minutes: 45
     # Waits for the environment's required reviewers. They confirm the
     # publication gates of #94 first (docs/testing/release-candidate-review.md).
+    # The release itself is written with a token of the release App minted
+    # from secrets of this environment, which a job outside it cannot read;
+    # a `v*` tag ruleset that only the App may bypass keeps any other token
+    # from creating the version's tag. GHCR accepts no App token, so the
+    # images are pushed with this job's GITHUB_TOKEN (packages: write), which
+    # the environment does not protect: see
+    # docs/testing/release-version-check.md#what-protects-publication.
     environment: production
     permissions:
-      # Draft the release, attach its files and publish it (which creates the tag).
-      contents: write
+      # Check out the workflow's own scripts.
+      contents: read
       # Push the release images to GHCR.
       packages: write
-      # Mark the merged release PR as released for release-please.
-      pull-requests: write
     env:
       VERSION: ${{ inputs.version }}
       SHA: ${{ inputs.sha }}
@@ -192,6 +204,29 @@ jobs:
             hack/release-publish.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # Environment secrets of `production`: present only to a job in that
+      # environment, after its reviewers approved.
+      - name: Check that the release App credential is provisioned
+        env:
+          HAS_CLIENT_ID: ${{ secrets.RELEASE_APP_CLIENT_ID != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$HAS_CLIENT_ID" != true ] || [ "$HAS_PRIVATE_KEY" != true ]; then
+            echo "::error::The production environment has no RELEASE_APP_CLIENT_ID or RELEASE_APP_PRIVATE_KEY secret; nothing was published"
+            exit 1
+          fi
+
+      # This repository only, and only what the release needs: contents for
+      # the draft, its files, publication and tag, pull requests for the label.
+      - name: Create a release App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Download the verified files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -238,7 +273,7 @@ jobs:
             jq -r '.images[] | "| `\(.reference)` | `\(.digest)` |"' "$verified/release-dry-run.json"
           } > "$RUNNER_TEMP/release-notes.md"
 
-      # Before anything is written, with the write token, which also sees
+      # Before anything is written, with the App token, which can write and so sees
       # drafts: a tag or a published release of this version stops the run,
       # and so does a draft for another commit. A draft for this commit is an
       # earlier attempt, which the steps below resume.
@@ -246,7 +281,7 @@ jobs:
         env:
           TAG: ${{ inputs.version }}
           EXPECTED_SHA: ${{ inputs.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
         run: .release-tools/hack/release-version-check.sh
 
       - name: Push the verified images
@@ -264,7 +299,7 @@ jobs:
         env:
           TAG: ${{ inputs.version }}
           EXPECTED_SHA: ${{ inputs.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
           ASSET_DIR: ${{ runner.temp }}/assets
           NOTES_FILE: ${{ runner.temp }}/release-notes.md
         run: .release-tools/hack/release-publish.sh draft
@@ -273,7 +308,7 @@ jobs:
         env:
           TAG: ${{ inputs.version }}
           EXPECTED_SHA: ${{ inputs.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
           ASSET_DIR: ${{ runner.temp }}/assets
         run: .release-tools/hack/release-publish.sh publish
 
@@ -283,7 +318,7 @@ jobs:
       # hand (a rerun is refused, because the version is now published).
       - name: Mark the release PR as released
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           prs=$(gh api "repos/$REPOSITORY/commits/$SHA/pulls" | jq -r --arg sha "$SHA" \
             '.[] | select(.merge_commit_sha == $sha and any(.labels[]; .name == "autorelease: pending")) | .number')

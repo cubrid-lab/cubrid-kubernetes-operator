@@ -18,6 +18,7 @@ package release
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,6 +61,12 @@ func readWorkflow(t *testing.T, name string) (string, anyWorkflow) {
 	return string(data), wf
 }
 
+// Permission levels as workflow files spell them.
+const (
+	permRead  = "read"
+	permWrite = "write"
+)
+
 var pinnedAction = regexp.MustCompile(`^[\w.-]+/[\w.-]+@[0-9a-f]{40}$`)
 
 func checkPinned(t *testing.T, wf anyWorkflow) {
@@ -91,7 +98,7 @@ func TestPublishWorkflowIsGated(t *testing.T) {
 	checkPinned(t, wf)
 	for id, j := range wf.Jobs {
 		for perm, level := range j.Permissions {
-			if level == "write" && id != "publish-production" {
+			if level == permWrite && id != "publish-production" {
 				t.Errorf("job %s may write %s", id, perm)
 			}
 		}
@@ -107,7 +114,10 @@ func TestPublishWorkflowIsGated(t *testing.T) {
 	if len(needs) != 2 || needs[0] != "release-commit" || needs[1] != "verify" {
 		t.Errorf("publish-production needs %v; want release-commit and verify", pub.Needs)
 	}
-	want := map[string]string{"contents": "write", "packages": "write", "pull-requests": "write"}
+	// The release is written with the App token minted from secrets of the
+	// production environment, not with GITHUB_TOKEN, which only pushes
+	// images (GHCR takes no App token).
+	want := map[string]string{"contents": permRead, "packages": permWrite}
 	if len(pub.Permissions) != len(want) {
 		t.Errorf("publish-production permissions %v; want %v", pub.Permissions, want)
 	}
@@ -120,17 +130,32 @@ func TestPublishWorkflowIsGated(t *testing.T) {
 	if verify.Uses != "./.github/workflows/release-dry-run.yml" || verify.With["keep-images"] != true {
 		t.Errorf("verify is %q with %v; want the release dry run with keep-images", verify.Uses, verify.With)
 	}
-	if verify.Permissions["contents"] != "read" || len(verify.Permissions) != 1 {
+	if verify.Permissions["contents"] != permRead || len(verify.Permissions) != 1 {
 		t.Errorf("verify permissions %v; want contents: read", verify.Permissions)
 	}
-	// The order of the writing steps: nothing is written before the version
-	// check, and the draft is published only after it was drafted and checked.
-	order := []string{
-		"Refuse a version that already has a tag or a published release",
-		"Push the verified images",
-		"Draft the release with the verified files",
-		"Publish the checked draft",
+	if strings.Contains(text, "continue-on-error") {
+		t.Error("publish.yml continues after an error")
 	}
+}
+
+// publishOrder is the order of the writing steps: nothing is written before
+// the version check, and the draft is published only after it was drafted
+// and checked.
+var publishOrder = []string{
+	"Refuse a version that already has a tag or a published release",
+	"Push the verified images",
+	"Draft the release with the verified files",
+	"Publish the checked draft",
+}
+
+// publish-production writes in the order above, runs only the workflow's own
+// scripts, is the only job that reads secrets, and writes the release with
+// the App token from the production environment. release-commit runs only
+// in this repository from main and checks the release commit.
+func TestPublishWritesTheReleaseWithTheEnvironmentAppToken(t *testing.T) {
+	text, wf := readWorkflow(t, "publish.yml")
+	pub := wf.Jobs["publish-production"]
+	order := publishOrder
 	last := -1
 	for _, name := range order {
 		i := -1
@@ -150,13 +175,125 @@ func TestPublishWorkflowIsGated(t *testing.T) {
 			t.Errorf("step %q runs a script that is not the workflow's own copy", s.Name)
 		}
 	}
-	if strings.Contains(text, "continue-on-error") || strings.Contains(text, "secrets.") {
-		t.Error("publish.yml continues after an error or reads a secret")
+	// Secrets are read only in publish-production, after approval.
+	for id, j := range wf.Jobs {
+		for _, s := range j.Steps {
+			raw, _ := yaml.Marshal(s)
+			if strings.Contains(string(raw), "secrets.") && id != "publish-production" {
+				t.Errorf("job %s step %q reads a secret", id, s.Name)
+			}
+		}
 	}
-	if !strings.Contains(wf.Jobs["release-commit"].Steps[len(wf.Jobs["release-commit"].Steps)-2].Run,
-		".release-please-manifest.json") {
+	appStep := -1
+	for k, s := range pub.Steps {
+		if strings.HasPrefix(s.Uses, "actions/create-github-app-token@") {
+			appStep = k
+			if s.With["client-id"] != "${{ secrets.RELEASE_APP_CLIENT_ID }}" ||
+				s.With["private-key"] != "${{ secrets.RELEASE_APP_PRIVATE_KEY }}" ||
+				s.With["permission-contents"] != permWrite || s.With["permission-pull-requests"] != permWrite ||
+				len(s.With) != 4 {
+				t.Errorf("the publishing App token inputs are %v", s.With)
+			}
+		}
+	}
+	if appStep < 0 {
+		t.Fatal("publish-production mints no App token")
+	}
+	for _, s := range pub.Steps {
+		for _, name := range []string{order[0], order[2], order[3], "Mark the release PR as released"} {
+			if s.Name != name {
+				continue
+			}
+			tok := s.Env["GITHUB_TOKEN"] + s.Env["GH_TOKEN"]
+			if tok != "${{ steps.app.outputs.token }}" {
+				t.Errorf("step %q writes with %q, not the App token", s.Name, tok)
+			}
+		}
+	}
+	rc := wf.Jobs["release-commit"]
+	var manifestCheck bool
+	for _, s := range rc.Steps {
+		manifestCheck = manifestCheck || strings.Contains(s.Run, "git show \"$1:.release-please-manifest.json\"")
+	}
+	if !manifestCheck {
 		t.Error("the release commit is not checked against the manifest")
 	}
+	const mainOnly = "if: github.repository == 'cubrid-lab/cubrid-kubernetes-operator' && " +
+		"github.ref == 'refs/heads/main'"
+	if !strings.Contains(text, mainOnly) {
+		t.Error("release-commit does not require the repository and the main ref")
+	}
+}
+
+// The reviewer guard passes only an environment whose every reviewer rule has
+// reviewers and prevents self-review, with no admin bypass and a deployment
+// branch policy.
+func TestPublishRequiresAProtectedEnvironment(t *testing.T) {
+	_, wf := readWorkflow(t, "publish.yml")
+	var script string
+	for _, s := range wf.Jobs["release-commit"].Steps {
+		if s.Name == "Require reviewers on the production environment" {
+			script = s.Run
+		}
+	}
+	if script == "" {
+		t.Fatal("no reviewer guard")
+	}
+	rule := func(n int, selfReview bool) string {
+		reviewers := strings.TrimSuffix(strings.Repeat(`{"type":"User"},`, n), ",")
+		return fmt.Sprintf(`{"type":"required_reviewers","prevent_self_review":%t,"reviewers":[%s]}`, selfReview, reviewers)
+	}
+	env := func(bypass bool, policy string, rules ...string) string {
+		return fmt.Sprintf(`{"name":"production","can_admins_bypass":%t,`+
+			`"deployment_branch_policy":%s,"protection_rules":[%s]}`, bypass, policy, strings.Join(rules, ","))
+	}
+	const policy = `{"protected_branches":false,"custom_branch_policies":true}`
+	cases := []struct {
+		name, body string
+		ok         bool
+	}{
+		{"protected", env(false, policy, rule(1, true)), true},
+		{"no rules", env(false, policy), false},
+		{"no reviewers", env(false, policy, rule(0, true)), false},
+		{"self-review allowed", env(false, policy, rule(1, false)), false},
+		{"one of two rules allows self-review", env(false, policy, rule(1, true), rule(1, false)), false},
+		{"admins bypass", env(true, policy, rule(1, true)), false},
+		{"no branch policy", env(false, "null", rule(1, true)), false},
+		{"the field is missing",
+			`{"protection_rules":[` + rule(1, true) + `],"deployment_branch_policy":` + policy + `}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			body := filepath.Join(bin, "env.json")
+			if err := os.WriteFile(body, []byte(c.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gh := "#!/bin/sh\ncat '" + body + "'\n"
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			code, out := runStepWithPath(t, bin, script, "REPOSITORY="+repository, "RUNNER_TEMP="+t.TempDir())
+			if (code == 0) != c.ok {
+				t.Errorf("exit %d, want ok=%t\n%s", code, c.ok, out)
+			}
+		})
+	}
+	t.Run("the environment cannot be read", func(t *testing.T) {
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if code, out := runStepWithPath(t, bin, script, "REPOSITORY="+repository, "RUNNER_TEMP="+t.TempDir()); code == 0 {
+			t.Errorf("exit 0\n%s", out)
+		}
+	})
+}
+
+// runStepWithPath runs a step's script like runStep with bin first on PATH.
+func runStepWithPath(t *testing.T, bin, script string, env ...string) (int, string) {
+	t.Helper()
+	return runStep(t, t.TempDir(), "export PATH='"+bin+"':\"$PATH\"\n"+script, env...)
 }
 
 // release-please only opens or updates the release PR, with the App token:
@@ -175,6 +312,10 @@ func TestReleasePleaseWorkflowNeverPublishes(t *testing.T) {
 	}
 	if len(j.Permissions) != 0 {
 		t.Errorf("job permissions %v; want none", j.Permissions)
+	}
+	// The App key is a secret of an environment limited to main.
+	if j.Environment != "release-pr" {
+		t.Errorf("release-pr runs in environment %v; want release-pr", j.Environment)
 	}
 	var rp, app *step
 	for i := range j.Steps {
@@ -199,7 +340,7 @@ func TestReleasePleaseWorkflowNeverPublishes(t *testing.T) {
 		rp.With["manifest-file"] != ".release-please-manifest.json" {
 		t.Errorf("release-please inputs %v", rp.With)
 	}
-	if app.With["permission-contents"] != "write" || app.With["permission-pull-requests"] != "write" ||
+	if app.With["permission-contents"] != permWrite || app.With["permission-pull-requests"] != permWrite ||
 		len(app.With) != 4 {
 		t.Errorf("App token inputs %v; want the credential and contents and pull-requests write only", app.With)
 	}

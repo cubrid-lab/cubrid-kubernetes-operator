@@ -18,10 +18,12 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,7 +73,20 @@ type github struct {
 	failUpload string
 	// failPublishAfterApply makes the publishing PATCH apply but answer 502.
 	failPublishAfterApply bool
+	// tamperOnPublish changes install.yaml when the release is published.
+	tamperOnPublish bool
+	// lateTag, when set, is the commit of a tag of the version that appears
+	// after lateTagAfter more tag lookups.
+	lateTag      string
+	lateTagAfter int
 }
+
+// The two modes of hack/release-publish.sh, and the name field of the API.
+const (
+	modeDraft   = "draft"
+	modePublish = "publish"
+	fieldName   = "name"
+)
 
 func newGitHub() *github { return &github{tags: map[string]string{}, nextID: 100} }
 
@@ -88,7 +103,7 @@ func (g *github) release(id int) *ghRelease {
 
 func (g *github) releaseJSON(r *ghRelease) map[string]any {
 	return map[string]any{"id": r.ID, "tag_name": r.Tag, "draft": r.Draft, "target_commitish": r.Target,
-		"name": r.Tag, "body": r.Body}
+		fieldName: r.Tag, "body": r.Body}
 }
 
 func reply(w http.ResponseWriter, code int, v any) {
@@ -123,12 +138,7 @@ func (g *github) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	atoi := func(s string) int { n, _ := strconv.Atoi(s); return n }
 	switch {
 	case req.Method == http.MethodGet && strings.HasPrefix(p, tagRefPrefix):
-		tag := strings.TrimPrefix(p, tagRefPrefix)
-		if target, ok := g.tags[tag]; ok {
-			reply(w, 200, map[string]any{"ref": "refs/tags/" + tag, "object": map[string]any{"sha": target, "type": "commit"}})
-			return
-		}
-		reply(w, 404, notFound)
+		g.serveTag(w, strings.TrimPrefix(p, tagRefPrefix))
 	case req.Method == http.MethodGet && p == releasesPrefix:
 		list := []any{}
 		if req.URL.Query().Get("page") == "1" {
@@ -161,62 +171,23 @@ func (g *github) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			reply(w, 404, notFound)
 			return
 		}
-		if req.Method == http.MethodPatch {
-			var in map[string]any
-			_ = json.Unmarshal(body, &in)
-			if !r.Draft {
-				g.problems = append(g.problems, "a published release was edited")
-			}
-			if b, ok := in["body"].(string); ok {
-				r.Body = b
-			}
-			if d, ok := in["draft"].(bool); ok && !d {
-				r.Draft = false
-				if _, ok := g.tags[r.Tag]; !ok {
-					g.tags[r.Tag] = r.Target
-				}
-				if g.failPublishAfterApply {
-					g.failPublishAfterApply = false
-					reply(w, 502, "bad gateway")
-					return
-				}
-			}
+		if req.Method == http.MethodPatch && !g.patchRelease(r, body) {
+			reply(w, 502, "bad gateway")
+			return
 		}
 		reply(w, 200, g.releaseJSON(r))
 	case req.Method == http.MethodGet && reAssets.MatchString(p):
 		r := g.release(atoi(reAssets.FindStringSubmatch(p)[1]))
 		list := []any{}
 		for _, a := range r.Assets {
-			list = append(list, map[string]any{"id": a.ID, "name": a.Name, "state": "uploaded", "size": len(a.Data)})
+			list = append(list, map[string]any{"id": a.ID, fieldName: a.Name, "state": "uploaded", "size": len(a.Data)})
 		}
 		reply(w, 200, list)
 	case reAsset.MatchString(p):
-		aid := atoi(reAsset.FindStringSubmatch(p)[1])
-		for _, r := range g.releases {
-			for i, a := range r.Assets {
-				if a.ID != aid {
-					continue
-				}
-				if req.Method == http.MethodDelete {
-					if !r.Draft {
-						g.problems = append(g.problems, "a file of a published release was deleted")
-					}
-					r.Assets = append(r.Assets[:i], r.Assets[i+1:]...)
-					w.WriteHeader(204)
-					return
-				}
-				if req.Header.Get("Accept") != "application/octet-stream" {
-					g.problems = append(g.problems, "an asset download without the octet-stream Accept")
-				}
-				w.WriteHeader(200)
-				_, _ = w.Write(a.Data)
-				return
-			}
-		}
-		reply(w, 404, notFound)
+		g.serveAsset(w, req, atoi(reAsset.FindStringSubmatch(p)[1]))
 	case req.Method == http.MethodPost && reUpload.MatchString(p):
 		r := g.release(atoi(reUpload.FindStringSubmatch(p)[1]))
-		name := req.URL.Query().Get("name")
+		name := req.URL.Query().Get(fieldName)
 		if r == nil || !r.Draft {
 			g.problems = append(g.problems, "a file attached to a release that is not a draft")
 			reply(w, 422, "{}")
@@ -228,11 +199,86 @@ func (g *github) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		r.Assets = append(r.Assets, &ghAsset{ID: g.id(), Name: name, Data: body})
-		reply(w, 201, map[string]any{"id": r.Assets[len(r.Assets)-1].ID, "name": name})
+		reply(w, 201, map[string]any{"id": r.Assets[len(r.Assets)-1].ID, fieldName: name})
 	default:
 		g.problems = append(g.problems, "unexpected request "+req.Method+" "+p)
 		reply(w, 404, notFound)
 	}
+}
+
+// serveTag answers the tag lookup; a late tag appears after the configured
+// number of lookups.
+func (g *github) serveTag(w http.ResponseWriter, tag string) {
+	if g.lateTag != "" {
+		if g.lateTagAfter == 0 {
+			g.tags[tag] = g.lateTag
+			g.lateTag = ""
+		}
+		g.lateTagAfter--
+	}
+	if target, ok := g.tags[tag]; ok {
+		reply(w, 200, map[string]any{"ref": "refs/tags/" + tag, "object": map[string]any{"sha": target, "type": "commit"}})
+		return
+	}
+	reply(w, 404, notFound)
+}
+
+// patchRelease applies a PATCH; publishing creates the tag at the target.
+// It returns false when the answer is to be lost after the change applied.
+func (g *github) patchRelease(r *ghRelease, body []byte) bool {
+	var in map[string]any
+	_ = json.Unmarshal(body, &in)
+	if !r.Draft {
+		g.problems = append(g.problems, "a published release was edited")
+	}
+	if b, ok := in["body"].(string); ok {
+		r.Body = b
+	}
+	if d, ok := in["draft"].(bool); !ok || d {
+		return true
+	}
+	r.Draft = false
+	if _, ok := g.tags[r.Tag]; !ok {
+		g.tags[r.Tag] = r.Target
+	}
+	if g.tamperOnPublish {
+		for _, a := range r.Assets {
+			if a.Name == "install.yaml" {
+				a.Data = []byte("kind: Secret\n")
+			}
+		}
+	}
+	if g.failPublishAfterApply {
+		g.failPublishAfterApply = false
+		return false
+	}
+	return true
+}
+
+// serveAsset downloads or deletes one release file.
+func (g *github) serveAsset(w http.ResponseWriter, req *http.Request, aid int) {
+	for _, r := range g.releases {
+		for i, a := range r.Assets {
+			if a.ID != aid {
+				continue
+			}
+			if req.Method == http.MethodDelete {
+				if !r.Draft {
+					g.problems = append(g.problems, "a file of a published release was deleted")
+				}
+				r.Assets = append(r.Assets[:i], r.Assets[i+1:]...)
+				w.WriteHeader(204)
+				return
+			}
+			if req.Header.Get("Accept") != "application/octet-stream" {
+				g.problems = append(g.problems, "an asset download without the octet-stream Accept")
+			}
+			w.WriteHeader(200)
+			_, _ = w.Write(a.Data)
+			return
+		}
+	}
+	reply(w, 404, notFound)
 }
 
 func (g *github) snapshot() (releases []ghRelease, tags map[string]string, writes []string) {
@@ -241,10 +287,7 @@ func (g *github) snapshot() (releases []ghRelease, tags map[string]string, write
 	for _, r := range g.releases {
 		releases = append(releases, *r)
 	}
-	tags = map[string]string{}
-	for k, v := range g.tags {
-		tags[k] = v
-	}
+	tags = maps.Clone(g.tags)
 	return releases, tags, append([]string(nil), g.writes...)
 }
 
@@ -318,7 +361,7 @@ func TestPublishDraftsThenPublishes(t *testing.T) {
 	defer srv.Close()
 	assets := assetDir(t)
 
-	if code, out := publish(t, srv, "draft", assets); code != 0 {
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 {
 		t.Fatalf("draft: exit %d\n%s", code, out)
 	}
 	rels, tags, _ := g.snapshot()
@@ -328,14 +371,14 @@ func TestPublishDraftsThenPublishes(t *testing.T) {
 	if !strings.Contains(rels[0].Body, "first release") {
 		t.Errorf("the draft's notes are %q", rels[0].Body)
 	}
-	if code, out := publish(t, srv, "publish", assets); code != 0 {
+	if code, out := publish(t, srv, modePublish, assets); code != 0 {
 		t.Fatalf("publish: exit %d\n%s", code, out)
 	}
 	rels, tags, writes := g.snapshot()
 	if len(rels) != 1 || rels[0].Draft || tags[version] != sha {
 		t.Fatalf("after publishing: releases %+v, tags %v", rels, tags)
 	}
-	for _, mode := range []string{"draft", "publish"} {
+	for _, mode := range []string{modeDraft, modePublish} {
 		code, out := publish(t, srv, mode, assets)
 		if code == 0 || !strings.Contains(out, outPublished) {
 			t.Errorf("%s again after publication: exit %d\n%s", mode, code, out)
@@ -357,12 +400,12 @@ func TestPublishRerunAfterAPartWayFailure(t *testing.T) {
 	defer srv.Close()
 	assets := assetDir(t)
 
-	code, out := publish(t, srv, "draft", assets)
+	code, out := publish(t, srv, modeDraft, assets)
 	if code == 0 || !strings.Contains(out, "Could not attach SHA256SUMS") {
 		t.Fatalf("a failed upload: exit %d\n%s", code, out)
 	}
 	_, _, before := g.snapshot()
-	code, out = publish(t, srv, "publish", assets)
+	code, out = publish(t, srv, modePublish, assets)
 	if code == 0 || !strings.Contains(out, "not the verified files") {
 		t.Errorf("publishing an incomplete draft: exit %d\n%s", code, out)
 	}
@@ -371,10 +414,10 @@ func TestPublishRerunAfterAPartWayFailure(t *testing.T) {
 		t.Fatalf("the refused publication wrote %v; tags %v", after[len(before):], tags)
 	}
 
-	if code, out := publish(t, srv, "draft", assets); code != 0 || !strings.Contains(out, outResume) {
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 || !strings.Contains(out, outResume) {
 		t.Fatalf("the rerun: exit %d\n%s", code, out)
 	}
-	if code, out := publish(t, srv, "publish", assets); code != 0 {
+	if code, out := publish(t, srv, modePublish, assets); code != 0 {
 		t.Fatalf("publish after the rerun: exit %d\n%s", code, out)
 	}
 	rels, tags, _ = g.snapshot()
@@ -392,10 +435,10 @@ func TestPublishLostCreateAnswerIsResumed(t *testing.T) {
 	srv := httptest.NewServer(g)
 	defer srv.Close()
 	assets := assetDir(t)
-	if code, out := publish(t, srv, "draft", assets); code == 0 {
+	if code, out := publish(t, srv, modeDraft, assets); code == 0 {
 		t.Fatalf("a lost answer: exit 0\n%s", out)
 	}
-	if code, out := publish(t, srv, "draft", assets); code != 0 || !strings.Contains(out, outResume) {
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 || !strings.Contains(out, outResume) {
 		t.Fatalf("the rerun: exit %d\n%s", code, out)
 	}
 	if rels, _, _ := g.snapshot(); len(rels) != 1 {
@@ -412,10 +455,10 @@ func TestPublishLostPublishAnswerIsConfirmed(t *testing.T) {
 	srv := httptest.NewServer(g)
 	defer srv.Close()
 	assets := assetDir(t)
-	if code, out := publish(t, srv, "draft", assets); code != 0 {
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 {
 		t.Fatalf("draft: exit %d\n%s", code, out)
 	}
-	if code, out := publish(t, srv, "publish", assets); code != 0 || !strings.Contains(out, "Published "+version) {
+	if code, out := publish(t, srv, modePublish, assets); code != 0 || !strings.Contains(out, "Published "+version) {
 		t.Fatalf("publish with a lost answer: exit %d\n%s", code, out)
 	}
 	requireClean(t, g)
@@ -445,7 +488,7 @@ func TestPublishRefusesAnExistingVersion(t *testing.T) {
 			srv := httptest.NewServer(g)
 			defer srv.Close()
 			assets := assetDir(t)
-			for _, mode := range []string{"draft", "publish"} {
+			for _, mode := range []string{modeDraft, modePublish} {
 				code, out := publish(t, srv, mode, assets)
 				if code == 0 || !strings.Contains(out, c.wantOut) {
 					t.Errorf("%s: exit %d, want %q\n%s", mode, code, c.wantOut, out)
@@ -465,7 +508,7 @@ func TestPublishRefusesAChangedDraft(t *testing.T) {
 	srv := httptest.NewServer(g)
 	defer srv.Close()
 	assets := assetDir(t)
-	if code, out := publish(t, srv, "draft", assets); code != 0 {
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 {
 		t.Fatalf("draft: exit %d\n%s", code, out)
 	}
 	g.mu.Lock()
@@ -475,7 +518,7 @@ func TestPublishRefusesAChangedDraft(t *testing.T) {
 		}
 	}
 	g.mu.Unlock()
-	code, out := publish(t, srv, "publish", assets)
+	code, out := publish(t, srv, modePublish, assets)
 	if code == 0 || !strings.Contains(out, "is not the verified file") {
 		t.Errorf("publishing a changed draft: exit %d\n%s", code, out)
 	}
@@ -483,6 +526,51 @@ func TestPublishRefusesAChangedDraft(t *testing.T) {
 		t.Error("a changed draft was published")
 	}
 	requireClean(t, g)
+}
+
+// A tag made between the draft and the publication, by hand or by another
+// workflow, is refused just before the publishing request.
+func TestPublishRefusesATagMadeAfterTheDraft(t *testing.T) {
+	g := newGitHub()
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+	assets := assetDir(t)
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 {
+		t.Fatalf("draft: exit %d\n%s", code, out)
+	}
+	_, _, before := g.snapshot()
+	// The version check's lookup still finds no tag; the tag appears before
+	// the next lookup, the one right before the publishing request.
+	g.mu.Lock()
+	g.lateTag, g.lateTagAfter = otherSHA, 1
+	g.mu.Unlock()
+	code, out := publish(t, srv, modePublish, assets)
+	if code == 0 || !strings.Contains(out, "appeared or could not be checked just before publication") {
+		t.Errorf("publish with a late tag: exit %d\n%s", code, out)
+	}
+	rels, _, after := g.snapshot()
+	if len(after) != len(before) || !rels[0].Draft {
+		t.Errorf("a release was published over an existing tag: writes %v", after[len(before):])
+	}
+	requireClean(t, g)
+}
+
+// The published release is checked again: a file that changed during the
+// publication fails the step.
+func TestPublishChecksThePublishedFiles(t *testing.T) {
+	g := newGitHub()
+	g.tamperOnPublish = true
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+	assets := assetDir(t)
+	if code, out := publish(t, srv, modeDraft, assets); code != 0 {
+		t.Fatalf("draft: exit %d\n%s", code, out)
+	}
+	code, out := publish(t, srv, modePublish, assets)
+	want := "install.yaml on the published release of " + version + " is not the verified file"
+	if code == 0 || !strings.Contains(out, want) {
+		t.Errorf("a published file that changed: exit %d\n%s", code, out)
+	}
 }
 
 // Files that do not match SHA256SUMS are refused before any request.
@@ -494,7 +582,7 @@ func TestPublishRefusesUnverifiedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(assets, "install.yaml"), []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := publish(t, srv, "draft", assets); code == 0 || !strings.Contains(out, "do not match SHA256SUMS") {
+	if code, out := publish(t, srv, modeDraft, assets); code == 0 || !strings.Contains(out, "do not match SHA256SUMS") {
 		t.Errorf("unverified files: exit %d\n%s", code, out)
 	}
 	if _, _, writes := g.snapshot(); len(writes) != 0 {
@@ -575,13 +663,19 @@ func newPushEnv(t *testing.T) *pushEnv {
 		Digest           string `json:"digest"`
 		OciArchiveSha256 string `json:"ociArchiveSha256"`
 	}
-	var images []img
-	for i, name := range []string{"manager", "instance-manager"} {
+	images := make([]img, 0, 2)
+	for _, name := range []string{"manager", "instance-manager"} {
 		archive := filepath.Join(e.archives, name+".oci.tar")
 		if err := os.WriteFile(archive, []byte("archive of "+name), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		d := digestOf("ab"[i])
+		// The stand-in skopeo answers inspect --raw with this manifest; the
+		// build's digest is its SHA-256.
+		manifest := []byte(`{"schemaVersion":2,"image":"` + name + `"}`)
+		if err := os.WriteFile(archive+".manifest", manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		d := fmt.Sprintf("sha256:%x", sha256.Sum256(manifest))
 		if err := os.WriteFile(archive+".digest", []byte(d), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -596,8 +690,10 @@ func newPushEnv(t *testing.T) *pushEnv {
 	if err := os.WriteFile(e.record, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// skopeo inspect --raw oci-archive:<path>, or
 	// skopeo copy [flags] oci-archive:<path> docker://<host>/<repo>/<image>:<tag>
 	skopeo := `#!/bin/bash
+if [ "$1" = inspect ]; then src=${@: -1}; exec cat "${src#oci-archive:}.manifest"; fi
 printf '%s\n' "$*" >> '` + e.pushLog + `'
 src=${@: -2:1}; dst=${@: -1}
 src=${src#oci-archive:}; ref=${dst##*/}
@@ -688,7 +784,8 @@ func TestPushImagesRefusesBeforeAnyPush(t *testing.T) {
 	t.Run("a tag with other bytes", func(t *testing.T) {
 		e := newPushEnv(t)
 		// The second image's tag is taken, so the first is not pushed either.
-		if err := os.WriteFile(filepath.Join(e.reg.dir, "instance-manager_"+version), []byte(digestOf('c')), 0o644); err != nil {
+		taken := filepath.Join(e.reg.dir, "instance-manager_"+version)
+		if err := os.WriteFile(taken, []byte(digestOf('c')), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		code, out := e.run(t)
@@ -703,6 +800,18 @@ func TestPushImagesRefusesBeforeAnyPush(t *testing.T) {
 		}
 		code, out := e.run(t)
 		if code == 0 || !strings.Contains(out, "not the one the verified build recorded") || len(e.pushes()) != 0 {
+			t.Errorf("exit %d, pushes %v\n%s", code, e.pushes(), out)
+		}
+	})
+	t.Run("an archive whose manifest is not the built digest", func(t *testing.T) {
+		e := newPushEnv(t)
+		// The archive's checksum still matches the record; only the manifest
+		// skopeo would push differs.
+		if err := os.WriteFile(filepath.Join(e.archives, "manager.oci.tar.manifest"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out := e.run(t)
+		if code == 0 || !strings.Contains(out, "does not hold the manifest") || len(e.pushes()) != 0 {
 			t.Errorf("exit %d, pushes %v\n%s", code, e.pushes(), out)
 		}
 	})

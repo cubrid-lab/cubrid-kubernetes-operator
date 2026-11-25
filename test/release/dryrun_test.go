@@ -18,6 +18,7 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -111,7 +112,7 @@ func TestDryRunCannotPublish(t *testing.T) {
 	if len(wf.Permissions) != 0 {
 		t.Errorf("workflow permissions %v; want none", wf.Permissions)
 	}
-	if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
+	if len(j.Permissions) != 1 || j.Permissions["contents"] != permRead {
 		t.Errorf("job permissions %v; want contents: read only", j.Permissions)
 	}
 	forbidden := []string{
@@ -511,18 +512,49 @@ func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 // elsewhere (#124).
 func TestDryRunBuildsTheInstallerWithTheBuiltInstanceManagerImage(t *testing.T) {
 	_, _, j := readDryRun(t)
-	const ref = "$REGISTRY/instance-manager:$VERSION"
-	installer := j.Steps[stepIndex(t, j, "Build the installer manifest")].Run
-	if !strings.Contains(installer, `make build-installer IMG="$REGISTRY/manager:$VERSION" IM_IMG="`+ref+`"`) {
-		t.Errorf("the installer is not built with IM_IMG=%s:\n%s", ref, installer)
+	const ref = "$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
+	installerStep := j.Steps[stepIndex(t, j, "Build the installer manifest")]
+	if !strings.Contains(installerStep.Run,
+		`make build-installer IMG="$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" IM_IMG="`+ref+`"`) {
+		t.Errorf("the installer is not built with both images pinned by digest:\n%s", installerStep.Run)
+	}
+	if installerStep.Env["MANAGER_DIGEST"] != "${{ steps.manager.outputs.digest }}" ||
+		installerStep.Env["IM_DIGEST"] != "${{ steps.instance-manager.outputs.digest }}" {
+		t.Errorf("the installer's digests are not the build outputs: %v", installerStep.Env)
 	}
 	if tags := j.Steps[stepIndex(t, j, "Build the Instance Manager image without pushing")].With["tags"]; tags !=
 		"${{ env.REGISTRY }}/instance-manager:${{ inputs.version }}" {
 		t.Errorf("the Instance Manager image is built as %v, not the image the installer names", tags)
 	}
-	if record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run; !strings.Contains(record,
-		`im_ref="`+ref+`"`) {
-		t.Error("the record checks for another Instance Manager image than the installer names")
+	record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run
+	if !strings.Contains(record, `im_ref="`+ref+`"`) || !strings.Contains(record, "-require-digest") ||
+		!strings.Contains(record, `-manager "$REGISTRY/manager:$VERSION@$MANAGER_DIGEST"`) {
+		t.Error("the record does not require the installer to name both built images by digest")
+	}
+}
+
+// The archives are hashed, and their manifests compared with the build
+// digests, before any of the candidate's code runs; the record uses those
+// hashes and refuses an archive that changed afterwards.
+func TestDryRunHashesTheArchivesBeforeCandidateCode(t *testing.T) {
+	_, _, j := readDryRun(t)
+	hash := stepIndex(t, j, "Record the archive checksums before any candidate code runs")
+	for k, s := range j.Steps {
+		if k <= hash && (strings.Contains(s.Run, "make ") || strings.Contains(s.Run, "go build")) {
+			t.Errorf("step %q runs before the archives are hashed", s.Name)
+		}
+	}
+	if hash < stepIndex(t, j, "Build the Instance Manager image without pushing") {
+		t.Error("the archives are hashed before they are built")
+	}
+	if !strings.Contains(j.Steps[hash].Run, `skopeo inspect --raw "oci-archive:$archive"`) {
+		t.Error("the archive's manifest digest is not compared with the build digest")
+	}
+	recordStep := j.Steps[stepIndex(t, j, "Record the digests and checksums")]
+	if recordStep.Env["MANAGER_ARCHIVE"] != "${{ steps.archives.outputs.manager }}" ||
+		recordStep.Env["IM_ARCHIVE"] != "${{ steps.archives.outputs.instance-manager }}" ||
+		!strings.Contains(recordStep.Run, "changed after it was hashed") {
+		t.Error("the record does not hold the archives to the early checksums")
 	}
 }
 
@@ -546,15 +578,19 @@ func runRecordStep(t *testing.T, script string) {
 	if err := os.MkdirAll(filepath.Join(runnerTemp, "images"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The checksums the early step recorded for the archives.
+	archiveSums := map[string]string{}
 	for _, name := range []string{"manager.oci.tar", "instance-manager.oci.tar"} {
 		if err := os.WriteFile(filepath.Join(runnerTemp, "images", name), []byte(name), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		archiveSums[name] = fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
 	}
 	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := "sha256:" + strings.Repeat("0", 64)
 	installer := func(args string) string {
 		return `apiVersion: apps/v1
 kind: Deployment
@@ -567,22 +603,23 @@ spec:
     spec:
       containers:
         - name: manager
-          image: ` + registry + `/manager:` + version + `
+          image: ` + registry + `/manager:` + version + `@` + digest + `
           args: [--leader-elect` + args + `]
 `
 	}
-	digest := "sha256:" + strings.Repeat("0", 64)
+	pinnedIM := registry + "/instance-manager:" + version + "@" + digest
 	cases := []struct {
 		name, args string
 		built      bool
 		used       string
 	}{
-		{"the built image", ", --instance-manager-image=" + registry + "/instance-manager:" + version,
-			true, registry + "/instance-manager:" + version},
+		{"the built image", ", --instance-manager-image=" + pinnedIM, true, pinnedIM},
 		{"no flag", "", false, registry +
 			"/instance-manager:dev, the manager's built-in default: install.yaml sets no --instance-manager-image"},
 		{"another image", ", -instance-manager-image, example/im:1", false,
 			`not verified: the manager uses Instance Manager image "example/im:1"`},
+		{"the built image by tag only", ", --instance-manager-image=" + registry + "/instance-manager:" + version,
+			false, `not verified: the manager uses Instance Manager image "` + registry + `/instance-manager:` + version + `"`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -607,6 +644,7 @@ spec:
 			code, out := runStep(t, work, script, "REGISTRY="+registry, "VERSION="+version, "SHA="+sha,
 				"CREATED=c", "BUILT=b", "WORKFLOW_SHA="+otherSHA, "RUN_ID=1", "RUN_ATTEMPT=1",
 				"MANAGER_DIGEST="+digest, "MANAGER_ID="+digest, "IM_DIGEST="+digest, "IM_ID="+digest,
+				"MANAGER_ARCHIVE="+archiveSums["manager.oci.tar"], "IM_ARCHIVE="+archiveSums["instance-manager.oci.tar"],
 				"RUNNER_TEMP="+runnerTemp, "GITHUB_OUTPUT="+outFile)
 			if code != 0 {
 				t.Fatalf("the record step failed: exit %d\n%s", code, out)
@@ -622,4 +660,16 @@ spec:
 			}
 		})
 	}
+	// An archive that changed after the early step hashed it, while the
+	// candidate's code ran, stops the record.
+	t.Run("an archive that changed", func(t *testing.T) {
+		work := t.TempDir()
+		code, out := runStep(t, work, script, "REGISTRY="+registry, "VERSION="+version,
+			"MANAGER_DIGEST="+digest, "IM_DIGEST="+digest,
+			"MANAGER_ARCHIVE="+archiveSums["manager.oci.tar"], "IM_ARCHIVE="+strings.Repeat("0", 64),
+			"RUNNER_TEMP="+runnerTemp, "GITHUB_OUTPUT="+filepath.Join(work, "out"))
+		if code == 0 || !strings.Contains(out, "changed after it was hashed") {
+			t.Errorf("exit %d\n%s", code, out)
+		}
+	})
 }
