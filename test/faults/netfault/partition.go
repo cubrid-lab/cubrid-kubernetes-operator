@@ -118,7 +118,8 @@ type Record struct {
 // back showed it gone. The rules of one endpoint are installed by one
 // command, which adds the jump to the drop chains last, and removed by one,
 // so they share their times. A rule whose install command failed has no
-// RuleTime; one not seen removed has no RemovedAt.
+// RuleTime; one not seen removed, or seen removed only after a removal
+// command that failed, has no RemovedAt.
 type RuleTime struct {
 	// Endpoint is the endpoint whose network namespace holds the rule, Path
 	// the traffic it drops, as "sender -> receiver".
@@ -406,7 +407,10 @@ func (p *Partition) installed(name string, drops []RuleTime, t time.Time) {
 }
 
 // removed records that the drop rules of the endpoint named name were taken
-// away at t, unless an earlier removal was already recorded.
+// away at t, unless an earlier removal was already recorded. It sets every
+// rule of the endpoint at once because one command removes them all: it
+// deletes the jumps to the drop chains and the chains themselves, so no rule
+// of the endpoint outlives another.
 func (p *Partition) removed(name string, t time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -754,7 +758,12 @@ const removeScript = ": netfault remove\n" +
 const removeAttempts = 3
 
 // removeDrops removes the endpoint's drop chains, reads the namespace back and
-// tries again while any is left. It returns what is left.
+// tries again while any is left. It returns what is left. The removal time
+// recorded is that of the attempt whose read-back first showed no drop rule,
+// and only when that attempt's own command succeeded. When that command
+// failed, no time is recorded: an earlier attempt's command succeeded while
+// the rules were still read back, so its time would be too early, and the
+// failed command's effect is not known.
 func (p *Partition) removeDrops(ctx context.Context, e Endpoint) ([]string, error) {
 	var left []string
 	var errs []error

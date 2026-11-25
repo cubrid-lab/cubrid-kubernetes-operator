@@ -2185,7 +2185,10 @@ Other measurements, from the cut's issue on the run's clock unless named:
 `faultConfirmedWithin`, `dropRulesInstalledWithin` (the last drop rule took
 effect, so every rule was in place) and `dropRulesRemovedWithin` (the last
 was taken away; `unknown` while any rule was not seen removed), both from
-`dropRules` in `cut.json`, `triggerObservedWithin`,
+`dropRules` in `cut.json`; with `-partition-repeat`, the second cut's own
+values, from the second cut's issue and its `repeat/cut.json`, are
+`secondCut.dropRulesInstalledWithin` and `secondCut.dropRulesRemovedWithin`;
+`triggerObservedWithin`,
 `targetClaimedActiveMasterWithin`, `quarantineSeenWithin` (detection),
 `rwScaledDownWithin` (Broker scale-down), `rwPodsGoneWithin` (actual Pod
 termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
@@ -2239,7 +2242,12 @@ Evidence, under `S07/<variant>/`:
   rule, `installedAt` and `removedAt`. Both are UTC on the run's clock,
   taken right after the command that installed or removed the rules in
   that namespace returned successfully (and, for the removal, the rules
-  read back showed them gone). One command installs all the rules of one
+  read back showed them gone). A rule first read back gone after a removal
+  command that failed has no `removedAt`: an earlier command's time would
+  be too early, and the failed one's effect is not known. The top-level
+  `removedAt` of `cut.json` is different: it is when the whole removal
+  finished, after every path was probed open again and the counting rules
+  were taken away. One command installs all the rules of one
   namespace, adding the jump to the drop chains last, so they share a time;
   an inbound cut has the member rules in the cut-off member, an outbound cut
   in each other member, each at its own time. A rule whose install command

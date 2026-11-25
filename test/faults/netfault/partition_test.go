@@ -961,8 +961,12 @@ func TestPartitionRecordsWhenEachDropRuleTookEffect(t *testing.T) {
 			if err := p.Prepare(ctx); err != nil {
 				t.Fatal(err)
 			}
+			// Each member's install command takes this long, so separate
+			// commands return at least this far apart, whatever the clock's
+			// resolution.
+			const latency = 20 * time.Millisecond
 			n.mu.Lock()
-			n.latency[opInject] = 20 * time.Millisecond
+			n.latency[opInject] = latency
 			n.mu.Unlock()
 			beforeInject := time.Now().UTC()
 			if err := p.Inject(ctx); err != nil {
@@ -991,8 +995,8 @@ func TestPartitionRecordsWhenEachDropRuleTookEffect(t *testing.T) {
 					t.Errorf("%s installed at %s, outside the injection %s to %s", w.path, r.InstalledAt,
 						beforeInject, afterInject)
 				}
-				if r.RemovedAt == nil || !r.RemovedAt.After(r.InstalledAt) || r.RemovedAt.After(afterRemove) {
-					t.Errorf("%s removed at %v, want after %s and before %s", w.path, r.RemovedAt, r.InstalledAt,
+				if r.RemovedAt == nil || r.RemovedAt.Before(afterInject) || r.RemovedAt.After(afterRemove) {
+					t.Errorf("%s removed at %v, want between %s and %s", w.path, r.RemovedAt, afterInject,
 						afterRemove)
 				}
 				if at, seen := installedAt[w.endpoint]; seen && !at.Equal(r.InstalledAt) {
@@ -1003,8 +1007,9 @@ func TestPartitionRecordsWhenEachDropRuleTookEffect(t *testing.T) {
 			}
 			for a, at := range installedAt {
 				for b, bt := range installedAt {
-					if a < b && at.Equal(bt) {
-						t.Errorf("%s and %s, installed by separate commands, share the time %s", a, b, at)
+					if d := bt.Sub(at); a < b && d < latency && d > -latency {
+						t.Errorf("%s and %s, installed by separate commands, are %s apart, less than one "+
+							"command's %s", a, b, d, latency)
 					}
 				}
 			}
