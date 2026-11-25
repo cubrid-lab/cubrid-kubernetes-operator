@@ -404,14 +404,20 @@ Pod:
   before them (`observedMasterLeavingPodUID`).
   - That departure is confirmed (`observedMasterLeavingConfirmed`) only by
     the kubelet's confirmed termination of that Pod, seen in the same pass.
-    A later master then rebases the quarantine as above.
   - Without that confirmation, the next pass makes the quarantine
-    `WriteQuarantinedMasterChanged`. That includes a graceful deletion the
-    kubelet reported only later.
-  - A confirmed end covers only its own Pod and the Pod recorded for the
-    master. If the master is then found in neither, the recorded Pod needs
-    its own confirmed end, or the quarantine becomes
+    `WriteQuarantinedMasterChanged`. That includes a graceful deletion whose
+    end the Operator's watch and reads see only after the pass that read the
+    replacement.
+  - A confirmed end of the earlier Pod does not stand in for the recorded
+    Pod, which may have answered too. Another active master rebases the
+    quarantine only once the recorded Pod has answered as a non-master, or
+    its own end is confirmed. Until then the quarantine is held. A recorded
+    Pod marked for deletion is held by its own mark, as above.
+  - If the master is then found in neither Pod, the recorded Pod needs its
+    own confirmed end, or the quarantine becomes
     `WriteQuarantinedMasterChanged`.
+  - A quarantine revision held in memory whose status write failed is kept
+    over the earlier revision the status read still holds.
 - A member that gives no answer is not unverified while the node its Pod was
   last seen scheduled on carries the taint
   `node.kubernetes.io/out-of-service` with the effect `NoExecute` (ADR-0005,

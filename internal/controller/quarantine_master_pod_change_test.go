@@ -197,11 +197,11 @@ func TestQuarantineEscalatesWhenTheMasterNextPodIsLostUnconfirmed(t *testing.T) 
 	})
 }
 
-// A quarantine rebased on a new master records that master in its Pod read
-// after the probes and, when that Pod changed during the probes, the
-// departure of the Pod read before them: either can have given its claim.
-// Without a confirmed end of that Pod, the next pass makes the quarantine
-// WriteQuarantinedMasterChanged.
+// A quarantine rebased on a new master, once qc-2's new Pod answered as a
+// slave, records that master in its Pod read after the probes and, when that
+// Pod changed during the probes, the departure of the Pod read before them:
+// either can have given its claim. Without a confirmed end of that Pod, the
+// next pass makes the quarantine WriteQuarantinedMasterChanged.
 func TestQuarantineRebaseRecordsTheNewMasterPodDeparture(t *testing.T) {
 	s := masterReplacedScenario(t)
 	s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
@@ -209,7 +209,7 @@ func TestQuarantineRebaseRecordsTheNewMasterPodDeparture(t *testing.T) {
 	s.replaceDuringProbes(q0, uid0, uid0New, t1)
 	s.identities[q2] = memberIdentity{PodUID: uid2New, Created: testNow.Add(-2 * time.Second)}
 	s.podsBefore[q2] = s.identities[q2]
-	d := s.pass(t1, afterReplacement(t1))
+	d := s.pass(t1, map[string]RoleObservation{q0: activeMasterAt(t1), q1: killedProbeAt(t1), q2: slaveAt(t1)})
 	q := d.Quarantine
 	if q == nil || q.ObservedMaster != q0 || q.ObservedMasterPodUID != uid0New || q.ObservedMasterLeavingPodUID != uid0 ||
 		q.ObservedMasterLeavingConfirmed {

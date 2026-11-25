@@ -89,8 +89,10 @@ func afterReplacement(now time.Time) map[string]RoleObservation {
 // master in the next pass the quarantine escalated to
 // WriteQuarantinedMasterChanged, which has no automatic release, and the
 // read-write Brokers stayed at zero. Now the quarantine still starts in that
-// pass, is rebased on qc-0, names qc-2's new Pod, and is released
-// automatically once every member but the master is verified.
+// pass. It waits while qc-2's new Pod, which may have given the claim, has
+// not answered; it is rebased on qc-0 once that Pod answers as a slave, names
+// it, and is released automatically once every member but the master is
+// verified.
 func TestQuarantineRecordsTheEndOfTheMasterPodReplacedDuringTheProbes(t *testing.T) {
 	s := masterReplacedScenario(t)
 	d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
@@ -114,6 +116,31 @@ func TestQuarantineRecordsTheEndOfTheMasterPodReplacedDuringTheProbes(t *testing
 			q2, started.ObservedMasterPodUID, started.ObservedMasterLeavingPodUID, started.ObservedMasterLeavingConfirmed,
 			q2, uid2New, uid2)
 	}
+	// qc-2's new Pod may have given the claim and has not answered yet: the
+	// quarantine waits beside qc-2, neither rebased nor escalated, and is not
+	// released.
+	slavesBut := func(now time.Time, silent string) map[string]RoleObservation {
+		obs := map[string]RoleObservation{q0: activeMasterAt(now), q1: slaveAt(now), q2: slaveAt(now)}
+		if silent != "" {
+			obs[silent] = noAnswerAt(now)
+		}
+		return obs
+	}
+	for i, now := range []time.Time{t1, t1.Add(unverifiedResyncInterval), t1.Add(2 * quarantineReleaseInterval)} {
+		if i > 0 {
+			d = s.pass(now, slavesBut(now, q2))
+		}
+		if q = d.Quarantine; d.Released != nil || q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified ||
+			q.ObservedMaster != q2 {
+			t.Fatalf("at %s: decision = %+v, want the quarantine waiting beside %s until its new Pod answers",
+				now.Sub(testNow), d, q2)
+		}
+	}
+
+	// qc-2's new Pod answers as a slave: the quarantine is rebased on qc-0
+	// and names it.
+	t2 := t1.Add(3 * quarantineReleaseInterval)
+	d = s.pass(t2, slavesBut(t2, ""))
 	q = d.Quarantine
 	if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || q.ObservedMaster != q0 ||
 		q.ObservedMasterPodUID != uid0 {
@@ -124,28 +151,14 @@ func TestQuarantineRecordsTheEndOfTheMasterPodReplacedDuringTheProbes(t *testing
 		t.Fatalf("members %v, want [%s %s]: the former master's new Pod is named", got, q1, q2)
 	}
 
-	// No release while qc-2's new Pod has not been verified.
-	t2 := t1.Add(quarantineReleaseInterval)
-	slavesBut := func(now time.Time, silent string) map[string]RoleObservation {
-		obs := map[string]RoleObservation{q0: activeMasterAt(now), q1: slaveAt(now), q2: slaveAt(now)}
-		if silent != "" {
-			obs[silent] = noAnswerAt(now)
-		}
-		return obs
+	// Released automatically once every member but qc-0 is verified.
+	t3 := t2.Add(quarantineVerifyGap + time.Second)
+	if d = s.pass(t3, slavesBut(t3, "")); d.Released != nil || d.Quarantine == nil ||
+		d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
+		t.Fatalf("decision = %+v, want the quarantine kept as %s", d, databasev1alpha1.WriteQuarantinedMemberUnverified)
 	}
-	for _, now := range []time.Time{t2, t2.Add(quarantineVerifyGap + time.Second), t2.Add(quarantineVerifyGap + 2*quarantineReleaseInterval)} {
-		if d = s.pass(now, slavesBut(now, q2)); d.Released != nil || d.Quarantine == nil {
-			t.Fatalf("released at %s while %s's new Pod had not answered", now.Sub(testNow), q2)
-		}
-	}
-	t3 := t2.Add(3 * quarantineReleaseInterval)
-	s.pass(t3, slavesBut(t3, ""))
-	t4 := t3.Add(quarantineVerifyGap + time.Second)
-	if d = s.pass(t4, slavesBut(t4, "")); d.Quarantine == nil || d.Quarantine.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified {
-		t.Fatalf("quarantine = %+v, want it kept as %s", d.Quarantine, databasev1alpha1.WriteQuarantinedMemberUnverified)
-	}
-	t5 := t4.Add(quarantineReleaseInterval)
-	if d = s.pass(t5, slavesBut(t5, "")); d.Released == nil || d.Released.Method != databasev1alpha1.WriteQuarantineReleasedAutomatically {
+	t4 := t3.Add(quarantineReleaseInterval)
+	if d = s.pass(t4, slavesBut(t4, "")); d.Released == nil || d.Released.Method != databasev1alpha1.WriteQuarantineReleasedAutomatically {
 		t.Fatalf("decision = %+v, want an automatic release once every member but %s is verified", d, q0)
 	}
 }
@@ -197,6 +210,17 @@ func TestQuarantineStartRecordsTheMasterPodDeparture(t *testing.T) {
 	})
 	// Only the termination of the Pod read before the probes confirms its
 	// departure: an end of another Pod of the same member does not.
+	// The Pod read before the probes was itself read terminated, with no
+	// termination recorded yet: that read confirms its departure.
+	t.Run("the Pod read before the probes read terminated", func(t *testing.T) {
+		s := masterReplacedScenario(t)
+		s.terminations = nil
+		s.podsBefore[q2] = memberIdentity{PodUID: uid2, Deleting: true, Terminated: true, Created: testNow.Add(-time.Hour)}
+		d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
+		if q := d.Quarantine; q == nil || q.ObservedMasterLeavingPodUID != uid2 || !q.ObservedMasterLeavingConfirmed {
+			t.Fatalf("quarantine = %+v, want the confirmed departure of %s", q, uid2)
+		}
+	})
 	t.Run("the end of another Pod of the master", func(t *testing.T) {
 		s := masterReplacedScenario(t)
 		s.terminations[0].PodUID = "uid-2-older"
@@ -307,7 +331,9 @@ func TestReconcileWriteQuarantineRecordsTheEndOfTheMasterPodReplacedDuringThePro
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.reconcileWriteQuarantine(context.Background(), next, quarantineMembers, afterReplacement(now), now, q2, pods, nil)
+			// qc-0 is the master and qc-2's new Pod answers as a slave.
+			obs := map[string]RoleObservation{q0: activeMasterAt(now), q1: killedProbeAt(now), q2: slaveAt(now)}
+			r.reconcileWriteQuarantine(context.Background(), next, quarantineMembers, obs, now, q2, pods, nil)
 			q := next.Status.WriteQuarantine
 			if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || q.ObservedMaster != q0 ||
 				!slices.Contains(memberNamesOf(q.Members), q2) {

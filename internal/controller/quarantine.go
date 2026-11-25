@@ -1230,11 +1230,32 @@ const (
 // neither of them: that later Pod is gone or replaced as well. The earlier
 // end covers only its own Pod, so masterDeparture judges the later Pod's
 // departure anew, and without its own confirmed end it is lost.
-func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdentity) {
-	leaving := q.ObservedMasterLeavingPodUID
-	if leaving != "" && leaving != q.ObservedMasterPodUID && id.PodUID != leaving && id.PodUID != q.ObservedMasterPodUID {
+func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdentity, recordedEnded bool) {
+	leaving, recorded := q.ObservedMasterLeavingPodUID, q.ObservedMasterPodUID
+	if leaving == "" || leaving == recorded {
+		return
+	}
+	// The recorded Pod itself being deleted, ended or replaced is judged on
+	// its own, by the mark, hold and confirmation that apply to any recorded
+	// Pod.
+	if (id.PodUID != leaving && id.PodUID != recorded) ||
+		(id.PodUID == recorded && (id.Deleting || id.Terminated)) || recordedEnded {
 		q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
 	}
+}
+
+// recordedPodAnswered reports whether q's master answered as a non-master
+// from the Pod q records for it: in this pass, or in the answers recorded
+// before it.
+func recordedPodAnswered(in quarantineInput, q *databasev1alpha1.WriteQuarantine) bool {
+	m, uid := q.ObservedMaster, q.ObservedMasterPodUID
+	if id := in.Identities[m]; !in.IdentitiesUnknown && !in.Unstable[m] && id.PodUID == uid &&
+		nonMasterAnswer(in.Observations[m], in.Now) {
+		return true
+	}
+	return slices.ContainsFunc(in.Verifications, func(v databasev1alpha1.MemberVerification) bool {
+		return v.Name == m && v.PodUID == uid
+	})
 }
 
 // masterDeparture judges the recorded master's Pod leaving, and keeps what
@@ -1265,7 +1286,7 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 		})
 	}
 	if !in.IdentitiesUnknown {
-		forgetEarlierDeparture(q, id)
+		forgetEarlierDeparture(q, id, recorded(q.ObservedMasterPodUID))
 		if slices.Contains(masters, m) && q.ObservedMasterLeavingPodUID != "" && id.PodUID != q.ObservedMasterLeavingPodUID {
 			// The master claims again from another Pod. After a confirmed end
 			// of the old Pod that is the master back; otherwise the old
@@ -1299,6 +1320,13 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 	switch {
 	case q.ObservedMasterLeavingPodUID == "":
 		return departureNone
+	case q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != q.ObservedMasterPodUID &&
+		!recordedPodAnswered(in, q):
+		// The confirmed end is an earlier Pod's. The recorded Pod may have
+		// given the master's claim, and has neither answered as a
+		// non-master nor ended: the quarantine waits, as for a Pod marked
+		// for deletion.
+		return departureHeld
 	case q.ObservedMasterLeavingConfirmed:
 		return departureConfirmed
 	case q.ObservedMasterHoldUntil == nil || in.Now.After(q.ObservedMasterHoldUntil.Time):
@@ -1503,16 +1531,18 @@ func (r *CubridClusterReconciler) forgetQuarantines(key types.NamespacedName) {
 
 // restoreWriteQuarantine runs first in every pass. A quarantine the status
 // read holds is kept in memory. A quarantine held in memory that the status
-// read does not hold, because its status write failed or the cache is
-// behind, is put back into the status, so that the pass enforces it and
-// writes it again. A quarantine recorded for another cluster UID is reported
+// read does not hold, or holds only in an earlier revision of the same
+// generation, because its status write failed or the cache is behind, is put
+// back into the status, so that the pass enforces it and writes it again. A quarantine recorded for another cluster UID is reported
 // once and enforced.
 func (r *CubridClusterReconciler) restoreWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster) {
 	q := cluster.Status.WriteQuarantine
 	switch held := r.heldQuarantine(cluster); {
-	case q != nil:
+	case q != nil && (held == nil || held.GenerationID != q.GenerationID || held.Revision <= q.Revision):
 		r.holdQuarantine(cluster, q)
 	case held != nil:
+		// No quarantine stored, or an earlier revision of the one held: a
+		// status write failed or the read is behind.
 		cluster.Status.WriteQuarantine = held.DeepCopy()
 		q = cluster.Status.WriteQuarantine
 		logf.FromContext(ctx).Info("Kept a write quarantine the stored status does not hold",
