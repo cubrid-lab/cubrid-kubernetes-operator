@@ -2,14 +2,18 @@ name: Release Dry Run
 
 # Builds the artifacts of a proposed release from one main commit without
 # publishing anything (#124): the manager image, the Instance Manager image and
-# the installer manifest. It pushes no image, creates no tag, release, branch,
-# pull request or cache entry, and has only a read-only token, so a failed run
-# leaves nothing behind and a rerun starts from the same state. Its only output
-# is the workflow artifact with the installer manifest and a record of the
-# image digests and file checksums.
+# the installer manifest. It pushes no image to a real registry, creates no
+# tag, release, branch, pull request or cache entry, and has only a read-only
+# token, so a failed run leaves nothing behind and a rerun starts from the same
+# state. Its only output is the workflow artifact with the installer manifest
+# and a record of the image digests and file checksums. It also rehearses the
+# image publication (a part-way failure, its rerun and a version whose tag is
+# taken) on a registry that runs inside the runner and is discarded with it.
 #
 # Run it from main: `gh workflow run release-dry-run.yml -f sha=<full sha> -f version=vX.Y.Z`.
-# See docs/testing/release-version-check.md#release-dry-run.
+# The publishing workflow (publish.yml) calls it as its verify job, with
+# keep-images, so the images it publishes are the archives built and checked
+# here. See docs/testing/release-version-check.md#release-dry-run.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +23,27 @@ on:
       version:
         description: "Proposed release version, vMAJOR.MINOR.PATCH (for example v0.1.0)"
         required: true
+  workflow_call:
+    inputs:
+      sha:
+        description: "Full 40-character commit SHA on main to build"
+        type: string
+        required: true
+      version:
+        description: "Release version, vMAJOR.MINOR.PATCH"
+        type: string
+        required: true
+      keep-images:
+        description: "Also upload the image archives, for the publish job of the same run"
+        type: boolean
+        default: false
+    outputs:
+      artifact:
+        description: "Name of the artifact with install.yaml, the record and SHA256SUMS"
+        value: ${{ jobs.dry-run.outputs.artifact }}
+      images-artifact:
+        description: "Name of the artifact with the image archives (keep-images only)"
+        value: ${{ jobs.dry-run.outputs.images-artifact }}
 
 permissions: {}
 
@@ -31,6 +56,9 @@ jobs:
     # A cold build of both images takes well under this; a hung pull would
     # otherwise hold the runner for the default 6 hours.
     timeout-minutes: 60
+    outputs:
+      artifact: release-dry-run-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+      images-artifact: ${{ inputs.keep-images && format('release-images-{0}-{1}-attempt-{2}', inputs.version, steps.meta.outputs.sha, github.run_attempt) || '' }}
     env:
       # The names a release would publish under; nothing is pushed to them.
       REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
@@ -74,6 +102,7 @@ jobs:
           path: .release-check
           sparse-checkout: |
             hack/release-version-check.sh
+            hack/release-push-images.sh
             hack/check-installer-image/
             go.mod
             go.sum
@@ -324,8 +353,8 @@ jobs:
             echo "im_used=$im_used"
           } >> "$GITHUB_OUTPUT"
 
-      # The image archives stay on the runner: they are large, and a release
-      # rebuilds rather than reuses them.
+      # The image archives stay on the runner unless publish.yml asks for
+      # them below: they are large.
       - name: Upload the installer manifest and the record
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -343,6 +372,81 @@ jobs:
             echo "::error::install.yaml does not make the manager use the Instance Manager image built here. Image it would use: $IM_USED"
             exit 1
           fi
+
+      # Rehearses hack/release-push-images.sh, the workflow's own copy that
+      # publish.yml runs against GHCR, with the archives and record of this
+      # run, on a registry container bound to the runner's loopback address.
+      # Nothing reaches GHCR, and the registry goes away with the runner. It
+      # shows that a pushed image answers the digest the build recorded, and
+      # what a rerun does:
+      #   1. an attempt that stops after pushing the manager image;
+      #   2. its rerun pushes only the missing Instance Manager image;
+      #   3. a further rerun pushes nothing;
+      #   4. a version whose manager tag already holds other bytes is refused
+      #      before anything is pushed.
+      - name: Rehearse the image publication on a registry inside the runner
+        env:
+          VERSION: ${{ inputs.version }}
+          REHEARSAL_REGISTRY: registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+        run: |
+          command -v skopeo > /dev/null || { echo "::error::skopeo is not installed on the runner"; exit 1; }
+          docker run -d --rm --name release-rehearsal -p 127.0.0.1:5000:5000 "$REHEARSAL_REGISTRY" > /dev/null
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:5000/v2/ && break
+            sleep 1
+          done
+          repo=cubrid-lab/cubrid-kubernetes-operator
+          push() {
+            env REGISTRY_HOST=localhost:5000 REPOSITORY="$repo" INSECURE=true RETRY_DELAY=1 \
+              RECORD="$RUNNER_TEMP/release-dry-run/release-dry-run.json" ARCHIVE_DIR="$RUNNER_TEMP/images" \
+              IMAGES="$1" TAG="$2" .release-check/hack/release-push-images.sh
+          }
+          echo "1. An attempt that stops after pushing the manager image"
+          push manager "$VERSION"
+          echo "2. Its rerun pushes only the Instance Manager image"
+          out=$(push "manager instance-manager" "$VERSION")
+          echo "$out"
+          if [ "$(grep -c '^Pushing ' <<< "$out")" != 1 ] || ! grep -q "^Pushing localhost:5000/$repo/instance-manager:" <<< "$out"; then
+            echo "::error::The rerun did not push exactly the missing Instance Manager image"
+            exit 1
+          fi
+          echo "3. A further rerun pushes nothing"
+          out=$(push "manager instance-manager" "$VERSION")
+          echo "$out"
+          if grep -q '^Pushing ' <<< "$out"; then
+            echo "::error::A rerun pushed an image that was already there"
+            exit 1
+          fi
+          echo "4. A version whose manager tag already holds other bytes"
+          taken="$VERSION-taken"
+          skopeo copy --dest-tls-verify=false "oci-archive:$RUNNER_TEMP/images/instance-manager.oci.tar" \
+            "docker://localhost:5000/$repo/manager:$taken"
+          if out=$(push "manager instance-manager" "$taken" 2>&1); then
+            echo "$out"
+            echo "::error::A tag holding other bytes was not refused"
+            exit 1
+          fi
+          echo "$out"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "http://127.0.0.1:5000/v2/$repo/instance-manager/manifests/$taken")
+          if [ "$code" != 404 ]; then
+            echo "::error::The refused run pushed the Instance Manager image anyway (answered $code)"
+            exit 1
+          fi
+          echo "The rehearsal pushed nothing outside this runner."
+
+      # publish.yml publishes these archives, not a rebuild, so the images it
+      # pushes are the ones recorded and checked above.
+      - name: Upload the image archives for the publish job
+        if: inputs.keep-images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-images-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/images/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
       # Also after a failed step, so a partial run says how far it got.
       - name: Write the result to the job summary

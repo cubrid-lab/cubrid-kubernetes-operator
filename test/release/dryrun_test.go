@@ -100,13 +100,13 @@ func stepIndex(t *testing.T, j job, name string) int {
 	return -1
 }
 
-// Only a manual run starts it, and its token can only read: a push, a pull
-// request or a schedule never builds release artifacts, and no step can write
-// a tag, a release, a package or a cache entry.
+// Only a manual run or publish.yml starts it, and its token can only read: a
+// push, a pull request or a schedule never builds release artifacts, and no
+// step can write a tag, a release, a package or a cache entry.
 func TestDryRunCannotPublish(t *testing.T) {
 	text, wf, j := readDryRun(t)
-	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
-		t.Errorf("triggers %v; want workflow_dispatch only", wf.On)
+	if len(wf.On) != 2 || wf.On["workflow_dispatch"] == nil || wf.On["workflow_call"] == nil {
+		t.Errorf("triggers %v; want workflow_dispatch and workflow_call only", wf.On)
 	}
 	if len(wf.Permissions) != 0 {
 		t.Errorf("workflow permissions %v; want none", wf.Permissions)
