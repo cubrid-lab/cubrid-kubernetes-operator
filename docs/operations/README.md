@@ -134,47 +134,149 @@ configuration to untrusted networks or production data
 
 ## 2. Install and verify SQL — candidate procedure, not yet signed off
 
-The repository has `make install` (CRDs) and `make deploy IMG=...`
-(Operator deployment), plus a **standalone** example
-[`CubridCluster`](../../config/samples/database_v1alpha1_cubridcluster.yaml).
-Those targets use the active kubectl context; they are not a context-locking
-or atomic release installer. The default Instance Manager image is a
-development reference, so supplying only a manager image **does not** pin
-both runtime images: add `IM_IMG=<Instance Manager image>` to
-`make deploy` to set the manager's `--instance-manager-image`.
-(`make build-installer` always sets it, by default to
-`<registry>/instance-manager:<tag>` of `IMG=<registry>/manager:<tag>`.) The Operator also needs its installed CRDs, RBAC,
-NetworkPolicy admission, suitable storage and correctly configured image
-pull access. Do not copy the bare sample into a valued cluster and assume
-these prerequisites are met.
+> [!NOTE]
+> Proposed: not yet followed end to end by a maintainer other than the
+> author (#127). Nothing in this section has been run on a cluster as
+> written. Do not read it as validated.
 
-For a disposable, explicitly authorized candidate environment only:
+The repository has `make install` (CRDs only), `make deploy` (CRDs, RBAC and
+the manager) and `make build-installer` (the same objects as one file,
+`dist/install.yaml`). All of them use the active kubectl context; none locks
+the context or installs atomically. The default Instance Manager image is a
+development reference, so supplying only `IMG=` does **not** pin both runtime
+images: give `IM_IMG=<Instance Manager image>` to `make deploy`, which sets
+the manager's `--instance-manager-image`. `make build-installer` always sets
+it, by default to `<registry>/instance-manager:<tag>` of
+`IMG=<registry>/manager:<tag>`; an `IMG` without a tag or pinned by digest
+needs `IM_IMG`.
 
-1. Inventory the context and check the exact manager/Instance Manager
-   image digests and candidate commit. Ensure the manager's
-   `--instance-manager-image` or the resource's `spec.image` points
-   at the intended tested image; see
-   [development images](../compatibility.md#development-images).
-2. Follow the selected candidate's installation procedure for CRDs,
-   controller deployment, namespace, RBAC and cluster configuration.
-   The project's `Makefile` and
-   [standalone sample](../../config/samples/database_v1alpha1_cubridcluster.yaml)
-   describe the generated resources, **not** a validated release installer.
-3. Inspect the resulting Pod roles, `Ready`, `HAReady`,
-   `PrimaryResolved`, `ReplicationHealthy`, `RoutingReady`,
-   `MemberPlacement` and the actual Broker Service endpoints. A Pod
-   `Ready` or `RoutingReady=True` alone never proves SQL is writable.
-4. Run a **real client** against `<cluster>-rw:33000`, commit a unique
-   row, read it back, and verify a write through `<cluster>-ro:33001`
-   is rejected by the **Broker**, not merely by a network/connection
-   error. The versioned
-   [installed smoke](../testing/installed-smoke.md) and
-   [HA workload](../testing/installed-ha.md) detail the actual client
-   and evidence assertions; use their pinned, context-guarded launcher for
-   acceptance rather than treating an arbitrary manual query as S00/S01.
-5. Keep the test result's candidate revision, image digests, SQL
-   acknowledgements, fault confirmation and artifact location together.
-   `not_run` or `blocked` cannot be interpreted as `pass`.
+### Prerequisites
+
+- A disposable, explicitly authorized candidate environment and its context
+  (see [section 1](#1-preflight--before-touching-a-cluster)); never a
+  cluster that holds valued data.
+- A checkout of the candidate commit, with Go and network access: the
+  Makefile downloads `kustomize` and `controller-gen` into `bin/` and
+  regenerates manifests before `deploy` and `build-installer`.
+- A manager image and an Instance Manager image that the cluster's nodes
+  can pull, built from that same commit and identified by tag or digest
+  (`make docker-build IMG=...` and `make docker-build-instance-manager
+  IM_IMG=...`, then `make docker-push IMG=...` and a push of the Instance
+  Manager image, or `kind load docker-image` on Kind), plus image pull
+  access.
+- A StorageClass that can bind `spec.storage.data.size` volumes. Decide the
+  size now; it cannot change ([data volume sizing](data-volume-sizing.md)).
+- A CNI that enforces NetworkPolicy if you rely on the policies
+  ([network access](network-access.md)).
+
+### Commands
+
+```sh
+export IMG="<registry>/manager:<tag>"
+export IM_IMG="<registry>/instance-manager:<tag>"
+NS="<namespace>"
+
+# The Makefile has no --context option: it uses the current context.
+kubectl config use-context "<approved-context>"
+kubectl config current-context
+
+```
+
+Then install with one of two options. Option A deploys straight from the
+source tree:
+
+```sh
+make deploy IMG="$IMG" IM_IMG="$IM_IMG"
+```
+
+Option B renders one file, which you can review, then applies it:
+
+```sh
+make build-installer IMG="$IMG" IM_IMG="$IM_IMG"
+kubectl apply -f dist/install.yaml
+```
+
+Create the namespace and the object-storage Secret (only if you will back up
+or restore, or run an HA cluster, which needs `spec.objectStorage.bucket`;
+the Secret has the keys `accessKey` and `secretKey`; read the values from the
+environment so they stay out of version control, and note that `--from-file`
+would keep a trailing newline in the key, which the store then refuses; a
+value written with `printf '%s'` to a file has none):
+
+```sh
+kubectl create namespace "$NS"
+kubectl -n "$NS" create secret generic <secret-name> \
+  --from-literal=accessKey="$OBJECT_STORE_ACCESS_KEY" \
+  --from-literal=secretKey="$OBJECT_STORE_SECRET_KEY"
+```
+
+Apply a cluster. For the standalone sample, copy
+[`database_v1alpha1_cubridcluster.yaml`](../../config/samples/database_v1alpha1_cubridcluster.yaml),
+set the name, and add the `spec.objectStorage` block (`endpoint`, `insecure`
+for a development store, `credentialsSecretRef.name`) when the cluster is
+the source of backups:
+
+```sh
+CLUSTER="cubridcluster-sample"
+kubectl -n "$NS" apply -f <your-copy-of-the-sample>.yaml
+kubectl -n "$NS" wait cubridcluster/"$CLUSTER" --for=condition=Ready --timeout=10m
+```
+
+Expected result:
+
+- `kubectl get crd cubridclusters.database.cubrid.io cubridbackups.database.cubrid.io`
+  lists both CRDs.
+- `kubectl -n cubrid-kubernetes-operator-system get deployment
+  cubrid-kubernetes-operator-controller-manager` shows `1/1` ready, and
+  `kubectl -n cubrid-kubernetes-operator-system get deployment -o yaml` has
+  `--instance-manager-image=<your IM_IMG>` in the manager's `args`.
+- The cluster's `Ready`, `BrokerReady` and `RoutingReady` Conditions are
+  `True` (`kubectl -n "$NS" get cubridcluster "$CLUSTER" -o
+  jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\n"}{end}'`),
+  the Pod `$CLUSTER-0` is `Ready`, and `status.instances[].role` is
+  observed. A three-member HA cluster also needs `HAReady=True`,
+  `PrimaryResolved=True` and `ReplicationHealthy=True`
+  ([Conditions](../observability.md#conditions)).
+- A SQL write and read-back over TCP on a member, as `<db>@<member hostname>`,
+  never `<db>@localhost` (the local socket lost sessions in POC-70, #238).
+  The table has a primary key because a table without one is not replicated:
+
+  ```sh
+  kubectl -n "$NS" exec "$CLUSTER-0" -c cubrid -- bash -c '
+    export PATH="$CUBRID/bin:$PATH"
+    csql -u dba -c "CREATE TABLE install_check (id INT PRIMARY KEY, note VARCHAR(40));" "appdb@$(hostname)" &&
+    csql -u dba -c "INSERT INTO install_check VALUES (1, '"'"'installed'"'"');" "appdb@$(hostname)" &&
+    csql -u dba -c "SELECT id, note FROM install_check;" "appdb@$(hostname)"'
+  ```
+
+  The last statement prints one row, `1` and `'installed'`. Keep any `-199` or
+  `-111` message, even when a row is printed. If the cluster names a DBA
+  password Secret, follow [DBA password](dba-password.md) instead of the empty
+  password this command assumes. The sample's database is `appdb`.
+- A write through `<cluster>-rw:33000` and a refused write through
+  `<cluster>-ro:33001` (refused by the Broker with `-581`, not a connection
+  error) with a real client; the
+  [installed smoke](../testing/installed-smoke.md) and
+  [HA workload](../testing/installed-ha.md) hold the client and assertions.
+  A Pod `Ready` or `RoutingReady=True` alone never proves SQL is writable.
+
+Drop the check table afterwards (`DROP TABLE install_check;`) unless you
+need it for the [restore procedure](backup-restore.md#7-procedure-restore-into-a-new-cluster).
+
+### If it fails
+
+| Seen | Do |
+|---|---|
+| `make` cannot download or build a tool | Fix network or Go setup; nothing was applied, because rendering failed before `kubectl`. |
+| `make deploy` or `build-installer` reports an invalid or underivable Instance Manager image | Set `IM_IMG` explicitly. |
+| Manager Pod `ImagePullBackOff` or crash | `kubectl -n cubrid-kubernetes-operator-system describe pod` and `logs`; fix image or pull access, then `make deploy` again, which is idempotent. |
+| `Ready=False` with a reason | Read the reason in [observability](../observability.md#conditions) (for example `InstancesNotReady`, `SecretReconcileFailed`, `InvalidClusterName`). Do not delete PVCs or Pods to clear it. |
+| A member Pod stays `Pending` | Check the StorageClass, node capacity and `spec.placement.memberSpread` ([member placement](member-placement.md)). |
+| The SQL check fails or prints `-199`/`-111` | Record it as `fail`, not `pass`. Keep the output and the member's `$CUBRID/log/server/<db>.err` ([logs](../observability.md#cubrids-own-log-files)). Do not repeat a write whose commit outcome is unknown. |
+| You must undo the install | See [uninstall](#uninstall). |
+
+Keep the candidate revision, image digests, SQL acknowledgements and
+artifact location together. `not_run` or `blocked` is never `pass`.
 
 **Exit criterion:** a second maintainer performs the entire path from the
 document without unstated setup (#127). Until then it is a *candidate*
@@ -240,8 +342,8 @@ delete PVCs, apply emergency `/v1/shutdown`, or treat a successful
 Use [the backup and restore operation guide](backup-restore.md) to inspect
 recorded operation identities, distinguish automatic retries from terminal
 failures, and collect evidence before a manual recovery decision. Its
-commands are read-only; its procedures still require candidate-specific
-validation and independent reproduction.
+inspection commands are read-only; its procedures still require
+candidate-specific validation and independent reproduction.
 
 The historical restore qualification in #121 is complete. Verification of
 the selected candidate's source, artifact, failure and data results belongs
@@ -273,9 +375,13 @@ Check whether historical evidence applies to that candidate before reusing it.
   make a retry possible. Compare the verified artifact and restored rows,
   then confirm that new acknowledged writes converge on the required members.
 
-No backup, restore or recovery has been executed as part of writing
-this guide. An actionable, independently reproduced runbook is still
-required by #125/#127.
+The numbered procedures are in [the backup and restore guide](backup-restore.md):
+[create a backup](backup-restore.md#6-procedure-create-a-backup) and
+[restore into a new cluster](backup-restore.md#7-procedure-restore-into-a-new-cluster).
+Both are proposed and not yet followed end to end by a maintainer other than
+the author (#127). No backup, restore or recovery has been executed as part
+of writing this guide. An independently reproduced runbook is still required
+by #125/#127.
 
 ## 5. Recovering after member loss, maintenance and removal
 
@@ -301,7 +407,7 @@ required by #125/#127.
   Eviction API for the cluster's Pods, held about 12 s, on a three-worker,
   no-spare-node layout (#614). A whole-node `kubectl drain`, a spare-node
   layout and a longer cordon were not run; see the [ROADMAP inventory](../../ROADMAP.md#implementation-and-validation-inventory).
-- **Uninstall/deletion:** distinguish deletion of controller resources
+- **Uninstall/deletion** (steps in [Uninstall](#uninstall) below): distinguish deletion of controller resources
   from deletion of `CubridCluster`, PVCs, backups, and CRDs. Inventory
   reclaim policies and retained data first. **`make uninstall` deletes the
   CRDs, and deleting a CRD deletes every `CubridCluster` and `CubridBackup`
@@ -316,6 +422,70 @@ required by #125/#127.
   [What deleting a cluster does to its data](data-retention.md) separates
   `spec.storage.retentionPolicy` from the StorageClass reclaim policy and
   shows a cleanup that deletes only the recorded claims.
+
+### Uninstall
+
+> [!NOTE]
+> Proposed: not yet followed end to end by a maintainer other than the
+> author (#127). Nothing here has been run on a cluster as written.
+
+**Prerequisites.** The environment is a disposable one you are authorized to
+change, and you have recorded, for every cluster, what must survive: a
+backup you have restored and checked elsewhere
+([backup and restore](backup-restore.md)), or a retained claim you accept
+keeping. Set `NS`, and use the context you installed with. For every
+`CubridBackup` you want to keep, save its manifest URI and digest **outside
+the cluster** (the first command below prints them) before any delete: the
+status holds the only record of the URI.
+
+**Commands**, in this order. Deleting a CRD removes every `CubridCluster` and
+`CubridBackup` in all namespaces at once, so delete the clusters first and
+look at what that does to the volumes:
+
+```sh
+kubectl config current-context
+kubectl get cubridclusters,cubridbackups -A
+kubectl -n "$NS" get cubridbackup -o custom-columns=NAME:.metadata.name,CLUSTER:.spec.clusterRef.name,URI:.status.artifact.uri,DIGEST:.status.artifact.manifestDigest   # save this outside the cluster
+kubectl -n "$NS" get cubridcluster -o custom-columns=NAME:.metadata.name,RETENTION:.spec.storage.retentionPolicy
+kubectl -n "$NS" get pvc -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,VOLUME:.spec.volumeName
+kubectl get pv -o custom-columns=NAME:.metadata.name,RECLAIM:.spec.persistentVolumeReclaimPolicy,CLAIM:.spec.claimRef.name
+
+kubectl -n "$NS" delete cubridcluster "$CLUSTER" --wait=true
+kubectl -n "$NS" get pods,pvc                       # claims remain under retentionPolicy Retain
+
+# Controller, RBAC and CRDs. This also deletes any CubridCluster or CubridBackup left anywhere.
+kubectl get cubridclusters -A                       # must list nothing you still need
+make undeploy ignore-not-found=true                 # or: kubectl delete -f dist/install.yaml
+# make uninstall deletes only the CRDs, with the same effect on the custom resources.
+```
+
+Do not run `make undeploy`, `make uninstall` or `kubectl delete -f
+dist/install.yaml` while a cluster you still need exists. To remove kept
+claims afterwards, use the guarded, UID-checked delete in [what deleting a
+cluster does to its data](data-retention.md#deleting-kept-claims-safely);
+never delete by label or across namespaces, and never delete a claim before
+its data is exported or restored elsewhere. On `local-path` (reclaim policy
+`Delete`) a kept claim is the only copy of the data.
+
+**Expected result.** `kubectl get crd | grep cubrid.io` prints nothing,
+`kubectl -n cubrid-kubernetes-operator-system get all` finds no manager, and
+`kubectl -n "$NS" get cubridcluster,cubridbackup` reports that the resource
+type does not exist. With `retentionPolicy: Retain` the claims
+`data-<cluster>-<n>` are still listed by `kubectl -n "$NS" get pvc` with
+their recorded UIDs; with `Delete` they are gone and, under a `Delete`
+reclaim policy, so is the data. Backup artifacts in the object store are
+untouched: the Operator sets no finalizer on a `CubridBackup`, so deleting it
+asks the store for nothing.
+
+**If it fails.**
+
+| Seen | Do |
+|---|---|
+| `delete cubridcluster` hangs | `kubectl -n "$NS" get pods,statefulset`; wait for Pods to terminate. Do not remove finalizers or force-delete Pods of a member that may be a master without reading [observability](../observability.md). |
+| A claim you meant to keep is gone | The retention policy was `Delete`, or something else deleted it. Check `.spec.storage.retentionPolicy` in the recorded manifest and the reclaim policy of the PV; if the PV is `Released` with `Retain`, ask an administrator before reusing it. Record it as data loss. |
+| `make undeploy` reports a missing object | Rerun with `ignore-not-found=true`. |
+| Namespace stuck `Terminating` | An object with a finalizer remains; list with `kubectl api-resources --verbs=list --namespaced -o name | xargs -n1 kubectl -n "$NS" get`. Do not delete PVCs to unblock it. |
+| You deleted the CRDs by mistake | The custom resources are gone. Claims under `Retain` remain; follow [retained-volume recovery](retained-volume-recovery.md) rather than creating a same-name cluster over them (HA stops with `MemberHoldsDatabase`). |
 
 ## 6. Evidence to add when a procedure becomes verified
 
