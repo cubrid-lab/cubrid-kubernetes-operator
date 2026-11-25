@@ -256,6 +256,21 @@ independently reviewable does not make it v0.1 work.
   safety checks unchanged. PR review is optional before v0.1 only under
   explicit maintainer direction; missing acceptance still means No-Go.
 
+### Issue lifecycle during v0.1
+
+Follow [Closing issues during the v0.1 release](CONTRIBUTING.md#closing-issues-during-the-v01-release)
+and the decision on #954. Distinguish implementation tasks, findings,
+acceptance gates and backlog; use the #308 gate index and the issue's Release
+line. Use the release milestones and repository-local classification labels
+when provisioned; preserve canonical triage metadata. Close a bounded task
+only after its scoped acceptance and applicable final-head checks are met.
+Keep later real-environment verification on the named gate. Do not auto-close
+a gate from a PR, hide unresolved mandatory evidence, or treat a duplicate
+tracker closure as a scenario pass. Link and preserve all outstanding
+obligations before consolidating. Findings belong on the owning gate first;
+open a new task only when it needs a distinct fix. No gate weakening, fault
+authority or publication authority follows from issue cleanup.
+
 ## Working on an Issue
 
 Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
