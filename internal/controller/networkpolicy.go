@@ -136,12 +136,14 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 
 // brokerNetworkPolicy admits the clients to the Broker ports of both access
 // modes: the peers spec.networkPolicy.clients names, or else the Pods of the
-// cluster's namespace.
+// cluster's namespace. It also admits the cluster's members to TCP 7, for
+// CUBRID's peer-alive probe of the CAS hosts.
 func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.NetworkPolicySpec {
 	clients := []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}
 	if np := cluster.Spec.NetworkPolicy; np != nil && len(np.Clients) > 0 {
 		clients = np.Clients
 	}
+	members := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)}}
 	return networkingv1.NetworkPolicySpec{
 		PodSelector: metav1.LabelSelector{MatchLabels: brokerLabelsFor(cluster)},
 		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
@@ -151,9 +153,22 @@ func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.N
 				npPort(corev1.ProtocolTCP, brokerRWPort),
 				npPort(corev1.ProtocolTCP, brokerROPort),
 			},
+		}, {
+			// The member probes the host of each CAS connected to it.
+			From:  []networkingv1.NetworkPolicyPeer{members},
+			Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolTCP, peerAliveEchoPort)},
 		}},
 	}
 }
+
+// peerAliveEchoPort is the TCP echo port CUBRID connects to when it checks
+// whether an idle peer's host is alive (check_peer_alive, default both).
+// Nothing listens on it, so an admitted probe gets an RST, which counts as
+// alive. A probe the policy drops gets no answer, and CUBRID then treats the
+// peer as dead and closes its idle session (#1158). Only a member's probe of
+// the Broker Pods is admitted, the path shown to close sessions; probes to
+// the members stay unadmitted until #1158 shows they are needed.
+const peerAliveEchoPort = 7
 
 func npPort(protocol corev1.Protocol, port int32) networkingv1.NetworkPolicyPort {
 	p := intOrString(port)
