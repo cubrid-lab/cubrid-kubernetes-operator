@@ -18,6 +18,7 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"os"
@@ -1099,6 +1100,70 @@ func TestS07CutStateAndRemovalOnEnd(t *testing.T) {
 	stop()
 	if !rec.RemovedOnEnd || rec.RemoveOnEndError != "" {
 		t.Errorf("removed on end %v, error %q", rec.RemovedOnEnd, rec.RemoveOnEndError)
+	}
+}
+
+// cut.json and the measurements say when the drop rules took effect and when
+// they were taken away, so that a run can tell whether a write acknowledged
+// around the cut was sent before or after its member's rules were in place
+// (#115). An injection that failed lists no rule and measures no time, and
+// still fails; a time not seen for every rule is unknown.
+func TestS07RecordsWhenTheDropRulesTookEffect(t *testing.T) {
+	cfg := testHAConfig(t)
+	cfg.EvidenceDir = t.TempDir()
+	ns := cfg.Namespace
+	kubectl := func(context.Context, ...string) (string, error) {
+		return "*filter\n:INPUT ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\nCOMMIT\n", nil
+	}
+	p := &netfault.Partition{Env: netfault.Env{Kubectl: kubectl, Poll: time.Millisecond},
+		Target: netfault.Endpoint{Name: m0, Namespace: ns, Pod: m0, IP: "10.42.1.20"},
+		Cuts: []netfault.Cut{{Peer: netfault.Endpoint{Name: m1, Namespace: ns, Pod: m1, IP: "10.42.2.21"},
+			Direction: netfault.In}}}
+	h := &haRun{cfg: cfg, redactor: evidence.NewRedactor()}
+	issued := time.Date(2026, 11, 24, 14, 46, 50, 0, time.UTC)
+	rec := &s07Record{Variant: s07HigherRankIsolated, FaultIssuedAt: &issued}
+	cut := &s07Cut{Partition: p, h: h, rec: rec}
+	if err := cut.Inject(context.Background()); err == nil {
+		t.Fatal("an unprepared partition was injected")
+	}
+	file := filepath.Join(cfg.EvidenceDir, s07File(s07HigherRankIsolated, "cut.json"))
+	data, err := os.ReadFile(file)
+	if err != nil || strings.Contains(string(data), "dropRules") {
+		t.Errorf("cut.json after a failed injection lists drop rules: %s, %v", data, err)
+	}
+	m := s07Measurements(rec)
+	for _, name := range []string{"dropRulesInstalledWithin", "dropRulesRemovedWithin"} {
+		if m[name] != evidence.Unknown {
+			t.Errorf("%s after a failed injection: %v, want unknown", name, m[name])
+		}
+	}
+
+	at := func(d time.Duration) time.Time { return issued.Add(d) }
+	removed := at(2*time.Minute + 3*time.Second)
+	rules := []netfault.RuleTime{
+		{Endpoint: m0, Path: m1 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.2.21/32 -j DROP",
+			InstalledAt: at(1200 * time.Millisecond), RemovedAt: &removed},
+		{Endpoint: m0, Path: m2 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.3.22/32 -j DROP",
+			InstalledAt: at(1500 * time.Millisecond)},
+	}
+	cut.writeState(func(f *s07CutFile) { f.DropRules = rules })
+	data, err = os.ReadFile(file)
+	written := &s07CutFile{}
+	if err != nil || json.Unmarshal(data, written) != nil || len(written.DropRules) != 2 ||
+		!written.DropRules[1].InstalledAt.Equal(rules[1].InstalledAt) ||
+		!strings.Contains(string(data), `"installedAt": "2026-11-24T14:46:51.2Z"`) {
+		t.Errorf("cut.json with the drop rules: %s, %v", data, err)
+	}
+	m = s07Measurements(rec)
+	if m["dropRulesInstalledWithin"] != "1.5s" || m["dropRulesRemovedWithin"] != evidence.Unknown {
+		t.Errorf("one rule not seen removed: installed within %v, removed within %v",
+			m["dropRulesInstalledWithin"], m["dropRulesRemovedWithin"])
+	}
+	later := at(2*time.Minute + 4*time.Second)
+	rules[1].RemovedAt = &later
+	cut.writeState(func(f *s07CutFile) { f.DropRules = rules })
+	if m = s07Measurements(rec); m["dropRulesRemovedWithin"] != "2m4s" {
+		t.Errorf("every rule removed: removed within %v, want 2m4s", m["dropRulesRemovedWithin"])
 	}
 }
 

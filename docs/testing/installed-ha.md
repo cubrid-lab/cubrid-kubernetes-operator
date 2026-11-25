@@ -2182,7 +2182,10 @@ section 8), and fail S07 when it reports `HAReady` and `ReplicationHealthy`
 healthy.
 
 Other measurements, from the cut's issue on the run's clock unless named:
-`faultConfirmedWithin`, `triggerObservedWithin`,
+`faultConfirmedWithin`, `dropRulesInstalledWithin` (the last drop rule took
+effect, so every rule was in place) and `dropRulesRemovedWithin` (the last
+was taken away; `unknown` while any rule was not seen removed), both from
+`dropRules` in `cut.json`, `triggerObservedWithin`,
 `targetClaimedActiveMasterWithin`, `quarantineSeenWithin` (detection),
 `rwScaledDownWithin` (Broker scale-down), `rwPodsGoneWithin` (actual Pod
 termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
@@ -2230,7 +2233,20 @@ Evidence, under `S07/<variant>/`:
   (`observed`);
 - `cut.json`: the cut's state alone, with the directions of the member and
   manager Pod cuts (`memberDirection`, `operatorDirection`), written before
-  the injection and at its removal;
+  the injection, after it and at its removal. `dropRules` lists each drop
+  rule installed: the member or Pod whose network namespace holds it
+  (`endpoint`), the traffic it drops (`path`, `sender -> receiver`), the
+  rule, `installedAt` and `removedAt`. Both are UTC on the run's clock,
+  taken right after the command that installed or removed the rules in
+  that namespace returned successfully (and, for the removal, the rules
+  read back showed them gone). One command installs all the rules of one
+  namespace, adding the jump to the drop chains last, so they share a time;
+  an inbound cut has the member rules in the cut-off member, an outbound cut
+  in each other member, each at its own time. A rule whose install command
+  failed is not listed. The same list is in `record.json` as
+  `partition.ruleTimes`. Compare these times with the clients' UTC write
+  times to see whether a write acknowledged around the cut was sent before
+  its member's rules took effect;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
   instead of `data-check.json`, and `engine-logs/<member>/`, when the
