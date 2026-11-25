@@ -5,15 +5,30 @@ name: Release Dry Run
 # the installer manifest. It pushes no image to a real registry, creates no
 # tag, release, branch, pull request or cache entry, and has only a read-only
 # token, so a failed run leaves nothing behind and a rerun starts from the same
-# state. Its only output is the workflow artifact with the installer manifest
-# and a record of the image digests and file checksums. It also rehearses the
-# image publication (a part-way failure, its rerun and a version whose tag is
-# taken) on a registry that runs inside the runner and is discarded with it.
+# state. Its outputs are workflow artifacts (the image archives, the installer
+# image check, and the installer manifest with a record of the image digests
+# and file checksums). It also rehearses the image publication (a part-way
+# failure, its rerun and a version whose tag is taken) on a registry that runs
+# inside the runner and is discarded with it.
+#
+# Three jobs keep the trusted values away from the candidate's code:
+#   build-images  builds both images with buildx (the candidate's Dockerfiles
+#                 run inside BuildKit's own container, not on the runner),
+#                 checks each archive's manifest against the build digest and
+#                 builds the installer image check from this workflow's own
+#                 commit. Its job outputs (the digests, the archive SHA-256s
+#                 and the checker's SHA-256) leave the job before any
+#                 candidate code runs on a runner: no make runs in it.
+#   installer     runs the candidate's `make build-installer` on its own
+#                 runner and uploads install.yaml and the record. Nothing it
+#                 writes is trusted by publish.yml without a check against
+#                 build-images' outputs.
+#   rehearsal     pushes build-images' archives to a registry on its runner.
 #
 # Run it from main: `gh workflow run release-dry-run.yml -f sha=<full sha> -f version=vX.Y.Z`.
 # The publishing workflow (publish.yml) calls it as its verify job, with
-# keep-images, so the images it publishes are the archives built and checked
-# here. See docs/testing/release-version-check.md#release-dry-run.
+# keep-images, and checks what it downloads against the build-images outputs.
+# See docs/testing/release-version-check.md#release-dry-run.
 on:
   workflow_dispatch:
     inputs:
@@ -34,34 +49,63 @@ on:
         type: string
         required: true
       keep-images:
-        description: "Also upload the image archives, for the publish job of the same run"
+        description: "Keep the image archives for 7 days instead of 1, for the publish job of the same run"
         type: boolean
         default: false
     outputs:
       artifact:
         description: "Name of the artifact with install.yaml, the record and SHA256SUMS"
-        value: ${{ jobs.dry-run.outputs.artifact }}
+        value: ${{ jobs.installer.outputs.artifact }}
       images-artifact:
-        description: "Name of the artifact with the image archives (keep-images only)"
-        value: ${{ jobs.dry-run.outputs.images-artifact }}
+        description: "Name of the artifact with the image archives"
+        value: ${{ jobs.build-images.outputs.images-artifact }}
+      checker-artifact:
+        description: "Name of the artifact with the installer image check, built from the workflow's commit"
+        value: ${{ jobs.build-images.outputs.checker-artifact }}
+      checker-sha256:
+        description: "SHA-256 of the installer image check binary"
+        value: ${{ jobs.build-images.outputs.checker-sha256 }}
+      manager-digest:
+        description: "Manifest digest of the manager image build"
+        value: ${{ jobs.build-images.outputs.manager-digest }}
+      manager-archive-sha256:
+        description: "SHA-256 of the manager image archive"
+        value: ${{ jobs.build-images.outputs.manager-archive-sha256 }}
+      instance-manager-digest:
+        description: "Manifest digest of the Instance Manager image build"
+        value: ${{ jobs.build-images.outputs.instance-manager-digest }}
+      instance-manager-archive-sha256:
+        description: "SHA-256 of the Instance Manager image archive"
+        value: ${{ jobs.build-images.outputs.instance-manager-archive-sha256 }}
 
 permissions: {}
 
+env:
+  # The names a release would publish under; nothing is pushed to them.
+  REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
+
 jobs:
-  dry-run:
+  build-images:
     permissions:
       contents: read
-    name: Build release artifacts without publishing
+    name: Build the images without publishing
     runs-on: ubuntu-latest
     # A cold build of both images takes well under this; a hung pull would
     # otherwise hold the runner for the default 6 hours.
     timeout-minutes: 60
     outputs:
-      artifact: release-dry-run-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
-      images-artifact: ${{ inputs.keep-images && format('release-images-{0}-{1}-attempt-{2}', inputs.version, steps.meta.outputs.sha, github.run_attempt) || '' }}
-    env:
-      # The names a release would publish under; nothing is pushed to them.
-      REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
+      sha: ${{ steps.meta.outputs.sha }}
+      created: ${{ steps.meta.outputs.created }}
+      built: ${{ steps.meta.outputs.built }}
+      manager-digest: ${{ steps.archives.outputs.manager-digest }}
+      manager-id: ${{ steps.manager.outputs.imageid }}
+      manager-archive-sha256: ${{ steps.archives.outputs.manager-archive-sha256 }}
+      instance-manager-digest: ${{ steps.archives.outputs.instance-manager-digest }}
+      instance-manager-id: ${{ steps.instance-manager.outputs.imageid }}
+      instance-manager-archive-sha256: ${{ steps.archives.outputs.instance-manager-archive-sha256 }}
+      checker-sha256: ${{ steps.checker.outputs.sha256 }}
+      images-artifact: release-images-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+      checker-artifact: release-checker-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
     steps:
       # Before anything is fetched: an input that is not exactly a full SHA or
       # a vMAJOR.MINOR.PATCH version fails here, whatever else it contains. The
@@ -108,6 +152,27 @@ jobs:
             go.sum
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # No module cache: setup-go would otherwise save one under main's scope,
+      # state that outlives the run. The workflow's own go.mod.
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: .release-check/go.mod
+          cache: false
+
+      # Built from the workflow's own copy while the workflow's commit is
+      # still checked out, before the candidate is selected. GOWORK=off keeps
+      # a go.work file elsewhere in the tree from changing the module.
+      # publish.yml runs this binary, held to the SHA-256 output here.
+      - name: Build the installer image check
+        id: checker
+        working-directory: .release-check
+        env:
+          GOWORK: "off"
+        run: |
+          go build -o "$RUNNER_TEMP/checker/check-installer-image" ./hack/check-installer-image
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/checker/check-installer-image" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       # Before switching to the requested source, verify the workflow itself
       # came from main and that inputs.sha is an ancestor of main. Nothing
@@ -221,11 +286,11 @@ jobs:
             org.opencontainers.image.version=${{ inputs.version }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
-      # Right after the builds and before any of the candidate's code runs
-      # (make, below): the checksum of each archive, and the digest of the
-      # image manifest inside it, which must be the digest the build reported.
-      # The record and the publish job hold the archives to these values, so
-      # an archive replaced later in the job is refused.
+      # The trusted values of the release: each archive's SHA-256 and the
+      # digest of the image manifest inside it, which must be the digest the
+      # build reported. They leave this job as job outputs, which no later job
+      # can change. No candidate code runs on this runner (no make), so
+      # nothing can replace an archive or a tool between the build and here.
       - name: Record the archive checksums before any candidate code runs
         id: archives
         env:
@@ -244,10 +309,79 @@ jobs:
               echo "::error::The $1 archive holds manifest $manifest, not the built digest $2"
               exit 1
             fi
-            echo "$3=$(sha256sum "$archive" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+            {
+              echo "$1-digest=$2"
+              echo "$1-archive-sha256=$(sha256sum "$archive" | cut -d' ' -f1)"
+            } >> "$GITHUB_OUTPUT"
           }
-          check manager "$MANAGER_DIGEST" manager
-          check instance-manager "$IM_DIGEST" instance-manager
+          check manager "$MANAGER_DIGEST"
+          check instance-manager "$IM_DIGEST"
+
+      # The rehearsal and publish.yml use these archives, not a rebuild.
+      - name: Upload the image archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-images-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/images/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: ${{ inputs.keep-images && 7 || 1 }}
+
+      - name: Upload the installer image check
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-checker-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/checker/
+          if-no-files-found: error
+          retention-days: ${{ inputs.keep-images && 7 || 1 }}
+
+  installer:
+    permissions:
+      contents: read
+    name: Build the installer manifest
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact: release-dry-run-${{ inputs.version }}-${{ needs.build-images.outputs.sha }}-attempt-${{ github.run_attempt }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # build-images already checked that the commit is on main.
+      - name: Select the verified commit
+        env:
+          SHA: ${{ needs.build-images.outputs.sha }}
+        run: |
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$SHA" refs/remotes/origin/main; then
+            echo "::error::Commit $SHA is not on main"
+            exit 1
+          fi
+          git checkout --detach --quiet "$SHA"
+
+      # The checker build-images made from the workflow's commit. Here it only
+      # writes the record: this runner also runs the candidate's make, so
+      # publish.yml repeats the check on its own runner.
+      - name: Download the installer image check
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build-images.outputs.checker-artifact }}
+          path: ${{ runner.temp }}/checker
+
+      - name: Install the installer image check
+        env:
+          CHECKER_SHA256: ${{ needs.build-images.outputs.checker-sha256 }}
+        run: |
+          checker="$RUNNER_TEMP/checker/check-installer-image"
+          if [ "$(sha256sum "$checker" | cut -d' ' -f1)" != "$CHECKER_SHA256" ]; then
+            echo "::error::The installer image check is not the binary build-images made"
+            exit 1
+          fi
+          install -m 0755 "$checker" "$RUNNER_TEMP/check-installer-image"
 
       # No module cache: setup-go would otherwise save one under main's scope,
       # state that outlives the run.
@@ -256,12 +390,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      # Built from the workflow's own copy, before any of the candidate's code
-      # runs through make.
-      - name: Build the installer image check
-        working-directory: .release-check
-        run: go build -o "$RUNNER_TEMP/check-installer-image" ./hack/check-installer-image
 
       # make runs the commit's own code. The defense against cache poisoning is
       # that this commit is an ancestor of main (checked above), not the job's
@@ -279,12 +407,11 @@ jobs:
       - name: Build the installer manifest
         env:
           VERSION: ${{ inputs.version }}
-          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
-          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+          MANAGER_DIGEST: ${{ needs.build-images.outputs.manager-digest }}
+          IM_DIGEST: ${{ needs.build-images.outputs.instance-manager-digest }}
         run: |
           make build-installer IMG="$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" IM_IMG="$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
-          # The cloned version check is not part of the commit.
-          changed=$(git status --porcelain -- . ':!.release-check')
+          changed=$(git status --porcelain)
           if [ -n "$changed" ]; then
             echo "$changed"
             echo "::error::make build-installer changed tracked files; the commit's generated files are stale"
@@ -297,23 +424,24 @@ jobs:
       # (exit 3), the manager falls back to its built-in default
       # (DefaultInstanceManagerImage), a mutable development tag; any other
       # failure is recorded with the checker's reason. Only the failure of the
-      # run waits for the step after the upload.
+      # run waits for the step after the upload. The digests and archive
+      # checksums come from build-images' outputs.
       - name: Record the digests and checksums
         id: record
         env:
           VERSION: ${{ inputs.version }}
-          SHA: ${{ steps.meta.outputs.sha }}
-          CREATED: ${{ steps.meta.outputs.created }}
-          BUILT: ${{ steps.meta.outputs.built }}
+          SHA: ${{ needs.build-images.outputs.sha }}
+          CREATED: ${{ needs.build-images.outputs.created }}
+          BUILT: ${{ needs.build-images.outputs.built }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
-          MANAGER_ID: ${{ steps.manager.outputs.imageid }}
-          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
-          IM_ID: ${{ steps.instance-manager.outputs.imageid }}
-          MANAGER_ARCHIVE: ${{ steps.archives.outputs.manager }}
-          IM_ARCHIVE: ${{ steps.archives.outputs.instance-manager }}
+          MANAGER_DIGEST: ${{ needs.build-images.outputs.manager-digest }}
+          MANAGER_ID: ${{ needs.build-images.outputs.manager-id }}
+          IM_DIGEST: ${{ needs.build-images.outputs.instance-manager-digest }}
+          IM_ID: ${{ needs.build-images.outputs.instance-manager-id }}
+          MANAGER_ARCHIVE: ${{ needs.build-images.outputs.manager-archive-sha256 }}
+          IM_ARCHIVE: ${{ needs.build-images.outputs.instance-manager-archive-sha256 }}
         run: |
           for d in "$MANAGER_DIGEST" "$IM_DIGEST"; do
             if [[ ! "$d" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -322,12 +450,6 @@ jobs:
             fi
           done
           sum() { sha256sum "$1" | cut -d' ' -f1; }
-          # The archives must still be the ones hashed before make ran.
-          if [ "$(sum "$RUNNER_TEMP/images/manager.oci.tar")" != "$MANAGER_ARCHIVE" ] ||
-            [ "$(sum "$RUNNER_TEMP/images/instance-manager.oci.tar")" != "$IM_ARCHIVE" ]; then
-            echo "::error::An image archive changed after it was hashed, while the candidate's code ran"
-            exit 1
-          fi
           im_ref="$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
           # A substring anywhere in the YAML is not proof: another resource
           # could mention this image while the manager still uses :dev.
@@ -396,12 +518,10 @@ jobs:
             echo "im_used=$im_used"
           } >> "$GITHUB_OUTPUT"
 
-      # The image archives stay on the runner unless publish.yml asks for
-      # them below: they are large.
       - name: Upload the installer manifest and the record
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-dry-run-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
+          name: release-dry-run-${{ inputs.version }}-${{ needs.build-images.outputs.sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-dry-run/
           if-no-files-found: error
 
@@ -416,12 +536,63 @@ jobs:
             exit 1
           fi
 
+      # Also after a failed step, so a partial run says how far it got.
+      - name: Write the result to the job summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ needs.build-images.outputs.sha }}
+          MANAGER_DIGEST: ${{ needs.build-images.outputs.manager-digest }}
+          IM_DIGEST: ${{ needs.build-images.outputs.instance-manager-digest }}
+          IM_USED: ${{ steps.record.outputs.im_used }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Release dry run"
+            echo
+            echo "Nothing was published. Job status: $JOB_STATUS."
+            echo
+            if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Version \`$VERSION\` from commit \`$SHA\`."
+              echo
+            fi
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| manager | ${MANAGER_DIGEST:-(not built)} |"
+            echo "| instance-manager | ${IM_DIGEST:-(not built)} |"
+            echo
+            echo "Instance Manager image the installer makes the manager use: ${IM_USED:-(not recorded)}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rehearsal:
+    permissions:
+      contents: read
+    name: Rehearse the image publication
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Clone the push script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-check
+          sparse-checkout: hack/release-push-images.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Download the image archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build-images.outputs.images-artifact }}
+          path: ${{ runner.temp }}/images
+
       # Rehearses hack/release-push-images.sh, the workflow's own copy that
-      # publish.yml runs against GHCR, with the archives and record of this
-      # run, on a registry container bound to the runner's loopback address.
-      # Nothing reaches GHCR, and the registry goes away with the runner. It
-      # shows that a pushed image answers the digest the build recorded, and
-      # what a rerun does:
+      # publish.yml runs against GHCR, with build-images' archives and
+      # outputs, on a registry container bound to the runner's loopback
+      # address. Nothing reaches GHCR, and the registry goes away with the
+      # runner. It shows that a pushed image answers the digest the build
+      # recorded, and what a rerun does:
       #   1. an attempt that stops after pushing the manager image;
       #   2. its rerun pushes only the missing Instance Manager image;
       #   3. a further rerun pushes nothing;
@@ -430,9 +601,17 @@ jobs:
       - name: Rehearse the image publication on a registry inside the runner
         env:
           VERSION: ${{ inputs.version }}
+          MANAGER_DIGEST: ${{ needs.build-images.outputs.manager-digest }}
+          MANAGER_ARCHIVE: ${{ needs.build-images.outputs.manager-archive-sha256 }}
+          IM_DIGEST: ${{ needs.build-images.outputs.instance-manager-digest }}
+          IM_ARCHIVE: ${{ needs.build-images.outputs.instance-manager-archive-sha256 }}
           REHEARSAL_REGISTRY: registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
         run: |
           command -v skopeo > /dev/null || { echo "::error::skopeo is not installed on the runner"; exit 1; }
+          record="$RUNNER_TEMP/images.json"
+          jq -n --arg md "$MANAGER_DIGEST" --arg ma "$MANAGER_ARCHIVE" --arg id "$IM_DIGEST" --arg ia "$IM_ARCHIVE" \
+            '{images: [{name: "manager", digest: $md, ociArchiveSha256: $ma},
+                       {name: "instance-manager", digest: $id, ociArchiveSha256: $ia}]}' > "$record"
           docker run -d --rm --name release-rehearsal -p 127.0.0.1:5000:5000 "$REHEARSAL_REGISTRY" > /dev/null
           for _ in $(seq 1 30); do
             curl -fsS -o /dev/null http://127.0.0.1:5000/v2/ && break
@@ -441,7 +620,7 @@ jobs:
           repo=cubrid-lab/cubrid-kubernetes-operator
           push() {
             env REGISTRY_HOST=localhost:5000 REPOSITORY="$repo" INSECURE=true RETRY_DELAY=1 \
-              RECORD="$RUNNER_TEMP/release-dry-run/release-dry-run.json" ARCHIVE_DIR="$RUNNER_TEMP/images" \
+              RECORD="$record" ARCHIVE_DIR="$RUNNER_TEMP/images" \
               IMAGES="$1" TAG="$2" .release-check/hack/release-push-images.sh
           }
           echo "1. An attempt that stops after pushing the manager image"
@@ -478,43 +657,3 @@ jobs:
             exit 1
           fi
           echo "The rehearsal pushed nothing outside this runner."
-
-      # publish.yml publishes these archives, not a rebuild, so the images it
-      # pushes are the ones recorded and checked above.
-      - name: Upload the image archives for the publish job
-        if: inputs.keep-images
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-images-${{ inputs.version }}-${{ steps.meta.outputs.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/images/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
-      # Also after a failed step, so a partial run says how far it got.
-      - name: Write the result to the job summary
-        if: always()
-        env:
-          VERSION: ${{ inputs.version }}
-          SHA: ${{ steps.meta.outputs.sha }}
-          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
-          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
-          IM_USED: ${{ steps.record.outputs.im_used }}
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          {
-            echo "## Release dry run"
-            echo
-            echo "Nothing was published. Job status: $JOB_STATUS."
-            echo
-            if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Version \`$VERSION\` from commit \`$SHA\`."
-              echo
-            fi
-            echo "| Image | Digest |"
-            echo "|---|---|"
-            echo "| manager | ${MANAGER_DIGEST:-(not built)} |"
-            echo "| instance-manager | ${IM_DIGEST:-(not built)} |"
-            echo
-            echo "Instance Manager image the installer makes the manager use: ${IM_USED:-(not recorded)}"
-          } >> "$GITHUB_STEP_SUMMARY"

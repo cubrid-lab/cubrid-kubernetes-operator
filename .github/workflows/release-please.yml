@@ -12,14 +12,14 @@ name: Release PR
 # input, the action builds its configuration from its inputs and ignores the
 # repository's config and manifest files.
 #
-# The PR is written with an installation token of the repository's GitHub
-# App, not with GITHUB_TOKEN or a personal token: CI on a PR that
-# GITHUB_TOKEN opens or updates does not start on its own. An admin
-# provisions the App and stores its Client ID and private key as the secrets
-# RELEASE_APP_CLIENT_ID and
-# RELEASE_APP_PRIVATE_KEY of the `release-pr` environment
-# (docs/testing/release-version-check.md). Until then this job warns and
-# updates no PR.
+# The PR is written with an installation token of the release-PR App, not
+# with GITHUB_TOKEN or a personal token: CI on a PR that GITHUB_TOKEN opens or
+# updates does not start on its own. This App is not the publishing App: it
+# is no bypass actor of the `v*` tag ruleset, so its token cannot create a
+# release tag. An admin stores its Client ID and private key as the secrets
+# RELEASE_PR_APP_CLIENT_ID and RELEASE_PR_APP_PRIVATE_KEY of the `release-pr`
+# environment (docs/testing/release-version-check.md). Until then this job
+# warns and updates no PR.
 on:
   push:
     branches: [main]
@@ -45,29 +45,41 @@ jobs:
     # The App token does all the writing; GITHUB_TOKEN gets nothing.
     permissions: {}
     steps:
-      - name: Check that the release App credential is provisioned
+      # The publishing App's key belongs only to the production environment.
+      # Visible here, any change merged to main could mint a token that may
+      # create release tags without production's reviewers.
+      - name: Refuse the publishing App key outside production
+        env:
+          PUBLISH_KEY_VISIBLE: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$PUBLISH_KEY_VISIBLE" != false ]; then
+            echo "::error::RELEASE_APP_PRIVATE_KEY, the publishing App's key, is visible to the release-pr job; an admin keeps it only in the production environment"
+            exit 1
+          fi
+
+      - name: Check that the release-PR App credential is provisioned
         id: app
         env:
-          HAS_CLIENT_ID: ${{ secrets.RELEASE_APP_CLIENT_ID != '' }}
-          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+          HAS_CLIENT_ID: ${{ secrets.RELEASE_PR_APP_CLIENT_ID != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY != '' }}
         run: |
           if [ "$HAS_CLIENT_ID" = true ] && [ "$HAS_PRIVATE_KEY" = true ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::warning::RELEASE_APP_CLIENT_ID or RELEASE_APP_PRIVATE_KEY is not set; the release PR was not updated"
-          echo "The release App credential is not provisioned, so the release PR was not opened or updated." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::RELEASE_PR_APP_CLIENT_ID or RELEASE_PR_APP_PRIVATE_KEY is not set; the release PR was not updated"
+          echo "The release-PR App credential is not provisioned, so the release PR was not opened or updated." >> "$GITHUB_STEP_SUMMARY"
           echo "ready=false" >> "$GITHUB_OUTPUT"
 
       # Scoped to this repository (the default without `owner`) and to the
       # two permissions release-please needs.
-      - name: Create a release App token
+      - name: Create a release-PR App token
         id: token
         if: steps.app.outputs.ready == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.RELEASE_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
 
