@@ -101,7 +101,7 @@ and retain a redacted copy. The full status field definitions are in
 | Backup `Completed`, `Ready=True` | The operation reported completion and the controller accepted its artifact facts. The controller does not independently download and rehash the objects. |
 | Recovery `Preparing` | A restore is being requested, or its backup is being verified/downloaded. |
 | Recovery `Restoring` | The restore utility runs, or the restored database is starting. |
-| Recovery `Validating` | The restored database is being validated before the bootstrap continues. |
+| Recovery `Validating` | The phase is declared in the API but the controller does not currently report it; the bootstrap goes from `Restoring` to `Complete` (and `SeedingReplicas` for HA). |
 | Recovery `SeedingReplicas` | HA peers are being copied from the restored data; inspect `status.databases[].seeding`. |
 | Recovery `Complete` | The bootstrap finished. Application SQL and dataset checks remain separate. |
 | Backup or recovery `Failed` | This resource's workflow is terminal; ordinary reconciliation does not reset it. |
@@ -277,17 +277,21 @@ and [runbook reproduction](https://github.com/cubrid-lab/cubrid-kubernetes-opera
   [`CubridBackup`](../../api/v1alpha1/cubridbackup_types.go) (bucket of 3 to 63
   lower-case letters, digits, dots and hyphens; no empty, `.` or `..` prefix
   segment). The API server refuses any other destination.
-- You know the database name (`spec.databases[].name`) and, for an HA
+- You know the database name (`spec.databases[0].name`, the first and only database) and, for an HA
   cluster, that `HAReady=True` and the data has been compared across members
   ([observability](../observability.md#conditions)).
 - Data you want to check after a restore is already committed. For a trial,
   create it with csql over TCP, as `<db>@<member hostname>` and never
   `<db>@localhost` (the local socket lost sessions, POC-70 and #238; see
   [section 5](#5-establish-a-usable-restore-independently)). A table needs a
-  primary key, or it is not replicated:
+  primary key, or it is not replicated. On an HA cluster first confirm
+  exactly one active master, then write to the Pod named by
+  `status.currentPrimary`, which is an observation, never assuming ordinal 0
+  is the master. For a standalone cluster the one member is `$CLUSTER-0`:
 
   ```sh
-  kubectl -n "$NS" exec "$CLUSTER-0" -c cubrid -- bash -c '
+  POD="$(kubectl -n "$NS" get cubridcluster "$CLUSTER" -o jsonpath='{.status.currentPrimary}')"   # HA; standalone: POD="$CLUSTER-0"
+  kubectl -n "$NS" exec "$POD" -c cubrid -- bash -c '
     export PATH="$CUBRID/bin:$PATH"
     csql -u dba -c "CREATE TABLE install_check (id INT PRIMARY KEY, note VARCHAR(40));" "'"$DB"'@$(hostname)" &&
     csql -u dba -c "INSERT INTO install_check VALUES (1, '"'"'before backup'"'"');" "'"$DB"'@$(hostname)"'
@@ -309,6 +313,7 @@ a terminal backup is not restarted), `spec.clusterRef.name`,
 NS="<namespace>"; CLUSTER="<source-cluster>"; DB="<database>"; BR_BACKUP="<new-backup-name>"
 kubectl -n "$NS" apply -f <your-copy-of-the-backup-sample>.yaml
 kubectl -n "$NS" get cubridbackup "$BR_BACKUP" -w     # until PHASE is Completed or Failed; stop with Ctrl-C
+# If the watch shows Failed, stop the wait and go to section 4.
 kubectl -n "$NS" wait cubridbackup/"$BR_BACKUP" \
   --for=jsonpath='{.status.phase}'=Completed --timeout=2h
 ```
@@ -360,7 +365,7 @@ Never delete the failed backup or any staging file to retry.
   retained volume, and HA then stops with `MemberHoldsDatabase`. There is no
   in-place restore, and you do not touch the source cluster.
 - The new cluster has its own `spec.objectStorage` (same endpoint and a
-  Secret that can read the backup), `spec.databases[].name` equal to the
+  Secret that can read the backup), `spec.databases[0].name` (a restore uses the first and only database) equal to the
   backup's database, `spec.version` of the same engine series, and enough
   `spec.storage.data.size` ([sizing](data-volume-sizing.md)). A restore of a
   password-bearing backup keeps that password ([DBA password](dba-password.md)).
@@ -417,14 +422,14 @@ done
 ```
 
 **Expected result.** `status.bootstrap.phase` goes through `Preparing`,
-`Restoring` and `Validating` (and `SeedingReplicas` for HA) to `Complete`;
+and `Restoring` (and `SeedingReplicas` for HA) to `Complete`;
 `BootstrapReady` and `Ready` are `True` (HA also `HAReady` and
 `ReplicationHealthy`); `status.bootstrap.mode` is `Recovery` and
 `status.bootstrap.manifestUri` equals the backup's artifact URI. The SQL
 check prints exactly the rows committed before the backup (the sample table:
 one row, `1` and `'before backup'`) on every member, which is stronger than
-the phase and than row counts. Then commit a new row on the new master
-and read it on every member within the convergence limit
+the phase and than row counts. Then commit a new row on the master named by the new cluster's `status.currentPrimary` (an
+observation; confirm exactly one active master) and read it on every member within the convergence limit
 ([section 5](#5-establish-a-usable-restore-independently)). Keep any `-199`
 or `-111` output, even with the expected rows.
 

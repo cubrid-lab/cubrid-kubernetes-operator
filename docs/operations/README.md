@@ -180,22 +180,34 @@ NS="<namespace>"
 kubectl config use-context "<approved-context>"
 kubectl config current-context
 
-# Option A: deploy straight from the checkout.
+```
+
+Then install with one of two options. Option A deploys straight from the
+source tree:
+
+```sh
 make deploy IMG="$IMG" IM_IMG="$IM_IMG"
-# Option B: render one file, review it, then apply it.
+```
+
+Option B renders one file, which you can review, then applies it:
+
+```sh
 make build-installer IMG="$IMG" IM_IMG="$IM_IMG"
 kubectl apply -f dist/install.yaml
 ```
 
 Create the namespace and the object-storage Secret (only if you will back up
 or restore, or run an HA cluster, which needs `spec.objectStorage.bucket`;
-the Secret has the keys `accessKey` and `secretKey`; read the values from a
-file or the environment so they do not enter shell history or Git):
+the Secret has the keys `accessKey` and `secretKey`; read the values from the
+environment so they stay out of version control, and note that `--from-file`
+would keep a trailing newline in the key, which the store then refuses; a
+value written with `printf '%s'` to a file has none):
 
 ```sh
 kubectl create namespace "$NS"
 kubectl -n "$NS" create secret generic <secret-name> \
-  --from-file=accessKey=<file> --from-file=secretKey=<file>
+  --from-literal=accessKey="$OBJECT_STORE_ACCESS_KEY" \
+  --from-literal=secretKey="$OBJECT_STORE_SECRET_KEY"
 ```
 
 Apply a cluster. For the standalone sample, copy
@@ -421,7 +433,10 @@ by #125/#127.
 change, and you have recorded, for every cluster, what must survive: a
 backup you have restored and checked elsewhere
 ([backup and restore](backup-restore.md)), or a retained claim you accept
-keeping. Set `NS`, and use the context you installed with.
+keeping. Set `NS`, and use the context you installed with. For every
+`CubridBackup` you want to keep, save its manifest URI and digest **outside
+the cluster** (the first command below prints them) before any delete: the
+status holds the only record of the URI.
 
 **Commands**, in this order. Deleting a CRD removes every `CubridCluster` and
 `CubridBackup` in all namespaces at once, so delete the clusters first and
@@ -430,15 +445,16 @@ look at what that does to the volumes:
 ```sh
 kubectl config current-context
 kubectl get cubridclusters,cubridbackups -A
+kubectl -n "$NS" get cubridbackup -o custom-columns=NAME:.metadata.name,CLUSTER:.spec.clusterRef.name,URI:.status.artifact.uri,DIGEST:.status.artifact.manifestDigest   # save this outside the cluster
 kubectl -n "$NS" get cubridcluster -o custom-columns=NAME:.metadata.name,RETENTION:.spec.storage.retentionPolicy
 kubectl -n "$NS" get pvc -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,VOLUME:.spec.volumeName
 kubectl get pv -o custom-columns=NAME:.metadata.name,RECLAIM:.spec.persistentVolumeReclaimPolicy,CLAIM:.spec.claimRef.name
 
-kubectl -n "$NS" delete cubridbackup --all          # the objects in the store stay; see below
 kubectl -n "$NS" delete cubridcluster "$CLUSTER" --wait=true
 kubectl -n "$NS" get pods,pvc                       # claims remain under retentionPolicy Retain
 
 # Controller, RBAC and CRDs. This also deletes any CubridCluster or CubridBackup left anywhere.
+kubectl get cubridclusters -A                       # must list nothing you still need
 make undeploy ignore-not-found=true                 # or: kubectl delete -f dist/install.yaml
 # make uninstall deletes only the CRDs, with the same effect on the custom resources.
 ```
