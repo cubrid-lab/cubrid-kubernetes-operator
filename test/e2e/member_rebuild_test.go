@@ -110,7 +110,7 @@ type memberIdentity struct {
 //     rebuilt, and the Operator does not resolve a primary while any member
 //     lacks an authoritative role (resolvePrimary in
 //     internal/controller/haresolve.go); the rebuild is not offered while the
-//     quarantine holds, so requiring True would wait for ever (Kind run
+//     quarantine holds, so requiring True would wait forever (Kind run
 //     45403615696; maintainer decision on #1139, comment 7148109339). In
 //     both cases status.instances shows exactly one member whose role is
 //     master, that member was observed no more than 60 seconds before now,
@@ -186,6 +186,14 @@ func missedProbeReleaseRefusal(c *databasev1alpha1.CubridCluster, emptied, empti
 				x.Reason == "PrimaryObservationIncomplete"
 		}) {
 			return unmet + resolved.Error(), false
+		}
+		if !slices.Contains(roleless, emptied) {
+			role := "no entry in status.instances"
+			if x := instance(emptied); x != nil {
+				role = fmt.Sprintf("the role %q", x.Role)
+			}
+			return fmt.Sprintf(unmet+"PrimaryResolved is False (PrimaryObservationIncomplete) but %s, whose "+
+				"storage this step replaced, has %s", emptied, role), false
 		}
 		for _, name := range roleless {
 			if name != emptied {
