@@ -431,6 +431,20 @@ The records are in `docs/poc/RESULTS.md`.
      such a member counts like a verified one only once its next Pod has
      answered as a non-master.
 
+     *Note (#938, 2026-11-25 UTC):* the Pod recorded for M is the one read
+     before the role probes of the pass that records it, the Pod that can
+     have given M's claim. It is not the one read after the probes. When
+     M's Pod was replaced during the probes (Kind run 45388185821, the token
+     rotation of scenario S14), the quarantine had recorded the replacement,
+     which had never answered. The confirmed termination of the old Pod then
+     never matched it, and the quarantine became
+     `WriteQuarantinedMasterChanged` once CUBRID moved the role. A
+     termination of the recorded Pod that the kubelet confirmed in the pass
+     that starts the quarantine counts as the confirmed end above. A Pod
+     replaced during the probes without a confirmed end escalates, as any
+     recorded Pod gone without one does. This changes which Pod is recorded,
+     not when a quarantine starts or ends; it adds no exception.
+
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,
   not linearizable absence of a DB process; status may be delayed and a

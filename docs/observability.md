@@ -397,6 +397,14 @@ Pod:
   ceasing to claim while its Pod is not seen being deleted, still makes it
   `WriteQuarantinedMasterChanged`. No rebase is made in a pass that could
   not read the members' Pods.
+- The Pod a quarantine records for its master (`observedMasterPodUID`) is
+  the one read before that pass's role probes, the Pod that can have
+  answered as the master, not a replacement created during the probes
+  (#938). A confirmed termination of that Pod seen in the same pass is
+  recorded with it (`observedMasterLeavingConfirmed`), so a later master
+  rebases the quarantine as above. A Pod replaced during the probes without
+  a confirmed end makes it `WriteQuarantinedMasterChanged` on the next pass,
+  like any recorded master Pod gone without one.
 - A member that gives no answer is not unverified while the node its Pod was
   last seen scheduled on carries the taint
   `node.kubernetes.io/out-of-service` with the effect `NoExecute` (ADR-0005,

@@ -372,6 +372,9 @@ type quarantineInput struct {
 	// Unstable are the members whose Pod differed between the reads before
 	// and after the probes: their answers verify nothing in this pass.
 	Unstable map[string]bool
+	// PodsBefore are the members' Pods read before the probes; nil when
+	// they were not read.
+	PodsBefore map[string]memberIdentity
 	// IdentitiesUnknown says that the members' Pods could not be read. Only
 	// the rule of two active masters is applied then; the verifications are
 	// kept as they were, no quarantine is released, and the caller keeps the
@@ -1026,6 +1029,18 @@ func startQuarantine(in quarantineInput, masters, named []string) (*databasev1al
 	return newQuarantine(in, reason, master, named)
 }
 
+// masterPod is the Pod a quarantine records for its master m: the one read
+// before the probes, which is the Pod that can have given m's active-master
+// claim. A Pod read after them can be a replacement created during the
+// probes that never answered (#938). Without that read, the Pod read after
+// the probes.
+func masterPod(in quarantineInput, m string) memberIdentity {
+	if id, ok := in.PodsBefore[m]; ok && !in.IdentitiesUnknown {
+		return id
+	}
+	return in.Identities[m]
+}
+
 // newQuarantine is a new quarantine with reason beside master about members.
 func newQuarantine(in quarantineInput, reason databasev1alpha1.WriteQuarantineReason, master string,
 	members []string) (*databasev1alpha1.WriteQuarantine, error) {
@@ -1040,8 +1055,18 @@ func newQuarantine(in quarantineInput, reason databasev1alpha1.WriteQuarantineRe
 	q := &databasev1alpha1.WriteQuarantine{GenerationID: generation, ClusterUID: in.ClusterUID, Reason: reason,
 		StartTime: metav1.NewTime(in.Now), ObservedMaster: master, Revision: 1, ReleaseToken: token}
 	if master != "" {
-		q.ObservedMasterPodUID = in.Identities[master].PodUID
-		q.ObservedMasterRestartCount = in.Identities[master].RestartCount
+		id := masterPod(in, master)
+		q.ObservedMasterPodUID, q.ObservedMasterRestartCount = id.PodUID, id.RestartCount
+		// The termination of that Pod confirmed in this pass is the
+		// departure masterDeparture reads in the next ones: by then the
+		// member's last Pod seen is its next one, and that termination is
+		// not recorded again.
+		if reason == databasev1alpha1.WriteQuarantinedMemberUnverified && id.PodUID != "" &&
+			(id.Terminated || slices.ContainsFunc(in.Terminations, func(t databasev1alpha1.MemberTermination) bool {
+				return t.Name == master && t.PodUID == id.PodUID
+			})) {
+			q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed = id.PodUID, true
+		}
 	}
 	for _, m := range members {
 		q.Members = append(q.Members, quarantineMember(in, m))
@@ -1100,7 +1125,7 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 		// the role. The quarantine is rebased on the new master, and the
 		// former one is a member like any other.
 		former, next := q.ObservedMaster, masters[0]
-		id := in.Identities[next]
+		id := masterPod(in, next)
 		q.ObservedMaster, q.ObservedMasterPodUID, q.ObservedMasterRestartCount = next, id.PodUID, id.RestartCount
 		q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
 		q.Members = slices.DeleteFunc(q.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == next })
@@ -1141,7 +1166,7 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	slices.SortFunc(q.Members, func(a, b databasev1alpha1.WriteQuarantineMember) int {
 		return ordinal[a.Name] - ordinal[b.Name]
 	})
-	if id := in.Identities[q.ObservedMaster]; q.ObservedMaster != "" && !in.IdentitiesUnknown &&
+	if id := masterPod(in, q.ObservedMaster); q.ObservedMaster != "" && !in.IdentitiesUnknown &&
 		(id.PodUID != q.ObservedMasterPodUID || id.RestartCount != q.ObservedMasterRestartCount) {
 		q.ObservedMasterPodUID, q.ObservedMasterRestartCount, revised = id.PodUID, id.RestartCount, true
 	}
@@ -1685,7 +1710,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	}
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
-		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
+		Unstable: unstable, PodsBefore: before, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
 		Terminations:    terminations,
 		Verifications:   withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
 		Quarantine:      withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)),
