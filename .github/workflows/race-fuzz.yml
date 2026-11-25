@@ -1,0 +1,104 @@
+name: Race and fuzz (advisory)
+
+# An advisory lane for the race detector and short fuzzing runs (#951). It has
+# no pull_request or push trigger, so it never reports a check on a pull
+# request, cannot be made a required check, and adds no time to the Tests,
+# Lint or E2E gates. It runs weekly and on demand:
+#   gh workflow run race-fuzz.yml --ref <branch>
+# A failure here is a finding to triage in an issue, not a merge blocker.
+# The fixed fuzz seeds already run in the required Tests job through the
+# ordinary go test; this lane only adds the race detector and new mutations.
+# docs/testing/race-and-fuzz.md describes the selection and its measured cost.
+on:
+  schedule:
+    - cron: "0 3 * * 2"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  race:
+    permissions:
+      contents: read
+    name: Race detector on concurrency-sensitive tests
+    runs-on: ubuntu-latest
+    # Building the controller tests with the race detector took about 14
+    # minutes on a 6-core workstation; see the measurements in the document.
+    timeout-minutes: 60
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/race-fuzz.yml
+
+      # The controller suite finds the envtest binaries under bin/k8s.
+      - name: Download the envtest binaries
+        run: make setup-envtest
+
+      - name: Instance Manager package with the race detector
+        timeout-minutes: 15
+        run: go test -race -count=1 ./internal/instancemanager/...
+
+      - name: Controller package with the race detector
+        timeout-minutes: 40
+        run: go test -race -count=1 ./internal/controller/...
+
+  fuzz:
+    permissions:
+      contents: read
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    # Each target mutates for at most 30 seconds with two workers; the job
+    # timeout also covers the build and a slow runner.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/instancemanager
+            target: FuzzParseHAStatus
+          - package: ./internal/instancemanager
+            target: FuzzParseManifest
+          - package: ./internal/controller
+            target: FuzzQuarantineAutomaticRelease
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/race-fuzz.yml
+
+      - name: Fuzz for 30 seconds
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: go test "$FUZZ_PACKAGE" -run '^$' -fuzz "^${FUZZ_TARGET}\$" -fuzztime 30s -parallel 2
+
+      # Go writes a failing input under the package's testdata/fuzz. Keep it
+      # so the crash can be reproduced and, once fixed, added as a seed.
+      - name: Upload the failing input
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-${{ matrix.target }}
+          path: internal/**/testdata/fuzz/
+          if-no-files-found: warn

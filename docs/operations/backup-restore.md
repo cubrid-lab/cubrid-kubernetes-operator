@@ -8,6 +8,11 @@ records actual results; this page supplies no new Kind or VM evidence.
 Use the [operations preflight](README.md#1-preflight--before-touching-a-cluster)
 to identify the intended environment and preserve its data before acting.
 
+The runnable procedures are [section 6, create a backup](#6-procedure-create-a-backup),
+and [section 7, restore into a new cluster](#7-procedure-restore-into-a-new-cluster).
+Both are proposed: not yet followed end to end by a maintainer other than the
+author (#127). Sections 1 to 5 are the reference they rely on.
+
 ## 1. Identify the backup and the recovery target
 
 A `CubridBackup` requests one full backup of a named database. Its spec is
@@ -96,7 +101,7 @@ and retain a redacted copy. The full status field definitions are in
 | Backup `Completed`, `Ready=True` | The operation reported completion and the controller accepted its artifact facts. The controller does not independently download and rehash the objects. |
 | Recovery `Preparing` | A restore is being requested, or its backup is being verified/downloaded. |
 | Recovery `Restoring` | The restore utility runs, or the restored database is starting. |
-| Recovery `Validating` | The restored database is being validated before the bootstrap continues. |
+| Recovery `Validating` | The phase is declared in the API but the controller does not currently report it; the bootstrap goes from `Restoring` to `Complete` (and `SeedingReplicas` for HA). |
 | Recovery `SeedingReplicas` | HA peers are being copied from the restored data; inspect `status.databases[].seeding`. |
 | Recovery `Complete` | The bootstrap finished. Application SQL and dataset checks remain separate. |
 | Backup or recovery `Failed` | This resource's workflow is terminal; ordinary reconciliation does not reset it. |
@@ -252,3 +257,190 @@ independent runbook reproduction remain with the
 [recovery acceptance](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/89),
 [release campaign](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/126)
 and [runbook reproduction](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/127).
+
+## 6. Procedure: create a backup
+
+> [!NOTE]
+> Proposed: not yet followed end to end by a maintainer other than the
+> author (#127). Nothing here has been run on a cluster as written.
+
+**Prerequisites.**
+
+- The source `CubridCluster` is `Ready` and was created with
+  `spec.objectStorage` (`endpoint`, `credentialsSecretRef.name`, and
+  `insecure: true` only for a development store). The Pods read these at
+  start, so a cluster created without them needs its Pods replaced, which is
+  a planned maintenance step, not part of this procedure. The Secret in the
+  cluster's namespace has the keys `accessKey` and `secretKey`.
+- The destination bucket exists, the credentials can write to it, and the
+  bucket and prefix follow the rules in
+  [`CubridBackup`](../../api/v1alpha1/cubridbackup_types.go) (bucket of 3 to 63
+  lower-case letters, digits, dots and hyphens; no empty, `.` or `..` prefix
+  segment). The API server refuses any other destination.
+- You know the database name (`spec.databases[0].name`, the first and only database) and, for an HA
+  cluster, that `HAReady=True` and the data has been compared across members
+  ([observability](../observability.md#conditions)).
+- Data you want to check after a restore is already committed. For a trial,
+  create it with csql over TCP, as `<db>@<member hostname>` and never
+  `<db>@localhost` (the local socket lost sessions, POC-70 and #238; see
+  [section 5](#5-establish-a-usable-restore-independently)). A table needs a
+  primary key, or it is not replicated. On an HA cluster first confirm
+  exactly one active master, then write to the Pod named by
+  `status.currentPrimary`, which is an observation, never assuming ordinal 0
+  is the master. For a standalone cluster the one member is `$CLUSTER-0`:
+
+  ```sh
+  POD="$(kubectl -n "$NS" get cubridcluster "$CLUSTER" -o jsonpath='{.status.currentPrimary}')"   # HA; standalone: POD="$CLUSTER-0"
+  kubectl -n "$NS" exec "$POD" -c cubrid -- bash -c '
+    export PATH="$CUBRID/bin:$PATH"
+    csql -u dba -c "CREATE TABLE install_check (id INT PRIMARY KEY, note VARCHAR(40));" "'"$DB"'@$(hostname)" &&
+    csql -u dba -c "INSERT INTO install_check VALUES (1, '"'"'before backup'"'"');" "'"$DB"'@$(hostname)"'
+  ```
+
+  Skip the `CREATE` if the table exists from the install check (then insert
+  a row of your own). With a DBA password Secret, follow
+  [DBA password](dba-password.md).
+
+**Commands.** Copy the
+[backup sample](../../config/samples/database_v1alpha1_cubridbackup.yaml) and
+set `metadata.name` (a new name for every backup; the spec cannot change and
+a terminal backup is not restarted), `spec.clusterRef.name`,
+`spec.database`, and `spec.destination.objectStorage.bucket` and `prefix`.
+`spec.target.preference` is `PreferStandby` (the default), `StandbyOnly` or
+`PrimaryOnly`; `spec.level` is `Full`.
+
+```sh
+NS="<namespace>"; CLUSTER="<source-cluster>"; DB="<database>"; BR_BACKUP="<new-backup-name>"
+kubectl -n "$NS" apply -f <your-copy-of-the-backup-sample>.yaml
+kubectl -n "$NS" get cubridbackup "$BR_BACKUP" -w     # until PHASE is Completed or Failed; stop with Ctrl-C
+# If the watch shows Failed, stop the wait and go to section 4.
+kubectl -n "$NS" wait cubridbackup/"$BR_BACKUP" \
+  --for=jsonpath='{.status.phase}'=Completed --timeout=2h
+```
+
+The wait budget follows the Instance Manager's two-hour default for a backup
+including its upload ([deadlines](#deadlines-and-a-lost-response)). Then read
+the result with the commands in [section 2](#2-read-progress-without-changing-it)
+and record the artifact:
+
+```sh
+kubectl -n "$NS" get cubridbackup "$BR_BACKUP" \
+  -o jsonpath='{.status.artifact.uri}{"\n"}{.status.artifact.manifestDigest}{"\n"}{.status.artifact.sizeBytes}{"\n"}{.status.targetInstance}{"\t"}{.status.targetRole}{"\n"}'
+```
+
+**Expected result.** `status.phase` is `Completed`; the `Ready` Condition is
+`True`; `status.artifact.uri` ends in `/manifest.json` and is under the
+bucket and prefix you set; `manifestDigest` and `sizeBytes` are set;
+`targetInstance` names a member of the cluster, and for `PreferStandby` on an
+HA cluster `targetRole` is normally the standby. With your object store's own
+client, list the prefix and confirm `manifest.json` and its objects exist.
+The phase `Completed` means the controller accepted the reported artifact; it
+does not download or rehash the objects, and it does not show that a restore
+works (see [section 5](#5-establish-a-usable-restore-independently)).
+
+**If it fails.** `kubectl wait` timing out is not a verdict: read the phase
+and Conditions first. A `Pending` backup with a reason is waiting, and the
+reasons and their bounds are in
+[section 3](#3-decide-whether-the-controller-is-waiting-retrying-or-finished).
+For `Failed`, keep the CR and operation record, work through
+[section 4](#4-investigate-a-terminal-or-uncertain-result), and create a
+separately named backup only once no earlier work may still be running.
+Never delete the failed backup or any staging file to retry.
+
+## 7. Procedure: restore into a new cluster
+
+> [!NOTE]
+> Proposed: not yet followed end to end by a maintainer other than the
+> author (#127). Nothing here has been run on a cluster as written.
+
+**Prerequisites.**
+
+- A backup with `status.phase: Completed` and a recorded
+  `status.artifact.uri` (the manifest URI), from
+  [section 6](#6-procedure-create-a-backup) or an earlier one. The object
+  store still holds it.
+- The restore target is a **new** cluster name in a namespace where no
+  cluster, and no retained claim `data-<name>-<n>`, of that name exists
+  (`kubectl -n "$NS" get cubridcluster,pvc`); a reused name can reattach a
+  retained volume, and HA then stops with `MemberHoldsDatabase`. There is no
+  in-place restore, and you do not touch the source cluster.
+- The new cluster has its own `spec.objectStorage` (same endpoint and a
+  Secret that can read the backup), `spec.databases[0].name` (a restore uses the first and only database) equal to the
+  backup's database, `spec.version` of the same engine series, and enough
+  `spec.storage.data.size` ([sizing](data-volume-sizing.md)). A restore of a
+  password-bearing backup keeps that password ([DBA password](dba-password.md)).
+- For an HA target, `spec.highAvailability.enabled: true`,
+  `spec.topology.promotableMembers: 3` and `spec.objectStorage.bucket` (used
+  to seed the other members). `bootstrap.recovery` is accepted only when the
+  cluster is created: it cannot be added, removed or changed afterwards.
+
+**Commands.** Write the new cluster from the standalone sample, plus these
+fields (`spec.bootstrap.recovery.manifestUri` is the field that makes it a
+restore):
+
+```yaml
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  name: <new-cluster>
+spec:
+  version: "11.4"
+  databases:
+    - name: <database>
+  topology: {promotableMembers: 1, readReplicas: 0}
+  highAvailability: {enabled: false}
+  storage:
+    data: {size: 1Gi}
+  objectStorage:
+    endpoint: <host[:port]>
+    insecure: false                    # true only for a development store
+    credentialsSecretRef: {name: <secret-name>}
+  bootstrap:
+    recovery:
+      manifestUri: <the backup's status.artifact.uri>
+```
+
+```sh
+NS="<namespace>"; BR_RECOVERY="<new-cluster>"; BR_BACKUP="<completed-backup>"
+kubectl -n "$NS" get cubridbackup "$BR_BACKUP" -o jsonpath='{.status.artifact.uri}{"\n"}'   # copy into manifestUri
+kubectl -n "$NS" apply -f <the-new-cluster>.yaml
+kubectl -n "$NS" get cubridcluster "$BR_RECOVERY" -w \
+  -o custom-columns='NAME:.metadata.name,BOOTSTRAP:.status.bootstrap.phase,READY:.status.conditions[?(@.type=="Ready")].status'
+kubectl -n "$NS" wait cubridcluster/"$BR_RECOVERY" --for=condition=Ready --timeout=2h
+```
+
+Follow progress with the commands in
+[section 2](#2-read-progress-without-changing-it). Then compare the data on
+every member, using csql over TCP:
+
+```sh
+DB="<database>"
+for p in $(kubectl -n "$NS" get pods -o name | grep "/$BR_RECOVERY-[0-9]*$"); do
+  kubectl -n "$NS" exec "${p#pod/}" -c cubrid -- bash -c \
+    'export PATH="$CUBRID/bin:$PATH"; csql -u dba -c "SELECT id, note FROM install_check;" "'"$DB"'@$(hostname)"'
+done
+```
+
+**Expected result.** `status.bootstrap.phase` goes through `Preparing`,
+and `Restoring` (and `SeedingReplicas` for HA) to `Complete`;
+`BootstrapReady` and `Ready` are `True` (HA also `HAReady` and
+`ReplicationHealthy`); `status.bootstrap.mode` is `Recovery` and
+`status.bootstrap.manifestUri` equals the backup's artifact URI. The SQL
+check prints exactly the rows committed before the backup (the sample table:
+one row, `1` and `'before backup'`) on every member, which is stronger than
+the phase and than row counts. Then commit a new row on the master named by the new cluster's `status.currentPrimary` (an
+observation; confirm exactly one active master) and read it on every member within the convergence limit
+([section 5](#5-establish-a-usable-restore-independently)). Keep any `-199`
+or `-111` output, even with the expected rows.
+
+**If it fails.** The initial restore has at most three attempts; the retry,
+waiting and terminal reasons, and what each one means, are in
+[section 3](#3-decide-whether-the-controller-is-waiting-retrying-or-finished).
+On `Failed`, leave the new cluster, its claims, the operation records and the
+backup untouched, follow
+[section 4](#4-investigate-a-terminal-or-uncertain-result), and plan a
+restore into another new name. `manifestUri` is immutable, and a restore
+never overwrites the source or an existing volume. Do not delete claims,
+staging directories or ownership markers to retry. If rows are missing or
+differ, record `fail` and ask a maintainer; do not load the source data by
+hand into the restored database.

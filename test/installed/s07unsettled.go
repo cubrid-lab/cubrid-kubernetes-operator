@@ -167,7 +167,7 @@ func noteS07SettleExpired(ctx context.Context, rec *s07Record, now time.Time) {
 // the time of the members read after it, and time a member does not use
 // passes to the next.
 func (h *haRun) snapshotS07Rows(ctx context.Context, rec *s07Record) {
-	rec.UnsettledRows, _ = h.readS07Rows(ctx, h.history.String(), s07File(rec.Variant, "unsettled-rows.json"))
+	rec.UnsettledRows, _ = h.readS07Rows(ctx, h.history.String(), s07File(rec.dir(), "unsettled-rows.json"))
 }
 
 // readS07Rows reads every member's rows as snapshotS07Rows does, applies the

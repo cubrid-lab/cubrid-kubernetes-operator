@@ -226,12 +226,14 @@ func confirmRequestedPassword(ctx context.Context, cli CLI, logger *slog.Logger,
 
 // ConfirmDBAPassword checks that the stopped database's DBA password is
 // password, and never sets one. It is for a database that got its password
-// elsewhere: a slave seeded from its master's backup carries the master's
-// password, and a password set on the master reaches the slaves by
-// replication (POC-61, Q3), so a slave is never given one of its own; an HA
-// member got it from the HA bootstrap or its seed, and a restored database
-// from its restore. No password, or another one, is an error, and no error
-// carries the value.
+// elsewhere: a slave seeded from its master's backup carries the password the
+// master had when the backup was taken, so a slave is never given one of its
+// own; an HA member got it from the HA bootstrap or its seed, and a restored
+// database from its restore. A password changed later does not reach the
+// slaves by itself: only ALTER USER is replicated, as SQL text that leaves
+// the value in every member's log, and set_password changes only the member
+// it runs on (docs/poc/RESULTS.md, POC-74). No password, or another one, is
+// an error, and no error carries the value.
 func ConfirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, database, password string) error {
 	if !databaseNamePattern.MatchString(database) {
 		return fmt.Errorf("database name %q is not a plain identifier", database)
@@ -242,7 +244,7 @@ func ConfirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, datab
 	}
 	if !refused {
 		return fmt.Errorf("the database has no DBA password, but one is requested; "+
-			"this database is only checked, never given one: a seeded slave gets its master's by replication, "+
+			"this database is only checked, never given one: a seeded slave carries its master's from its seed, "+
 			"and an HA member or a restored database got its password when it was created or restored: %w",
 			ErrPasswordNotRequested)
 	}

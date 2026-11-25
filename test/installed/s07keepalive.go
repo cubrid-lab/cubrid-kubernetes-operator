@@ -120,6 +120,11 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 		}
 	}
 	k := h.cfg.s07Keepalive()
+	if rec.sub != "" {
+		// The first cut's container in the same Pods may have ended, and its
+		// name cannot be used again (netfault.Keepalive).
+		k.Container = s07RepeatKeepaliveContainer
+	}
 	refuse := func(err error) error {
 		rec.mu.Lock()
 		rec.Keepalive = &netfault.KeepaliveRecord{Target: p.Target.Name, Master: rec.Master, Unmet: err.Error()}
@@ -147,7 +152,7 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 	rec.Keepalive = &got
 	rec.mu.Unlock()
 	if err != nil {
-		diagnostics := h.s07KeepaliveDiagnostics(ctx, members)
+		diagnostics := h.s07KeepaliveDiagnostics(ctx, members, cmpOr(k.Container, netfault.KeepaliveContainer))
 		rec.mu.Lock()
 		rec.KeepaliveDiagnostics = diagnostics
 		rec.mu.Unlock()
@@ -169,11 +174,12 @@ func (h *haRun) shortenS07Keepalive(ctx context.Context, rec *s07Record, p *netf
 // may run after the step's own context ended.
 const s07DiagnosticsBound = 30 * time.Second
 
-// s07KeepaliveDiagnostics reads, for each member Pod, the keepalive
-// container's status and the Events about the Pod, best-effort. The API
-// error of the container's addition, if any, is already in the step's
-// record.
-func (h *haRun) s07KeepaliveDiagnostics(ctx context.Context, members []netfault.Endpoint) []s07PodDiagnostic {
+// s07KeepaliveDiagnostics reads, for each member Pod, the status of the
+// keepalive container named container and the Events about the Pod,
+// best-effort. The API error of the container's addition, if any, is already
+// in the step's record.
+func (h *haRun) s07KeepaliveDiagnostics(ctx context.Context, members []netfault.Endpoint,
+	container string) []s07PodDiagnostic {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s07DiagnosticsBound)
 	defer cancel()
 	events := &corev1.EventList{}
@@ -186,7 +192,7 @@ func (h *haRun) s07KeepaliveDiagnostics(ctx context.Context, members []netfault.
 			d.Error = "pod unread: " + err.Error()
 		}
 		for _, s := range pod.Status.EphemeralContainerStatuses {
-			if s.Name != netfault.KeepaliveContainer {
+			if s.Name != container {
 				continue
 			}
 			switch {

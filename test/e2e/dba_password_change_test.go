@@ -178,10 +178,14 @@ wait:
 }
 
 // kubectlExecTerminal is the documented `kubectl exec -it` command line that
-// runs csql with args in the DB container of member.
-func kubectlExecTerminal(namespace, member string, args ...string) *exec.Cmd {
+// runs csql with options in the DB container of member, logged in to database.
+// csql reaches the member's own server over TCP by its hostname, not through
+// the local Unix socket that "<db>@localhost" uses: over that socket csql could
+// print its whole result and then the -199/-111 pair of a lost session
+// (POC-70, #238). The password is typed at csql's prompt, never passed here.
+func kubectlExecTerminal(namespace, member, database string, options ...string) *exec.Cmd {
 	return exec.Command("kubectl", append([]string{"-n", namespace, "exec", "-it", member, "-c", "cubrid", "--",
-		"bash", "-c", `exec csql "$@"`, "csql"}, args...)...)
+		"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" exec csql "$@" "$0@$(hostname)"`, database}, options...)...)
 }
 
 // redactValues counts each of values in text and replaces it, so that text
@@ -214,8 +218,8 @@ func loginVerdict(t csqlTranscript) string {
 // value nor any of others is printed: the transcript is printed with them
 // redacted, and a transcript that holds one of them fails the step.
 func (h dbaPasswordHelpers) terminalLogin(member, value string, others ...string) string {
-	t, err := runCSQLDialog(kubectlExecTerminal(h.namespace, member, "-u", "dba", "-c",
-		"SELECT 'login-' || 'ok' FROM db_root", h.database+"@localhost"), value, nil, 2*time.Minute)
+	t, err := runCSQLDialog(kubectlExecTerminal(h.namespace, member, h.database, "-u", "dba", "-c",
+		"SELECT 'login-' || 'ok' FROM db_root"), value, nil, 2*time.Minute)
 	shown, found := redactValues(t.all, append([]string{value}, others...)...)
 	_, _ = fmt.Fprintf(GinkgoWriter, "csql on a terminal on %s:\n%s\n", member, shown)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "csql on %s: %s", member, shown)

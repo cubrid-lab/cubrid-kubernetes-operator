@@ -40,6 +40,10 @@ type HAStatus struct {
 	// ServerActive reports whether the local DB server is registered_and_active
 	// (a real writable master) rather than merely a master-scored node.
 	ServerActive bool `json:"serverActive"`
+	// ServerStandby reports whether the local DB server is
+	// registered_and_standby, as a slave's server is once it runs
+	// (docs/poc/RESULTS.md). It is not part of GET /v1/role.
+	ServerStandby bool `json:"-"`
 	// Nodes is the observed per-node topology (all nodes in ha_node_list).
 	Nodes []NodeState `json:"nodes"`
 	// Source explains how Role was derived (feeds ADR-0005 non-authoritative handling).
@@ -162,6 +166,7 @@ func ParseHAStatus(out string) HAStatus {
 
 	if sm := reServer.FindStringSubmatch(out); sm != nil {
 		s.ServerActive = sm[1] == "registered_and_active"
+		s.ServerStandby = sm[1] == "registered_and_standby"
 	}
 	for _, am := range reApplier.FindAllStringSubmatch(out, -1) {
 		s.Appliers = append(s.Appliers, ApplierProcess{LogPath: am[1], PID: atoiSafe(am[2])})

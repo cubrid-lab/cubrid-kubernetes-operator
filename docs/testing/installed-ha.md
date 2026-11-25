@@ -1102,7 +1102,8 @@ status.
 With `-fault partition-master-isolated`, `-fault partition-slave-isolated`
 or `-fault partition-higher-rank-isolated` the run goes on after LAB01
 passed, on the same cluster, with S07 of the scenario contract: one member is
-cut off, both ways, from the other two members and from the manager Pod, and
+cut off from the other two members (both ways unless `-partition-direction`
+below asks for one way) and, both ways, from the manager Pod, and
 the run records what the Operator's write quarantine (ADR-0005 section 8)
 does with real SQL. The lane is then `lab-installed-ha-s07-master-isolated`,
 `lab-installed-ha-s07-slave-isolated` or
@@ -1128,11 +1129,13 @@ S07 with that variant. It runs on the `vm-lab` level only.
   member, no slave outranks it, so the run first moves the master, as
   described below.
 
-The lane does not cover the contract's `asymmetric` variant, the replication
-lag of S08, or the persistence, release-token, out-of-service-taint and
-return-to-service checks of S07. It makes no manual release and restarts no
-Operator unless asked to (`-partition-manual-release` and
-`-partition-operator-restart` below).
+The contract's `asymmetric` variant is not a lane of its own: the opt-in
+`-partition-direction` below makes any of the three variants cut the member
+off the other members in one direction only, recorded with the variant's
+evidence. The lane does not cover the replication lag of S08, or the persistence, release-token, out-of-service-taint and
+return-to-service checks of S07. It makes no manual release, restarts no
+Operator and cuts only once unless asked to (`-partition-manual-release`,
+`-partition-operator-restart` and `-partition-repeat` below).
 
 **Why `higher-rank-isolated`.** The first `master-isolated` run on the lab
 (below) produced no quarantine trigger, and the POCs explain why a cut of a
@@ -1223,7 +1226,8 @@ real partition between the database members would let it. The faults:
   the counting rules, follows within two minutes. A fault not seen removed
   fails S07.
 - leave `cut.json` on disk before the injection is sent: the namespace, the
-  member cut off and its IP, the peers, the manager Pod and its IP, and when
+  member cut off and its IP, the peers, the manager Pod and its IP, the
+  direction of each cut, and when
   the injection was requested; it is written again when the cut was removed
   (`removedAt`, or `removeError`).
 
@@ -1247,6 +1251,66 @@ The run namespace is created with Pod Security `enforce=privileged`, and
 `warn` and `audit` at `restricted`, for the ephemeral container with
 `NET_ADMIN` and `NET_RAW`. The labels are in `LAB01/record.json`.
 
+**One-way cuts.** `-partition-direction` chooses the direction of the cut
+between the cut-off member and each of the other two members:
+
+- `both`, the default: the cut above, unchanged.
+- `inbound`: the packets the other two members send to the cut-off member
+  are dropped as they arrive in the cut-off member's network namespace. What
+  the cut-off member sends them still arrives.
+- `outbound`: the packets the cut-off member sends to the other two members
+  are dropped as they arrive in each of their network namespaces. What they
+  send it still arrives.
+
+Every drop is made where the packets arrive, as for the cut both ways, so a
+sender's own send calls succeed and it sees what a real loss shows it:
+nothing. The manager Pod is cut both ways in every direction: the faults
+never enter it, so the direction a one-way cut keeps open could not be
+probed there (the network faults refuse such a cut); its traffic with the
+member is TCP, which a drop in either direction breaks anyway; and
+`-partition-operator-restart` extends a cut both ways to the replacement
+Pod. The option works with all three variants, the control included, and
+with `-partition-keepalive`, `-partition-manual-release`,
+`-partition-operator-restart` and `-partition-repeat` (the second cut uses
+the same direction); none of them depends on the direction of the member
+cuts. A value other than `both`, `inbound` or `outbound` is refused, and so
+is a one-way direction without an S07 partition fault.
+
+The drop rules match addresses, not connection state. A one-way drop
+therefore also breaks every TCP connection between the cut-off member and
+the other members in both directions, because the handshake replies or
+acknowledgements of one side are lost. What stays one-way is datagram
+traffic, such as CUBRID's heartbeat messages over UDP, and the first packet
+of each TCP connection. This is the intended shape: it reproduces what the
+heartbeat and the Operator's connections see when one direction is lost.
+What CUBRID and the Operator do under a one-way cut on the VM lab has not
+been measured by this lane. POC-40 dropped a first member's packets to the
+slaves, without cutting the Operator, in two runs and saw no second active
+server; no run of this lane has used the option yet.
+
+A one-way cut is confirmed for each direction, before the hold counts: the
+dropped direction must be seen cut (the receiver counted no packet from the
+sender after its drop rule, no probe connect got an answer, and the drop
+rule's counter grew), and the direction kept open must be seen open (the
+receiver counted the sender's probe packets, although the probe's TCP
+connect gets no answer). A cut whose dropped direction is still open, or
+whose kept direction is found cut too, is not confirmed, and S07 ends
+blocked as for any cut that is not confirmed. The removal takes away exactly
+the drop rules the direction installed: in the cut-off member for
+`inbound`, in the other two members for `outbound`, and the manager Pod's
+in the cut-off member for every direction; then it probes every path open
+again.
+
+The direction is recorded as `partitionDirection` in `record.json` and in
+the measurements (the second cut's too, under `repeat.secondCut`), and as
+`memberDirection` and `operatorDirection` in `cut.json`; `partition.fault`
+names each cut with the network faults' own direction (`in`, `out` or
+`both`, from the cut-off member's side). A one-way run is recorded under the
+variant's lane and directory like a run both ways, so check
+`partitionDirection` to tell them apart. A `record.json` or `cut.json`
+written before the option existed has none of these fields; its cuts were
+both ways.
+
 ```sh
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
   ...the LAB01 inputs above... -level vm-lab \
@@ -1254,7 +1318,9 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-
   [-quarantine-limit <duration>] [-partition-duration <duration>]'
 ```
 
-Use `-fault partition-slave-isolated` for the control. The cut of a member
+Use `-fault partition-slave-isolated` for the control. Add
+`-partition-direction inbound` or `-partition-direction outbound` to any of
+these commands for a one-way cut. The cut of a member
 that outranks the master, with the master moved off the first member first
 when it is there:
 
@@ -1602,6 +1668,175 @@ no cluster in any namespace, from the deletion until the replacement holds
 the Lease and has synced, about 15 to 30 seconds. A lab campaign
 announcement for a run with the option must name the manager Pod's deletion
 and that pause next to the network cut.
+
+**Repeated failures: a second cut.** A fifth opt-in option,
+`-partition-repeat`, tests what ADR-0005 section 8 says about a fault that
+follows a released quarantine: each new quarantine gets a fresh generation
+and a fresh one-time release token, so a token of an earlier quarantine
+never releases a later one, and the read-write path closes again
+([#115](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/115)).
+It is refused without a partition fault, with `partition-slave-isolated`
+(the control, which must not quarantine), and with
+`-partition-operator-restart`: the restart replaces the manager Pod that
+LAB01 recorded and that the second cut cuts off as the Operator, and a run
+blocked by one of the two steps would hide what the other showed. Run them
+separately.
+
+The second cut starts only from a first cut that settled, quarantined and
+had that quarantine released, with no rule already broken. With
+`-partition-manual-release` the release must be the run's own accepted
+release; without it, the Operator's automatic release of a
+`WriteQuarantinedMemberUnverified` quarantine counts. A quarantine only a
+person may release that is still in force after the first cut (as after
+every `higher-rank-isolated` run on the lab with shortened keepalive, where
+the cut-off member became the master) needs `-partition-manual-release`;
+without it, the second cut is not made and S07 is blocked. The option
+therefore does not test a new fault while a quarantine is still in force;
+that case revises the quarantine in force (same generation, new token)
+rather than starting a new one.
+
+After the first cut's settle wait and release, the run:
+
+1. waits up to 5 minutes, observing the first cut's record as before, until
+   no quarantine is in force, the `-rw` Service has a ready endpoint in its
+   last reading, the starting conditions hold, CUBRID reports one master and
+   the other members as its slaves, and status names that master as
+   `currentPrimary` and `lastResolvedPrimary`;
+2. picks the member to cut off again by the variant's own rule against the
+   master and `status.lastResolvedPrimary` of now (`masterBeforeSecondCut`).
+   For `higher-rank-isolated` that is again the highest-ranked slave above
+   the master. After an accepted manual release, the master is usually the
+   first member, the member the first cut cut off, so no slave outranks it:
+   the run moves the master off it again by the same graceful Pod deletion
+   as before the first cut (`secondCut.masterMove`). The second cut thus
+   tests the same trigger the first cut showed on the lab (one reachable
+   active master and an unreachable member that outranks it), now after a
+   release. A different member would test a different trigger:
+   cutting off the master (`master-isolated`) depends on CUBRID promoting
+   another member, which the lab has not shown, and a lower-ranked slave
+   is the control, which must not quarantine;
+3. with `-partition-keepalive`, shortens keepalive again before the second
+   cut and resets the connections the cut crosses, as before the first. The
+   move replaced the first member's Pod, so its network namespace has the
+   kernel's values again, and connections made since (from it, and its
+   peers' connections to it made before their values were set) may be on
+   the 2-hour schedule. The step uses a second ephemeral container,
+   `netsysctl-repeat`: the first cut's `netsysctl` has ended its sleep in the
+   Pods that were not replaced, and an ephemeral container can be neither
+   restarted nor added again under the same name. Members whose values the
+   first step set read them as already set and get them again; connections
+   already on the new schedule are listed and left alone
+   (`secondCut.partitionKeepalive`);
+4. only then, as before the first cut, starts a second established-session
+   client, `s07open2`, which holds one connection to `<cluster>-rw` and
+   stops at its first error like `s07open`, and waits for its first
+   acknowledgements. A session opened before the move would hold a
+   connection to the master the move replaces and end before the cut, as
+   the first VM-lab run of the option did on 2026-11-24 (error `-581`). The
+   new-connection writes have gone on all along; those started from the
+   beginning of step 1 on are the second cut's;
+5. builds a new partition for that member and runs it through the same
+   steps as the first: the checks before the cut, the cut, sweeps and
+   readings while it holds, the hold of `-partition-hold`, the removal and
+   the settle wait, all recorded in the second cut's own record;
+6. while the second cut holds, once it reads the new quarantine enforced
+   with the read-write path at zero, sets the release annotation to tokens
+   of the first quarantine, one after the other (`oldTokenReplays`): first
+   the one the run's release consumed, when the run released, then the
+   newest one no release consumed, when the run saw one (with an automatic
+   release, that is the only one). The two reach different checks of the
+   Operator (`decideManualRelease` in
+   `internal/controller/quarantine_release.go`, recorded as
+   `operatorCheck`): the consumed token is the one
+   `status.lastWriteQuarantineRelease.releaseToken` still names, which the
+   Operator ignores and removes; the other is not the new quarantine's
+   current `status.writeQuarantine.releaseToken`, which leaves it inert. The
+   run never sets a token that is the new quarantine's own, which would
+   release it. For 30 seconds after each token it reads whether the new
+   quarantine stays in force and the read-write Brokers stay at zero,
+   records any release refusal, and then removes the annotation with a JSON
+   patch that tests the cluster's UID and the value first. The token is
+   kept before the patch that sets it, so that a patch whose answer was lost
+   is still removed. The hold lasts until these watches ended, within 2
+   minutes more than `-partition-hold`, and any token left is removed as
+   soon as the cut's fault flow returns, before the settle wait.
+
+The second cut makes no manual release: when its quarantine is one only a
+person may release, it is left in force and recorded (`quarantineAtEnd` of
+the second cut). The clients are stopped and read, the data check and the
+health window are made once, after the second cut, against the master the
+second cut settled on (`dataCheck.comparedWithMaster`), with the history of
+both cuts. When the second cut's master move started and the cut was then
+not made, the run reads the roles again just before the data check
+(`masterBeforeDataCheck`) and compares the rows with that master; when it
+cannot read them, the data check is not made and S07 is blocked. The data
+check covers both windows: every acknowledged write of either window must be on that master
+unless the run's manual release accepted its loss. When the second cut does
+not settle, the rows and engine logs are kept under `repeat/` instead.
+
+What the option judges, on top of the rules below (each named `on the
+second cut` in the reason):
+
+- **Fail** (never-events and broken expectations): any never-event of the
+  second cut by the rules below (a write through a new connection that took
+  effect after the second closure while the quarantine was in force, an
+  established-session acknowledgement after it while the same quarantine
+  was in force at the end without a release, the path reopened while the
+  quarantine was in force, `PrimaryResolved` or `RoutingReady` True while
+  the member was cut off); a trigger without a quarantine, or a quarantine
+  whose path was never seen closed; a new quarantine whose generation an
+  earlier quarantine had (the first cut's, or one seen while the master
+  moved), or whose release token an earlier quarantine had; a release of the
+  new quarantine on the first quarantine's token; and read-write Brokers
+  above zero while the new quarantine was in force and only the old token
+  was set. `quarantine_limit` also bounds the second cut, from its trigger
+  window until new connections stopped, and `partition_duration` its hold;
+  a second cut over a limit is a time-limit-only fail like the first
+  (`exceededLimits` names it `second cut: ...`).
+- **Blocked**, never passed: the second cut not reached or not made
+  (`repeat.notMade`: the first cut not settled, not quarantined or its
+  quarantine not released, the starting state not reached within 5 minutes,
+  the second session not started, or the second cut's preparation, such as
+  the move or the keepalive step, failing); any blocking observation of the
+  second cut by the rules below (no trigger seen, the cut not confirmed or
+  held, the second session's history insufficient, the cluster not settled);
+  no old token tried (`oldTokenReplays[].notMade`), or fewer tried than the
+  run had; the new quarantine released by another token or gone during a
+  watch without a release the run read, also at its last reading; fewer
+  than two readings in a watch, or a watch that ended before its 30 seconds; or a watch still running when
+  the run was judged.
+
+The measurements add `repeat` (`made`, `not made` or `not reached`),
+`secondQuarantineNewGeneration` and `oldTokenIgnored` (`true`, `false`, or
+`unknown` where the run did not show it: `oldTokenIgnored` needs every token
+watched for its whole window with two readings, and is `unknown` when the new
+quarantine was gone without a release the run read, also at the watch's last
+reading, unless a release on the old token was read), and `secondCut`: the second cut's
+own measurements by the same names as the first's (`quarantineWithin`,
+`rwPodsGoneWithin`, `establishedAcknowledgedAfterPathClosed` and the
+others), with its `target`, `masterBefore` and `masterMoved`.
+
+The option adds the second cut's bounds to the `-timeout` check: 5 minutes
+for the starting state, 2 for the second session, the 10-minute move for
+`higher-rank-isolated`, the 10-minute keepalive step when asked for, and the
+preparation, hold, the two old-token watches, removal and settle of the cut.
+The scenario's `cleanupSucceeded` holds only when both cuts were removed and
+no old token the run set was left after a failed removal. With
+`-partition-keepalive 30s`, `-partition-manual-release` and the other
+defaults, the variant's own bounds are 93 minutes and 50 seconds, plus
+LAB01:
+
+```sh
+make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/installed-ha \
+  ...the LAB01 inputs above... -level vm-lab \
+  -fault partition-higher-rank-isolated -partition-keepalive 30s -partition-manual-release \
+  -partition-repeat -quarantine-limit 30s -partition-duration 2m -timeout 110m'
+```
+
+It needs no permission beyond those of the options it repeats. A lab
+campaign announcement for a run with the option must name both cuts, the
+second move of the master, the second keepalive step when asked for, and
+the release annotations set during the second cut.
 
 `-check installed-ha-network-partition-master-isolated`, `-check
 installed-ha-network-partition-slave-isolated` and `-check
@@ -1971,7 +2206,8 @@ termination), `rwEndpointsEmptyWithin`, `newConnectionsStoppedWithin` (SQL
 interruption for new connections), `releaseSeenWithin`, `rwReopenedWithin`;
 `quarantineStartTime`, `enforcedTime` and `releaseTime` as status gives them,
 on the Operator's clock; `quarantineReason`, `releaseMethod`,
-`quarantineAtEnd`, `finalMaster` and `operatorChange`; `newConnectionWrites`,
+`quarantineAtEnd`, `finalMaster`, `operatorChange` and `partitionDirection`
+(`both`, `inbound` or `outbound`); `newConnectionWrites`,
 the new-connection writes counted by outcome (`acknowledged`, `failed`,
 `no answer`, `unknown-present`, `unknown-absent`, or `unknown` when not
 resolved); and for `s07open`
@@ -1994,7 +2230,8 @@ setting the current token: `manualReleaseSeenWithin`,
 
 Evidence, under `S07/<variant>/`:
 
-- `record.json`: the member cut off and why, the move of the master before
+- `record.json`: the member cut off and why, the direction of the cut
+  (`partitionDirection`), the move of the master before
   it (`masterMove`, `higher-rank-isolated` only), the manager Pod, the clock
   offsets, every sweep with each member's role and raw heartbeat state, the
   members the Operator could not reach and the trigger, the quarantine's reasons and revisions,
@@ -2004,16 +2241,22 @@ Evidence, under `S07/<variant>/`:
   `settleWaitExpired` when it did not), the data check or, when the cluster
   did not settle, `unsettledRowsSnapshot` and `unsettledEngineLogs`, the partition's rules and probes (`partition`),
   the keepalive set with `-partition-keepalive` (`partitionKeepalive`), the
-  Operator restart of `-partition-operator-restart` (`operatorRestart`), and the run's
-  observations in time order (`observed`);
-- `cut.json`: the cut's state alone, written before the injection and at
-  its removal;
+  Operator restart of `-partition-operator-restart` (`operatorRestart`), the
+  second cut of `-partition-repeat` (`repeat`, with the second cut's own
+  record as `repeat.secondCut`), and the run's observations in time order
+  (`observed`);
+- `cut.json`: the cut's state alone, with the directions of the member and
+  manager Pod cuts (`memberDirection`, `operatorDirection`), written before
+  the injection and at its removal;
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
   instead of `data-check.json`, and `engine-logs/<member>/`, when the
   cluster did not settle;
   `rows-before-release.json` and `rows-after-release.json` with
   `-partition-manual-release` when the run set a token;
+- `repeat/` with `-partition-repeat`: the second cut's `cut.json`,
+  `timeline.jsonl` and `open-connection.jsonl`, and `unsettled-rows.json`
+  and `engine-logs/<member>/` when the second cut did not settle;
 - `clients/<client>.jsonl` when S07 ended before it read the clients.
 
 Beyond LAB01's, the account needs in the run namespace `update` on

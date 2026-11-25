@@ -983,8 +983,12 @@ var sentSignal = regexp.MustCompile(`(?m)^sent SIG(?:STOP|CONT) to (\d+)$`)
 // primary is resolved to master, and every one of slaves is a freshly
 // observed slave that the backup target selection would take but for its
 // stall. Its replication reading is fresh, of master's log, with no failed
-// change and a copy that receives the log (no notReceivingSince), and its
-// stall has lasted at least the stall window. A refusal in any other state,
+// change and a copy that has not been reported as not receiving the log for
+// the stall window, and its stall has lasted at least the stall window. A
+// shorter notReceivingSince does not exclude a slave from the selection
+// (eligibleStandbys skips it only after replicationStallWindow): a copy one
+// page behind that did not grow between two close readings is reported at
+// once. A refusal in any other state,
 // such as while the primary is not resolved or an observation is missing,
 // can have another cause than the exclusion of stuck standbys, and proves
 // nothing (#291).
@@ -1022,7 +1026,7 @@ func stuckStandbysEligible(c *databasev1alpha1.CubridCluster, master string, sla
 			problems = append(problems, fmt.Errorf("%s applies the log of %q, not of %s", slave, rep.Source, master))
 		case rep.FailCount != 0:
 			problems = append(problems, fmt.Errorf("%s has failed %d changes", slave, rep.FailCount))
-		case rep.NotReceivingSince != nil:
+		case rep.NotReceivingSince != nil && now.Sub(rep.NotReceivingSince.Time) >= stuckStallWindow:
 			problems = append(problems, fmt.Errorf("%s has not received the log since %s", slave,
 				rep.NotReceivingSince.UTC().Format(time.RFC3339)))
 		case rep.StalledSince == nil:

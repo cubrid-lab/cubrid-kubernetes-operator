@@ -96,6 +96,9 @@ jobs:
               "security.yml": {"govulncheck"},
               "codeql.yml": {"codeql_go", "codeql_actions"},
               "pr-title.yml": set(),
+              # The advisory race and fuzz lane runs only on a schedule or a
+              # manual dispatch, but it runs Go tests, so its edits do too.
+              "race-fuzz.yml": {"go_tests"},
               # The classifier gates every heavy check, so a change to it runs
               # all of them: a broken classifier must not land unexercised.
               "ci-impact.yml": set(CHECKS),
@@ -154,6 +157,7 @@ jobs:
               ([".github/workflows/test-e2e.yml"], ACTIONS | {"go_e2e"}),
               ([".github/workflows/security.yml"], ACTIONS | {"govulncheck"}),
               ([".github/workflows/codeql.yml"], ACTIONS | {"codeql_go"}),
+              ([".github/workflows/race-fuzz.yml"], ACTIONS | {"go_tests"}),
               ([".github/workflows/unknown.yml"], set(CHECKS)),
               (["go.mod"], set(CHECKS)),
               (["test/e2e/ha_test.go"], set(CHECKS)),

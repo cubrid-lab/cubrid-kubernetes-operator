@@ -67,13 +67,15 @@ type fakeSysctlNS struct {
 	kernel                  string
 }
 
-// fakeSysctl answers the keepalive container's commands.
+// fakeSysctl answers the keepalive container's commands, in the container
+// named container, KeepaliveContainer when empty.
 type fakeSysctl struct {
-	mu      sync.Mutex
-	podIP   map[string]string
-	execIn  map[string]string
-	ns      map[string]*fakeSysctlNS // by IP
-	scripts []string
+	mu        sync.Mutex
+	container string
+	podIP     map[string]string
+	execIn    map[string]string
+	ns        map[string]*fakeSysctlNS // by IP
+	scripts   []string
 }
 
 func newFakeSysctl() *fakeSysctl {
@@ -105,7 +107,11 @@ func (s *fakeSysctl) kubectl(ctx context.Context, args ...string) (string, error
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if len(args) != 10 || args[2] != "exec" || args[5] != KeepaliveContainer {
+	want := s.container
+	if want == "" {
+		want = KeepaliveContainer
+	}
+	if len(args) != 10 || args[2] != "exec" || args[5] != want {
 		return "", fmt.Errorf("unexpected kubectl call %q", args)
 	}
 	pod, script := args[3], args[9]
@@ -609,6 +615,7 @@ func TestKeepaliveValidate(t *testing.T) {
 		{}, {Time: 1500 * time.Millisecond, Interval: time.Second, Probes: 1},
 		{Time: 2 * time.Hour, Interval: time.Second, Probes: 1}, {Time: time.Minute, Interval: 0, Probes: 1},
 		{Time: time.Minute, Interval: time.Second, Probes: 0},
+		{Time: time.Minute, Interval: time.Second, Probes: 1, Container: "Net_Sysctl"},
 	} {
 		if err := k.Validate(); err == nil {
 			t.Errorf("%+v was accepted", k)
@@ -684,5 +691,78 @@ func TestParseSockets(t *testing.T) {
 	}
 	if _, err := parseSockets("garbage\n"); err == nil {
 		t.Error("a line that is not a socket was accepted")
+	}
+}
+
+// endKeepaliveContainer reports the keepalive container of every test Pod
+// as ended, as once its sleep is over.
+func endKeepaliveContainer(t *testing.T, env Env) {
+	t.Helper()
+	for name := range testPods {
+		pod := &corev1.Pod{}
+		if err := env.Client.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: name},
+			pod); err != nil {
+			t.Fatal(err)
+		}
+		for i, s := range pod.Status.EphemeralContainerStatuses {
+			if s.Name == KeepaliveContainer {
+				pod.Status.EphemeralContainerStatuses[i].State = corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{Reason: "Completed"}}
+			}
+		}
+		if err := env.Client.Status().Update(context.Background(), pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A second step in the same Pods, as before a second cut, cannot use the
+// first step's container once it ended, and works under a name of its own:
+// the values the first step wrote are read as already set and written again,
+// the cut-off member's connection to the master is reset and made again, and
+// a crossing connection already on the new schedule is listed and left
+// alone.
+func TestShortenKeepaliveAgainInAContainerOfItsOwn(t *testing.T) {
+	s := newFakeSysctl()
+	env := keepaliveEnv(t, s)
+	members := []Endpoint{member(target), member(slave1), member(slave2)}
+	if _, err := ShortenKeepalive(context.Background(), env, testKeepalive, members, member(target),
+		member(slave1), time.Second); err != nil {
+		t.Fatalf("first step: %v", err)
+	}
+	endKeepaliveContainer(t, env)
+	if _, err := ShortenKeepalive(context.Background(), env, testKeepalive, members, member(target),
+		member(slave1), time.Second); err == nil || !strings.Contains(err.Error(), "container ended") {
+		t.Fatalf("a second step in the ended container: %v", err)
+	}
+	again := testKeepalive
+	again.Container = "netsysctl-repeat"
+	s.mu.Lock()
+	s.container = again.Container
+	s.mu.Unlock()
+	rec, err := ShortenKeepalive(context.Background(), env, again, members, member(target), member(slave1),
+		time.Second)
+	if err != nil {
+		t.Fatalf("second step: %v", err)
+	}
+	want := KeepaliveValues{Time: 30, Interval: 10, Probes: 3}
+	if rec.Container != again.Container || len(rec.Members) != 3 {
+		t.Fatalf("record %+v", rec)
+	}
+	for _, m := range rec.Members {
+		if m.Before == nil || *m.Before != want || m.After == nil || *m.After != want || m.SetAt == nil {
+			t.Errorf("member %+v", m)
+		}
+	}
+	if len(rec.Reset) != 1 || rec.Reconnected == nil {
+		t.Errorf("the connection to the master: reset %+v, made again %+v", rec.Reset, rec.Reconnected)
+	}
+	for _, c := range rec.Crossing {
+		if c.ResetAt != nil || len(c.Reset) != 0 || c.Unmet != "" {
+			t.Errorf("a crossing connection already on the new schedule was reset: %+v", c)
+		}
+	}
+	if len(rec.Crossing) == 0 || len(rec.Crossing[0].Before) == 0 && len(rec.Crossing[1].Before) == 0 {
+		t.Errorf("the crossing connections made again by the first step are not listed: %+v", rec.Crossing)
 	}
 }

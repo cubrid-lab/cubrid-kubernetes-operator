@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,8 +40,8 @@ import (
 // spec.dbaPasswordSecretRef names exists and holds a value the Instance
 // Manager accepts. The DB container sets the password, or checks it, before
 // its server starts, so a member that is ready already has it; afterwards the
-// ready member of a standalone cluster, or the resolved primary of an HA
-// cluster, is asked whether the value is still the database's password
+// ready member of a standalone cluster, or every member of an HA cluster, is
+// asked whether the value is still its DBA password
 // (reconcileDBAPasswordRotation). A cluster without the reference has no such
 // condition.
 const conditionDBAPasswordSecretResolved = "DBAPasswordSecretResolved"
@@ -176,7 +178,7 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordSecret(ctx context.Context
 	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	if reason == reasonDBAPasswordSecretResolved {
 		// A value that resolves may still not be the database's password;
-		// only the member's answer clears that (reconcileDBAPasswordRotation).
+		// only the members' answers clear that (reconcileDBAPasswordRotation).
 		if was == nil || was.Reason != reasonDBAPasswordRotationUnsupported {
 			setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue, reason, msg)
 		}
@@ -257,6 +259,26 @@ const defaultDBAPasswordPoll = 5 * time.Minute
 // back the next check for a whole poll (#1031).
 const dbaPasswordInconclusiveRetry = 30 * time.Second
 
+// dbaPasswordQuickRetries is how many checks in a row are asked after
+// dbaPasswordInconclusiveRetry because a slave could not tell or was not
+// asked; the checks after them wait for the poll again. A slave whose
+// Instance Manager predates #1012, or one that stays in a transition, cannot
+// tell on every check, and without a bound would bring a login on every
+// member every dbaPasswordInconclusiveRetry for as long as it does. Three
+// short retries cover a member that cannot tell for about a minute and a
+// half, such as one whose heartbeat status command was killed while it was
+// asked.
+const dbaPasswordQuickRetries = 3
+
+// dbaPasswordSchedule is what the reconciler's dbaPasswordNextCheck keeps for
+// a cluster: when its members may next be asked, and how many short retries
+// after a slave that could not tell or was not asked were made since the last
+// check that settled (reconcileDBAPasswordRotation).
+type dbaPasswordSchedule struct {
+	at           time.Time
+	quickRetries int
+}
+
 func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 	if r.DBAPasswordPoll > 0 {
 		return r.DBAPasswordPoll
@@ -264,24 +286,56 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 	return defaultDBAPasswordPoll
 }
 
-// reconcileDBAPasswordRotation asks member, a ready member of a cluster with a
-// DBA password Secret, whether the Secret's value is still the database's DBA
-// password, and returns the delay after which to ask again; zero for a
-// cluster without the reference. member is "" when no member may be asked
-// now (dbaPasswordStandaloneMember, dbaPasswordHAMember): nothing is asked,
-// the condition is left as it is, and the poll is returned.
+// reconcileDBAPasswordRotation asks members, the members of a cluster with a
+// DBA password Secret that may be asked now, whether the Secret's value is
+// still each one's DBA password, and returns the delay after which to ask
+// again; zero for a cluster without the reference. members[0] is the
+// standalone member or the HA primary. unasked are the members
+// that answer for the password too but may not be asked now, such as an HA
+// slave that is not ready; each counts as an answer that cannot tell. members
+// is empty when no member may be asked now (dbaPasswordStandaloneMember,
+// dbaPasswordHAMembers): nothing is asked, the condition is left as it is,
+// and the poll is returned.
 //
-// Differs sets conditionDBAPasswordSecretResolved False with
-// reasonDBAPasswordRotationUnsupported, and records a Warning Event when it
-// was not already so. Matches sets it back to True. The new value is never
-// applied, and neither the StatefulSet nor its Pods are changed. An answer
-// that cannot tell (Unknown, a failed call, no member to ask) leaves the
-// condition as it is, so that it does not flap. A member is asked at most
-// once per poll per cluster, or once per dbaPasswordInconclusiveRetry after
-// an Unknown answer or a failed call; only the time of the next check is
-// kept, in memory, so an operator that restarts asks again at once.
+// Each member keeps its own copy of the password: set_password changes only
+// the member it runs on (docs/poc/RESULTS.md, POC-74), so a slave still on the
+// old password would go unnoticed until a failover promoted it if only the
+// primary were asked (#1012). So a match needs every member's answer:
+//
+//   - any member that answers Differs sets conditionDBAPasswordSecretResolved
+//     False with reasonDBAPasswordRotationUnsupported, and records a Warning
+//     Event when it was not already so. The message names the members that
+//     refused the value and those that accepted it. One reason covers both a
+//     Secret that no member accepts and members that disagree: the kubelet
+//     writes a changed Secret into the members' files at different times, so
+//     a mix of answers is also what a changed Secret looks like for a while;
+//   - every member answering Matches sets it back to True;
+//   - anything else (an Unknown answer, a failed call, a member not asked)
+//     leaves the condition as it is, so that it does not flap, and is never
+//     counted as a match.
+//
+// The new value is never applied, and neither the StatefulSet nor its Pods
+// are changed. The members are asked at most once per poll per cluster, or
+// sooner, after dbaPasswordInconclusiveRetry, when a check did not settle:
+//
+//   - after an Unknown answer or a failed call of members[0], on every such
+//     check, as since #1031: the condition of a standalone cluster depends on
+//     that one answer, and the primary is the member whose answer a client
+//     sees;
+//   - after a check in which a slave could not tell or was not asked, also
+//     when another member answered Differs, at most dbaPasswordQuickRetries
+//     checks in a row; the checks after them wait for the poll. A slave whose
+//     Instance Manager is older than #1012, or one that stays in a
+//     transition, answers Unknown on every check, and without the bound would
+//     bring a login on every member every 30 seconds for as long as it does.
+//     The count starts again after a check that settled: one in which every
+//     member was asked and answered Matches or Differs.
+//
+// Only the time of the next check and that count are kept, in memory, in the
+// entry that already throttles the checks, so an operator that restarts asks
+// again at once.
 func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
-	cluster *databasev1alpha1.CubridCluster, member string) time.Duration {
+	cluster *databasev1alpha1.CubridCluster, members, unasked []string) time.Duration {
 	ref := cluster.Spec.DBAPasswordSecretRef
 	if ref == nil {
 		return 0
@@ -290,40 +344,70 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	// A Secret that does not resolve is reported as such, and is what has to
 	// be corrected first.
-	if r.DBAPassword == nil || member == "" || was == nil ||
+	if r.DBAPassword == nil || len(members) == 0 || was == nil ||
 		(was.Status != metav1.ConditionTrue && was.Reason != reasonDBAPasswordRotationUnsupported) {
 		return poll
 	}
-	// The member is asked at most once per poll: each check is a login to the
-	// database, and a cluster is reconciled on every event of its objects. A
-	// next check further away than the poll is not trusted: the clock went
-	// back.
+	// The members are asked at most once per poll: each check is a login to
+	// the database, and a cluster is reconciled on every event of its
+	// objects. A next check further away than the poll is not trusted: the
+	// clock went back.
 	now := r.now()
+	var quickRetries int
 	if next, ok := r.dbaPasswordNextCheck.Load(cluster.UID); ok {
-		if wait := next.(time.Time).Sub(now); wait > 0 && wait <= poll {
+		next := next.(dbaPasswordSchedule)
+		if wait := next.at.Sub(now); wait > 0 && wait <= poll {
 			return wait
 		}
+		quickRetries = next.quickRetries
 	}
-	r.dbaPasswordNextCheck.Store(cluster.UID, now.Add(poll))
-	// An answer that cannot tell said nothing about the password; the member
-	// is asked again sooner than the poll (#1031).
-	inconclusive := func() time.Duration {
-		retry := min(dbaPasswordInconclusiveRetry, poll)
-		r.dbaPasswordNextCheck.Store(cluster.UID, now.Add(retry))
-		return retry
-	}
+	r.dbaPasswordNextCheck.Store(cluster.UID, dbaPasswordSchedule{at: now.Add(poll), quickRetries: quickRetries})
 	log := logf.FromContext(ctx)
-	check, err := r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace)
+	// The members are asked at once, so that one that does not answer does
+	// not hold back the others.
+	checks := make([]instancemanager.DBAPasswordCheck, len(members))
+	errs := make([]error, len(members))
+	var wg sync.WaitGroup
+	for i, member := range members {
+		wg.Go(func() { checks[i], errs[i] = r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace) })
+	}
+	wg.Wait()
+	var matched, differed []string
+	primaryInconclusive := false
+	for i, member := range members {
+		switch {
+		case errs[i] != nil:
+			log.V(1).Info("Could not check the DBA password Secret against the database", "member", member,
+				"error", errs[i].Error())
+			primaryInconclusive = primaryInconclusive || i == 0
+		case checks[i].State == instancemanager.DBAPasswordDiffers:
+			differed = append(differed, member)
+		case checks[i].State == instancemanager.DBAPasswordMatches:
+			matched = append(matched, member)
+		default:
+			log.V(1).Info("Could not tell whether the DBA password Secret is the database's password", "member", member,
+				"reason", checks[i].Reason)
+			primaryInconclusive = primaryInconclusive || i == 0
+		}
+	}
+	// A check settles only when every member was asked and answered for
+	// certain. A member that differs does not settle it on its own: another
+	// member that could not tell, or was not asked, would otherwise wait a
+	// whole poll, and its own answer would be missing from the message all
+	// that time (Kind E2E run 45388185821).
+	settled := len(matched)+len(differed) == len(members) && len(unasked) == 0
 	switch {
-	case err != nil:
-		log.V(1).Info("Could not check the DBA password Secret against the database", "member", member,
-			"error", err.Error())
-		return inconclusive()
-	case check.State == instancemanager.DBAPasswordDiffers:
+	case len(differed) > 0:
 		msg := fmt.Sprintf("the key %q of the Secret %s is not the database's current DBA password: the Secret's value "+
 			"or the database's password was changed after it was set, and changing the DBA password is not supported. "+
 			"The database keeps its password and the new value is not used; put the database's current DBA password "+
 			"back into the Secret", ref.Key, ref.Name)
+		msg += "; a dba login with it was refused on " + strings.Join(differed, ", ")
+		if len(matched) > 0 {
+			msg += " and accepted on " + strings.Join(matched, ", ") + ": the members' passwords differ, or the " +
+				"kubelet has not yet written a changed Secret into every member's file. A password changed by hand " +
+				"has to be changed on every member"
+		}
 		if was.Reason != reasonDBAPasswordRotationUnsupported {
 			r.statusEvent(cluster, corev1.EventTypeWarning, reasonDBAPasswordRotationUnsupported,
 				msg+"; the DB Pod is not restarted. A standalone member, created new or restored from a backup, "+
@@ -332,51 +416,89 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		}
 		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionFalse,
 			reasonDBAPasswordRotationUnsupported, msg)
-	case check.State == instancemanager.DBAPasswordMatches:
+	case len(matched) == len(members) && len(unasked) == 0:
 		if was.Reason == reasonDBAPasswordRotationUnsupported {
 			log.Info("DBA password Secret holds the database's DBA password again", "secret", ref.Name)
 			setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue,
 				reasonDBAPasswordSecretResolved, dbaPasswordResolvedMessage(ref))
 		}
-	default:
-		log.V(1).Info("Could not tell whether the DBA password Secret is the database's password", "member", member,
-			"reason", check.Reason)
-		return inconclusive()
+	case len(unasked) > 0:
+		log.V(1).Info("Could not ask every member whether the DBA password Secret is its password",
+			"notAsked", strings.Join(unasked, ","))
 	}
-	return poll
+	// An answer that cannot tell said nothing about the password; the
+	// members are asked again sooner than the poll: every time for the
+	// standalone member or the primary (#1031), and a bounded number of
+	// times in a row for a slave that cannot tell or was not asked.
+	wait := poll
+	if settled {
+		quickRetries = 0
+	}
+	switch {
+	case primaryInconclusive:
+		wait = min(dbaPasswordInconclusiveRetry, poll)
+	case !settled && quickRetries < dbaPasswordQuickRetries:
+		quickRetries++
+		wait = min(dbaPasswordInconclusiveRetry, poll)
+	}
+	r.dbaPasswordNextCheck.Store(cluster.UID, dbaPasswordSchedule{at: now.Add(wait), quickRetries: quickRetries})
+	return wait
 }
 
 // dbaPasswordStandaloneMember is the member of a standalone cluster asked
 // about its DBA password Secret: its one member, once it is ready.
-func dbaPasswordStandaloneMember(cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) string {
+func dbaPasswordStandaloneMember(cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) []string {
 	if sts.Status.ReadyReplicas < 1 {
-		return ""
+		return nil
 	}
-	return memberNames(cluster, 1)[0]
+	return memberNames(cluster, 1)
 }
 
-// dbaPasswordHAMember is the member of an HA cluster asked about its DBA
-// password Secret: the primary that res resolved in this pass, which
-// heartbeat reports as the master and whose role answer counts. The password
-// was set on it, and reaches the slaves from it by replication (POC-61, Q3);
-// its Instance Manager checks only while heartbeat reports its server as the
-// active master (instancemanager checkDBAPassword). No member is asked while
-// no primary is resolved, while more than one member claims to be the
-// master, while the primary is not ready in the status, or while the HA
-// bootstrap has not admitted every member or failed (haBootstrapUnadmitted),
-// so a member that is still being seeded is never asked. A slave that lags
-// does not stop the check: the primary answers for the database's password.
-func dbaPasswordHAMember(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution) string {
+// dbaPasswordHAMembers are the members of an HA cluster asked about its DBA
+// password Secret, the primary first, and those that may not be asked now.
+// Every member keeps
+// its own copy of the password, which a password changed on one member does
+// not reach (POC-74), so every member is asked (#1012): the primary that res
+// resolved in this pass, which heartbeat reports as the master and whose role
+// answer counts, and each member that is ready as a slave. A member that is
+// not ready, or is in another role, is returned as not asked: it is not
+// asked, and it keeps the cluster from being reported as a match. Its
+// Instance Manager checks only while heartbeat reports its server as the
+// active master or, on a slave, as standby (instancemanager checkDBAPassword).
+//
+// No member is asked while no primary is resolved, while more than one
+// member claims to be the master, while the primary is not ready in the
+// status, or while the HA bootstrap has not admitted every member or failed
+// (haBootstrapUnadmitted), so a member that is still being seeded is never
+// asked. A slave that lags is asked: it answers for its own password.
+func dbaPasswordHAMembers(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution) ([]string, []string) {
 	if res.Status != metav1.ConditionTrue || res.CurrentPrimary == "" || res.MultipleMasters {
-		return ""
+		return nil, nil
 	}
 	if _, _, unadmitted := haBootstrapUnadmitted(cluster); unadmitted {
-		return ""
+		return nil, nil
 	}
+	instances := make(map[string]databasev1alpha1.InstanceStatus, len(cluster.Status.Instances))
 	for _, in := range cluster.Status.Instances {
-		if in.Name == res.CurrentPrimary && in.Ready && in.Role == databasev1alpha1.RoleMaster {
-			return in.Name
+		instances[in.Name] = in
+	}
+	if in, ok := instances[res.CurrentPrimary]; !ok || !in.Ready || in.Role != databasev1alpha1.RoleMaster {
+		return nil, nil
+	}
+	// The primary comes first: its answer that cannot tell is retried soon
+	// every time, a slave's only a bounded number of times in a row
+	// (reconcileDBAPasswordRotation).
+	ask := []string{res.CurrentPrimary}
+	var unasked []string
+	for _, name := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
+		in, ok := instances[name]
+		switch {
+		case name == res.CurrentPrimary:
+		case ok && in.Ready && in.Role == databasev1alpha1.RoleSlave:
+			ask = append(ask, name)
+		default:
+			unasked = append(unasked, name)
 		}
 	}
-	return ""
+	return ask, unasked
 }

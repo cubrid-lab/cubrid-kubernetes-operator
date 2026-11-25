@@ -449,21 +449,23 @@ func (h *haRun) releaseS07(ctx context.Context, rec *s07Record) {
 		return
 	}
 	r.RowsBefore, r.before = h.readS07Rows(ctx, h.s07HistoryNow(ctx, rec),
-		s07File(rec.Variant, "rows-before-release.json"))
+		s07File(rec.dir(), "rows-before-release.json"))
 	defer func() {
 		r.RowsAfter, _ = h.readS07Rows(ctx, h.s07HistoryNow(ctx, rec),
-			s07File(rec.Variant, "rows-after-release.json"))
+			s07File(rec.dir(), "rows-after-release.json"))
 		r.Events = h.s07ReleaseEvents(ctx)
 	}()
 	defer h.removeS07ReleaseToken(ctx, rec, r)
 	stale, kind := s07StaleToken(rec.tokens, q.GenerationID, q.ReleaseToken)
 	r.Stale = &s07StaleTokenRecord{Kind: kind, TokenPrefix: s07TokenPrefix(stale), PathBefore: &before}
+	// Kept before the patch, so that a patch whose answer was lost is still
+	// removed by the deferred removal, which tests the value first.
+	r.lastSet = stale
 	if err := h.setS07ReleaseToken(ctx, stale); err != nil {
 		r.Stale.SetError = err.Error()
 		notMade("the stale token could not be set: %v", err)
 		return
 	}
-	r.lastSet = stale
 	setAt := time.Now().UTC()
 	r.Stale.SetAt = &setAt
 	rec.note("stale_release_token_set", kind)
@@ -549,12 +551,14 @@ func (h *haRun) applyS07ReleaseToken(ctx context.Context, rec *s07Record, r *s07
 	noteS07ActiveServers(rec)
 	sweep := rec.Sweeps[len(rec.Sweeps)-1]
 	r.MasterAtApply, r.StatesAtApply = s07SoleMaster(sweep, h.members), sweep.States
+	// Kept before the patch, as the stale token is: a patch whose answer was
+	// lost may still have set it.
+	r.currentToken, r.lastSet = q.ReleaseToken, q.ReleaseToken
 	if err := h.setS07ReleaseToken(ctx, q.ReleaseToken); err != nil {
 		r.SetError = err.Error()
 		r.Unmet = "the current token was not set: " + err.Error()
 		return
 	}
-	r.currentToken, r.lastSet = q.ReleaseToken, q.ReleaseToken
 	applied := time.Now().UTC()
 	r.AppliedAt = &applied
 	rec.note("release_token_set", cmpOr(r.MasterAtApply, "no active master"))

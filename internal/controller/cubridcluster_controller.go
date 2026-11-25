@@ -208,10 +208,11 @@ type CubridClusterReconciler struct {
 	// podUnconfirmed holds, per Pod UID, a database Pod the Pod watch saw
 	// deleted without a confirmed termination (notePodDeleted).
 	podUnconfirmed sync.Map
-	// dbaPasswordNextCheck holds, per cluster UID, when its member may next
+	// dbaPasswordNextCheck holds, per cluster UID, when its members may next
 	// be asked whether the DBA password Secret's value is the database's
-	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
-	// does not log in to the database once each.
+	// password, and how many short retries were made in a row
+	// (reconcileDBAPasswordRotation, dbaPasswordSchedule), so that a burst
+	// of reconciles does not log in to the database once each.
 	dbaPasswordNextCheck sync.Map
 }
 
@@ -1313,7 +1314,7 @@ func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context
 		setStandaloneBrokerConditions(cluster, sts.Status.ReadyReplicas >= desired && desired > 0, available)
 	}
 	// The sooner of the two retries is kept.
-	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, dbaPasswordStandaloneMember(cluster, sts)); poll > 0 &&
+	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, dbaPasswordStandaloneMember(cluster, sts), nil); poll > 0 &&
 		(steps.retry == 0 || poll < steps.retry) {
 		steps.retry = poll
 	}
@@ -1322,7 +1323,7 @@ func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context
 
 // reconcileHAMembers runs the steps of an HA cluster with a role prober: the
 // HA bootstrap (ADR-0010), the role observation, the Broker tier, the rolling
-// update and the check of its DBA password Secret against its primary
+// update and the check of its DBA password Secret against every member
 // (reconcileDBAPasswordRotation). It reports whether more than one master was
 // observed.
 func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -1358,7 +1359,8 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 		}
 	}
 	// The sooner of the two retries is kept.
-	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, dbaPasswordHAMember(cluster, res)); poll > 0 &&
+	ask, unasked := dbaPasswordHAMembers(cluster, res)
+	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, ask, unasked); poll > 0 &&
 		(steps.retry == 0 || poll < steps.retry) {
 		steps.retry = poll
 	}

@@ -146,6 +146,104 @@ func TestPartitionOneWay(t *testing.T) {
 	requireClean(t, n)
 }
 
+// S07 with -partition-direction inbound or outbound: ha-0 cut one way from
+// both slaves and both ways from the Operator. The cut is confirmed only with
+// the dropped direction seen cut and the other seen open, each counted where
+// it arrives; the drop rules sit only in the receivers of the dropped
+// direction, and the removal leaves nothing.
+func TestPartitionOneWayFromEveryMember(t *testing.T) {
+	const to = " -> "
+	for _, tc := range []struct {
+		direction Direction
+		cut, open []string
+		rules     map[string][]string
+	}{
+		{In, []string{slave1 + to + target, slave2 + to + target},
+			[]string{target + to + slave1, target + to + slave2},
+			map[string][]string{target: {dropInRule(testPods[slave1]), dropInRule(testPods[slave2]),
+				dropInRule(operatorIP), dropOutRule(operatorIP), jumpIn, jumpOut}}},
+		{Out, []string{target + to + slave1, target + to + slave2},
+			[]string{slave1 + to + target, slave2 + to + target},
+			map[string][]string{target: {dropInRule(operatorIP), dropOutRule(operatorIP), jumpIn, jumpOut},
+				slave1: {dropInRule(testPods[target]), jumpIn}, slave2: {dropInRule(testPods[target]), jumpIn}}},
+	} {
+		t.Run(string(tc.direction), func(t *testing.T) {
+			n := newFakeNet(testPods)
+			p := isolateMaster(n, testEnv(t, n))
+			p.Cuts[0].Direction, p.Cuts[1].Direction = tc.direction, tc.direction
+			o := run(p, p.Prepare)
+			if o.Result != evidence.Pass || !o.FaultConfirmed || !o.CleanupSucceeded {
+				t.Fatalf("outcome %s %q confirmed=%v cleanup=%v; timeline %+v", o.Result, o.Reason,
+					o.FaultConfirmed, o.CleanupSucceeded, o.Timeline)
+			}
+			r := p.Record()
+			for _, path := range tc.cut {
+				requireSeen(t, r, PhaseFault, path, SeenCut, MethodCounted)
+				requireSeen(t, r, PhaseRemoved, path, SeenOpen, MethodCounted)
+			}
+			for _, path := range tc.open {
+				requireSeen(t, r, PhaseFault, path, SeenOpen, MethodCounted)
+				if o, _ := last(r, PhaseFault, path); o.Expected != SeenOpen {
+					t.Errorf("%s was probed as %s, want open", path, o.Expected)
+				}
+			}
+			requireSeen(t, r, PhaseFault, "ha-0 -> operator", SeenCut, MethodConnect)
+			requireSeen(t, r, PhaseFault, "operator -> ha-0", SeenCut, MethodPassive)
+			requireSeen(t, r, PhaseFault, slave1+to+slave2, SeenOpen, MethodCounted)
+			if len(r.Rules) != len(tc.rules) {
+				t.Errorf("rules read back from %v, want from %v", r.Rules, tc.rules)
+			}
+			for name, lines := range tc.rules {
+				got := slices.Sorted(slices.Values(r.Rules[name]))
+				if want := slices.Sorted(slices.Values(lines)); !slices.Equal(got, want) {
+					t.Errorf("rules read back from %s: %v, want %v", name, got, want)
+				}
+			}
+			if !strings.Contains(r.Fault, "ha-1 ("+string(tc.direction)+")") ||
+				!strings.Contains(r.Fault, "operator (both)") {
+				t.Errorf("the record names the fault %q", r.Fault)
+			}
+			requireClean(t, n)
+		})
+	}
+}
+
+// A one-way cut is never confirmed without evidence of both directions: not
+// when the direction it drops is still open, and not when the direction it
+// keeps is found cut as well, as by a drop that no rule names.
+func TestPartitionOneWayIsNotConfirmedWithoutBothDirections(t *testing.T) {
+	const to = " -> "
+	for _, tc := range []struct {
+		name      string
+		direction Direction
+		set       func(*fakeNet)
+		detail    string
+	}{
+		{"inbound, the rules drop nothing", In, func(n *fakeNet) { n.inertRules = true },
+			slave1 + to + target + " is still open"},
+		{"outbound, the rules drop nothing", Out, func(n *fakeNet) { n.inertRules = true },
+			target + to + slave1 + " is still open"},
+		{"outbound, the kept direction is cut too", Out, func(n *fakeNet) { n.widen = true },
+			slave1 + to + target + " must stay open and is cut"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newFakeNet(testPods)
+			p := isolateMaster(n, testEnv(t, n))
+			p.Cuts[0].Direction, p.Cuts[1].Direction = tc.direction, tc.direction
+			tc.set(n)
+			o := run(p, p.Prepare)
+			if o.Result != evidence.Blocked || o.FaultConfirmed ||
+				!strings.HasPrefix(o.Reason, faults.ReasonFaultNotConfirmed) {
+				t.Fatalf("outcome %s %q confirmed=%v, want blocked, not confirmed", o.Result, o.Reason,
+					o.FaultConfirmed)
+			}
+			if !timelineHas(o, tc.detail) {
+				t.Errorf("the timeline does not say %q: %+v", tc.detail, o.Timeline)
+			}
+		})
+	}
+}
+
 // The ephemeral container of ha-0 turns out to be in ha-1's namespace: the
 // injection must fail, and install nothing there.
 func TestPartitionRefusesAnotherPodsNamespace(t *testing.T) {

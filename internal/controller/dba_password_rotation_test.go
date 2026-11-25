@@ -42,20 +42,40 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
-// fakeDBAPasswordChecker stands in for the member's Instance Manager: every
-// check answers answer, or fails with err, and is recorded.
+// fakeDBAPasswordChecker stands in for the members' Instance Managers: every
+// check answers answer, or fails with err, unless the member has its own
+// answer in members, and is recorded.
 type fakeDBAPasswordChecker struct {
-	mu     sync.Mutex
-	answer instancemanager.DBAPasswordCheck
-	err    error
-	asked  []string
+	mu      sync.Mutex
+	answer  instancemanager.DBAPasswordCheck
+	err     error
+	members map[string]instancemanager.DBAPasswordCheck
+	asked   []string
 }
 
 func (f *fakeDBAPasswordChecker) CheckDBAPassword(_ context.Context, podName, namespace string) (instancemanager.DBAPasswordCheck, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, namespace+"/"+podName)
+	if answer, ok := f.members[podName]; ok {
+		return answer, nil
+	}
 	return f.answer, f.err
+}
+
+// setMember makes member answer state, whatever the others answer; an empty
+// state removes its own answer.
+func (f *fakeDBAPasswordChecker) setMember(member string, state instancemanager.DBAPasswordState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if state == "" {
+		delete(f.members, member)
+		return
+	}
+	if f.members == nil {
+		f.members = map[string]instancemanager.DBAPasswordCheck{}
+	}
+	f.members[member] = instancemanager.DBAPasswordCheck{State: state}
 }
 
 func (f *fakeDBAPasswordChecker) set(state instancemanager.DBAPasswordState, reason string, err error) {
@@ -324,9 +344,10 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		Expect(res.RequeueAfter).To(Equal(poll))
 	})
 
-	// On an HA cluster the operator asks the resolved primary, the member that
-	// heartbeat reports as the active master, and only once the HA bootstrap
-	// admitted every member (#845). The primary is ha-1 here, not ordinal 0.
+	// On an HA cluster the operator asks every member, the resolved primary
+	// (the member that heartbeat reports as the active master) and each ready
+	// slave, and only once the HA bootstrap admitted every member (#845,
+	// #1012). The primary is ha-1 here, not ordinal 0.
 	haRunning := func(name string, r *CubridClusterReconciler, prober *haDBAProber) types.NamespacedName {
 		r.Prober = prober
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-secret", Namespace: testNamespace},
@@ -342,16 +363,15 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		return key
 	}
 
-	It("asks the primary of an HA cluster and reports a value that is not the database's password", func() {
+	It("asks every member of an HA cluster and reports a value that is not the database's password", func() {
 		checker := &fakeDBAPasswordChecker{}
 		checker.set(instancemanager.DBAPasswordMatches, "", nil)
 		r := newReconciler(checker)
 		key := haRunning("dba-rotation-ha", r, &haDBAProber{master: "dba-rotation-ha-1", now: now})
+		asked := len(checker.calls())
 		reconcileOnce(r, key)
-		Expect(checker.calls()).NotTo(BeEmpty())
-		for _, asked := range checker.calls() {
-			Expect(asked).To(Equal(testNamespace+"/dba-rotation-ha-1"), "only the primary is asked")
-		}
+		Expect(checker.calls()[asked:]).To(ConsistOf(testNamespace+"/dba-rotation-ha-0",
+			testNamespace+"/dba-rotation-ha-1", testNamespace+"/dba-rotation-ha-2"), "every member is asked once")
 		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
 		drain(r.Recorder.(*record.FakeRecorder))
 
@@ -390,7 +410,7 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		}
 
 		By("asking at most once per poll")
-		asked := len(checker.calls())
+		asked = len(checker.calls())
 		for range 3 {
 			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
@@ -433,13 +453,118 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		Expect(checker.calls()).To(BeEmpty())
 		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
 
-		By("asking the primary once every member is admitted")
+		By("asking every member once every member is admitted")
 		c = getCluster(key)
 		c.Status.Databases[0].HAConfigured = true
 		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
 		reconcileOnce(r, key)
-		Expect(checker.calls()).To(Equal([]string{testNamespace + "/dba-rotation-ha-gate-0"}))
+		Expect(checker.calls()).To(ConsistOf(testNamespace+"/dba-rotation-ha-gate-0",
+			testNamespace+"/dba-rotation-ha-gate-1", testNamespace+"/dba-rotation-ha-gate-2"))
 		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+	})
+
+	// Each member keeps its own copy of the password: set_password changes
+	// only the member it runs on (POC-74). A match needs every member to
+	// match, one member that differs is reported, and a member that cannot
+	// tell, or is not asked, is never counted as a match (#1012).
+	It("reports a match on an HA cluster only when every member matches", func() {
+		const name = "dba-rotation-every"
+		primary, slave1, slave2 := name+"-1", name+"-0", name+"-2"
+		checker := &fakeDBAPasswordChecker{}
+		checker.set(instancemanager.DBAPasswordMatches, "", nil)
+		r := newReconciler(checker)
+		prober := &haDBAProber{master: primary, now: now}
+		key := haRunning(name, r, prober)
+
+		By("reporting True while every member matches")
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+		drain(r.Recorder.(*record.FakeRecorder))
+
+		// askedAfterShortRetry reports whether the members are asked again
+		// once dbaPasswordInconclusiveRetry has passed, well before the poll.
+		askedAfterShortRetry := func() bool {
+			asked := len(checker.calls())
+			advance(dbaPasswordInconclusiveRetry)
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			return len(checker.calls()) > asked
+		}
+
+		By("keeping True while one slave cannot tell and the others match, with a bounded short retry")
+		checker.setMember(slave2, instancemanager.DBAPasswordUnknown)
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		for i := range dbaPasswordQuickRetries {
+			Expect(askedAfterShortRetry()).To(BeTrue(), "short retry %d of a slave that cannot tell", i+1)
+		}
+		Expect(askedAfterShortRetry()).To(BeFalse(), "a slave that cannot tell is retried soon only a few times")
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		checker.setMember(slave2, "")
+
+		By("asking again soon while the primary cannot tell (#1031)")
+		checker.setMember(primary, instancemanager.DBAPasswordUnknown)
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		Expect(askedAfterShortRetry()).To(BeTrue(), "the primary that cannot tell is asked again soon")
+		checker.setMember(primary, "")
+
+		By("reporting one slave that differs while the primary and the other slave match")
+		checker.setMember(slave1, instancemanager.DBAPasswordDiffers)
+		reconcileOnce(r, key)
+		resolved := resolvedOf(key)
+		Expect(resolved.Status).To(Equal(metav1.ConditionFalse))
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		Expect(resolved.Message).To(ContainSubstring("refused on " + slave1 + " and accepted on"))
+		Expect(resolved.Message).To(ContainSubstring(primary))
+		Expect(resolved.Message).To(ContainSubstring("every member"))
+		events := drain(r.Recorder.(*record.FakeRecorder))
+		Expect(events).To(ContainElement(And(
+			HavePrefix(corev1.EventTypeWarning+" "+reasonDBAPasswordRotationUnsupported), ContainSubstring(slave1))))
+		expectNoValue(key, events)
+
+		By("not counting an Unknown answer as a match: the slave that differed now cannot tell")
+		checker.setMember(slave1, instancemanager.DBAPasswordUnknown)
+		reported := resolvedOf(key)
+		reconcileOnce(r, key)
+		kept := resolvedOf(key)
+		Expect(kept.Status).To(Equal(metav1.ConditionFalse))
+		Expect(kept.Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		Expect(kept.LastTransitionTime).To(Equal(reported.LastTransitionTime))
+
+		By("asking no member, and keeping the report, while a slave's role is not observed")
+		checker.setMember(slave1, "")
+		prober.setUnknownMembers(slave1)
+		asked := len(checker.calls())
+		reconcileOnce(r, key)
+		Expect(checker.calls()[asked:]).To(BeEmpty(), "no primary is resolved while a member's role is unknown")
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionFalse))
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+
+		By("reporting True again once every member is asked and matches")
+		prober.setUnknownMembers()
+		reconcileOnce(r, key)
+		reconcileOnce(r, key)
+		Expect(resolvedOf(key).Status).To(Equal(metav1.ConditionTrue))
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+
+		By("reporting the primary that differs while the slaves match")
+		checker.setMember(primary, instancemanager.DBAPasswordDiffers)
+		reconcileOnce(r, key)
+		resolved = resolvedOf(key)
+		Expect(resolved.Status).To(Equal(metav1.ConditionFalse))
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		Expect(resolved.Message).To(ContainSubstring("refused on " + primary + " and accepted on"))
+
+		By("reporting every member that differs, with no member accepting it")
+		checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+		checker.setMember(primary, "")
+		reconcileOnce(r, key)
+		resolved = resolvedOf(key)
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordRotationUnsupported))
+		Expect(resolved.Message).NotTo(ContainSubstring("accepted on"))
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)))
 	})
 
 	It("asks the member at most once per poll, however often the cluster is reconciled", func() {
@@ -483,7 +608,15 @@ type haDBAProber struct {
 	master  string
 	masters []string
 	unknown bool
-	now     func() time.Time
+	// unknownMembers answer unknown, whatever the others answer.
+	unknownMembers []string
+	now            func() time.Time
+}
+
+func (p *haDBAProber) setUnknownMembers(members ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unknownMembers = members
 }
 
 func (p *haDBAProber) set(unknown bool, masters ...string) {
@@ -501,7 +634,7 @@ func (p *haDBAProber) ProbeRole(_ context.Context, podName, _ string) RoleObserv
 		masters = []string{p.master}
 	}
 	switch {
-	case p.unknown:
+	case p.unknown, slices.Contains(p.unknownMembers, podName):
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: at}
 	case slices.Contains(masters, podName):
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: at,

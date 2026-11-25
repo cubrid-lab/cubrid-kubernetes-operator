@@ -165,6 +165,15 @@ type HAConfig struct {
 	// replacement, and record whether the quarantine and the closed
 	// read-write path hold across the restart.
 	PartitionOperatorRestart bool
+	// PartitionRepeat makes S07, once the first cut's quarantine was
+	// released and the read-write path reopened, cut the member the variant
+	// picks again and record whether a new quarantine closes the path again.
+	PartitionRepeat bool
+	// PartitionDirection is the direction S07 cuts the member off the other
+	// members in: both, the default when empty, inbound (what they send it is
+	// dropped) or outbound (what it sends them is dropped). The manager Pod
+	// is cut both ways whatever the direction.
+	PartitionDirection string
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12

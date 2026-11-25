@@ -284,8 +284,11 @@ func TestJudgeS07WithAnOperatorRestart(t *testing.T) {
 	}
 }
 
-// measuredTrue is a measurement that held.
-const measuredTrue = "true"
+// measuredTrue is a measurement that held, measuredFalse one that did not.
+const (
+	measuredTrue  = "true"
+	measuredFalse = "false"
+)
 
 // The restart's measurements: its times from the deletion and whether the
 // quarantine held, or unknown where the run did not show it.

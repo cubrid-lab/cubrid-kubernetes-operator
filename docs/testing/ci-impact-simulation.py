@@ -57,6 +57,7 @@ def cases():
         "security.yml": {"govulncheck", "codeql_actions"},
         "codeql.yml": {"codeql_go", "codeql_actions"},
         "pr-title.yml": {"codeql_actions"},
+        "race-fuzz.yml": {"go_tests", "codeql_actions"},
         "ci-impact.yml": CHECKS,
     }
     for name, expected in workflows.items():
