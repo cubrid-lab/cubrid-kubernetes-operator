@@ -109,6 +109,11 @@ func TestOtherQuarantineMembersExcludesOnlyTheReplacedMember(t *testing.T) {
 // rejoined: the quarantine records both, the master hab-2 is resolved, and
 // hab-1 answered slave in the latest observation from the Pod it had before
 // the step (#1139).
+//
+// It pairs PrimaryResolved True with hab-0 without a role, which the
+// Operator does not report; it is kept to exercise the path on which the
+// primary is resolved. incompleteObservationCluster is the shape the
+// Operator reports.
 func missedProbeCluster(observed time.Time) *databasev1alpha1.CubridCluster {
 	at := metav1.NewTime(observed)
 	q := rebuildQuarantine("",
@@ -130,9 +135,9 @@ func missedProbeCluster(observed time.Time) *databasev1alpha1.CubridCluster {
 
 // The rebuild step releases a quarantine that records the emptied member and
 // another slave only under the conditions the maintainer set on #1139: one
-// resolved active master that the quarantine does not record, and every
-// other recorded member answering slave from the Pod and container start it
-// had before the step. Anything else is refused, and a refusal that waiting
+// active master, the one the step started with, that the quarantine observed
+// and does not record, and every other recorded member answering slave from
+// the Pod and container start it had before the step. Anything else is refused, and a refusal that waiting
 // cannot change ends the step.
 func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 	observed := time.Date(2026, 11, 24, 3, 0, 0, 0, time.UTC)
@@ -144,6 +149,15 @@ func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 	if refusal, final := missedProbeReleaseRefusal(missedProbeCluster(observed), "hab-0", "new-0", "hab-2",
 		before, same, now); refusal != "" || final {
 		t.Fatalf("every condition holds: refused %q (final %t)", refusal, final)
+	}
+	// While the emptied member hab-0 has no database it gives no role, so the
+	// Operator reports the primary as not resolved because the observation is
+	// incomplete, and leaves currentPrimary empty; hab-1 answers slave and
+	// hab-2 master (Kind run 45403615696). The maintainer accepted this shape
+	// on #1139 when hab-0 is the only member without a role.
+	if refusal, final := missedProbeReleaseRefusal(incompleteObservationCluster(observed), "hab-0", "new-0",
+		"hab-2", before, same, now); refusal != "" || final {
+		t.Fatalf("only the emptied member has no role: refused %q (final %t)", refusal, final)
 	}
 
 	for _, tc := range []struct {
@@ -175,15 +189,23 @@ func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[2].Role = databasev1alpha1.RoleUnknown }},
 		{name: "two members are master", want: "members whose role is master are [hab-1 hab-2]",
 			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[1].Role = databasev1alpha1.RoleMaster }},
+		{name: "the primary is resolved without currentPrimary", want: `currentPrimary is ""`,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.CurrentPrimary = "" }},
 		{name: "the primary is not resolved", want: "PrimaryResolved is False",
 			change: func(c *databasev1alpha1.CubridCluster) {
 				c.Status.Conditions[0].Status = metav1.ConditionFalse
 			}},
-		{name: "the observation is stale", want: "more than 60 seconds old",
+		{name: "the master's observation is stale", want: "more than 60 seconds before",
 			change: func(c *databasev1alpha1.CubridCluster) {
 				old := metav1.NewTime(now.Add(-61 * time.Second))
-				c.Status.LastObservedTime = &old
+				c.Status.Instances[2].LastObservedTime = &old
 			}},
+		{name: "the cluster has no observation time", want: "status.lastObservedTime is unset",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.LastObservedTime = nil }},
+		{name: "the master was never observed", want: "more than 60 seconds before",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[2].LastObservedTime = nil }},
+		{name: "the quarantine observed another master", want: `observed master is "hab-1"`,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.WriteQuarantine.ObservedMaster = "hab-1" }},
 		{name: "the master moved", want: "not hab-2", final: true,
 			change: func(c *databasev1alpha1.CubridCluster) {
 				c.Status.CurrentPrimary = "hab-1"
@@ -221,6 +243,103 @@ func TestMissedProbeReleaseOnlyUnderTheMaintainersConditions(t *testing.T) {
 		refusal, final := missedProbeReleaseRefusal(c, "hab-0", "new-0", "hab-2", before, current, now)
 		if !strings.Contains(refusal, tc.want) || final != tc.final {
 			t.Errorf("%s: refused %q (final %t), want %q (final %t)", tc.name, refusal, final, tc.want, tc.final)
+		}
+	}
+}
+
+// incompleteObservationCluster is missedProbeCluster as the Operator reports
+// it while the emptied member hab-0 gives no role: PrimaryResolved is False
+// with the reason PrimaryObservationIncomplete and currentPrimary is empty,
+// while hab-1 answers slave and hab-2 master (Kind run 45403615696, #1139).
+func incompleteObservationCluster(observed time.Time) *databasev1alpha1.CubridCluster {
+	c := missedProbeCluster(observed)
+	c.Status.CurrentPrimary = ""
+	c.Status.Conditions = []metav1.Condition{{Type: s03PrimaryResolved, Status: metav1.ConditionFalse,
+		Reason: "PrimaryObservationIncomplete"}}
+	return c
+}
+
+// When the primary is not resolved because the observation is incomplete,
+// the rebuild step releases the quarantine only when the emptied member is
+// the only member without a role and the one master it started with was
+// observed recently and is not recorded (#1139). Any other shape is refused.
+func TestMissedProbeReleaseWithAnIncompleteObservationOnlyForTheEmptiedMember(t *testing.T) {
+	observed := time.Date(2026, 11, 24, 3, 0, 0, 0, time.UTC)
+	now := observed.Add(5 * time.Second)
+	before := map[string]memberIdentity{"hab-1": {podUID: "pod-1", restartCount: 2},
+		"hab-2": {podUID: "pod-2"}}
+	same := map[string]memberIdentity{"hab-1": {podUID: "pod-1", restartCount: 2}}
+
+	for _, tc := range []struct {
+		name   string
+		change func(c *databasev1alpha1.CubridCluster)
+		want   string
+		final  bool
+	}{
+		{name: "another member also has no role", want: "hab-3 has no recognised role",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.Instances = append(c.Status.Instances,
+					databasev1alpha1.InstanceStatus{Name: "hab-3", Role: databasev1alpha1.RoleUnknown})
+			}},
+		{name: "another member has an empty role", want: "hab-3 has no recognised role",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.Instances = append(c.Status.Instances, databasev1alpha1.InstanceStatus{Name: "hab-3"})
+			}},
+		{name: "two masters", want: "members whose role is master are [hab-1 hab-2]",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[1].Role = databasev1alpha1.RoleMaster }},
+		{name: "a master other than the starting one", want: "not hab-2", final: true,
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.Instances[1].Role, c.Status.Instances[2].Role = databasev1alpha1.RoleMaster,
+					databasev1alpha1.RoleSlave
+			}},
+		{name: "a stale master observation", want: "more than 60 seconds before",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				old := metav1.NewTime(now.Add(-61 * time.Second))
+				c.Status.Instances[2].LastObservedTime = &old
+			}},
+		{name: "a master observation just over 60 seconds old", want: "more than 60 seconds before",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				old := metav1.NewTime(now.Add(-60*time.Second - time.Nanosecond))
+				c.Status.Instances[2].LastObservedTime = &old
+			}},
+		{name: "the emptied member reports a role", want: `hab-0, whose storage this step replaced, has the role "slave"`,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances[0].Role = databasev1alpha1.RoleSlave }},
+		{name: "the emptied member is not in status.instances", want: "has no entry in status.instances",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Instances = c.Status.Instances[1:] }},
+		{name: "another reason for an unresolved primary", want: "NoPrimaryObserved",
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.Conditions[0].Reason = "NoPrimaryObserved" }},
+		{name: "the quarantine observed another master", want: `observed master is "hab-1"`,
+			change: func(c *databasev1alpha1.CubridCluster) { c.Status.WriteQuarantine.ObservedMaster = "hab-1" }},
+		{name: "the quarantine records the master", want: "records the master hab-2",
+			change: func(c *databasev1alpha1.CubridCluster) {
+				c.Status.WriteQuarantine.Members = append(c.Status.WriteQuarantine.Members,
+					databasev1alpha1.WriteQuarantineMember{Name: "hab-2", PodUID: "pod-2"})
+			}},
+	} {
+		c := incompleteObservationCluster(observed)
+		tc.change(c)
+		refusal, final := missedProbeReleaseRefusal(c, "hab-0", "new-0", "hab-2", before, same, now)
+		if !strings.Contains(refusal, tc.want) || final != tc.final {
+			t.Errorf("%s: refused %q (final %t), want %q (final %t)", tc.name, refusal, final, tc.want, tc.final)
+		}
+	}
+
+	// A replica is a recognised role, and an observation exactly 60 seconds
+	// old is still fresh enough.
+	for name, change := range map[string]func(c *databasev1alpha1.CubridCluster){
+		"a replica besides the members": func(c *databasev1alpha1.CubridCluster) {
+			c.Status.Instances = append(c.Status.Instances, databasev1alpha1.InstanceStatus{Name: "hab-3",
+				Role: databasev1alpha1.RoleReplica, LastObservedTime: c.Status.LastObservedTime})
+		},
+		"a master observed exactly 60 seconds ago": func(c *databasev1alpha1.CubridCluster) {
+			old := metav1.NewTime(now.Add(-60 * time.Second))
+			c.Status.Instances[2].LastObservedTime = &old
+		},
+	} {
+		c := incompleteObservationCluster(observed)
+		change(c)
+		if refusal, final := missedProbeReleaseRefusal(c, "hab-0", "new-0", "hab-2", before, same, now); refusal != "" || final {
+			t.Errorf("%s: refused %q (final %t)", name, refusal, final)
 		}
 	}
 }
