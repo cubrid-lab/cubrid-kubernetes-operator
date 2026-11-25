@@ -431,19 +431,40 @@ The records are in `docs/poc/RESULTS.md`.
      such a member counts like a verified one only once its next Pod has
      answered as a non-master.
 
-     *Note (#938, 2026-11-25 UTC):* the Pod recorded for M is the one read
-     before the role probes of the pass that records it, the Pod that can
-     have given M's claim. It is not the one read after the probes. When
-     M's Pod was replaced during the probes (Kind run 45388185821, the token
-     rotation of scenario S14), the quarantine had recorded the replacement,
-     which had never answered. The confirmed termination of the old Pod then
-     never matched it, and the quarantine became
-     `WriteQuarantinedMasterChanged` once CUBRID moved the role. A
-     termination of the recorded Pod that the kubelet confirmed in the pass
-     that starts the quarantine counts as the confirmed end above. A Pod
-     replaced during the probes without a confirmed end escalates, as any
-     recorded Pod gone without one does. This changes which Pod is recorded,
-     not when a quarantine starts or ends; it adds no exception.
+     *Note (#938, 2026-11-25 UTC):* **M's Pod replaced during the role
+     probes.** When a quarantine starts beside M, or is rebased on M, and
+     M's Pod read before the probes differs from the one read after them,
+     either Pod can have given M's claim.
+     - **What is recorded.** The quarantine records M in the Pod read after
+       the probes, as it does otherwise, and records the departure of the Pod
+       read before them.
+     - **Confirmed end.** That departure counts as confirmed only when the
+       kubelet's confirmed termination of that very Pod is read or recorded
+       in the same pass. It cannot be recorded later, because the member's
+       last Pod seen is then its next one.
+     - **Without a confirmed end,** the old Pod is a recorded Pod gone
+       without one: the next pass makes the quarantine
+       `WriteQuarantinedMasterChanged`.
+     - **A confirmed end covers only its own Pod** and the Pod the quarantine
+       records for M. If M is then found in neither, the recorded Pod is gone
+       too. It needs its own confirmed end, or the quarantine escalates as
+       above. This also holds when the quarantine followed M to its next Pod
+       after a confirmed end seen in a later pass.
+
+     Why: in Kind run 45388185821 (the token rotation of scenario S14), the
+     quarantine recorded only the replacement, which had never answered.
+     The confirmed termination of the old Pod then never matched it, and the
+     quarantine became `WriteQuarantinedMasterChanged` once CUBRID moved the
+     role.
+
+     - **What does not change:** when a quarantine starts, and the release
+       conditions.
+     - **What changes:** a master Pod replaced during the probes without a
+       confirmed end now escalates on the next pass. Before, only another
+       active master, or M verified as no active master, escalated it.
+     - **Late kubelet report:** a graceful deletion whose termination the
+       kubelet reports only after the pass that read the replacement is
+       treated as an end not confirmed.
 
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,

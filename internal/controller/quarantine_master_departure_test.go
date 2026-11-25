@@ -80,18 +80,18 @@ func afterReplacement(now time.Time) map[string]RoleObservation {
 	return map[string]RoleObservation{q0: activeMasterAt(now), q1: killedProbeAt(now), q2: noAnswerAt(now)}
 }
 
-// The quarantine records, for its master, the Pod read before the probes:
-// the Pod that can have given the active-master claim (#938). In the Kind run
-// the quarantine started in the pass that replaced qc-2's Pod and recorded
-// the replacement, read after the probes, which had never answered. The
-// kubelet's confirmed termination of the old Pod then never matched it, and
-// when CUBRID made qc-0 the master in the next pass the quarantine escalated
-// to WriteQuarantinedMasterChanged, which has no automatic release, so the
-// read-write Brokers stayed at zero. Recording the old Pod, the quarantine
-// still starts in that pass, is rebased on qc-0 once the old Pod's end is
-// known, names qc-2's new Pod, and is released automatically once every
-// member but the master is verified.
-func TestQuarantineRecordsTheMasterPodReadBeforeTheProbes(t *testing.T) {
+// When the master's Pod is replaced during the probes, either Pod can have
+// given its active-master claim. The quarantine records the master in its Pod
+// read after the probes and, with it, the departure of the Pod read before
+// them, confirmed by the kubelet's termination recorded in that pass (#938).
+// In the Kind run the quarantine recorded only the replacement, so the old
+// Pod's confirmed termination never matched it, and when CUBRID made qc-0 the
+// master in the next pass the quarantine escalated to
+// WriteQuarantinedMasterChanged, which has no automatic release, and the
+// read-write Brokers stayed at zero. Now the quarantine still starts in that
+// pass, is rebased on qc-0, names qc-2's new Pod, and is released
+// automatically once every member but the master is verified.
+func TestQuarantineRecordsTheEndOfTheMasterPodReplacedDuringTheProbes(t *testing.T) {
 	s := masterReplacedScenario(t)
 	d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
 	q := d.Quarantine
@@ -99,16 +99,20 @@ func TestQuarantineRecordsTheMasterPodReadBeforeTheProbes(t *testing.T) {
 		t.Fatalf("quarantine = %+v, want %s beside %s started in the pass that replaced its Pod", q,
 			databasev1alpha1.WriteQuarantinedMemberUnverified, q2)
 	}
-	recorded := q.ObservedMasterPodUID
+	started := q.DeepCopy()
 
 	t1 := testNow.Add(unverifiedResyncInterval + roleProbeTimeout)
 	d = s.pass(t1, afterReplacement(t1))
 	if d.Quarantine != nil && d.Quarantine.Reason == databasev1alpha1.WriteQuarantinedMasterChanged {
-		t.Fatalf("escalated to %s when %s became the master: the quarantine had recorded %s's Pod %s, want %s, "+
-			"the Pod read before the probes", d.Quarantine.Reason, q0, q2, recorded, uid2)
+		t.Fatalf("escalated to %s when %s became the master: the quarantine had recorded %s in %s with the departure "+
+			"of %q (confirmed %t), want the confirmed departure of %s", d.Quarantine.Reason, q0, q2,
+			started.ObservedMasterPodUID, started.ObservedMasterLeavingPodUID, started.ObservedMasterLeavingConfirmed, uid2)
 	}
-	if recorded != uid2 {
-		t.Fatalf("recorded %s's Pod %s, want %s, the Pod read before the probes", q2, recorded, uid2)
+	if started.ObservedMasterPodUID != uid2New || started.ObservedMasterLeavingPodUID != uid2 ||
+		!started.ObservedMasterLeavingConfirmed {
+		t.Fatalf("started with %s in %s, departure %q confirmed %t; want %s in %s with the confirmed departure of %s",
+			q2, started.ObservedMasterPodUID, started.ObservedMasterLeavingPodUID, started.ObservedMasterLeavingConfirmed,
+			q2, uid2New, uid2)
 	}
 	q = d.Quarantine
 	if q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified || q.ObservedMaster != q0 ||
@@ -176,9 +180,31 @@ func TestQuarantineReplacementThatKeepsClaimingTheMaster(t *testing.T) {
 	})
 }
 
-// Recording the Pod read before the probes changes no rule: the quarantine
-// starts in the same pass as before, and only the recorded Pod differs.
-func TestQuarantineStartUnchangedByThePodReadBeforeTheProbes(t *testing.T) {
+// The quarantine starts in the same passes as on main. What it records of
+// the master's departure depends on what was read of the Pod before the
+// probes and of that Pod's end.
+func TestQuarantineStartRecordsTheMasterPodDeparture(t *testing.T) {
+	// No Pod of the master was read before the probes, so no departure is
+	// recorded: the Pod read after them is the only one that can have
+	// answered.
+	t.Run("no Pod read before the probes", func(t *testing.T) {
+		s := masterReplacedScenario(t)
+		s.podsBefore[q2] = memberIdentity{}
+		d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
+		if q := d.Quarantine; q == nil || q.ObservedMasterPodUID != uid2New || q.ObservedMasterLeavingPodUID != "" {
+			t.Fatalf("quarantine = %+v, want it beside %s in %s with no departure recorded", q, q2, uid2New)
+		}
+	})
+	// Only the termination of the Pod read before the probes confirms its
+	// departure: an end of another Pod of the same member does not.
+	t.Run("the end of another Pod of the master", func(t *testing.T) {
+		s := masterReplacedScenario(t)
+		s.terminations[0].PodUID = "uid-2-older"
+		d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
+		if q := d.Quarantine; q == nil || q.ObservedMasterLeavingPodUID != uid2 || q.ObservedMasterLeavingConfirmed {
+			t.Fatalf("quarantine = %+v, want an unconfirmed departure of %s", q, uid2)
+		}
+	})
 	t.Run("two active masters", func(t *testing.T) {
 		s := masterReplacedScenario(t)
 		d := s.pass(testNow, map[string]RoleObservation{q0: activeMasterAt(testNow), q1: killedProbeAt(testNow),
@@ -201,14 +227,16 @@ func TestQuarantineStartUnchangedByThePodReadBeforeTheProbes(t *testing.T) {
 	})
 	// A master Pod replaced during the probes without a confirmed end, as
 	// one deleted with --force on a node cut off, may still run: the
-	// quarantine records it and becomes manual on the next pass, as for any
-	// recorded master Pod gone without a confirmed end (ADR-0005, section 8).
+	// quarantine records its departure unconfirmed and becomes manual on the
+	// next pass, as for any recorded master Pod gone without a confirmed end
+	// (ADR-0005, section 8).
 	t.Run("a master Pod replaced without a confirmed end", func(t *testing.T) {
 		s := masterReplacedScenario(t)
 		s.terminations = nil
 		d := s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
-		if q := d.Quarantine; q == nil || q.ObservedMasterPodUID != uid2 || q.ObservedMasterLeavingConfirmed {
-			t.Fatalf("quarantine = %+v, want it beside %s in %s with no confirmed end", q, q2, uid2)
+		if q := d.Quarantine; q == nil || q.ObservedMasterPodUID != uid2New || q.ObservedMasterLeavingPodUID != uid2 ||
+			q.ObservedMasterLeavingConfirmed {
+			t.Fatalf("quarantine = %+v, want it beside %s in %s with an unconfirmed departure of %s", q, q2, uid2New, uid2)
 		}
 		t1 := testNow.Add(unverifiedResyncInterval + roleProbeTimeout)
 		if d = s.pass(t1, afterReplacement(t1)); d.Quarantine == nil ||
@@ -250,11 +278,11 @@ func newDepartureReconciler(t *testing.T, now *time.Time) (*CubridClusterReconci
 
 // The reconcile passes the Pods read before the probes to the decision, so
 // that the quarantine started in the pass that replaced the master's Pod
-// records the old Pod. The next pass rebases it on the new master, whether
-// the status of the first pass was written or not: a status write that
-// failed leaves the quarantine in memory (restoreWriteQuarantine) and the
-// status from before the first pass.
-func TestReconcileWriteQuarantineRecordsTheMasterPodReadBeforeTheProbes(t *testing.T) {
+// records the old Pod's confirmed departure. The next pass rebases it on the
+// new master, whether the status of the first pass was written or not: a
+// status write that failed leaves the quarantine in memory
+// (restoreWriteQuarantine) and the status from before the first pass.
+func TestReconcileWriteQuarantineRecordsTheEndOfTheMasterPodReplacedDuringTheProbes(t *testing.T) {
 	for name, written := range map[string]bool{"status written": true, "status write failed": false} {
 		t.Run(name, func(t *testing.T) {
 			now := testNow
@@ -264,8 +292,9 @@ func TestReconcileWriteQuarantineRecordsTheMasterPodReadBeforeTheProbes(t *testi
 				q2: {PodUID: uid2, Deleting: true, Created: testNow.Add(-time.Hour)}}
 			r.reconcileWriteQuarantine(context.Background(), cluster, quarantineMembers,
 				masterClaimsBesideAMissedProbe(testNow), testNow, q2, before, nil)
-			if q := cluster.Status.WriteQuarantine; q == nil || q.ObservedMasterPodUID != uid2 {
-				t.Fatalf("quarantine = %+v, want it beside %s in %s, the Pod read before the probes", q, q2, uid2)
+			if q := cluster.Status.WriteQuarantine; q == nil || q.ObservedMasterLeavingPodUID != uid2 ||
+				!q.ObservedMasterLeavingConfirmed {
+				t.Fatalf("quarantine = %+v, want the confirmed departure of %s, the Pod read before the probes", q, uid2)
 			}
 			next := cluster
 			if !written {
