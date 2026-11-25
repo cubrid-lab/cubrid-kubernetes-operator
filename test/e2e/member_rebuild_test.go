@@ -31,6 +31,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -96,14 +97,25 @@ type memberIdentity struct {
 // write quarantine in force in c, which records members besides the one whose
 // storage the step replaced (emptied, now in the Pod emptiedPodUID), with or
 // without that member. Such a quarantine does not end by itself either: the
-// automatic release needs emptied verified too. The maintainer allowed the
-// release on #1139 only for a quarantine that records emptied together with
-// another slave, and only when, in this read:
+// automatic release needs every member other than the active master verified,
+// emptied included. The maintainer allowed the release on #1139 only for a
+// quarantine that records emptied together with another slave, and only when,
+// in this read:
 //
-//  1. one active master is resolved (PrimaryResolved is True, currentPrimary
-//     is the only member whose role is master, and the status is no older
-//     than 60 seconds at now), it is the master the step started with, and
-//     the quarantine does not record it;
+//  1. one active master is observed, and it is the master the step started
+//     with. PrimaryResolved is True with currentPrimary that master, or it is
+//     False with the reason PrimaryObservationIncomplete while emptied is the
+//     only member in status.instances without a recognised role (master,
+//     slave or replica). The emptied member gives no role until it is
+//     rebuilt, and the Operator does not resolve a primary while any member
+//     lacks an authoritative role (resolvePrimary in
+//     internal/controller/haresolve.go); the rebuild is not offered while the
+//     quarantine holds, so requiring True would wait for ever (Kind run
+//     45403615696; maintainer decision on #1139, comment 7148109339). In
+//     both cases status.instances shows exactly one member whose role is
+//     master, that member was observed no more than 60 seconds before now,
+//     the quarantine's observedMaster is that master, and the quarantine does
+//     not record it;
 //  2. every recorded member other than emptied answered slave in the latest
 //     observation (its lastObservedTime is the cluster's), and its Pod UID and
 //     container restart count, read now and recorded by the quarantine, are
@@ -154,30 +166,62 @@ func missedProbeReleaseRefusal(c *databasev1alpha1.CubridCluster, emptied, empti
 		}
 		return nil
 	}
-	var masters []string
+	var masters, roleless []string
 	for _, x := range s.Instances {
-		if x.Role == databasev1alpha1.RoleMaster {
+		switch x.Role {
+		case databasev1alpha1.RoleMaster:
 			masters = append(masters, x.Name)
+		case databasev1alpha1.RoleSlave, databasev1alpha1.RoleReplica:
+		default:
+			roleless = append(roleless, x.Name)
 		}
 	}
-	resolved := conditionIs(c, "PrimaryResolved", "True")
+	const unmet = "condition 1 (one active master, the one this step started with) is not met: "
+	if resolved := conditionIs(c, "PrimaryResolved", "True"); resolved != nil {
+		// While emptied has no database it gives no role, and the Operator
+		// reports the observation as incomplete. Another member without a
+		// role, or another reason, is not covered by the decision on #1139.
+		if !slices.ContainsFunc(s.Conditions, func(x metav1.Condition) bool {
+			return x.Type == "PrimaryResolved" && x.Status == metav1.ConditionFalse &&
+				x.Reason == "PrimaryObservationIncomplete"
+		}) {
+			return unmet + resolved.Error(), false
+		}
+		for _, name := range roleless {
+			if name != emptied {
+				return fmt.Sprintf(unmet+"PrimaryResolved is False (PrimaryObservationIncomplete) and %s has no "+
+					"recognised role (%q) besides %s", name, instance(name).Role, emptied), false
+			}
+		}
+	} else if len(masters) == 1 && masters[0] != s.CurrentPrimary {
+		return fmt.Sprintf(unmet+"currentPrimary is %q and the members whose role is master are %v",
+			s.CurrentPrimary, masters), false
+	}
 	switch {
-	case resolved != nil:
-		return "condition 1 (one resolved active master) is not met: " + resolved.Error(), false
-	case s.LastObservedTime == nil || now.Sub(s.LastObservedTime.Time) > 60*time.Second:
-		return "condition 1 (one resolved active master) is not met: status.lastObservedTime is unset or more " +
-			"than 60 seconds old", false
-	case len(masters) != 1 || masters[0] != s.CurrentPrimary:
-		return fmt.Sprintf("condition 1 (one resolved active master) is not met: currentPrimary is %q and the "+
-			"members whose role is master are %v", s.CurrentPrimary, masters), false
-	case s.CurrentPrimary != master:
-		return fmt.Sprintf("condition 1 (one resolved active master) is not met: the master is %s, not %s, "+
-			"the master this step started with", s.CurrentPrimary, master), true
+	case len(masters) != 1:
+		return fmt.Sprintf(unmet+"currentPrimary is %q and the members whose role is master are %v",
+			s.CurrentPrimary, masters), false
+	case masters[0] != master:
+		return fmt.Sprintf(unmet+"the master is %s, not %s, the master this step started with", masters[0],
+			master), true
+	}
+	// Condition 2 compares each member's answer with the cluster's latest
+	// observation, so a status without one is not read further.
+	if s.LastObservedTime == nil {
+		return unmet + "status.lastObservedTime is unset", false
+	}
+	if x := instance(master); x.LastObservedTime == nil || now.Sub(x.LastObservedTime.Time) > 60*time.Second {
+		return fmt.Sprintf(unmet+"the master %s has no observation time or was last observed more than 60 "+
+			"seconds before %s", master, now.UTC().Format(time.RFC3339)), false
+	}
+	switch {
+	case q.ObservedMaster != master:
+		return fmt.Sprintf(unmet+"the quarantine's observed master is %q, not %s", q.ObservedMaster, master),
+			false
 	case slices.ContainsFunc(q.Members, func(m databasev1alpha1.WriteQuarantineMember) bool {
 		return m.Name == master
 	}):
-		return fmt.Sprintf("condition 1 (one resolved active master) is not met: the quarantine records the "+
-			"master %s", master), false
+		return fmt.Sprintf(unmet+"the quarantine records the master %s", master), false
 	}
 
 	// Condition 2: every other recorded member answers slave from the Pod
@@ -608,7 +652,7 @@ func memberRebuildStep(r *haRun) {
 				g.Expect(err).NotTo(HaveOccurred())
 				missedSet = q.ReleaseToken
 				entry := fmt.Sprintf("set the release annotation with the current token of the %s; the master "+
-					"%s is the one resolved active master and is not recorded, and every recorded member other "+
+					"%s is the one active master observed and is not recorded, and every recorded member other "+
 					"than %s answered slave in the latest observation from the Pod and container start it had "+
 					"before the step; the Operator's own release checks decide",
 					quarantineSummary(q), master, member)
