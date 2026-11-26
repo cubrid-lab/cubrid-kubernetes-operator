@@ -38,6 +38,9 @@ func TestMemberKeepaliveCheck(t *testing.T) {
 		{"milliseconds", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,500ms,0)", 1, 0},
 		{"overdue", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,-1.2sec,0)", 1, 0},
 		{"exactly the limit", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,30sec,0)", 1, 0},
+		{"a millisecond over the limit", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,30.001sec,0)", 1, 1},
+		{"almost a second over", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,30.999sec,0)", 1, 1},
+		{"exactly the limit with a fraction", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,30.000sec,0)", 1, 0},
 		{"the kernel default", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,119min,0)", 1, 1},
 		{"over the limit", "0 0 10.244.0.12:43210 10.244.0.13:1523 timer:(keepalive,1min5sec,0)", 1, 1},
 		{"loopback", "0 0 127.0.0.1:43210 127.0.0.1:1523 timer:(keepalive,119min,0)\n" +

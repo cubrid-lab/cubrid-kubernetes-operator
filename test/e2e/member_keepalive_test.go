@@ -32,6 +32,19 @@ import (
 // has more time left than that.
 const memberKeepaliveLimitSeconds = 30
 
+// memberKeepaliveSysctls are the sysctls the Operator sets on every member
+// Pod (#982) and the values the member's network namespace must show: the
+// idle time, the interval between probes and the number of probes. Together
+// they end a connection of a silent peer after about a minute.
+var memberKeepaliveSysctls = []struct {
+	file  string
+	value int
+}{
+	{"tcp_keepalive_time", memberKeepaliveLimitSeconds},
+	{"tcp_keepalive_intvl", 10},
+	{"tcp_keepalive_probes", 3},
+}
+
 // ssMissing is what memberSocketsScript prints when the image has no ss.
 const ssMissing = "NO-SS"
 
@@ -70,19 +83,30 @@ func memberKeepaliveCheck(out string) (int, []string) {
 			continue
 		}
 		counted++
-		seconds := 0
+		// The time left, in milliseconds, so that 30.999sec is not read as
+		// 30sec. A timer that is overdue has none left.
+		left := 0
 		if m[1] == "" {
 			minutes, _ := strconv.Atoi(m[2])
 			n, _ := strconv.Atoi(m[3])
-			// Whole milliseconds without a fraction are under a second.
-			if m[5] == "ms" && m[4] == "" {
-				n = 0
+			fraction := 0
+			if m[4] != "" {
+				digits := (m[4][1:] + "000")[:3]
+				fraction, _ = strconv.Atoi(digits)
 			}
-			seconds = minutes*60 + n
+			switch {
+			case m[5] == "ms" && m[4] == "":
+				// Whole milliseconds without a fraction are under a second.
+				left = minutes*60000 + n
+			default:
+				// Seconds: "<s>sec", "<s>.<ms>sec", or, before iproute2
+				// 6.11, "<s>.<ms>ms".
+				left = minutes*60000 + n*1000 + fraction
+			}
 		}
-		if seconds > memberKeepaliveLimitSeconds {
-			problems = append(problems, fmt.Sprintf("the connection to %s has a keepalive timer of %ds, more than %ds: %s",
-				fields[3], seconds, memberKeepaliveLimitSeconds, strings.TrimSpace(line)))
+		if left > memberKeepaliveLimitSeconds*1000 {
+			problems = append(problems, fmt.Sprintf("the connection to %s has a keepalive timer of %d.%03ds, more than %ds: %s",
+				fields[3], left/1000, left%1000, memberKeepaliveLimitSeconds, strings.TrimSpace(line)))
 		}
 	}
 	return counted, problems

@@ -428,11 +428,12 @@ spec:
 		It("shortens TCP keepalive in every member Pod", func() {
 			members := append([]string{first}, peers...)
 			for _, member := range members {
-				out, err := kubectl("exec", member, "-c", "cubrid", "--",
-					"cat", "/proc/sys/net/ipv4/tcp_keepalive_time")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(strings.TrimSpace(out)).To(Equal(strconv.Itoa(memberKeepaliveLimitSeconds)),
-					"tcp_keepalive_time in %s", member)
+				for _, s := range memberKeepaliveSysctls {
+					out, err := kubectl("exec", member, "-c", "cubrid", "--",
+						"cat", "/proc/sys/net/ipv4/"+s.file)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(strings.TrimSpace(out)).To(Equal(strconv.Itoa(s.value)), "%s in %s", s.file, member)
+				}
 			}
 
 			By("checking the keepalive timers of the log copy connections")
@@ -440,10 +441,10 @@ spec:
 				for _, member := range members {
 					out, err := kubectl("exec", member, "-c", "cubrid", "--", "sh", "-c", memberSocketsScript)
 					g.Expect(err).NotTo(HaveOccurred())
-					if strings.TrimSpace(out) == ssMissing {
-						_, _ = fmt.Fprintf(GinkgoWriter, "%s has no ss: its connections' timers are not checked\n", member)
-						continue
-					}
+					// The pinned image ships ss. Without it nothing is
+					// observed, which is not a pass.
+					g.Expect(strings.TrimSpace(out)).NotTo(Equal(ssMissing),
+						"%s has no ss: its connections' keepalive timers cannot be checked", member)
 					counted, problems := memberKeepaliveCheck(out)
 					g.Expect(problems).To(BeEmpty(), "%s:\n%s", member, out)
 					g.Expect(counted).To(BeNumerically(">", 0),

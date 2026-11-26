@@ -144,15 +144,16 @@ such a failover (#702).
 so they need no kubelet `--allowed-unsafe-sysctls`, and Pod Security
 admits them under `restricted` from policy version 1.29. The Kubernetes
 documentation requires a node kernel of 4.5 or later. On an older cluster
-or kernel the member does not start: Pod Security `restricted` before
-policy version 1.29 refuses the Pod at admission, and a kubelet that does
+or kernel the member does not start: Pod Security `baseline` or `restricted`
+enforced at a policy version before 1.29 (also a namespace pinned to such a
+version) refuses the Pod at admission, and a kubelet that does
 not count the sysctls as safe refuses it with `SysctlForbidden`. An envtest checks that a member Pod is admitted in a
 namespace that enforces `restricted`, and the Kind HA scenario checks the
 value inside each member. Only Kind's `kindest/node:v1.37.0` has run these
-Pods; the VM lab's k3s has not yet.
+Pods. A run on the VM lab's k3s is tracked on #982.
 
-The Broker Pods set no sysctls: the server's end of each Broker connection
-is in a member Pod, which has the short keepalive.
+The Broker Pods set no sysctls. Only the member's end of each Broker
+connection, in a member Pod, has the short keepalive.
 
 **Upgrading an existing cluster.** The sysctls change the member Pod
 template, so the StatefulSet gets a new revision on the first reconcile by
