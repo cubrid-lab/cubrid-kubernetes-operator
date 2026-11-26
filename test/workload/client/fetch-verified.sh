@@ -29,6 +29,15 @@
 # a dead mirror, which answers at once, holds a build for about 5 minutes.
 # Other failures keep the short wait. The digest check is the same for every
 # attempt, and the exit status is 0 for a verified download and 1 otherwise.
+#
+# FETCH_LOCAL_COPY, when set, names a file that may already hold the same
+# content, such as the copy CI restores from its cache (#1109). When that file
+# exists and its SHA-256 is SHA256, it is copied to OUT and nothing is
+# downloaded. A file with another digest is reported and ignored, never
+# copied, and the script downloads and verifies as above; a missing file is
+# not an error either. The local copy is checked every time, so a damaged or
+# tampered cache entry can only cost a download, never put an unverified file
+# into OUT.
 set -eu
 url=$1
 want=$2
@@ -39,6 +48,20 @@ cap=${FETCH_RATE_LIMIT_CAP:-120}
 budget=${FETCH_RATE_LIMIT_BUDGET:-300}
 waited=0
 trap 'rm -f "$out.part" "$out.headers"' EXIT
+
+local_copy=${FETCH_LOCAL_COPY:-}
+if [ -n "$local_copy" ] && [ -f "$local_copy" ]; then
+	# The digest is taken of the copy that is kept, not of the original.
+	cp "$local_copy" "$out.part"
+	got=$(sha256sum "$out.part" | cut -d ' ' -f 1)
+	if [ "$got" = "$want" ]; then
+		mv "$out.part" "$out"
+		echo "$local_copy: the local copy has the wanted sha256 $want; not downloading" >&2
+		exit 0
+	fi
+	echo "$local_copy: the local copy has sha256 $got ($(wc -c < "$out.part") bytes), want $want; ignoring it and downloading $url" >&2
+	rm -f "$out.part"
+fi
 
 i=1
 while :; do

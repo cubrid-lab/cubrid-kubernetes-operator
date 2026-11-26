@@ -936,7 +936,15 @@ Each client runs a numbered sequence of operations, one transaction each:
 
 The first client is `test/workload/client`, on the official CUBRID JDBC
 driver. The driver's version and checksum are pinned in that directory's
-`Dockerfile`. pycubrid may be added as a second client later.
+`Dockerfile`. The build downloads the driver from Maven Central and keeps it
+only when its SHA-256 matches the pin. Because Maven Central can answer with a
+rate limit (429) for minutes at a time, the E2E workflow keeps the verified jar
+in the GitHub Actions cache, keyed by the pinned version and SHA-256, and
+restores it into `test/workload/client/jdbc-cache` before the build (#1109).
+The build uses that copy only when its SHA-256 still matches the pin; a copy
+that differs is ignored and the driver is downloaded and verified as usual.
+A local build has no such copy and downloads the driver. pycubrid may be added
+as a second client later.
 
 The client decides an outcome by where the error occurred. An error before the
 commit was sent means nothing was committed: `failed`. An error from the

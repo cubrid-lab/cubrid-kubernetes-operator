@@ -1,0 +1,7 @@
+# The E2E workflow restores a verified copy of the JDBC driver here from its
+# cache (.github/workflows/test-e2e.yml, #1109). The workload client build
+# uses it only when its SHA-256 matches the pinned one
+# (test/workload/client/Dockerfile). Nothing here except this file is
+# committed; the directory exists so that the build can always copy it.
+*
+!.gitignore

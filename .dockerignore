@@ -27,3 +27,5 @@
 !test/workload/client/Workload.java
 !test/workload/client/WorkloadApplicationReconnectTest.java
 !test/workload/client/fetch-verified.sh
+# A verified copy of the JDBC driver, restored by the E2E workflow (#1109)
+!test/workload/client/jdbc-cache

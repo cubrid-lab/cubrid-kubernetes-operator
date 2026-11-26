@@ -75,6 +75,69 @@ jobs:
           done
           bin/kind version
 
+      # The workload client image downloads the pinned JDBC driver from Maven
+      # Central, which once answered 429 for about ten minutes and failed the
+      # run (#1109). The driver is therefore kept in the Actions cache, under a
+      # key made of its pinned version and SHA-256, read from the ARG lines of
+      # test/workload/client/Dockerfile so that a new pin is a new key. The
+      # build copies test/workload/client/jdbc-cache and uses the jar there
+      # only when its SHA-256 is the pinned one: a damaged or tampered entry
+      # is ignored and the driver is downloaded and verified as before.
+      - name: Read the pinned JDBC driver
+        id: jdbc
+        run: |
+          dockerfile=test/workload/client/Dockerfile
+          version=$(sed -n 's/^ARG JDBC_VERSION=//p' "$dockerfile")
+          sha256=$(sed -n 's/^ARG JDBC_SHA256=//p' "$dockerfile")
+          url=$(sed -n 's/^ARG JDBC_URL=//p' "$dockerfile" | sed "s/\${JDBC_VERSION}/$version/g")
+          # Exactly one plain value each: a second ARG line, a value left
+          # unexpanded or anything unusual is refused rather than guessed at.
+          bad=
+          case $version in '' | *[!0-9.]*) bad=1 ;; esac
+          case $sha256 in *[!0-9a-f]*) bad=1 ;; esac
+          [ "${#sha256}" -eq 64 ] || bad=1
+          case $url in https://*) ;; *) bad=1 ;; esac
+          case $url in *[!A-Za-z0-9./:_-]*) bad=1 ;; esac
+          if [ -n "$bad" ]; then
+            echo "::error::$dockerfile must pin JDBC_VERSION, JDBC_SHA256 and JDBC_URL on one ARG line each"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "sha256=$sha256"
+            echo "url=$url"
+            echo "path=test/workload/client/jdbc-cache/cubrid-jdbc-$version.jar"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore the JDBC driver from the cache
+        id: jdbc-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.jdbc.outputs.path }}
+          key: cubrid-jdbc-${{ steps.jdbc.outputs.version }}-${{ steps.jdbc.outputs.sha256 }}
+
+      # On a miss the driver is downloaded with the same verified download
+      # the image build uses, and saved at once rather than at the end of the
+      # job, so that a run that fails later still fills the cache. A failed
+      # download is only a warning: the image build then tries again itself.
+      - name: Download the JDBC driver on a cache miss
+        if: ${{ steps.jdbc-cache.outputs.cache-hit != 'true' }}
+        env:
+          JDBC_URL: ${{ steps.jdbc.outputs.url }}
+          JDBC_SHA256: ${{ steps.jdbc.outputs.sha256 }}
+          JDBC_PATH: ${{ steps.jdbc.outputs.path }}
+        run: |
+          if ! sh test/workload/client/fetch-verified.sh "$JDBC_URL" "$JDBC_SHA256" "$JDBC_PATH"; then
+            echo "::warning::the JDBC driver could not be downloaded before the build; the image build downloads it"
+          fi
+
+      - name: Save the JDBC driver to the cache
+        if: ${{ steps.jdbc-cache.outputs.cache-hit != 'true' && hashFiles(steps.jdbc.outputs.path) != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.jdbc.outputs.path }}
+          key: ${{ steps.jdbc-cache.outputs.cache-primary-key }}
+
       # Outside the run's own deadlines in the Makefile (E2E_SUITE_TIMEOUT 80m,
       # E2E_GO_TIMEOUT 88m), with room for creating the Kind cluster and
       # building before the run. Raised with them from 80 to 95 minutes, and

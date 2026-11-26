@@ -8,15 +8,21 @@ FROM ${JDK_IMAGE} AS build
 # The driver is pinned by version and checksum (docs/third-party-material.md).
 ARG JDBC_VERSION=11.3.2.0053
 ARG JDBC_SHA256=ab8ab5632382a3042c0f354dd903d53b4f15c67b462afbeddb4edcf0bf43ad1f
+ARG JDBC_URL=https://repo1.maven.org/maven2/org/cubrid/cubrid-jdbc/${JDBC_VERSION}/cubrid-jdbc-${JDBC_VERSION}.jar
 WORKDIR /build
 # A response whose digest differs is asked for again, a few times, and never
 # kept (#521). A 429 or 503 from the server is waited out for up to about five
 # minutes (#718). The driver must be readable by the unprivileged user of the
 # final image.
+# The E2E workflow restores a copy of the driver from its cache into
+# test/workload/client/jdbc-cache (#1109). That copy is used only when its
+# SHA-256 is JDBC_SHA256; otherwise, and when the directory is empty, as in a
+# local build, the driver is downloaded. The workflow reads the three ARG lines
+# above, so they stay one line each.
 COPY test/workload/client/fetch-verified.sh /usr/local/bin/fetch-verified
-RUN fetch-verified \
-        https://repo1.maven.org/maven2/org/cubrid/cubrid-jdbc/${JDBC_VERSION}/cubrid-jdbc-${JDBC_VERSION}.jar \
-        "${JDBC_SHA256}" cubrid-jdbc.jar \
+COPY test/workload/client/jdbc-cache/ /jdbc-cache/
+RUN FETCH_LOCAL_COPY="/jdbc-cache/cubrid-jdbc-${JDBC_VERSION}.jar" fetch-verified \
+        "${JDBC_URL}" "${JDBC_SHA256}" cubrid-jdbc.jar \
     && chmod 0644 cubrid-jdbc.jar
 COPY test/workload/client/Workload.java .
 COPY test/workload/client/WorkloadApplicationReconnectTest.java .
