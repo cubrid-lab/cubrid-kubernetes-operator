@@ -457,12 +457,23 @@ The records are in `docs/poc/RESULTS.md`.
          it. The quarantine then records it (`observedMasterAnsweredPodUID`),
          and the wait is over for good: the recorded Pod being silent later
          does not escalate it, and another active master then rebases it.
-         A new Pod, or a container restart in the recorded Pod, makes an
-         earlier answer no longer count.
+         A new Pod never matches an earlier answer. A container restart in
+         the recorded Pod forgets it: the wait starts again for the restarted
+         process, whose deadline is then the later of the one set before and
+         90 seconds after the restart. A new 90 seconds therefore needs a
+         real non-master answer first. If the recorded Pod claims the active
+         master again, the departure and the answer are cleared, the
+         quarantine stays beside it, and a claim beside another active master
+         escalates it.
+       - When M had no Pod after the probes of the starting pass, the
+         quarantine records no Pod for M and waits all the same: no answer
+         counts until a Pod of M is read, and the pass that follows M to that
+         Pod gives it its own deadline.
        - The deadline is 90 seconds (the bound of the exception above) after
          the pass that recorded the earlier end or followed M to another
          Pod. It replaces any hold of a deletion mark. A container restart
-         in the recorded Pod does not set it again. Both passes raise the
+         in the recorded Pod does not set it again, unless it forgets an
+         answer, as above. Both passes raise the
          quarantine's revision, so a failed status write does not lose the
          deadline. A wait found without a deadline, as one stored by an
          earlier version of the Operator, gets one in its first waiting

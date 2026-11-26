@@ -1123,7 +1123,8 @@ type WriteQuarantine struct {
 	// termination of that Pod. Only then can the quarantine be rebased on
 	// one other active master; when that Pod is not observedMasterPodUID,
 	// only once observedMasterPodUID has also answered as no active master
-	// in that pass or the pass before it, or ended.
+	// during the wait for it (kept in observedMasterAnsweredPodUID), or
+	// ended.
 	// +optional
 	ObservedMasterLeavingConfirmed bool `json:"observedMasterLeavingConfirmed,omitempty"`
 	// observedMasterHoldUntil is when a wait for observedMaster's Pod stops
@@ -1139,9 +1140,13 @@ type WriteQuarantine struct {
 	// observedMasterAnsweredPodUID is observedMasterPodUID once that Pod has
 	// answered as no active master while the quarantine waited for it after
 	// the confirmed end of an earlier Pod. While the two are equal the wait
-	// is over: another active master can rebase the quarantine, whatever the
-	// Pod answers later. It no longer applies once observedMasterPodUID or
-	// its restart count changes.
+	// is over: the Pod being silent later does not escalate the quarantine,
+	// and one other active master can rebase it. If the Pod claims the
+	// active master again, the departure and this field are cleared, the
+	// quarantine stays beside it, and a claim beside another active master
+	// escalates it. A new observedMasterPodUID never matches the field, and
+	// a container restart in the Pod clears it and gives the restarted
+	// process at least 90 seconds to answer.
 	// +optional
 	ObservedMasterAnsweredPodUID string `json:"observedMasterAnsweredPodUID,omitempty"`
 	// members are the members the quarantine is about: the unverified

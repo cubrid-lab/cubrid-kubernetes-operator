@@ -1263,13 +1263,20 @@ const (
 // end covers only its own Pod, so masterDeparture judges the later Pod's
 // departure anew, and without its own confirmed end it is lost. It also
 // forgets an answer of the recorded Pod given before a container restart
-// read in this pass.
-func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdentity, recordedEnded bool) {
+// read in this pass, and then gives the restarted process at least
+// quarantineStartBound from now to answer.
+func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdentity, recordedEnded bool, now time.Time) {
 	leaving, recorded := q.ObservedMasterLeavingPodUID, q.ObservedMasterPodUID
-	if id.PodUID == recorded && id.RestartCount != q.ObservedMasterRestartCount {
+	if id.PodUID == recorded && id.RestartCount != q.ObservedMasterRestartCount && q.ObservedMasterAnsweredPodUID != "" {
 		// The recorded Pod's container restarted: its answer before the
-		// restart no longer ends the wait.
+		// restart no longer ends the wait, which starts again for the
+		// restarted process, with at least quarantineStartBound to answer.
 		q.ObservedMasterAnsweredPodUID = ""
+		if until := now.Add(quarantineStartBound); q.ObservedMasterHoldUntil == nil ||
+			q.ObservedMasterHoldUntil.Time.Before(until) {
+			next := metav1.NewTime(until)
+			q.ObservedMasterHoldUntil = &next
+		}
 	}
 	if leaving == "" || leaving == recorded {
 		return
@@ -1290,7 +1297,7 @@ func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdenti
 func waitingForRecordedPod(q *databasev1alpha1.WriteQuarantine) bool {
 	return q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != "" &&
 		q.ObservedMasterLeavingPodUID != q.ObservedMasterPodUID &&
-		q.ObservedMasterAnsweredPodUID != q.ObservedMasterPodUID
+		(q.ObservedMasterAnsweredPodUID == "" || q.ObservedMasterAnsweredPodUID != q.ObservedMasterPodUID)
 }
 
 // recordedPodWait is the departure while q waits for its recorded Pod. The
@@ -1360,13 +1367,14 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 		})
 	}
 	if !in.IdentitiesUnknown {
-		forgetEarlierDeparture(q, id, recorded(q.ObservedMasterPodUID))
+		forgetEarlierDeparture(q, id, recorded(q.ObservedMasterPodUID), in.Now)
 		if slices.Contains(masters, m) && q.ObservedMasterLeavingPodUID != "" && id.PodUID != q.ObservedMasterLeavingPodUID {
 			// The master claims again from another Pod. After a confirmed end
 			// of the old Pod that is the master back; otherwise the old
 			// process may still run beside it.
 			confirmed := q.ObservedMasterLeavingConfirmed
 			q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
+			q.ObservedMasterAnsweredPodUID = ""
 			if confirmed {
 				return departureNone
 			}

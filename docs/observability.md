@@ -415,12 +415,19 @@ Pod:
     non-master during the wait (in a pass or the pass before it), or its own
     end is confirmed. The answer is kept in `observedMasterAnsweredPodUID`,
     and the wait is over for good: later silence of that Pod does not
-    escalate the quarantine. A new Pod, or a container restart in the
-    recorded Pod, makes an earlier answer no longer count.
+    escalate the quarantine. A new Pod never matches an earlier answer. A
+    container restart in the recorded Pod forgets it, and the restarted
+    process then has until the later of the deadline and 90 seconds after
+    the restart to answer. If the recorded Pod claims the active master
+    again, the answer is cleared with the departure. A master with no Pod
+    after the probes of the starting pass is recorded with none
+    (`observedMasterPodUID` empty), and the quarantine waits until a Pod of
+    it is read and answers.
   - Until then the quarantine is held, until `observedMasterHoldUntil`. That
     is 90 seconds after the pass that recorded the earlier end or followed
     the master to another Pod, in place of any deletion-mark hold; a
-    container restart in the recorded Pod does not set it again. A waiting
+    container restart in the recorded Pod does not set it again, unless it
+    forgets an answer, as above. A waiting
     quarantine stored without a deadline gets one 90 seconds after its first
     waiting pass. After the deadline, a recorded Pod that stayed silent or
     refused the token makes it `WriteQuarantinedMasterChanged`.
