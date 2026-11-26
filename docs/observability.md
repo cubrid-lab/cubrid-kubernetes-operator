@@ -408,16 +408,22 @@ Pod:
     `WriteQuarantinedMasterChanged`. That includes a graceful deletion whose
     end the Operator's watch and reads see only after the pass that read the
     replacement.
-  - A confirmed end of the earlier Pod does not stand in for the recorded
-    Pod, which may have answered too. Another active master rebases the
-    quarantine only once the recorded Pod has given a non-master answer in
-    that pass or the pass before it, or its own end is confirmed. Until then
-    the quarantine is held, for at most 90 seconds
-    (`observedMasterHoldUntil`). After that, a recorded Pod that stayed
-    silent or refused the token makes it `WriteQuarantinedMasterChanged`.
-    While it waits, its description in `RoutingReady` and `Ready` names
-    the Pod it waits for and the deadline. A recorded Pod marked for
-    deletion is held by its own mark, as above.
+  - A confirmed end of an earlier Pod does not stand in for the recorded
+    Pod. That is the Pod read after the probes, or the next Pod the
+    quarantine followed the master to after that end. Another active master
+    rebases the quarantine only once the recorded Pod has given a non-master
+    answer in that pass or the pass before it, or its own end is confirmed.
+  - Until then the quarantine is held, until `observedMasterHoldUntil`: 90
+    seconds after the pass that recorded the earlier end or followed the
+    master to the recorded Pod, in place of any deletion-mark hold. After
+    that, a recorded Pod that stayed silent or refused the token makes it
+    `WriteQuarantinedMasterChanged`.
+  - While it waits, its description in `RoutingReady` and `Ready` says what
+    it waits for: the earlier Pod whose end was confirmed, the recorded Pod
+    whose answer or end it needs, and the deadline. A recorded Pod marked
+    for deletion is held by its own mark, as above.
+  - A pass that reads the master with no Pod keeps the last Pod recorded
+    (`observedMasterPodUID` is not cleared).
   - If the master is then found in neither Pod, the recorded Pod needs its
     own confirmed end, or the quarantine becomes
     `WriteQuarantinedMasterChanged`.

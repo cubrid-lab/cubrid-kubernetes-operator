@@ -446,19 +446,33 @@ The records are in `docs/poc/RESULTS.md`.
        without one: the next pass makes the quarantine
        `WriteQuarantinedMasterChanged`.
      - **A confirmed end of an earlier Pod does not stand in for the recorded
-       Pod.** The recorded Pod may have given M's claim too. Another active
-       master rebases the quarantine only once the recorded Pod has given a
-       non-master answer in that pass or the pass before it, or its own end
-       is confirmed. Until then the quarantine is held, neither rebased nor
-       escalated, as for a Pod marked for deletion: for at most 90 seconds
-       (the bound of the exception above) from the pass that recorded the
-       earlier end, or from the first pass that waits if that pass set no
-       deadline.
+       Pod.** This applies when the quarantine records a later Pod of M than
+       the one whose end was confirmed: the Pod read after the probes when M's
+       Pod was replaced during them, or the next Pod the quarantine followed
+       M to after that end. Another active master rebases the quarantine only
+       once the recorded Pod has given a non-master answer in that pass or the
+       pass before it, or its own end is confirmed. Until then the quarantine
+       is held, neither rebased nor escalated, as for a Pod marked for
+       deletion.
+       - The deadline is 90 seconds (the bound of the exception above) after
+         the pass that recorded the earlier end or followed M to the recorded
+         Pod. It replaces any hold of a deletion mark, and both passes raise
+         the quarantine's revision, so a failed status write does not lose
+         it. A wait found without a deadline gets one in its first pass,
+         which may not raise the revision: a failed status write then only
+         restarts the 90 seconds, which keeps the read-write path closed
+         longer.
        - After the deadline, the recorded Pod counts as gone without a
          confirmed end: a Pod that stayed silent or refused the Operator's
          token makes the quarantine `WriteQuarantinedMasterChanged`.
-       - While it waits, the quarantine's description names the Pod it waits
-         for and the deadline, not M as the only active master.
+       - While it waits, the quarantine's description states what it waits
+         for: the earlier Pod whose end was confirmed, the recorded Pod whose
+         answer or end it needs, and the deadline. It does not call M the
+         only active master.
+       - A pass that reads M with no Pod at all keeps the last Pod recorded:
+         the quarantine does not follow M to no Pod. When that Pod's own end
+         was confirmed, the next active master rebases the quarantine, as
+         before this note.
        - Once the recorded Pod has itself claimed the active master after the
          start, it has given a claim; `main`'s rules then apply to it, and
          another active master escalates the quarantine.

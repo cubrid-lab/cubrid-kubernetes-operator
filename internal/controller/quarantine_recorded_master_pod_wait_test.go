@@ -75,26 +75,27 @@ func TestQuarantineWaitsForTheRecordedMasterPodUntilADeadline(t *testing.T) {
 
 // On main's path the end of the master's old Pod uid2 is confirmed without a
 // deletion mark in a pass with no active master, and the quarantine follows
-// qc-2 to its next Pod uid2New with no deadline set. The first pass that
-// waits for uid2New sets the deadline, quarantineStartBound later, and a
-// uid2New silent until then makes the quarantine
-// WriteQuarantinedMasterChanged.
+// qc-2 to its next Pod uid2New. That pass sets the deadline of the wait for
+// uid2New, quarantineStartBound later, and raises the revision, so that a
+// failed status write does not lose it. A uid2New silent until the deadline
+// makes the quarantine WriteQuarantinedMasterChanged.
 func TestQuarantineWaitForAFollowedMasterPodHasADeadline(t *testing.T) {
 	s := newQuarantineScenario(t, q2)
 	s.verifiedAll(q0)
 	s.pass(testNow, masterClaimsBesideAMissedProbe(testNow))
+	revision := s.quarantine.Revision
 	t1 := testNow.Add(5 * time.Second)
 	s.identities[q2] = memberIdentity{PodUID: uid2New, Created: t1.Add(-time.Second)}
 	s.terminations = append(s.terminations, terminationOf(uid2, t1))
 	d := s.pass(t1, map[string]RoleObservation{q0: slaveAt(t1), q1: killedProbeAt(t1), q2: noAnswerAt(t1)})
 	if q := d.Quarantine; q == nil || q.ObservedMasterPodUID != uid2New || q.ObservedMasterLeavingPodUID != uid2 ||
-		q.ObservedMasterHoldUntil != nil {
-		t.Fatalf("quarantine = %+v, want it following %s to %s after the confirmed end of %s, with no deadline yet",
-			q, q2, uid2New, uid2)
+		q.ObservedMasterHoldUntil == nil || !q.ObservedMasterHoldUntil.Time.Equal(metav1.NewTime(t1.Add(quarantineStartBound)).Time) ||
+		q.Revision != revision+1 {
+		t.Fatalf("quarantine = %+v, want it following %s to %s after the confirmed end of %s, in revision %d, "+
+			"with the deadline %s later", q, q2, uid2New, uid2, revision+1, quarantineStartBound)
 	}
-	waitStart := t1.Add(5 * time.Second)
-	now := waitStart
-	for !now.After(waitStart.Add(quarantineStartBound)) {
+	now := t1.Add(5 * time.Second)
+	for !now.After(t1.Add(quarantineStartBound)) {
 		d = s.pass(now, map[string]RoleObservation{q0: activeMasterAt(now), q1: slaveAt(now), q2: noAnswerAt(now)})
 		if q := d.Quarantine; d.Released != nil || q == nil || q.Reason != databasev1alpha1.WriteQuarantinedMemberUnverified ||
 			q.ObservedMaster != q2 {
