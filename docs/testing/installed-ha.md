@@ -1428,9 +1428,10 @@ does not check for that and behaves as described here: it still writes the
 values it is given (a duration other than 30 seconds replaces the Pod's
 idle time for the rest of the run), resets connections and records them.
 Such a run is not a comparison with the kernel's default keepalive; that
-needs member Pods of a build without the sysctls. Whether the option
-should stay as a comparison or refuse to run on such Pods is a pending
-decision on #982.
+needs member Pods of a build without the sysctls. The option stays in the
+harness as a comparison option for such builds, as the maintainer decided
+on #982; it is not needed to get the short keepalive on a build that sets
+the sysctls.
 
 The `netsysctl` container is privileged because the container runtime
 mounts `/proc/sys` read-only in every other container: the `netfault`

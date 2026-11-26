@@ -1900,8 +1900,11 @@ the VM lab). `Ready` is `False` with the write quarantine's reason, and
 `PrimaryResolved` and `HAReady` are `False` (`AmbiguousPrimaryObservation`).
 `ReplicationHealthy` may stay `True`, because the stuck copier belongs to the
 heartbeat master, so `LogCopyStalled` does not fire. The supported cause is a
-half-open `copylogdb` connection (#716); the Operator does not change TCP
-keepalive (backlog #982). Before any [manual release](#manual-release), compare
+half-open `copylogdb` connection (#716), observed with the kernel's default
+TCP keepalive. Member Pods now set a keepalive that ends such a connection
+after about one minute ([compatibility](compatibility.md#tcp-keepalive-of-member-pods-982),
+#982), but a member Pod created by an older build keeps the kernel default
+until it is replaced. Before any [manual release](#manual-release), compare
 the members' data: the Operator never picks a winner.
 
 ## Metrics
