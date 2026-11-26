@@ -434,7 +434,7 @@ The steps below were validated, all on CUBRID 11.4.7.1995:
 - **The procedure relies on a csql option that csql does not document.**
   Step 4 runs csql with `--write-on-standby`, which csql's help does not
   list. It worked in POC-74, on Kind and on the VM lab. The CUBRID engine
-  team has been asked whether it is supported; that question is still open.
+  team has not confirmed that it is supported: nobody has an answer yet.
   What else the option permits on a standby is not known.
 - **Expect `DBAPasswordRotationUnsupported` during the change.** From the
   first `set_password` until every member's mounted file holds the new value
@@ -467,7 +467,13 @@ Before you start:
 - the new value follows [What the API accepts](#what-the-api-accepts), with
   any single quote doubled in the statement below.
 
-Steps, the same in POC-74, on Kind and on the VM lab:
+Steps. The same statements and options were used in POC-74, on Kind and on the
+VM lab. The csql commands connect to the member's own server by its hostname
+(`"$0@$(hostname)"`), as the Kind step and the VM-lab run did, and not as
+`<db>@localhost`: over the local Unix socket that `localhost` uses, csql can
+print the `-199`/`-111` pair of a lost session after a statement succeeded
+(#238). Seeing it after the change could make you think the change failed and
+run it again with the old password, which no longer works.
 
 1. On your workstation, write the statement into a file only you can read
    (`umask 077`, with an editor, not on a command line, so it is not in your
@@ -482,20 +488,20 @@ Steps, the same in POC-74, on Kind and on the VM lab:
    `kubectl exec -i <pod> -c <db container> -- bash -c 'umask 077; cat > /tmp/pwchange.sql' < pwchange.sql`.
 3. On the primary, start csql on a terminal and type the **current** password
    at its `Enter Password :` prompt:
-   `kubectl exec -it <primary pod> -c <db container> -- bash -c 'exec csql -u dba <db>@localhost'`.
+   `kubectl exec -it <primary pod> -c <db container> -- bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql -u dba "$0@$(hostname)"' <db>`.
    At the `csql>` prompt, enter `;read /tmp/pwchange.sql`, then `;run`. csql
    answers `2 command(s) successfully processed.`; then `;exit`. `;read`
    loads the file without showing it, so the new value is never typed or
    shown.
 4. Right after, do the same on each other member, with
-   `bash -c 'exec csql --sysadm --write-on-standby -u dba <db>@localhost'`
+   `bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql --sysadm --write-on-standby -u dba "$0@$(hostname)"' <db>`
    (a standby refuses the change otherwise; the prompt is `sysadm>`). Until
    every member is done, the members have different passwords, and a
    failover in between would promote a member that still has the old one.
 5. Remove the file from every member:
    `kubectl exec <pod> -c <db container> -- rm -f /tmp/pwchange.sql`, and
    delete your local copy.
-6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'exec csql -u dba -c "SELECT 1" <db>@localhost'`
+6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql -u dba -c "SELECT 1" "$0@$(hostname)"' <db>`
    must accept the new password and answer `Incorrect or missing password.`
    for the old one.
 7. Put the new value in the Secret. Until the kubelet updates every member's
@@ -519,7 +525,10 @@ working, so after a suspected compromise this change alone does not end them.
 Not covered by POC-74, the Kind step or the VM-lab run: a member that is down
 or being seeded during the change (it keeps the old password), a lagging
 slave, an Operator restart during the change, `backupdb -C` after the change
-on Kubernetes, and what `--write-on-standby` changes beyond the password. The
+on Kubernetes, and what `--write-on-standby` changes beyond the password. Two
+cases are rules, not tested paths: a `set_password` that fails or is mistyped
+on one member part way through, and running the change again on every member
+after a failover in the window. The
 Brokers, the `-rw` and `-ro` Services and `kubectl exec` were covered on Kind
 and on the VM lab.
 
@@ -563,8 +572,11 @@ open session ended.
    ```
 
    Go on only when `Ready`, `HAReady`, `ReplicationHealthy` and
-   `DBAPasswordSecretResolved` are `True` and `status.currentPrimary` names a
-   member. The member's termination grace period is 120 seconds, so the
+   `DBAPasswordSecretResolved` are `True`, `status.currentPrimary` names a
+   member, and step 6's check passes on the member that was restarted. The
+   Condition can still show `True` from before the restart, because the
+   Operator asks again only every 5 minutes, so it alone does not show that
+   the new Pod accepts the new value. The member's termination grace period is 120 seconds, so the
    delete can take that long; if `kubectl wait` reports that the Pod is not
    found, run it again once the StatefulSet has created the Pod. Deleting the
    primary's Pod makes another member the master, and writes during the
