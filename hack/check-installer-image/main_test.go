@@ -226,6 +226,24 @@ items:
 	}
 }
 
+// With -require-digest the release dry run accepts only references pinned by
+// a sha256 digest, so the published installer cannot follow a moved tag.
+func TestPinnedByDigest(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for ref, ok := range map[string]bool{
+		testManager + digest:                     true,
+		"ghcr.io/x/manager" + digest:             true,
+		testManager:                              false,
+		"ghcr.io/x/manager@sha256:" + "abc":      false,
+		"ghcr.io/x/manager@sha512:" + digest[8:]: false,
+		testManager + digest + "\n":              false,
+	} {
+		if err := pinnedByDigest(ref); (err == nil) != ok {
+			t.Errorf("pinnedByDigest(%q) = %v; want ok=%t", ref, err, ok)
+		}
+	}
+}
+
 // The workflow reads the exit code: 3 says the installer leaves the manager on
 // its built-in default image, 1 any other mismatch.
 func TestExitCode(t *testing.T) {

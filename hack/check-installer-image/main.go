@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -296,10 +297,20 @@ func main() {
 	manifest := flag.String("manifest", "", "path to the generated multi-document installer YAML")
 	manager := flag.String("manager", "", "expected manager image reference")
 	instanceManager := flag.String("instance-manager", "", "expected Instance Manager image reference")
+	requireDigest := flag.Bool("require-digest", false,
+		"require both expected references, and so the installer's, to be pinned by sha256 digest")
 	flag.Parse()
 	if *manifest == "" {
 		fmt.Fprintln(os.Stderr, "installer manifest path is required")
 		os.Exit(exitUsage)
+	}
+	if *requireDigest {
+		for _, ref := range []string{*manager, *instanceManager} {
+			if err := pinnedByDigest(ref); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(exitMismatch)
+			}
+		}
 	}
 	f, err := os.Open(*manifest)
 	if err != nil {
@@ -314,6 +325,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, checkErr)
 	}
 	os.Exit(exitCode(checkErr))
+}
+
+// digestRef matches a reference that ends in a full sha256 digest, with or
+// without a tag before it.
+var digestRef = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+
+// pinnedByDigest fails for a reference that a registry could resolve to other
+// bytes later: one without a sha256 digest. Because verifyInstaller requires
+// the installer to name exactly the expected references, an installer that
+// passes with -require-digest runs only digest-pinned images.
+func pinnedByDigest(ref string) error {
+	if !digestRef.MatchString(ref) {
+		return fmt.Errorf("image reference %q is not pinned by a sha256 digest", ref)
+	}
+	return nil
 }
 
 // exitCode maps the result of verifyInstaller to the command's exit code.

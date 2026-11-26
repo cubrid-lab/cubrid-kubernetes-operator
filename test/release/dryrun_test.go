@@ -18,6 +18,7 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -80,14 +81,31 @@ func readDryRun(t *testing.T) (string, workflow, job) {
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		t.Fatal(err)
 	}
-	if len(wf.Jobs) != 1 {
-		t.Fatalf("the dry run has %d jobs; want one", len(wf.Jobs))
+	// The steps of all jobs in the order they run, so that a step is found by
+	// name wherever it is; the permissions are checked per job.
+	var merged job
+	for _, id := range dryRunJobs {
+		j, ok := wf.Jobs[id]
+		if !ok {
+			t.Fatalf("the dry run has no job %s", id)
+		}
+		merged.Steps = append(merged.Steps, j.Steps...)
 	}
-	for _, j := range wf.Jobs {
-		return string(data), wf, j
+	if len(wf.Jobs) != len(dryRunJobs) {
+		t.Fatalf("the dry run has jobs %v; want %v", wf.Jobs, dryRunJobs)
 	}
-	return "", wf, job{}
+	merged.Permissions = map[string]string{"contents": permRead}
+	for id, j := range wf.Jobs {
+		if len(j.Permissions) != 1 || j.Permissions["contents"] != permRead {
+			merged.Permissions = j.Permissions
+			t.Logf("job %s has permissions %v", id, j.Permissions)
+		}
+	}
+	return string(data), wf, merged
 }
+
+// dryRunJobs are the dry run's jobs in the order they run.
+var dryRunJobs = []string{"build-images", "installer", "rehearsal"}
 
 func stepIndex(t *testing.T, j job, name string) int {
 	t.Helper()
@@ -100,18 +118,18 @@ func stepIndex(t *testing.T, j job, name string) int {
 	return -1
 }
 
-// Only a manual run starts it, and its token can only read: a push, a pull
-// request or a schedule never builds release artifacts, and no step can write
-// a tag, a release, a package or a cache entry.
+// Only a manual run or publish.yml starts it, and its token can only read: a
+// push, a pull request or a schedule never builds release artifacts, and no
+// step can write a tag, a release, a package or a cache entry.
 func TestDryRunCannotPublish(t *testing.T) {
 	text, wf, j := readDryRun(t)
-	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
-		t.Errorf("triggers %v; want workflow_dispatch only", wf.On)
+	if len(wf.On) != 2 || wf.On["workflow_dispatch"] == nil || wf.On["workflow_call"] == nil {
+		t.Errorf("triggers %v; want workflow_dispatch and workflow_call only", wf.On)
 	}
 	if len(wf.Permissions) != 0 {
 		t.Errorf("workflow permissions %v; want none", wf.Permissions)
 	}
-	if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
+	if len(j.Permissions) != 1 || j.Permissions["contents"] != permRead {
 		t.Errorf("job permissions %v; want contents: read only", j.Permissions)
 	}
 	forbidden := []string{
@@ -138,7 +156,7 @@ func TestDryRunCannotPublish(t *testing.T) {
 		if strings.HasPrefix(s.Uses, "docker/build-push-action@") {
 			builds++
 			// The action uploads a build record artifact unless told not to.
-			if s.Env["DOCKER_BUILD_RECORD_UPLOAD"] != "false" {
+			if s.Env["DOCKER_BUILD_RECORD_UPLOAD"] != strFalse {
 				t.Errorf("step %q: DOCKER_BUILD_RECORD_UPLOAD is %q; want \"false\"",
 					s.Name, s.Env["DOCKER_BUILD_RECORD_UPLOAD"])
 			}
@@ -270,7 +288,7 @@ func TestDryRunRefusesAnExistingVersion(t *testing.T) {
 	}
 	tools := j.Steps[stepIndex(t, j, "Clone the version check")]
 	sparse, _ := tools.With["sparse-checkout"].(string)
-	if tools.With["path"] != ".release-check" || tools.With["ref"] != "${{ github.workflow_sha }}" {
+	if tools.With["path"] != releaseCheckDir || tools.With["ref"] != "${{ github.workflow_sha }}" {
 		t.Error("the version check is not cloned from the workflow's own commit into .release-check")
 	}
 	// The installer image check needs its module files next to it.
@@ -286,10 +304,10 @@ func TestDryRunRefusesAnExistingVersion(t *testing.T) {
 
 	// The step's working directory holds the script where the clone puts it.
 	work := t.TempDir()
-	if err := os.Mkdir(filepath.Join(work, ".release-check"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(work, releaseCheckDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(repoRoot(), "hack"), filepath.Join(work, ".release-check", "hack")); err != nil {
+	if err := os.Symlink(filepath.Join(repoRoot(), "hack"), filepath.Join(work, releaseCheckDir, "hack")); err != nil {
 		t.Fatal(err)
 	}
 	absentTag := []answer{{http.StatusNotFound, notFound}}
@@ -445,8 +463,10 @@ func TestDryRunStepOrderAndCheckouts(t *testing.T) {
 	for k, s := range j.Steps {
 		runsRepoCode := strings.Contains(s.Run, "make ") || strings.HasPrefix(s.Uses, "docker/") ||
 			strings.HasPrefix(s.Uses, "./")
+		// A go command in the workflow's own copy (.release-check) builds
+		// the workflow's code, not the candidate's.
 		for _, goCmd := range []string{"go run", "go build", "go test", "go generate"} {
-			runsRepoCode = runsRepoCode || strings.Contains(s.Run, goCmd)
+			runsRepoCode = runsRepoCode || (strings.Contains(s.Run, goCmd) && s.WorkingDirectory != releaseCheckDir)
 		}
 		if runsRepoCode && k < meta {
 			t.Errorf("step %q runs before the check that the commit is on main", s.Name)
@@ -472,8 +492,8 @@ func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 	// The checker is the workflow's own copy, built from .release-check, not
 	// the candidate's, which an older commit does not have.
 	buildStep := j.Steps[stepIndex(t, j, "Build the installer image check")]
-	if buildStep.WorkingDirectory != ".release-check" ||
-		!strings.Contains(buildStep.Run, `go build -o "$RUNNER_TEMP/check-installer-image" ./hack/check-installer-image`) {
+	const buildChecker = `go build -o "$RUNNER_TEMP/checker/check-installer-image" ./hack/check-installer-image`
+	if buildStep.WorkingDirectory != releaseCheckDir || !strings.Contains(buildStep.Run, buildChecker) {
 		t.Errorf("the installer image check is not built from the workflow's own copy: %q in %q",
 			buildStep.Run, buildStep.WorkingDirectory)
 	}
@@ -511,18 +531,24 @@ func TestDryRunRequiresTheBuiltInstanceManagerImage(t *testing.T) {
 // elsewhere (#124).
 func TestDryRunBuildsTheInstallerWithTheBuiltInstanceManagerImage(t *testing.T) {
 	_, _, j := readDryRun(t)
-	const ref = "$REGISTRY/instance-manager:$VERSION"
-	installer := j.Steps[stepIndex(t, j, "Build the installer manifest")].Run
-	if !strings.Contains(installer, `make build-installer IMG="$REGISTRY/manager:$VERSION" IM_IMG="`+ref+`"`) {
-		t.Errorf("the installer is not built with IM_IMG=%s:\n%s", ref, installer)
+	const ref = "$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"
+	installerStep := j.Steps[stepIndex(t, j, "Build the installer manifest")]
+	if !strings.Contains(installerStep.Run,
+		`make build-installer IMG="$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" IM_IMG="`+ref+`"`) {
+		t.Errorf("the installer is not built with both images pinned by digest:\n%s", installerStep.Run)
+	}
+	if installerStep.Env["MANAGER_DIGEST"] != "${{ needs.build-images.outputs.manager-digest }}" ||
+		installerStep.Env["IM_DIGEST"] != "${{ needs.build-images.outputs.instance-manager-digest }}" {
+		t.Errorf("the installer's digests are not the build outputs: %v", installerStep.Env)
 	}
 	if tags := j.Steps[stepIndex(t, j, "Build the Instance Manager image without pushing")].With["tags"]; tags !=
 		"${{ env.REGISTRY }}/instance-manager:${{ inputs.version }}" {
 		t.Errorf("the Instance Manager image is built as %v, not the image the installer names", tags)
 	}
-	if record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run; !strings.Contains(record,
-		`im_ref="`+ref+`"`) {
-		t.Error("the record checks for another Instance Manager image than the installer names")
+	record := j.Steps[stepIndex(t, j, "Record the digests and checksums")].Run
+	if !strings.Contains(record, `im_ref="`+ref+`"`) || !strings.Contains(record, "-require-digest") ||
+		!strings.Contains(record, `-manager "$REGISTRY/manager:$VERSION@$MANAGER_DIGEST"`) {
+		t.Error("the record does not require the installer to name both built images by digest")
 	}
 }
 
@@ -546,15 +572,19 @@ func runRecordStep(t *testing.T, script string) {
 	if err := os.MkdirAll(filepath.Join(runnerTemp, "images"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The checksums the early step recorded for the archives.
+	archiveSums := map[string]string{}
 	for _, name := range []string{"manager.oci.tar", "instance-manager.oci.tar"} {
 		if err := os.WriteFile(filepath.Join(runnerTemp, "images", name), []byte(name), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		archiveSums[name] = fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
 	}
 	src, err := os.ReadFile(filepath.Join(repoRoot(), "internal", "controller", "cubridcluster_controller.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := "sha256:" + strings.Repeat("0", 64)
 	installer := func(args string) string {
 		return `apiVersion: apps/v1
 kind: Deployment
@@ -567,22 +597,23 @@ spec:
     spec:
       containers:
         - name: manager
-          image: ` + registry + `/manager:` + version + `
+          image: ` + registry + `/manager:` + version + `@` + digest + `
           args: [--leader-elect` + args + `]
 `
 	}
-	digest := "sha256:" + strings.Repeat("0", 64)
+	pinnedIM := registry + "/instance-manager:" + version + "@" + digest
 	cases := []struct {
 		name, args string
 		built      bool
 		used       string
 	}{
-		{"the built image", ", --instance-manager-image=" + registry + "/instance-manager:" + version,
-			true, registry + "/instance-manager:" + version},
+		{"the built image", ", --instance-manager-image=" + pinnedIM, true, pinnedIM},
 		{"no flag", "", false, registry +
 			"/instance-manager:dev, the manager's built-in default: install.yaml sets no --instance-manager-image"},
 		{"another image", ", -instance-manager-image, example/im:1", false,
 			`not verified: the manager uses Instance Manager image "example/im:1"`},
+		{"the built image by tag only", ", --instance-manager-image=" + registry + "/instance-manager:" + version,
+			false, `not verified: the manager uses Instance Manager image "` + registry + `/instance-manager:` + version + `"`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -607,6 +638,7 @@ spec:
 			code, out := runStep(t, work, script, "REGISTRY="+registry, "VERSION="+version, "SHA="+sha,
 				"CREATED=c", "BUILT=b", "WORKFLOW_SHA="+otherSHA, "RUN_ID=1", "RUN_ATTEMPT=1",
 				"MANAGER_DIGEST="+digest, "MANAGER_ID="+digest, "IM_DIGEST="+digest, "IM_ID="+digest,
+				"MANAGER_ARCHIVE="+archiveSums["manager.oci.tar"], "IM_ARCHIVE="+archiveSums["instance-manager.oci.tar"],
 				"RUNNER_TEMP="+runnerTemp, "GITHUB_OUTPUT="+outFile)
 			if code != 0 {
 				t.Fatalf("the record step failed: exit %d\n%s", code, out)

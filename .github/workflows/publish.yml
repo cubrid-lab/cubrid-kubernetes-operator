@@ -1,0 +1,434 @@
+name: Publish Release
+
+# Publishes one versioned release of the operator (#124): the manager and
+# Instance Manager images on GHCR and a GitHub Release with dist/install.yaml.
+# A maintainer starts it from main for the merge commit of the release PR that
+# release-please keeps up to date (release-please.yml):
+#
+#   gh workflow run publish.yml --ref main -f sha=<merge commit of the release PR> -f version=vX.Y.Z
+#
+# An ordinary merge never publishes: this workflow has no push, pull_request
+# or schedule trigger, refuses a commit that did not set the version in
+# .release-please-manifest.json, and its only writing job waits for the
+# reviewers of the `production` environment. In order:
+#   release-commit      the commit is on main and is the release PR's merge
+#                       for this version; its CHANGELOG.md section becomes the
+#                       notes; `production` requires reviewers.
+#   verify              the release dry run (release-dry-run.yml) builds and
+#                       checks the images and install.yaml with a read-only
+#                       token and keeps the image archives.
+#   publish-production  after approval: refuses a version that has a tag or a
+#                       published release, pushes the verified archives, drafts
+#                       the release with the verified files, checks the draft
+#                       and only then publishes it, which creates the tag.
+# A failure stops every later step. A rerun of the failed job (not of the
+# whole run) reuses the same verified artifacts: images already pushed with
+# the verified digest are not pushed again, and the draft is resumed, not
+# duplicated. Nothing published is overwritten.
+# See docs/testing/release-version-check.md#publishing-a-release.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full 40-character SHA of the merge commit of the release PR, on main"
+        required: true
+      version:
+        description: "Release version, vMAJOR.MINOR.PATCH, as in .release-please-manifest.json at that commit"
+        required: true
+
+permissions: {}
+
+concurrency:
+  # One publication at a time, never cancelled part-way.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-commit:
+    # A fork has no right to these package names or to this release, and only
+    # the workflow on main publishes.
+    if: github.repository == 'cubrid-lab/cubrid-kubernetes-operator' && github.ref == 'refs/heads/main'
+    name: Check that the commit is the merged release PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Reading the protection rules of the production environment.
+      actions: read
+    outputs:
+      notes-artifact: release-notes-${{ inputs.version }}-${{ inputs.sha }}-attempt-${{ github.run_attempt }}
+    steps:
+      # Before anything is fetched; the inputs are not echoed.
+      - name: Check the format of the commit and the version
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character lowercase commit SHA"
+            exit 1
+          fi
+          if [[ ! "$INPUT_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must be vMAJOR.MINOR.PATCH, for example v0.1.0"
+            exit 1
+          fi
+
+      # This job runs in no environment, so it sees only repository and
+      # organization secrets. Either App key visible here is stored outside
+      # its environment, where any workflow on any branch could read it.
+      - name: Refuse App keys stored outside their environments
+        env:
+          PUBLISH_KEY_VISIBLE: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+          PR_KEY_VISIBLE: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$PUBLISH_KEY_VISIBLE" != false ] || [ "$PR_KEY_VISIBLE" != false ]; then
+            echo "::error::A release App key is a repository or organization secret; an admin moves it into its environment (production or release-pr) and deletes the other copy"
+            exit 1
+          fi
+
+      # GitHub creates an environment that a job names but that does not
+      # exist yet, without any protection. Publishing must wait for another
+      # person, so the run stops here unless the production environment has
+      # required reviewers on every reviewer rule, self-review prevented,
+      # no admin bypass, and a deployment branch policy that allows exactly
+      # the branch main. Both endpoints are readable by anyone who can read
+      # the repository; any failure to read them stops the run.
+      - name: Require reviewers on the production environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if ! gh api "repos/$REPOSITORY/environments/production" > "$RUNNER_TEMP/production.json"; then
+            echo "::error::Could not read the production environment; an admin creates it as docs/testing/release-version-check.md describes"
+            exit 1
+          fi
+          if ! jq -e '
+            ([.protection_rules[]? | select(.type == "required_reviewers")]) as $rules
+            | ($rules | length) > 0
+              and all($rules[]; (.reviewers | length) > 0 and .prevent_self_review == true)
+              and .can_admins_bypass == false
+              and .deployment_branch_policy.protected_branches == false
+              and .deployment_branch_policy.custom_branch_policies == true' "$RUNNER_TEMP/production.json" > /dev/null; then
+            echo "::error::The production environment needs required reviewers with self-review prevented, no admin bypass and a custom deployment branch policy; nothing is published until an admin sets them"
+            exit 1
+          fi
+          if ! gh api "repos/$REPOSITORY/environments/production/deployment-branch-policies?per_page=100" \
+            > "$RUNNER_TEMP/branch-policies.json"; then
+            echo "::error::Could not read the deployment branch policies of the production environment"
+            exit 1
+          fi
+          if ! jq -e '.total_count == 1 and (.branch_policies | length) == 1
+            and .branch_policies[0].name == "main" and .branch_policies[0].type == "branch"' \
+            "$RUNNER_TEMP/branch-policies.json" > /dev/null; then
+            echo "::error::The production environment must allow exactly the branch main"
+            exit 1
+          fi
+
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only the merge of the release PR sets the version in the manifest: the
+      # commit must say this version and its first parent must not. A later
+      # ordinary commit, which still says the same version, is refused. Files
+      # of the commit are only read, never run.
+      - name: Check that the commit is the release PR merge for this version
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          workflow_sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$workflow_sha" refs/remotes/origin/main; then
+            echo "::error::Workflow revision $workflow_sha is not on main"
+            exit 1
+          fi
+          if ! git cat-file -e "$INPUT_SHA^{commit}" 2>/dev/null ||
+            ! git merge-base --is-ancestor "$INPUT_SHA" refs/remotes/origin/main; then
+            echo "::error::Commit $INPUT_SHA is not on main"
+            exit 1
+          fi
+          want=${INPUT_VERSION#v}
+          manifest() { git show "$1:.release-please-manifest.json" 2>/dev/null | jq -er '."." | strings'; }
+          if ! now=$(manifest "$INPUT_SHA") || [ "$now" != "$want" ]; then
+            echo "::error::.release-please-manifest.json at $INPUT_SHA does not set version $want"
+            exit 1
+          fi
+          if prev=$(manifest "$INPUT_SHA^1") && [ "$prev" = "$want" ]; then
+            echo "::error::Version $want was already set before $INPUT_SHA; publish the merge commit of the release PR"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/notes"
+          if ! git show "$INPUT_SHA:CHANGELOG.md" > "$RUNNER_TEMP/changelog.md" 2>/dev/null; then
+            echo "::error::$INPUT_SHA has no CHANGELOG.md"
+            exit 1
+          fi
+          # The section release-please wrote for this version, without its
+          # heading: "## [0.1.0](compare link) (date)" or "## 0.1.0 (date)".
+          awk -v v="$want" '
+            /^## / { if (found) exit; if (index($0, "[" v "]") || $2 == v) { found = 1; next } }
+            found { print }
+          ' "$RUNNER_TEMP/changelog.md" > "$RUNNER_TEMP/notes/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes/notes.md"; then
+            echo "::error::CHANGELOG.md at $INPUT_SHA has no section for $want"
+            exit 1
+          fi
+
+      - name: Upload the release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes-${{ inputs.version }}-${{ inputs.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notes/
+          if-no-files-found: error
+
+  verify:
+    name: Build and verify the release artifacts
+    needs: release-commit
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-dry-run.yml
+    with:
+      sha: ${{ inputs.sha }}
+      version: ${{ inputs.version }}
+      keep-images: true
+
+  publish-production:
+    name: Publish the verified release
+    needs: [release-commit, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Waits for the environment's required reviewers. They confirm the
+    # publication gates of #94 first (docs/testing/release-candidate-review.md).
+    # The release itself is written with a token of the publishing App minted
+    # from secrets of this environment, which a job outside it cannot read;
+    # a `v*` tag ruleset that only the App may bypass keeps any other token
+    # from creating the version's tag. GHCR accepts no App token, so the
+    # images are pushed with this job's GITHUB_TOKEN (packages: write), which
+    # the environment does not protect: see
+    # docs/testing/release-version-check.md#what-protects-publication.
+    environment: production
+    permissions:
+      # Check out the workflow's own scripts.
+      contents: read
+      # Push the release images to GHCR.
+      packages: write
+    env:
+      VERSION: ${{ inputs.version }}
+      SHA: ${{ inputs.sha }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      # The workflow's own scripts, never the candidate's.
+      - name: Clone the publication scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: |
+            hack/release-version-check.sh
+            hack/release-push-images.sh
+            hack/release-publish.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # Environment secrets of `production`: present only to a job in that
+      # environment, after its reviewers approved.
+      - name: Check that the publishing App credential is provisioned
+        env:
+          HAS_CLIENT_ID: ${{ secrets.RELEASE_APP_CLIENT_ID != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$HAS_CLIENT_ID" != true ] || [ "$HAS_PRIVATE_KEY" != true ]; then
+            echo "::error::The production environment has no RELEASE_APP_CLIENT_ID or RELEASE_APP_PRIVATE_KEY secret; nothing was published"
+            exit 1
+          fi
+
+      # This repository only, and only what the release needs: contents for
+      # the draft, its files, publication and tag, pull requests for the label.
+      - name: Create a publishing App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Download the verified files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.verify.outputs.artifact }}
+          path: ${{ runner.temp }}/verified
+
+      - name: Download the installer image check
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.verify.outputs.checker-artifact }}
+          path: ${{ runner.temp }}/checker
+
+      - name: Download the verified image archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.verify.outputs.images-artifact }}
+          path: ${{ runner.temp }}/images
+
+      - name: Download the release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.release-commit.outputs.notes-artifact }}
+          path: ${{ runner.temp }}/notes
+
+      # The trusted values are the verify job's outputs, which its
+      # build-images job set before any candidate code ran on a runner; the
+      # record and install.yaml come from the installer job, which ran the
+      # candidate's make, and are only checked against them. On this runner
+      # (no candidate code) it requires:
+      #   - each archive to have the output SHA-256, and the image manifest
+      #     inside it the output digest;
+      #   - the installer image check to be the binary build-images made;
+      #   - install.yaml to name both images by tag and those digests
+      #     (-require-digest).
+      # The push and the notes use a record written here from the outputs.
+      - name: Check the verified files against the build outputs
+        env:
+          MANAGER_DIGEST: ${{ needs.verify.outputs.manager-digest }}
+          MANAGER_ARCHIVE: ${{ needs.verify.outputs.manager-archive-sha256 }}
+          IM_DIGEST: ${{ needs.verify.outputs.instance-manager-digest }}
+          IM_ARCHIVE: ${{ needs.verify.outputs.instance-manager-archive-sha256 }}
+          CHECKER_SHA256: ${{ needs.verify.outputs.checker-sha256 }}
+          REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
+        run: |
+          command -v skopeo > /dev/null || { echo "::error::skopeo is not installed on the runner"; exit 1; }
+          sum() { sha256sum "$1" | cut -d' ' -f1; }
+          for v in "$MANAGER_DIGEST" "$IM_DIGEST"; do
+            [[ "$v" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::The build outputs hold no image digest"; exit 1; }
+          done
+          for v in "$MANAGER_ARCHIVE" "$IM_ARCHIVE" "$CHECKER_SHA256"; do
+            [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::The build outputs hold no checksum"; exit 1; }
+          done
+          check_archive() {
+            local archive="$RUNNER_TEMP/images/$1.oci.tar" manifest
+            if [ "$(sum "$archive")" != "$3" ]; then
+              echo "::error::The $1 archive is not the one build-images hashed"
+              exit 1
+            fi
+            manifest="sha256:$(skopeo inspect --raw "oci-archive:$archive" | sha256sum | cut -d' ' -f1)"
+            if [ "$manifest" != "$2" ]; then
+              echo "::error::The $1 archive holds manifest $manifest, not the built digest $2"
+              exit 1
+            fi
+          }
+          check_archive manager "$MANAGER_DIGEST" "$MANAGER_ARCHIVE"
+          check_archive instance-manager "$IM_DIGEST" "$IM_ARCHIVE"
+          checker="$RUNNER_TEMP/checker/check-installer-image"
+          if [ "$(sum "$checker")" != "$CHECKER_SHA256" ]; then
+            echo "::error::The installer image check is not the binary build-images made"
+            exit 1
+          fi
+          chmod 0755 "$checker"
+          verified="$RUNNER_TEMP/verified"
+          (cd "$verified" && sha256sum --check --strict SHA256SUMS)
+          if ! "$checker" -require-digest -manifest "$verified/install.yaml" \
+            -manager "$REGISTRY/manager:$VERSION@$MANAGER_DIGEST" \
+            -instance-manager "$REGISTRY/instance-manager:$VERSION@$IM_DIGEST"; then
+            echo "::error::install.yaml does not run exactly the built images, pinned by digest"
+            exit 1
+          fi
+          if ! jq -e --arg v "$VERSION" --arg c "$SHA" '.version == $v and .commit == $c' \
+            "$verified/release-dry-run.json" > /dev/null; then
+            echo "::error::The verified record is not version $VERSION of $SHA"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/trusted" "$RUNNER_TEMP/assets"
+          jq -n --arg md "$MANAGER_DIGEST" --arg ma "$MANAGER_ARCHIVE" --arg id "$IM_DIGEST" --arg ia "$IM_ARCHIVE" \
+            --arg mr "$REGISTRY/manager:$VERSION" --arg ir "$REGISTRY/instance-manager:$VERSION" \
+            '{images: [{name: "manager", reference: $mr, digest: $md, ociArchiveSha256: $ma},
+                       {name: "instance-manager", reference: $ir, digest: $id, ociArchiveSha256: $ia}]}' \
+            > "$RUNNER_TEMP/trusted/images.json"
+          cp "$verified/install.yaml" "$RUNNER_TEMP/assets/install.yaml"
+          (cd "$RUNNER_TEMP/assets" && sha256sum install.yaml > SHA256SUMS)
+          {
+            cat "$RUNNER_TEMP/notes/notes.md"
+            echo
+            echo "### Images"
+            echo
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            jq -r '.images[] | "| `\(.reference)` | `\(.digest)` |"' "$RUNNER_TEMP/trusted/images.json"
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      # Before anything is written, with the App token, which can write and so sees
+      # drafts: a tag or a published release of this version stops the run,
+      # and so does a draft for another commit. A draft for this commit is an
+      # earlier attempt, which the steps below resume.
+      - name: Refuse a version that already has a tag or a published release
+        env:
+          TAG: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: .release-tools/hack/release-version-check.sh
+
+      - name: Push the verified images
+        env:
+          REGISTRY_HOST: ghcr.io
+          IMAGES: manager instance-manager
+          TAG: ${{ inputs.version }}
+          RECORD: ${{ runner.temp }}/trusted/images.json
+          ARCHIVE_DIR: ${{ runner.temp }}/images
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: REPOSITORY="${REPOSITORY,,}" .release-tools/hack/release-push-images.sh
+
+      - name: Draft the release with the verified files
+        env:
+          TAG: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          ASSET_DIR: ${{ runner.temp }}/assets
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: .release-tools/hack/release-publish.sh draft
+
+      - name: Publish the checked draft
+        env:
+          TAG: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          ASSET_DIR: ${{ runner.temp }}/assets
+        run: .release-tools/hack/release-publish.sh publish
+
+      # release-please opens no next release PR while a merged one is still
+      # labelled "autorelease: pending". After publication; if this step
+      # fails, the release is complete and a maintainer moves the label by
+      # hand (a rerun is refused, because the version is now published).
+      - name: Mark the release PR as released
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          prs=$(gh api "repos/$REPOSITORY/commits/$SHA/pulls" | jq -r --arg sha "$SHA" \
+            '.[] | select(.merge_commit_sha == $sha and any(.labels[]; .name == "autorelease: pending")) | .number')
+          if [ -z "$prs" ]; then
+            echo "::error::$VERSION is published, but no merged release PR of $SHA is labelled autorelease: pending"
+            exit 1
+          fi
+          for n in $prs; do
+            gh api -X POST "repos/$REPOSITORY/issues/$n/labels" -f 'labels[]=autorelease: tagged' > /dev/null
+            gh api -X DELETE "repos/$REPOSITORY/issues/$n/labels/autorelease:%20pending" > /dev/null
+            echo "Marked release PR #$n as released"
+          done
+
+      # Also after a failed step, so a partial run says how far it got.
+      - name: Write the result to the job summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Publish $VERSION"
+            echo
+            echo "Commit \`$SHA\`. Job status: $JOB_STATUS."
+            echo
+            if [ "$JOB_STATUS" != success ]; then
+              echo "The release is published only if the step \"Publish the checked draft\" succeeded. Image tags pushed so far hold the verified digests, and a draft is visible only to maintainers. Rerun this failed job, not the whole run, to continue with the same verified files."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
