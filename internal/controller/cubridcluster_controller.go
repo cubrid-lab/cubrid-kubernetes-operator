@@ -943,6 +943,34 @@ func (r *CubridClusterReconciler) imageToRun(cluster *databasev1alpha1.CubridClu
 	return running
 }
 
+// TCP keepalive of a member Pod's network namespace (#982). CUBRID only turns
+// SO_KEEPALIVE on (tcp_keepalive) and leaves the schedule to the kernel, whose
+// default finds a dead peer after about 2 hours. After a network partition a
+// member's copylogdb, which in sync mode waits for the server's reply with no
+// timeout, can hold a connection whose other end is gone: on the VM lab its
+// server then stayed to-be-active after the heal in 8 of 9 runs with the
+// default, and became active in all 8 runs with these values (#982, #716).
+// With them a silent peer ends the connection after about one minute
+// (30 s idle + 3 probes 10 s apart). They are safe sysctls since Kubernetes
+// 1.29, so no kubelet allowlist is needed and Pod Security "restricted"
+// admits them; a cluster before 1.29 refuses the Pod.
+const (
+	memberTCPKeepaliveTime     = "30"
+	memberTCPKeepaliveInterval = "10"
+	memberTCPKeepaliveProbes   = "3"
+)
+
+// memberSysctls are the Pod sysctls of every member Pod. The kernel sets them
+// in the Pod's network namespace before any container starts, so every
+// connection the Pod makes has the short schedule from the start.
+func memberSysctls() []corev1.Sysctl {
+	return []corev1.Sysctl{
+		{Name: "net.ipv4.tcp_keepalive_time", Value: memberTCPKeepaliveTime},
+		{Name: "net.ipv4.tcp_keepalive_intvl", Value: memberTCPKeepaliveInterval},
+		{Name: "net.ipv4.tcp_keepalive_probes", Value: memberTCPKeepaliveProbes},
+	}
+}
+
 func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster, image string) corev1.PodSpec {
 	runAsNonRoot := true
 	noPrivEscalation := false
@@ -992,6 +1020,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			FSGroup:             &uid,
 			FSGroupChangePolicy: &fsGroupPolicy,
 			SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			Sysctls:             memberSysctls(),
 		},
 		Containers: []corev1.Container{{
 			Name:      appName,
