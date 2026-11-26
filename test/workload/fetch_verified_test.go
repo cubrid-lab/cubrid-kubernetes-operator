@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -357,5 +358,110 @@ func TestFetchVerified_DocumentedDefaultCapAndBudget(t *testing.T) {
 	})
 	if err == nil || strings.Join(waits, ",") != "120,120,60" {
 		t.Errorf("err = %v, waits = %v; want a failure after waits 120,120,60", err, waits)
+	}
+}
+
+// A local copy with the wanted digest, such as the one CI restores from its
+// cache (#1109), is used without a request to the server.
+func TestFetchVerified_UsesAVerifiedLocalCopy(t *testing.T) {
+	good := []byte("the driver")
+	local := filepath.Join(t.TempDir(), "cached.jar")
+	if err := os.WriteFile(local, good, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	stderr, got, _, err := fetchVerifiedWaits(t, good, "2", []string{"FETCH_LOCAL_COPY=" + local},
+		func(n int32, w http.ResponseWriter) {
+			requests.Store(n)
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+	if err != nil || string(got) != string(good) || requests.Load() != 0 {
+		t.Errorf("err = %v, file = %q, requests = %d; want the local copy and no request; stderr:\n%s",
+			err, got, requests.Load(), stderr)
+	}
+}
+
+// A local copy with another digest, a damaged or tampered cache entry, is
+// never kept: the script reports it and downloads the verified body, and when
+// the download fails too, it fails without a file.
+func TestFetchVerified_IgnoresALocalCopyWithAnotherDigest(t *testing.T) {
+	good := []byte("the driver")
+	bad := []byte("a tampered driver")
+	local := filepath.Join(t.TempDir(), "cached.jar")
+	if err := os.WriteFile(local, bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"FETCH_LOCAL_COPY=" + local}
+	stderr, got, _, err := fetchVerifiedWaits(t, good, "2", env, func(_ int32, w http.ResponseWriter) {
+		_, _ = w.Write(good)
+	})
+	badSum := sha256.Sum256(bad)
+	if err != nil || string(got) != string(good) {
+		t.Errorf("err = %v, file = %q, want the downloaded body; stderr:\n%s", err, got, stderr)
+	}
+	if !strings.Contains(stderr, hex.EncodeToString(badSum[:])) {
+		t.Errorf("stderr does not report the local copy's digest:\n%s", stderr)
+	}
+	stderr, got, _, err = fetchVerifiedWaits(t, good, "1", env, func(_ int32, w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if err == nil || got != nil {
+		t.Errorf("err = %v, file = %q; want a failure and no file; stderr:\n%s", err, got, stderr)
+	}
+}
+
+// A local copy that does not exist, as in a build without the CI cache, is
+// not an error: the driver is downloaded.
+func TestFetchVerified_DownloadsWhenTheLocalCopyIsMissing(t *testing.T) {
+	good := []byte("the driver")
+	env := []string{"FETCH_LOCAL_COPY=" + filepath.Join(t.TempDir(), "absent.jar")}
+	stderr, got, _, err := fetchVerifiedWaits(t, good, "1", env, func(_ int32, w http.ResponseWriter) {
+		_, _ = w.Write(good)
+	})
+	if err != nil || string(got) != string(good) {
+		t.Errorf("err = %v, file = %q, want the downloaded body; stderr:\n%s", err, got, stderr)
+	}
+}
+
+// The E2E workflow builds its cache key from the driver's ARG lines in the
+// Dockerfile (#1109), so each must be one plain line, and the build must take
+// the local copy from the directory the workflow restores into, which the
+// build context must include.
+func TestWorkloadDockerfile_PinsTheDriverWhereTheCacheReadsIt(t *testing.T) {
+	dockerfile, err := os.ReadFile(filepath.Join("client", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`(?m)^ARG JDBC_VERSION=[0-9.]+$`,
+		`(?m)^ARG JDBC_SHA256=[0-9a-f]{64}$`,
+		`(?m)^ARG JDBC_URL=https://[A-Za-z0-9./:_-]*\$\{JDBC_VERSION\}[A-Za-z0-9./:_${}-]*$`,
+		`(?m)^COPY test/workload/client/jdbc-cache/ /jdbc-cache/$`,
+		`FETCH_LOCAL_COPY="/jdbc-cache/cubrid-jdbc-\$\{JDBC_VERSION\}\.jar"`,
+	} {
+		if n := len(regexp.MustCompile(re).FindAll(dockerfile, -1)); n != 1 {
+			t.Errorf("client/Dockerfile matches %s %d times, want once", re, n)
+		}
+	}
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "test-e2e.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"s/^ARG JDBC_VERSION=//p",
+		"s/^ARG JDBC_SHA256=//p",
+		"s/^ARG JDBC_URL=//p",
+		"test/workload/client/jdbc-cache/cubrid-jdbc-$version.jar",
+	} {
+		if !strings.Contains(string(workflow), want) {
+			t.Errorf("test-e2e.yml no longer contains %q", want)
+		}
+	}
+	ignore, err := os.ReadFile(filepath.Join("..", "..", ".dockerignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^!test/workload/client/jdbc-cache$`).Match(ignore) {
+		t.Error(".dockerignore leaves test/workload/client/jdbc-cache out of the build context")
 	}
 }
