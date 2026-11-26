@@ -450,25 +450,36 @@ The records are in `docs/poc/RESULTS.md`.
        the one whose end was confirmed: the Pod read after the probes when M's
        Pod was replaced during them, or the next Pod the quarantine followed
        M to after that end. Another active master rebases the quarantine only
-       once the recorded Pod has given a non-master answer in that pass or the
-       pass before it, or its own end is confirmed. Until then the quarantine
-       is held, neither rebased nor escalated, as for a Pod marked for
-       deletion.
+       once the recorded Pod has answered as a non-master during the wait, or
+       its own end is confirmed. Until then the quarantine is held, neither
+       rebased nor escalated, as for a Pod marked for deletion.
+       - An answer counts when it was given in the pass or in the pass before
+         it. The quarantine then records it (`observedMasterAnsweredPodUID`),
+         and the wait is over for good: the recorded Pod being silent later
+         does not escalate it, and another active master then rebases it.
+         A new Pod, or a container restart in the recorded Pod, makes an
+         earlier answer no longer count.
        - The deadline is 90 seconds (the bound of the exception above) after
-         the pass that recorded the earlier end or followed M to the recorded
-         Pod. It replaces any hold of a deletion mark, and both passes raise
-         the quarantine's revision, so a failed status write does not lose
-         it. A wait found without a deadline gets one in its first pass,
-         which may not raise the revision: a failed status write then only
-         restarts the 90 seconds, which keeps the read-write path closed
-         longer.
+         the pass that recorded the earlier end or followed M to another
+         Pod. It replaces any hold of a deletion mark. A container restart
+         in the recorded Pod does not set it again. Both passes raise the
+         quarantine's revision, so a failed status write does not lose the
+         deadline. A wait found without a deadline, as one stored by an
+         earlier version of the Operator, gets one in its first waiting
+         pass, which may not raise the revision: a failed status write then
+         only restarts the 90 seconds, which keeps the read-write path closed
+         longer. A failed status write in the pass that records the answer
+         loses it the same way: the wait goes on, which can only escalate
+         the quarantine, never release it.
        - After the deadline, the recorded Pod counts as gone without a
          confirmed end: a Pod that stayed silent or refused the Operator's
          token makes the quarantine `WriteQuarantinedMasterChanged`.
        - While it waits, the quarantine's description states what it waits
          for: the earlier Pod whose end was confirmed, the recorded Pod whose
          answer or end it needs, and the deadline. It does not call M the
-         only active master.
+         only active master. Once the wait is over, or with M's own end
+         confirmed, it says that one other active master rebases the
+         quarantine.
        - A pass that reads M with no Pod at all keeps the last Pod recorded:
          the quarantine does not follow M to no Pod. When that Pod's own end
          was confirmed, the next active master rebases the quarantine, as

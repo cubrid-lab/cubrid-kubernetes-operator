@@ -1101,7 +1101,9 @@ type WriteQuarantine struct {
 	// beside; empty for WriteQuarantinedMultipleMasters.
 	// +optional
 	ObservedMaster string `json:"observedMaster,omitempty"`
-	// observedMasterPodUID is the UID of observedMaster's Pod.
+	// observedMasterPodUID is the UID of observedMaster's Pod: the Pod read
+	// in the last observation that found one. An observation that reads
+	// observedMaster with no Pod keeps it.
 	// +optional
 	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
 	// observedMasterRestartCount is the restart count of observedMaster's
@@ -1130,9 +1132,18 @@ type WriteQuarantine struct {
 	// time when it first saw the deletion, plus the Pod's grace period (at
 	// most 10 minutes of it) and 90 seconds. For a confirmed end of an
 	// earlier Pod: 90 seconds after the pass that recorded that end or
-	// followed observedMaster to observedMasterPodUID.
+	// followed observedMaster to another observedMasterPodUID, or, for a
+	// wait found without a deadline, after its first waiting pass.
 	// +optional
 	ObservedMasterHoldUntil *metav1.Time `json:"observedMasterHoldUntil,omitempty"`
+	// observedMasterAnsweredPodUID is observedMasterPodUID once that Pod has
+	// answered as no active master while the quarantine waited for it after
+	// the confirmed end of an earlier Pod. While the two are equal the wait
+	// is over: another active master can rebase the quarantine, whatever the
+	// Pod answers later. It no longer applies once observedMasterPodUID or
+	// its restart count changes.
+	// +optional
+	ObservedMasterAnsweredPodUID string `json:"observedMasterAnsweredPodUID,omitempty"`
 	// members are the members the quarantine is about: the unverified
 	// members, or the active masters.
 	// +listType=map

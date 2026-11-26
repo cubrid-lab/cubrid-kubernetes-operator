@@ -411,13 +411,19 @@ Pod:
   - A confirmed end of an earlier Pod does not stand in for the recorded
     Pod. That is the Pod read after the probes, or the next Pod the
     quarantine followed the master to after that end. Another active master
-    rebases the quarantine only once the recorded Pod has given a non-master
-    answer in that pass or the pass before it, or its own end is confirmed.
-  - Until then the quarantine is held, until `observedMasterHoldUntil`: 90
-    seconds after the pass that recorded the earlier end or followed the
-    master to the recorded Pod, in place of any deletion-mark hold. After
-    that, a recorded Pod that stayed silent or refused the token makes it
-    `WriteQuarantinedMasterChanged`.
+    rebases the quarantine only once the recorded Pod has answered as a
+    non-master during the wait (in a pass or the pass before it), or its own
+    end is confirmed. The answer is kept in `observedMasterAnsweredPodUID`,
+    and the wait is over for good: later silence of that Pod does not
+    escalate the quarantine. A new Pod, or a container restart in the
+    recorded Pod, makes an earlier answer no longer count.
+  - Until then the quarantine is held, until `observedMasterHoldUntil`. That
+    is 90 seconds after the pass that recorded the earlier end or followed
+    the master to another Pod, in place of any deletion-mark hold; a
+    container restart in the recorded Pod does not set it again. A waiting
+    quarantine stored without a deadline gets one 90 seconds after its first
+    waiting pass. After the deadline, a recorded Pod that stayed silent or
+    refused the token makes it `WriteQuarantinedMasterChanged`.
   - While it waits, its description in `RoutingReady` and `Ready` says what
     it waits for: the earlier Pod whose end was confirmed, the recorded Pod
     whose answer or end it needs, and the deadline. A recorded Pod marked

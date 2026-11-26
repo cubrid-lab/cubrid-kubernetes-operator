@@ -158,9 +158,10 @@ func TestQuarantineFollowStartsAFreshDeadline(t *testing.T) {
 
 // The description of a quarantine waiting for its recorded Pod states what
 // it waits for, in order: the end confirmed of the earlier Pod, the Pod whose
-// answer or end it needs, and the deadline. It stays true after the recorded
-// Pod answered as a slave with no other active master, and on the path where
-// the recorded Pod was created after the claim.
+// answer or end it needs, and the deadline, also on the path where the
+// recorded Pod was created after the claim. Once that Pod has answered as a
+// slave, the wait is over, and the description says that another active
+// master rebases the quarantine, without calling qc-2 the only active master.
 func TestQuarantineWaitingDescription(t *testing.T) {
 	s := stableMasterQuarantine(t)
 	t1 := testNow.Add(4 * time.Second)
@@ -174,16 +175,18 @@ func TestQuarantineWaitingDescription(t *testing.T) {
 		"only once its Pod %s answers as no active master or ends; without either by the deadline %s, the quarantine "+
 		"becomes %s", uid2, uid2Next, t2.Add(quarantineStartBound).UTC().Format(time.RFC3339),
 		databasev1alpha1.WriteQuarantinedMasterChanged)
+	if desc := quarantineDescription(s.quarantine, nil); !strings.Contains(desc, want) {
+		t.Fatalf("description %q, want it to contain %q", desc, want)
+	}
 	now := t2
-	for i := range 3 {
-		if i > 0 {
-			now = now.Add(4 * time.Second)
-			s.pass(now, map[string]RoleObservation{q0: slaveAt(now), q1: noAnswerAt(now), q2: slaveAt(now)})
-		}
-		desc := quarantineDescription(s.quarantine, nil)
-		if !strings.Contains(desc, want) || strings.Contains(desc, "may have given") ||
-			strings.Contains(desc, "has neither answered") {
-			t.Fatalf("pass %d: description %q, want it to contain %q", i, desc, want)
-		}
+	for range 2 {
+		now = now.Add(4 * time.Second)
+		s.pass(now, map[string]RoleObservation{q0: slaveAt(now), q1: noAnswerAt(now), q2: slaveAt(now)})
+	}
+	answered := fmt.Sprintf("the kubelet confirmed the end of its Pod %s, and one other active master rebases the "+
+		"quarantine", uid2)
+	if desc := quarantineDescription(s.quarantine, nil); !strings.Contains(desc, answered) ||
+		strings.Contains(desc, waitingText) || strings.Contains(desc, q2+" is the only active master") {
+		t.Fatalf("description %q after %s answered, want it to contain %q", desc, uid2Next, answered)
 	}
 }

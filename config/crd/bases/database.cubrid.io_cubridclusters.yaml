@@ -2207,6 +2207,15 @@ spec:
                       observedMaster is the one active master the quarantine was started
                       beside; empty for WriteQuarantinedMultipleMasters.
                     type: string
+                  observedMasterAnsweredPodUID:
+                    description: |-
+                      observedMasterAnsweredPodUID is observedMasterPodUID once that Pod has
+                      answered as no active master while the quarantine waited for it after
+                      the confirmed end of an earlier Pod. While the two are equal the wait
+                      is over: another active master can rebase the quarantine, whatever the
+                      Pod answers later. It no longer applies once observedMasterPodUID or
+                      its restart count changes.
+                    type: string
                   observedMasterHoldUntil:
                     description: |-
                       observedMasterHoldUntil is when a wait for observedMaster's Pod stops
@@ -2215,7 +2224,8 @@ spec:
                       time when it first saw the deletion, plus the Pod's grace period (at
                       most 10 minutes of it) and 90 seconds. For a confirmed end of an
                       earlier Pod: 90 seconds after the pass that recorded that end or
-                      followed observedMaster to observedMasterPodUID.
+                      followed observedMaster to another observedMasterPodUID, or, for a
+                      wait found without a deadline, after its first waiting pass.
                     format: date-time
                     type: string
                   observedMasterLeavingConfirmed:
@@ -2237,8 +2247,10 @@ spec:
                       the quarantine WriteQuarantinedMasterChanged at once.
                     type: string
                   observedMasterPodUID:
-                    description: observedMasterPodUID is the UID of observedMaster's
-                      Pod.
+                    description: |-
+                      observedMasterPodUID is the UID of observedMaster's Pod: the Pod read
+                      in the last observation that found one. An observation that reads
+                      observedMaster with no Pod keeps it.
                     type: string
                   observedMasterRestartCount:
                     description: |-
