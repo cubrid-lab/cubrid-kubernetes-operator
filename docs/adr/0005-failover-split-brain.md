@@ -458,17 +458,22 @@ The records are in `docs/poc/RESULTS.md`.
          and the wait is over for good: the recorded Pod being silent later
          does not escalate it, and another active master then rebases it.
          A new Pod never matches an earlier answer. A container restart in
-         the recorded Pod forgets it: the wait starts again for the restarted
-         process, whose deadline is then the later of the one set before and
-         90 seconds after the restart. A new 90 seconds therefore needs a
-         real non-master answer first. If the recorded Pod claims the active
+         the recorded Pod forgets that Pod's own answer: the wait starts
+         again for the restarted process, whose deadline is then the later of
+         the one set before and 90 seconds after the restart. A restart of a
+         Pod that never answered keeps the deadline. A new 90 seconds
+         therefore needs a real non-master answer of that Pod first. If the recorded Pod claims the active
          master again, the departure and the answer are cleared, the
          quarantine stays beside it, and a claim beside another active master
          escalates it.
        - When M had no Pod after the probes of the starting pass, the
-         quarantine records no Pod for M and waits all the same: no answer
-         counts until a Pod of M is read, and the pass that follows M to that
-         Pod gives it its own deadline.
+         quarantine records no Pod for M and waits all the same. No answer
+         counts while no Pod of M is recorded, also one that reaches M's
+         Service. The first Pod of M read later is not judged a replacement
+         lost without a confirmed end: that pass holds the quarantine and
+         follows M to the Pod with a fresh 90-second deadline, after which
+         the Pod's answer or end is needed as above. If no Pod of M is read
+         by the deadline set at the start, the quarantine escalates.
        - The deadline is 90 seconds (the bound of the exception above) after
          the pass that recorded the earlier end or followed M to another
          Pod. It replaces any hold of a deletion mark. A container restart

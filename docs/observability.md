@@ -421,8 +421,12 @@ Pod:
     the restart to answer. If the recorded Pod claims the active master
     again, the answer is cleared with the departure. A master with no Pod
     after the probes of the starting pass is recorded with none
-    (`observedMasterPodUID` empty), and the quarantine waits until a Pod of
-    it is read and answers.
+    (`observedMasterPodUID` empty), and no answer counts while it has none.
+    The first Pod of it read later is followed with a fresh 90-second
+    deadline, and its answer or end is then needed. Without any Pod read by
+    the deadline set at the start, the quarantine becomes
+    `WriteQuarantinedMasterChanged`. A restart of a Pod that never answered
+    keeps the deadline.
   - Until then the quarantine is held, until `observedMasterHoldUntil`. That
     is 90 seconds after the pass that recorded the earlier end or followed
     the master to another Pod, in place of any deletion-mark hold; a

@@ -1103,7 +1103,8 @@ type WriteQuarantine struct {
 	ObservedMaster string `json:"observedMaster,omitempty"`
 	// observedMasterPodUID is the UID of observedMaster's Pod: the Pod read
 	// in the last observation that found one. An observation that reads
-	// observedMaster with no Pod keeps it.
+	// observedMaster with no Pod keeps it. It is empty while no Pod of
+	// observedMaster was read since the quarantine started beside it.
 	// +optional
 	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
 	// observedMasterRestartCount is the restart count of observedMaster's
