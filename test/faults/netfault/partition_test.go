@@ -927,3 +927,141 @@ func TestPartitionReplacePeerAfterTheRemoval(t *testing.T) {
 		t.Errorf("drop rules for the replacement after the removal: %v", left)
 	}
 }
+
+// Each drop rule records when it took effect: the time right after the
+// command that installed it in an endpoint's network namespace returned, and
+// the time right after the command that removed it returned. A one-way cut
+// installs its member rules in the cut-off member for inbound and in each
+// other member for outbound, one command per member, so the members' times
+// differ. These times show whether a loss of acknowledged writes during a
+// one-way cut depends on when the rules took effect (#115).
+func TestPartitionRecordsWhenEachDropRuleTookEffect(t *testing.T) {
+	const to = " -> "
+	type ruleAt struct{ endpoint, path, rule string }
+	for _, tc := range []struct {
+		direction Direction
+		want      []ruleAt
+	}{
+		{In, []ruleAt{
+			{target, slave1 + to + target, dropInRule(testPods[slave1])},
+			{target, slave2 + to + target, dropInRule(testPods[slave2])},
+			{target, "operator" + to + target, dropInRule(operatorIP)},
+			{target, target + to + "operator", dropOutRule(operatorIP)}}},
+		{Out, []ruleAt{
+			{slave1, target + to + slave1, dropInRule(testPods[target])},
+			{slave2, target + to + slave2, dropInRule(testPods[target])},
+			{target, "operator" + to + target, dropInRule(operatorIP)},
+			{target, target + to + "operator", dropOutRule(operatorIP)}}},
+	} {
+		t.Run(string(tc.direction), func(t *testing.T) {
+			ctx := context.Background()
+			n := newFakeNet(testPods)
+			p := isolateMaster(n, testEnv(t, n))
+			p.Cuts[0].Direction, p.Cuts[1].Direction = tc.direction, tc.direction
+			if err := p.Prepare(ctx); err != nil {
+				t.Fatal(err)
+			}
+			// Each member's install command takes this long, so separate
+			// commands return at least this far apart, whatever the clock's
+			// resolution.
+			const latency = 20 * time.Millisecond
+			n.mu.Lock()
+			n.latency[opInject] = latency
+			n.mu.Unlock()
+			beforeInject := time.Now().UTC()
+			if err := p.Inject(ctx); err != nil {
+				t.Fatal(err)
+			}
+			afterInject := time.Now().UTC()
+			if err := p.Remove(ctx); err != nil {
+				t.Fatal(err)
+			}
+			afterRemove := time.Now().UTC()
+			times := p.Record().RuleTimes
+			if len(times) != len(tc.want) {
+				t.Fatalf("recorded %d rule times, want %d: %+v", len(times), len(tc.want), times)
+			}
+			installedAt := map[string]time.Time{}
+			for _, w := range tc.want {
+				i := slices.IndexFunc(times, func(r RuleTime) bool {
+					return r.Endpoint == w.endpoint && r.Path == w.path && r.Rule == w.rule
+				})
+				if i < 0 {
+					t.Errorf("no time recorded for %s in %s (%s): %+v", w.path, w.endpoint, w.rule, times)
+					continue
+				}
+				r := times[i]
+				if r.InstalledAt.Before(beforeInject) || r.InstalledAt.After(afterInject) {
+					t.Errorf("%s installed at %s, outside the injection %s to %s", w.path, r.InstalledAt,
+						beforeInject, afterInject)
+				}
+				if r.RemovedAt == nil || r.RemovedAt.Before(afterInject) || r.RemovedAt.After(afterRemove) {
+					t.Errorf("%s removed at %v, want between %s and %s", w.path, r.RemovedAt, afterInject,
+						afterRemove)
+				}
+				if at, seen := installedAt[w.endpoint]; seen && !at.Equal(r.InstalledAt) {
+					t.Errorf("the rules of %s, installed by one command, have the times %s and %s", w.endpoint,
+						at, r.InstalledAt)
+				}
+				installedAt[w.endpoint] = r.InstalledAt
+			}
+			for a, at := range installedAt {
+				for b, bt := range installedAt {
+					if d := bt.Sub(at); a < b && d < latency && d > -latency {
+						t.Errorf("%s and %s, installed by separate commands, are %s apart, less than one "+
+							"command's %s", a, b, d, latency)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A rule whose install command failed records no time, and the injection
+// still fails as it did before the times were recorded. A member whose
+// command succeeded before another member's failed keeps its time: its rules
+// are installed.
+func TestPartitionRecordsNoTimeForAFailedRuleInstall(t *testing.T) {
+	ctx := context.Background()
+	n := newFakeNet(testPods)
+	n.failInject = true
+	p := &Partition{Env: testEnv(t, n), Target: member(target), Cuts: []Cut{{member(slave1), Both}}}
+	if err := p.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Inject(ctx); err == nil || !strings.Contains(err.Error(), "install the drop rules") {
+		t.Fatalf("a failed install returned %v", err)
+	}
+	if times := p.Record().RuleTimes; len(times) != 0 {
+		t.Errorf("a failed install recorded rule times: %+v", times)
+	}
+
+	n = newFakeNet(testPods)
+	p = &Partition{Env: testEnv(t, n), Target: member(target), Cuts: []Cut{{member(slave1), Out},
+		{member(slave2), Out}}}
+	if err := p.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	installs := 0
+	n.mu.Lock()
+	n.fail = func(op string) error {
+		if op != opInject {
+			return nil
+		}
+		if installs++; installs > 1 {
+			return errors.New("command terminated with exit code 4")
+		}
+		return nil
+	}
+	n.mu.Unlock()
+	if err := p.Inject(ctx); err == nil || !strings.Contains(err.Error(), "install the drop rules") {
+		t.Fatalf("the second member's failed install returned %v", err)
+	}
+	times := p.Record().RuleTimes
+	if len(times) != 1 || times[0].InstalledAt.IsZero() || times[0].RemovedAt != nil {
+		t.Fatalf("want the first member's one rule time alone, got %+v", times)
+	}
+	if first := times[0].Endpoint; first != slave1 && first != slave2 {
+		t.Errorf("the rule time names %s, not a member that got rules", first)
+	}
+}

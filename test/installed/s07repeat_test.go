@@ -332,6 +332,36 @@ func TestS07RepeatMeasurements(t *testing.T) {
 	}
 }
 
+// The second cut's drop rules are written to its own repeat/cut.json, so its
+// measurements under secondCut say when its own rules took effect and were
+// taken away, from its own issue, not the first cut's (#115).
+func TestS07RepeatReportsItsOwnDropRuleTimes(t *testing.T) {
+	rec := s07RepeatBase()
+	c := rec.Repeat.Cut
+	rule := func(issued *time.Time, in, out time.Duration) netfault.RuleTime {
+		removed := issued.Add(out)
+		return netfault.RuleTime{Endpoint: m0, Path: m1 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.2.31/32 -j DROP",
+			InstalledAt: issued.Add(in), RemovedAt: &removed}
+	}
+	rec.cut = &s07CutFile{DropRulesComplete: true,
+		DropRules: []netfault.RuleTime{rule(rec.FaultIssuedAt, time.Second, 2*time.Minute)}}
+	c.cut = &s07CutFile{DropRulesComplete: true,
+		DropRules: []netfault.RuleTime{rule(c.FaultIssuedAt, 3*time.Second, 3*time.Minute)}}
+	m := s07Measurements(rec)
+	second, ok := m["secondCut"].(map[string]any)
+	if !ok {
+		t.Fatalf("no secondCut in %v", m)
+	}
+	if m["dropRulesInstalledWithin"] != "1s" || m["dropRulesRemovedWithin"] != "2m0s" {
+		t.Errorf("first cut: installed within %v, removed within %v", m["dropRulesInstalledWithin"],
+			m["dropRulesRemovedWithin"])
+	}
+	if second["dropRulesInstalledWithin"] != "3s" || second["dropRulesRemovedWithin"] != "3m0s" {
+		t.Errorf("second cut: installed within %v, removed within %v", second["dropRulesInstalledWithin"],
+			second["dropRulesRemovedWithin"])
+	}
+}
+
 // A new quarantine that was no longer in force with no release the run read
 // leaves unknown whether the old token released it, so the verdict is blocked
 // and oldTokenIgnored unknown, both when it was gone part-way through the

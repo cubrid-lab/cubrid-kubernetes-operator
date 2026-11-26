@@ -1203,6 +1203,37 @@ func s07DataNote(rec *s07Record) string {
 	return "; " + strings.Join(notes, "; ")
 }
 
+// s07DropRuleTimes are, from cut.json's drop rules, when the last rule took
+// effect, so every rule was in place, and when the last was taken away. Both
+// are nil unless the injection succeeded (DropRulesComplete): the rules of an
+// injection that failed part way are only those of the members it reached,
+// and their times say nothing of the whole cut. The removal is also nil
+// while a rule was not seen removed.
+func s07DropRuleTimes(rec *s07Record) (installed, removed *time.Time) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.cut == nil || !rec.cut.DropRulesComplete || len(rec.cut.DropRules) == 0 {
+		return nil, nil
+	}
+	var last, gone time.Time
+	allGone := true
+	for _, r := range rec.cut.DropRules {
+		if r.InstalledAt.After(last) {
+			last = r.InstalledAt
+		}
+		switch {
+		case r.RemovedAt == nil:
+			allGone = false
+		case r.RemovedAt.After(gone):
+			gone = *r.RemovedAt
+		}
+	}
+	if !allGone {
+		return &last, nil
+	}
+	return &last, &gone
+}
+
 // s07Measurements are the times S07 records, as durations from the fault's
 // issue on the run's clock, the quarantine's own times as status gives
 // them on the Operator's clock, and "unknown" where a value was not seen.
@@ -1222,6 +1253,9 @@ func s07Measurements(rec *s07Record) map[string]any {
 	}
 	issued := rec.FaultIssuedAt
 	since("faultConfirmedWithin", issued, rec.FaultConfirmedAt)
+	installed, removed := s07DropRuleTimes(rec)
+	since("dropRulesInstalledWithin", issued, installed)
+	since("dropRulesRemovedWithin", issued, removed)
 	since("partitionHeldFor", rec.FaultConfirmedAt, rec.HoldEndedAt)
 	since("triggerObservedWithin", issued, rec.TriggerObservedAt)
 	since("targetClaimedActiveMasterWithin", issued, rec.TargetClaimedAt)
@@ -1871,6 +1905,8 @@ func (h *haRun) removeOnEnd(ctx context.Context, rec *s07Record, p *netfault.Par
 			rec.RemoveOnEndError = err.Error()
 		}
 		rec.mu.Unlock()
+		rules := p.Record().RuleTimes
+		h.writeS07CutFile(rec, func(f *s07CutFile) { f.DropRules = rules })
 	})
 }
 
@@ -2547,6 +2583,14 @@ type s07CutFile struct {
 	RemovedAt              *time.Time `json:"removedAt,omitempty"`
 	RemoveError            string     `json:"removeError,omitempty"`
 	RemovedOnEnd           bool       `json:"dropRulesRemovedOnRunEnd,omitempty"`
+	// DropRules are the drop rules installed so far, each with the member or
+	// Pod that holds it, the traffic it drops, and when it took effect and
+	// was taken away (netfault.RuleTime). A rule whose install command failed
+	// is not listed. DropRulesComplete is set only when the injection
+	// succeeded, so every planned rule was installed; a list from an
+	// injection that failed part way holds only the members it reached.
+	DropRules         []netfault.RuleTime `json:"dropRules,omitempty"`
+	DropRulesComplete bool                `json:"dropRulesComplete,omitempty"`
 }
 
 // s07Cut is the partition with the cut state written around its injection
@@ -2555,20 +2599,47 @@ type s07Cut struct {
 	*netfault.Partition
 	h   *haRun
 	rec *s07Record
+	// drops installs and removes the drop rules and records their times; nil
+	// is the partition itself. Tests set it to make an injection fail after
+	// some members' rules were installed.
+	drops s07Drops
 }
 
-// Inject writes the cut's state, then injects it.
+// s07Drops is what installs and removes a cut's drop rules.
+type s07Drops interface {
+	Inject(ctx context.Context) error
+	Remove(ctx context.Context) error
+	Record() netfault.Record
+}
+
+func (c *s07Cut) dropper() s07Drops {
+	if c.drops != nil {
+		return c.drops
+	}
+	return c.Partition
+}
+
+// Inject writes the cut's state, injects it, and writes when each drop rule
+// it installed took effect, also when the injection failed part way. Only an
+// injection that succeeded marks the rules complete: one that failed may
+// have installed some members' rules and not the others'.
 func (c *s07Cut) Inject(ctx context.Context) error {
 	now := time.Now().UTC()
 	c.writeState(func(f *s07CutFile) { f.InjectRequestedAt = &now })
-	return c.Partition.Inject(ctx)
+	err := c.dropper().Inject(ctx)
+	rules := c.dropper().Record().RuleTimes
+	c.writeState(func(f *s07CutFile) { f.DropRules, f.DropRulesComplete = rules, err == nil })
+	return err
 }
 
-// Remove removes the cut and writes how that went.
+// Remove removes the cut and writes how that went, with when each drop rule
+// was taken away.
 func (c *s07Cut) Remove(ctx context.Context) error {
-	err := c.Partition.Remove(ctx)
+	err := c.dropper().Remove(ctx)
 	now := time.Now().UTC()
+	rules := c.dropper().Record().RuleTimes
 	c.writeState(func(f *s07CutFile) {
+		f.DropRules = rules
 		if err != nil {
 			f.RemoveError = err.Error()
 			return

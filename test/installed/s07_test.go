@@ -18,6 +18,7 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"os"
@@ -1099,6 +1100,182 @@ func TestS07CutStateAndRemovalOnEnd(t *testing.T) {
 	stop()
 	if !rec.RemovedOnEnd || rec.RemoveOnEndError != "" {
 		t.Errorf("removed on end %v, error %q", rec.RemovedOnEnd, rec.RemoveOnEndError)
+	}
+}
+
+// s07DropRuleMeasurements are the whole-cut drop-rule measurements: every
+// rule in place, and every rule gone.
+var s07DropRuleMeasurements = []string{"dropRulesInstalledWithin", "dropRulesRemovedWithin"}
+
+// cut.json and the measurements say when the drop rules took effect and when
+// they were taken away, so that a run can tell whether a write acknowledged
+// around the cut was sent before or after its member's rules were in place
+// (#115). An injection that failed lists no rule and measures no time, and
+// still fails; a time not seen for every rule is unknown.
+func TestS07RecordsWhenTheDropRulesTookEffect(t *testing.T) {
+	cfg := testHAConfig(t)
+	cfg.EvidenceDir = t.TempDir()
+	ns := cfg.Namespace
+	kubectl := func(context.Context, ...string) (string, error) {
+		return "*filter\n:INPUT ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\nCOMMIT\n", nil
+	}
+	p := &netfault.Partition{Env: netfault.Env{Kubectl: kubectl, Poll: time.Millisecond},
+		Target: netfault.Endpoint{Name: m0, Namespace: ns, Pod: m0, IP: "10.42.1.20"},
+		Cuts: []netfault.Cut{{Peer: netfault.Endpoint{Name: m1, Namespace: ns, Pod: m1, IP: "10.42.2.21"},
+			Direction: netfault.In}}}
+	h := &haRun{cfg: cfg, redactor: evidence.NewRedactor()}
+	issued := time.Date(2026, 11, 24, 14, 46, 50, 0, time.UTC)
+	rec := &s07Record{Variant: s07HigherRankIsolated, FaultIssuedAt: &issued}
+	cut := &s07Cut{Partition: p, h: h, rec: rec}
+	if err := cut.Inject(context.Background()); err == nil {
+		t.Fatal("an unprepared partition was injected")
+	}
+	file := filepath.Join(cfg.EvidenceDir, s07File(s07HigherRankIsolated, "cut.json"))
+	data, err := os.ReadFile(file)
+	if err != nil || strings.Contains(string(data), "dropRules") {
+		t.Errorf("cut.json after a failed injection lists drop rules: %s, %v", data, err)
+	}
+	m := s07Measurements(rec)
+	for _, name := range s07DropRuleMeasurements {
+		if m[name] != evidence.Unknown {
+			t.Errorf("%s after a failed injection: %v, want unknown", name, m[name])
+		}
+	}
+
+	at := func(d time.Duration) time.Time { return issued.Add(d) }
+	removed := at(2*time.Minute + 3*time.Second)
+	rules := []netfault.RuleTime{
+		{Endpoint: m0, Path: m1 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.2.21/32 -j DROP",
+			InstalledAt: at(1200 * time.Millisecond), RemovedAt: &removed},
+		{Endpoint: m0, Path: m2 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.3.22/32 -j DROP",
+			InstalledAt: at(1500 * time.Millisecond)},
+	}
+	cut.writeState(func(f *s07CutFile) { f.DropRules, f.DropRulesComplete = rules, true })
+	data, err = os.ReadFile(file)
+	written := &s07CutFile{}
+	if err != nil || json.Unmarshal(data, written) != nil || len(written.DropRules) != 2 ||
+		!written.DropRules[1].InstalledAt.Equal(rules[1].InstalledAt) ||
+		!strings.Contains(string(data), `"installedAt": "2026-11-24T14:46:51.2Z"`) {
+		t.Errorf("cut.json with the drop rules: %s, %v", data, err)
+	}
+	m = s07Measurements(rec)
+	if m["dropRulesInstalledWithin"] != "1.5s" || m["dropRulesRemovedWithin"] != evidence.Unknown {
+		t.Errorf("one rule not seen removed: installed within %v, removed within %v",
+			m["dropRulesInstalledWithin"], m["dropRulesRemovedWithin"])
+	}
+	later := at(2*time.Minute + 4*time.Second)
+	rules[1].RemovedAt = &later
+	cut.writeState(func(f *s07CutFile) { f.DropRules, f.DropRulesComplete = rules, true })
+	if m = s07Measurements(rec); m["dropRulesRemovedWithin"] != "2m4s" {
+		t.Errorf("every rule removed: removed within %v, want 2m4s", m["dropRulesRemovedWithin"])
+	}
+}
+
+// fakeS07Drops installs the drop rules of the members in installs, one
+// command each, and fails at the member in failAt, as an injection whose
+// second command fails after the first succeeded. Remove takes away every
+// rule installed.
+type fakeS07Drops struct {
+	installs []netfault.RuleTime
+	failAt   string
+	rec      netfault.Record
+}
+
+func (f *fakeS07Drops) Inject(context.Context) error {
+	for _, r := range f.installs {
+		if r.Endpoint == f.failAt {
+			return errors.New("install the drop rules: command terminated with exit code 4")
+		}
+		r.InstalledAt = time.Now().UTC()
+		f.rec.RuleTimes = append(f.rec.RuleTimes, r)
+	}
+	return nil
+}
+
+func (f *fakeS07Drops) Remove(context.Context) error {
+	now := time.Now().UTC()
+	for i := range f.rec.RuleTimes {
+		f.rec.RuleTimes[i].RemovedAt = &now
+	}
+	return nil
+}
+
+func (f *fakeS07Drops) Record() netfault.Record { return f.rec }
+
+// An outbound cut installs its rules in ha-1 and then in ha-2. When ha-1's
+// command succeeds and ha-2's fails, the cut was never in place: cut.json
+// keeps ha-1's rule with its times, but dropRulesInstalledWithin and
+// dropRulesRemovedWithin stay unknown, since they mean every rule in place
+// and every rule gone, and the injection fails and is cleaned up as before,
+// with the same S07 verdict as a record without rule times. When both
+// commands succeed, the cut is complete and both are measured (#115).
+func TestS07DropRuleTimesOfACutInstalledPartWay(t *testing.T) {
+	installs := []netfault.RuleTime{
+		{Endpoint: m1, Path: m0 + " -> " + m1, Rule: "-A NETFAULT-IN -s 10.42.1.40/32 -j DROP"},
+		{Endpoint: m2, Path: m0 + " -> " + m2, Rule: "-A NETFAULT-IN -s 10.42.1.40/32 -j DROP"},
+	}
+	newCut := func(t *testing.T, failAt string) *s07Cut {
+		t.Helper()
+		cfg := testHAConfig(t)
+		cfg.EvidenceDir = t.TempDir()
+		ns := cfg.Namespace
+		p := &netfault.Partition{Target: netfault.Endpoint{Name: m0, Namespace: ns, Pod: m0, IP: "10.42.1.40"},
+			Cuts: []netfault.Cut{
+				{Peer: netfault.Endpoint{Name: m1, Namespace: ns, Pod: m1, IP: "10.42.2.41"}, Direction: netfault.Out},
+				{Peer: netfault.Endpoint{Name: m2, Namespace: ns, Pod: m2, IP: "10.42.3.42"}, Direction: netfault.Out}}}
+		return &s07Cut{Partition: p, h: &haRun{cfg: cfg, redactor: evidence.NewRedactor()}, rec: s07Base(false),
+			drops: &fakeS07Drops{installs: installs, failAt: failAt}}
+	}
+
+	// The fault flow cleans up after a failed injection without confirming.
+	cut := newCut(t, m2)
+	rec := cut.rec
+	o := faults.Run(context.Background(), faults.Scenario{Fault: cut,
+		Limits: faults.Limits{Confirm: time.Second, Outcome: time.Second, Cleanup: time.Second,
+			Poll: time.Millisecond, Stop: time.Second},
+		Before: func(context.Context) error { return nil },
+		Check:  func(context.Context) (bool, error) { return true, nil }})
+	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, faults.ReasonInjectionFailed) ||
+		!o.CleanupSucceeded {
+		t.Fatalf("a failed injection: %s %q, cleanup %v", o.Result, o.Reason, o.CleanupSucceeded)
+	}
+	if f := rec.cut; f == nil || f.DropRulesComplete || len(f.DropRules) != 1 || f.DropRules[0].Endpoint != m1 ||
+		f.DropRules[0].InstalledAt.IsZero() || f.DropRules[0].RemovedAt == nil || f.RemovedAt == nil {
+		t.Fatalf("cut.json after ha-2's command failed: %+v", f)
+	}
+	m := s07Measurements(rec)
+	for _, name := range s07DropRuleMeasurements {
+		if m[name] != evidence.Unknown {
+			t.Errorf("%s of a cut installed part way: %v, want unknown", name, m[name])
+		}
+	}
+	without := s07Base(false)
+	without.cut = &s07CutFile{}
+	got, want := judgeS07(rec, s07Limits{Quarantine: time.Minute, Partition: time.Minute}),
+		judgeS07(without, s07Limits{Quarantine: time.Minute, Partition: time.Minute})
+	if got.Result != want.Result || got.Reason != want.Reason || !slices.Equal(got.NeverEvents, want.NeverEvents) {
+		t.Errorf("verdict with partial rule times %s %q, without %s %q", got.Result, got.Reason, want.Result,
+			want.Reason)
+	}
+
+	// The full cut is injected and removed directly: its confirmation would
+	// probe a real network.
+	cut = newCut(t, "")
+	rec = cut.rec
+	if err := cut.Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cut.Remove(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.cut.DropRulesComplete || len(rec.cut.DropRules) != 2 {
+		t.Fatalf("a full cut: %+v", rec.cut)
+	}
+	m = s07Measurements(rec)
+	for _, name := range s07DropRuleMeasurements {
+		if m[name] == evidence.Unknown {
+			t.Errorf("%s of a full cut is unknown", name)
+		}
 	}
 }
 

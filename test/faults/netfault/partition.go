@@ -106,6 +106,30 @@ type Record struct {
 	// Replacements are the peers ReplacePeer replaced while the fault was
 	// on.
 	Replacements []Replacement `json:"replacements,omitempty"`
+	// RuleTimes say when each drop rule took effect and when it was taken
+	// away, in the order the rules were installed.
+	RuleTimes []RuleTime `json:"ruleTimes,omitempty"`
+}
+
+// RuleTime is one drop rule and when it took effect: InstalledAt is taken,
+// on the run's clock in UTC, right after the command that installed it in
+// the endpoint's network namespace returned successfully, and RemovedAt
+// right after the first command that removed it returned and the rules read
+// back showed it gone. Each is an upper bound: the rule changed at some
+// point while the command ran, not exactly at the time recorded. The rules
+// of one endpoint are installed by one
+// command, which adds the jump to the drop chains last, and removed by one,
+// so they share their times. A rule whose install command failed has no
+// RuleTime; one not seen removed, or seen removed only after a removal
+// command that failed, has no RemovedAt.
+type RuleTime struct {
+	// Endpoint is the endpoint whose network namespace holds the rule, Path
+	// the traffic it drops, as "sender -> receiver".
+	Endpoint    string     `json:"endpoint"`
+	Path        string     `json:"path"`
+	Rule        string     `json:"rule"`
+	InstalledAt time.Time  `json:"installedAt"`
+	RemovedAt   *time.Time `json:"removedAt,omitempty"`
 }
 
 // Replacement is a peer that ReplacePeer replaced: the old and the new
@@ -171,6 +195,7 @@ func (p *Partition) Record() Record {
 	r.Rules = maps.Clone(r.Rules)
 	r.Observations = slices.Clone(r.Observations)
 	r.Replacements = slices.Clone(r.Replacements)
+	r.RuleTimes = slices.Clone(r.RuleTimes)
 	return r
 }
 
@@ -338,23 +363,64 @@ func (p *Partition) observed(e Endpoint) []string {
 // dropRules returns, by endpoint name, the drop rules the partition installs
 // there.
 func (p *Partition) dropRules() map[string][]string {
+	by := map[string][]string{}
+	for _, d := range p.drops() {
+		by[d.Endpoint] = append(by[d.Endpoint], d.Rule)
+	}
+	return by
+}
+
+// drops returns every drop rule the partition installs, with the endpoint
+// that holds it and the traffic it drops; the times are not set.
+func (p *Partition) drops() []RuleTime {
 	p.mu.Lock()
 	cuts := append(slices.Clone(p.retired), p.Cuts...)
 	p.mu.Unlock()
-	by := map[string][]string{}
+	var drops []RuleTime
 	for _, c := range cuts {
 		if c.Direction == In || c.Direction == Both {
-			by[p.Target.Name] = append(by[p.Target.Name], dropInRule(c.Peer.IP))
+			drops = append(drops, RuleTime{Endpoint: p.Target.Name, Path: Path{c.Peer, p.Target}.String(),
+				Rule: dropInRule(c.Peer.IP)})
 		}
 		if c.Direction == Out || c.Direction == Both {
 			if c.Peer.Entered() {
-				by[c.Peer.Name] = append(by[c.Peer.Name], dropInRule(p.Target.IP))
+				drops = append(drops, RuleTime{Endpoint: c.Peer.Name, Path: Path{p.Target, c.Peer}.String(),
+					Rule: dropInRule(p.Target.IP)})
 			} else {
-				by[p.Target.Name] = append(by[p.Target.Name], dropOutRule(c.Peer.IP))
+				drops = append(drops, RuleTime{Endpoint: p.Target.Name, Path: Path{p.Target, c.Peer}.String(),
+					Rule: dropOutRule(c.Peer.IP)})
 			}
 		}
 	}
-	return by
+	return drops
+}
+
+// installed records that the drop rules of the endpoint named name, among
+// drops, took effect at t.
+func (p *Partition) installed(name string, drops []RuleTime, t time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range drops {
+		if d.Endpoint == name {
+			d.InstalledAt = t
+			p.rec.RuleTimes = append(p.rec.RuleTimes, d)
+		}
+	}
+}
+
+// removed records that the drop rules of the endpoint named name were taken
+// away at t, unless an earlier removal was already recorded. It sets every
+// rule of the endpoint at once because one command removes them all: it
+// deletes the jumps to the drop chains and the chains themselves, so no rule
+// of the endpoint outlives another.
+func (p *Partition) removed(name string, t time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.rec.RuleTimes {
+		if r := &p.rec.RuleTimes[i]; r.Endpoint == name && r.RemovedAt == nil {
+			r.RemovedAt = &t
+		}
+	}
 }
 
 // expected returns the rules and jumps of the drop chains an endpoint must
@@ -486,7 +552,7 @@ func (p *Partition) Inject(ctx context.Context) error {
 			return err
 		}
 	}
-	by := p.dropRules()
+	by, drops := p.dropRules(), p.drops()
 	for _, e := range ruled {
 		var script strings.Builder
 		script.WriteString(": netfault inject\nset -e\n")
@@ -513,6 +579,7 @@ func (p *Partition) Inject(ctx context.Context) error {
 		if _, err := shell(ctx, p.Env, e, script.String()); err != nil {
 			return fmt.Errorf("install the drop rules: %w", err)
 		}
+		p.installed(e.Name, drops, time.Now().UTC())
 	}
 	read := map[string][]string{}
 	for _, e := range ruled {
@@ -575,6 +642,10 @@ func (p *Partition) ReplacePeer(ctx context.Context, name string, peer Endpoint)
 	if _, err := shell(ctx, p.Env, p.Target, script); err != nil {
 		return fmt.Errorf("install the drop rules for %s: %w", peer.Name, err)
 	}
+	p.installed(p.Target.Name, []RuleTime{
+		{Endpoint: p.Target.Name, Path: Path{peer, p.Target}.String(), Rule: dropInRule(peer.IP)},
+		{Endpoint: p.Target.Name, Path: Path{p.Target, peer}.String(), Rule: dropOutRule(peer.IP)}},
+		time.Now().UTC())
 	p.mu.Lock()
 	p.Cuts[i] = Cut{Peer: peer, Direction: Both}
 	p.retired = append(p.retired, old)
@@ -689,13 +760,22 @@ const removeScript = ": netfault remove\n" +
 const removeAttempts = 3
 
 // removeDrops removes the endpoint's drop chains, reads the namespace back and
-// tries again while any is left. It returns what is left.
+// tries again while any is left. It returns what is left. The removal time
+// recorded is that of the attempt whose read-back first showed no drop rule,
+// and only when that attempt's own command succeeded. When that command
+// failed, no time is recorded: an earlier attempt's command succeeded while
+// the rules were still read back, so its time would be too early, and the
+// failed command's effect is not known.
 func (p *Partition) removeDrops(ctx context.Context, e Endpoint) ([]string, error) {
 	var left []string
 	var errs []error
 	for range removeAttempts {
+		var removedAt *time.Time
 		if _, err := shell(ctx, p.Env, e, removeScript); err != nil {
 			errs = append(errs, fmt.Errorf("remove the drop rules: %w", err))
+		} else {
+			now := time.Now().UTC()
+			removedAt = &now
 		}
 		r, err := readRules(ctx, p.Env, e)
 		if err != nil {
@@ -703,6 +783,9 @@ func (p *Partition) removeDrops(ctx context.Context, e Endpoint) ([]string, erro
 			continue
 		}
 		if left = dropLeft(r); len(left) == 0 {
+			if removedAt != nil {
+				p.removed(e.Name, *removedAt)
+			}
 			return nil, nil
 		}
 	}
@@ -737,6 +820,7 @@ func (p *Partition) removeDropsAtOnce(ctx context.Context, e Endpoint) error {
 	var errs []error
 	for range removeAttempts {
 		out, err := shell(ctx, p.Env, e, removeDropsScript)
+		removedAt := time.Now().UTC()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("remove the drop rules: %w", err))
 			if ctx.Err() != nil {
@@ -750,6 +834,7 @@ func (p *Partition) removeDropsAtOnce(ctx context.Context, e Endpoint) error {
 			continue
 		}
 		if left = dropLeft(r); len(left) == 0 {
+			p.removed(e.Name, removedAt)
 			return nil
 		}
 	}
