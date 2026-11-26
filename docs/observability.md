@@ -410,9 +410,14 @@ Pod:
     replacement.
   - A confirmed end of the earlier Pod does not stand in for the recorded
     Pod, which may have answered too. Another active master rebases the
-    quarantine only once the recorded Pod has answered as a non-master, or
-    its own end is confirmed. Until then the quarantine is held. A recorded
-    Pod marked for deletion is held by its own mark, as above.
+    quarantine only once the recorded Pod has given a non-master answer in
+    that pass or the pass before it, or its own end is confirmed. Until then
+    the quarantine is held, for at most 90 seconds
+    (`observedMasterHoldUntil`). After that, a recorded Pod that stayed
+    silent or refused the token makes it `WriteQuarantinedMasterChanged`.
+    While it waits, its description in `RoutingReady` and `Ready` names
+    the Pod it waits for and the deadline. A recorded Pod marked for
+    deletion is held by its own mark, as above.
   - If the master is then found in neither Pod, the recorded Pod needs its
     own confirmed end, or the quarantine becomes
     `WriteQuarantinedMasterChanged`.

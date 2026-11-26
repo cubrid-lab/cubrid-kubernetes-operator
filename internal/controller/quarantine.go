@@ -1048,6 +1048,12 @@ func recordMasterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuaranti
 		slices.ContainsFunc(in.Terminations, func(t databasev1alpha1.MemberTermination) bool {
 			return t.Name == m && t.PodUID == before.PodUID
 		})
+	if q.ObservedMasterLeavingConfirmed {
+		// How long the quarantine waits for the recorded Pod to answer
+		// (masterDeparture).
+		until := metav1.NewTime(in.Now.Add(quarantineStartBound))
+		q.ObservedMasterHoldUntil = &until
+	}
 }
 
 // newQuarantine is a new quarantine with reason beside master about members.
@@ -1244,9 +1250,34 @@ func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdenti
 	}
 }
 
+// waitingForRecordedPod reports whether q holds the confirmed end of a Pod of
+// its master earlier than the Pod it records: until the recorded Pod answers
+// as a non-master or ends, q waits for it (masterDeparture).
+func waitingForRecordedPod(q *databasev1alpha1.WriteQuarantine) bool {
+	return q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != "" &&
+		q.ObservedMasterLeavingPodUID != q.ObservedMasterPodUID
+}
+
+// recordedPodWait is the departure while q waits for its recorded Pod. The
+// confirmed end is an earlier Pod's; the recorded Pod may have given the
+// master's claim, and has neither answered as a non-master nor ended. The
+// quarantine waits, as for a Pod marked for deletion: departureHeld until
+// ObservedMasterHoldUntil, set to quarantineStartBound after the first pass
+// that waits if no earlier pass set it, and departureLost after it.
+func recordedPodWait(in quarantineInput, q *databasev1alpha1.WriteQuarantine) departure {
+	if q.ObservedMasterHoldUntil == nil {
+		until := metav1.NewTime(in.Now.Add(quarantineStartBound))
+		q.ObservedMasterHoldUntil = &until
+	}
+	if in.Now.After(q.ObservedMasterHoldUntil.Time) {
+		return departureLost
+	}
+	return departureHeld
+}
+
 // recordedPodAnswered reports whether q's master answered as a non-master
-// from the Pod q records for it: in this pass, or in the answers recorded
-// before it.
+// from the Pod q records for it: in this pass, or in the pass before it,
+// whose answer the verifications kept.
 func recordedPodAnswered(in quarantineInput, q *databasev1alpha1.WriteQuarantine) bool {
 	m, uid := q.ObservedMaster, q.ObservedMasterPodUID
 	if id := in.Identities[m]; !in.IdentitiesUnknown && !in.Unstable[m] && id.PodUID == uid &&
@@ -1320,13 +1351,8 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 	switch {
 	case q.ObservedMasterLeavingPodUID == "":
 		return departureNone
-	case q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != q.ObservedMasterPodUID &&
-		!recordedPodAnswered(in, q):
-		// The confirmed end is an earlier Pod's. The recorded Pod may have
-		// given the master's claim, and has neither answered as a
-		// non-master nor ended: the quarantine waits, as for a Pod marked
-		// for deletion.
-		return departureHeld
+	case waitingForRecordedPod(q) && !recordedPodAnswered(in, q):
+		return recordedPodWait(in, q)
 	case q.ObservedMasterLeavingConfirmed:
 		return departureConfirmed
 	case q.ObservedMasterHoldUntil == nil || in.Now.After(q.ObservedMasterHoldUntil.Time):
@@ -2016,6 +2042,18 @@ func quarantineDescription(q *databasev1alpha1.WriteQuarantine, masters []string
 	case databasev1alpha1.WriteQuarantinedMultipleMasters:
 		why = "more than one active master: " + quarantineMemberText(q.Members)
 	case databasev1alpha1.WriteQuarantinedMemberUnverified:
+		if waitingForRecordedPod(q) {
+			until := "no deadline set"
+			if q.ObservedMasterHoldUntil != nil {
+				until = "at most until " + q.ObservedMasterHoldUntil.UTC().Format(time.RFC3339)
+			}
+			why = fmt.Sprintf("started beside %s as the only active master; the kubelet confirmed the end of its "+
+				"Pod %s, but its Pod %s may have given that claim and has neither answered as no active master nor "+
+				"ended, so the quarantine waits for it (%s) and another active master does not rebase it before; "+
+				"members: %s", q.ObservedMaster, q.ObservedMasterLeavingPodUID, q.ObservedMasterPodUID, until,
+				quarantineMemberText(q.Members))
+			break
+		}
 		why = fmt.Sprintf("%s is the only active master, and not verified as no active master: %s",
 			q.ObservedMaster, quarantineMemberText(q.Members))
 	case databasev1alpha1.WriteQuarantinedMemberReturning:

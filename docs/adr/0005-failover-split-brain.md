@@ -447,10 +447,21 @@ The records are in `docs/poc/RESULTS.md`.
        `WriteQuarantinedMasterChanged`.
      - **A confirmed end of an earlier Pod does not stand in for the recorded
        Pod.** The recorded Pod may have given M's claim too. Another active
-       master rebases the quarantine only once the recorded Pod has answered
-       as a non-master, or its own end is confirmed. Until then the
-       quarantine is held, neither rebased nor escalated, as for a Pod marked
-       for deletion.
+       master rebases the quarantine only once the recorded Pod has given a
+       non-master answer in that pass or the pass before it, or its own end
+       is confirmed. Until then the quarantine is held, neither rebased nor
+       escalated, as for a Pod marked for deletion: for at most 90 seconds
+       (the bound of the exception above) from the pass that recorded the
+       earlier end, or from the first pass that waits if that pass set no
+       deadline.
+       - After the deadline, the recorded Pod counts as gone without a
+         confirmed end: a Pod that stayed silent or refused the Operator's
+         token makes the quarantine `WriteQuarantinedMasterChanged`.
+       - While it waits, the quarantine's description names the Pod it waits
+         for and the deadline, not M as the only active master.
+       - Once the recorded Pod has itself claimed the active master after the
+         start, it has given a claim; `main`'s rules then apply to it, and
+         another active master escalates the quarantine.
        - If the recorded Pod is marked for deletion or read terminated, the
          mark, hold and confirmation above apply to it.
        - If M is then found in neither Pod, the recorded Pod is gone too. It
@@ -473,7 +484,8 @@ The records are in `docs/poc/RESULTS.md`.
        without a confirmed end now escalates on the next pass. Before, only
        another active master, or M verified as no active master, escalated
        it. So does a recorded Pod followed after an earlier Pod's confirmed
-       end and then gone without its own.
+       end and then gone without its own, and one that gives no non-master
+       answer within the 90-second wait, even with no other active master.
      - **Late observation of the end:** the kubelet reports a graceful
        deletion's end before the Pod object is removed. If the Operator's
        watch and reads see that report only after the pass that read the
