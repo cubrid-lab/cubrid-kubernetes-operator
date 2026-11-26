@@ -1204,13 +1204,15 @@ func s07DataNote(rec *s07Record) string {
 }
 
 // s07DropRuleTimes are, from cut.json's drop rules, when the last rule took
-// effect, so every rule was in place, and when the last was taken away; each
-// is nil when no rule was installed, and the removal also while a rule was
-// not seen removed.
+// effect, so every rule was in place, and when the last was taken away. Both
+// are nil unless the injection succeeded (DropRulesComplete): the rules of an
+// injection that failed part way are only those of the members it reached,
+// and their times say nothing of the whole cut. The removal is also nil
+// while a rule was not seen removed.
 func s07DropRuleTimes(rec *s07Record) (installed, removed *time.Time) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if rec.cut == nil || len(rec.cut.DropRules) == 0 {
+	if rec.cut == nil || !rec.cut.DropRulesComplete || len(rec.cut.DropRules) == 0 {
 		return nil, nil
 	}
 	var last, gone time.Time
@@ -2584,8 +2586,11 @@ type s07CutFile struct {
 	// DropRules are the drop rules installed so far, each with the member or
 	// Pod that holds it, the traffic it drops, and when it took effect and
 	// was taken away (netfault.RuleTime). A rule whose install command failed
-	// is not listed.
-	DropRules []netfault.RuleTime `json:"dropRules,omitempty"`
+	// is not listed. DropRulesComplete is set only when the injection
+	// succeeded, so every planned rule was installed; a list from an
+	// injection that failed part way holds only the members it reached.
+	DropRules         []netfault.RuleTime `json:"dropRules,omitempty"`
+	DropRulesComplete bool                `json:"dropRulesComplete,omitempty"`
 }
 
 // s07Cut is the partition with the cut state written around its injection
@@ -2594,25 +2599,45 @@ type s07Cut struct {
 	*netfault.Partition
 	h   *haRun
 	rec *s07Record
+	// drops installs and removes the drop rules and records their times; nil
+	// is the partition itself. Tests set it to make an injection fail after
+	// some members' rules were installed.
+	drops s07Drops
+}
+
+// s07Drops is what installs and removes a cut's drop rules.
+type s07Drops interface {
+	Inject(ctx context.Context) error
+	Remove(ctx context.Context) error
+	Record() netfault.Record
+}
+
+func (c *s07Cut) dropper() s07Drops {
+	if c.drops != nil {
+		return c.drops
+	}
+	return c.Partition
 }
 
 // Inject writes the cut's state, injects it, and writes when each drop rule
-// it installed took effect, also when the injection failed part way.
+// it installed took effect, also when the injection failed part way. Only an
+// injection that succeeded marks the rules complete: one that failed may
+// have installed some members' rules and not the others'.
 func (c *s07Cut) Inject(ctx context.Context) error {
 	now := time.Now().UTC()
 	c.writeState(func(f *s07CutFile) { f.InjectRequestedAt = &now })
-	err := c.Partition.Inject(ctx)
-	rules := c.Record().RuleTimes
-	c.writeState(func(f *s07CutFile) { f.DropRules = rules })
+	err := c.dropper().Inject(ctx)
+	rules := c.dropper().Record().RuleTimes
+	c.writeState(func(f *s07CutFile) { f.DropRules, f.DropRulesComplete = rules, err == nil })
 	return err
 }
 
 // Remove removes the cut and writes how that went, with when each drop rule
 // was taken away.
 func (c *s07Cut) Remove(ctx context.Context) error {
-	err := c.Partition.Remove(ctx)
+	err := c.dropper().Remove(ctx)
 	now := time.Now().UTC()
-	rules := c.Record().RuleTimes
+	rules := c.dropper().Record().RuleTimes
 	c.writeState(func(f *s07CutFile) {
 		f.DropRules = rules
 		if err != nil {

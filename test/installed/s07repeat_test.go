@@ -343,8 +343,10 @@ func TestS07RepeatReportsItsOwnDropRuleTimes(t *testing.T) {
 		return netfault.RuleTime{Endpoint: m0, Path: m1 + " -> " + m0, Rule: "-A NETFAULT-IN -s 10.42.2.31/32 -j DROP",
 			InstalledAt: issued.Add(in), RemovedAt: &removed}
 	}
-	rec.cut = &s07CutFile{DropRules: []netfault.RuleTime{rule(rec.FaultIssuedAt, time.Second, 2*time.Minute)}}
-	c.cut = &s07CutFile{DropRules: []netfault.RuleTime{rule(c.FaultIssuedAt, 3*time.Second, 3*time.Minute)}}
+	rec.cut = &s07CutFile{DropRulesComplete: true,
+		DropRules: []netfault.RuleTime{rule(rec.FaultIssuedAt, time.Second, 2*time.Minute)}}
+	c.cut = &s07CutFile{DropRulesComplete: true,
+		DropRules: []netfault.RuleTime{rule(c.FaultIssuedAt, 3*time.Second, 3*time.Minute)}}
 	m := s07Measurements(rec)
 	second, ok := m["secondCut"].(map[string]any)
 	if !ok {

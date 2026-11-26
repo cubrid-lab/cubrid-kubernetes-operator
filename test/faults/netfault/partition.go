@@ -115,7 +115,9 @@ type Record struct {
 // on the run's clock in UTC, right after the command that installed it in
 // the endpoint's network namespace returned successfully, and RemovedAt
 // right after the first command that removed it returned and the rules read
-// back showed it gone. The rules of one endpoint are installed by one
+// back showed it gone. Each is an upper bound: the rule changed at some
+// point while the command ran, not exactly at the time recorded. The rules
+// of one endpoint are installed by one
 // command, which adds the jump to the drop chains last, and removed by one,
 // so they share their times. A rule whose install command failed has no
 // RuleTime; one not seen removed, or seen removed only after a removal

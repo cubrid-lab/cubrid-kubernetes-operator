@@ -2185,7 +2185,9 @@ Other measurements, from the cut's issue on the run's clock unless named:
 `faultConfirmedWithin`, `dropRulesInstalledWithin` (the last drop rule took
 effect, so every rule was in place) and `dropRulesRemovedWithin` (the last
 was taken away; `unknown` while any rule was not seen removed), both from
-`dropRules` in `cut.json`; with `-partition-repeat`, the second cut's own
+`dropRules` in `cut.json` and both `unknown` unless the injection succeeded
+(`dropRulesComplete`), since an injection that failed part way lists only
+the members it reached; with `-partition-repeat`, the second cut's own
 values, from the second cut's issue and its `repeat/cut.json`, are
 `secondCut.dropRulesInstalledWithin` and `secondCut.dropRulesRemovedWithin`;
 `triggerObservedWithin`,
@@ -2251,10 +2253,21 @@ Evidence, under `S07/<variant>/`:
   namespace, adding the jump to the drop chains last, so they share a time;
   an inbound cut has the member rules in the cut-off member, an outbound cut
   in each other member, each at its own time. A rule whose install command
-  failed is not listed. The same list is in `record.json` as
-  `partition.ruleTimes`. Compare these times with the clients' UTC write
-  times to see whether a write acknowledged around the cut was sent before
-  its member's rules took effect;
+  failed is not listed, and when an install command fails after others
+  succeeded, the list keeps the rules of the members reached and
+  `dropRulesComplete` is not set; it is set only when the whole injection
+  succeeded. The same list is in `record.json` as `partition.ruleTimes`.
+  `installedAt` is when the successful command returned to the run, through
+  `kubectl exec`: an upper bound on when the rules were installed, not the
+  moment packets started to be dropped. A write sent after `installedAt`,
+  on the same clock, was sent with the rules in place. A write sent before
+  it does not show
+  that the rules were not yet in place: the rules took effect at some point
+  between the command's start and its return, and a write inside that
+  interval stays ambiguous. `removedAt` bounds the removal the same way.
+  The clients' times are on the client node's clock and these on the run's,
+  so compare them across nodes only through the clock offsets recorded in
+  `record.json` (`clockOffsetsSeconds`);
 - `timeline.jsonl`: the fault flow's steps;
 - `data-check.json` and `open-connection.jsonl`; `unsettled-rows.json`
   instead of `data-check.json`, and `engine-logs/<member>/`, when the
