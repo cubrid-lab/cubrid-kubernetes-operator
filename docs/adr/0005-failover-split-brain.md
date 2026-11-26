@@ -432,91 +432,33 @@ The records are in `docs/poc/RESULTS.md`.
      answered as a non-master.
 
      *Note (#938, 2026-11-25 UTC):* **M's Pod replaced during the role
-     probes.** When a quarantine starts beside M, or is rebased on M, and
-     M's Pod read before the probes differs from the one read after them,
-     either Pod can have given M's claim.
-     - **What is recorded.** The quarantine records M in the Pod read after
-       the probes, as it does otherwise, and records the departure of the Pod
-       read before them.
-     - **Confirmed end.** That departure counts as confirmed only when the
-       kubelet's confirmed termination of that very Pod is read or recorded
-       in the same pass. It cannot be recorded later, because the member's
-       last Pod seen is then its next one.
-     - **Without a confirmed end,** the old Pod is a recorded Pod gone
-       without one: the next pass makes the quarantine
-       `WriteQuarantinedMasterChanged`.
-     - **A confirmed end of an earlier Pod does not stand in for the recorded
-       Pod.** This applies when the quarantine records a later Pod of M than
-       the one whose end was confirmed: the Pod read after the probes when M's
-       Pod was replaced during them, or the next Pod the quarantine followed
-       M to after that end. Another active master rebases the quarantine only
-       once the recorded Pod has answered as a non-master during the wait, or
-       its own end is confirmed. Until then the quarantine is held, neither
-       rebased nor escalated, as for a Pod marked for deletion.
-       - An answer counts when it was given in the pass or in the pass before
-         it. The quarantine then records it (`observedMasterAnsweredPodUID`),
-         and the wait is over for good: the recorded Pod being silent later
-         does not escalate it, and another active master then rebases it.
-         A new Pod never matches an earlier answer. A container restart in
-         the recorded Pod forgets that Pod's own answer: the wait starts
-         again for the restarted process, whose deadline is then the later of
-         the one set before and 90 seconds after the restart. A restart of a
-         Pod that never answered keeps the deadline. A new 90 seconds
-         therefore needs a real non-master answer of that Pod first. If the recorded Pod claims the active
-         master again, the departure and the answer are cleared, the
-         quarantine stays beside it, and a claim beside another active master
-         escalates it.
-       - When M had no Pod after the probes of the starting pass, the
-         quarantine records no Pod for M and waits all the same. No answer
-         counts while no Pod of M is recorded, also one that reaches M's
-         Service. The first Pod of M read later is not judged a replacement
-         lost without a confirmed end: that pass holds the quarantine and
-         follows M to the Pod with a fresh 90-second deadline, after which
-         the Pod's answer or end is needed as above. If no Pod of M is read
-         by the deadline set at the start, the quarantine escalates.
-       - The deadline is 90 seconds (the bound of the exception above) after
-         the pass that recorded the earlier end or followed M to another
-         Pod. It replaces any hold of a deletion mark. A container restart
-         in the recorded Pod does not set it again, unless it forgets an
-         answer, as above. Both passes raise the
-         quarantine's revision, so a failed status write does not lose the
-         deadline. A wait found without a deadline, as one stored by an
-         earlier version of the Operator, gets one in its first waiting
-         pass, which may not raise the revision: a failed status write then
-         only restarts the 90 seconds, which keeps the read-write path closed
-         longer. A failed status write in the pass that records the answer
-         loses it the same way: the wait goes on, which can only escalate
-         the quarantine, never release it.
-       - After the deadline, the recorded Pod counts as gone without a
-         confirmed end: a Pod that stayed silent or refused the Operator's
-         token makes the quarantine `WriteQuarantinedMasterChanged`.
-       - While it waits, the quarantine's description states what it waits
-         for: the earlier Pod whose end was confirmed, the recorded Pod whose
-         answer or end it needs, and the deadline. It does not call M the
-         only active master. Once the wait is over, or with M's own end
-         confirmed, it says that one other active master rebases the
-         quarantine.
-       - A pass that reads M with no Pod at all keeps the last Pod recorded:
-         the quarantine does not follow M to no Pod. When that Pod's own end
-         was confirmed, the next active master rebases the quarantine, as
-         before this note.
-       - Once the recorded Pod has itself claimed the active master after the
-         start, it has given a claim; `main`'s rules then apply to it, and
-         another active master escalates the quarantine.
-       - If the recorded Pod is marked for deletion or read terminated, the
-         mark, hold and confirmation above apply to it.
-       - If M is then found in neither Pod, the recorded Pod is gone too. It
-         needs its own confirmed end, or the quarantine escalates as above.
-       - This also holds when the quarantine followed M to its next Pod after
-         a confirmed end seen in a later pass.
+     probes.** When a `WriteQuarantinedMemberUnverified` quarantine starts
+     beside M, or is rebased on M, and M's Pod read before the probes
+     differs from the one read after them, either Pod can have given M's
+     claim. The quarantine records M in the Pod read after the probes and
+     records the departure of the Pod read before them. That departure
+     counts as confirmed only when the kubelet's confirmed termination of
+     that very Pod is read or recorded in the same pass; without it, the
+     old Pod is a recorded Pod gone without a confirmed end, as above.
+     - **A confirmed end of one Pod never stands in for another Pod of M.**
+       While the end on record is an earlier Pod's than the recorded one,
+       another active master rebases the quarantine only once the recorded
+       Pod has answered as a non-master, or its own end is confirmed. Until
+       then the quarantine is held, neither rebased nor escalated, for a
+       bounded wait of 90 seconds (the bound of the exception above), and
+       then becomes `WriteQuarantinedMasterChanged`. Rule 2 is never
+       suspended, and two active masters always quarantine.
+       `docs/observability.md` states the mechanics of the wait.
+     - **Status:** `writeQuarantine.observedMasterAnsweredPodUID`, optional,
+       records that the recorded Pod answered during the wait; it stops
+       applying as its API comment states.
 
      Why: in Kind run 45388185821 (the token rotation of scenario S14), the
-     quarantine recorded only the replacement, which had never answered.
-     The confirmed termination of the old Pod then never matched it, and the
+     quarantine recorded only the replacement, which had never answered, so
+     the old Pod's confirmed termination never matched it and the
      quarantine became `WriteQuarantinedMasterChanged` once CUBRID moved the
-     role.
+     role. When a quarantine starts does not change.
 
-     - **What does not change:** when a quarantine starts.
      - **Escalation removed:** with the old Pod's confirmed end and a later
        non-master answer from the recorded Pod, another active master now
        rebases the quarantine, which can then be released automatically.
@@ -532,6 +474,8 @@ The records are in `docs/poc/RESULTS.md`.
        watch and reads see that report only after the pass that read the
        replacement, the end counts as not confirmed, and the quarantine
        escalates.
+     - **Evidence:** unit and fake-client tests only; Kind run 45388185821
+       is the failing case, and Kind is no evidence of VM faults.
 
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,
