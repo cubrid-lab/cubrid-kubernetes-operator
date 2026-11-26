@@ -431,6 +431,52 @@ The records are in `docs/poc/RESULTS.md`.
      such a member counts like a verified one only once its next Pod has
      answered as a non-master.
 
+     *Note (#938, 2026-11-25 UTC):* **M's Pod replaced during the role
+     probes.** When a `WriteQuarantinedMemberUnverified` quarantine starts
+     beside M, or is rebased on M, and M's Pod read before the probes
+     differs from the one read after them, either Pod can have given M's
+     claim. The quarantine records M in the Pod read after the probes and
+     records the departure of the Pod read before them. That departure
+     counts as confirmed only when the kubelet's confirmed termination of
+     that very Pod is read or recorded in the same pass; without it, the
+     old Pod is a recorded Pod gone without a confirmed end, as above.
+     - **A confirmed end of one Pod never stands in for another Pod of M.**
+       While the end on record is an earlier Pod's than the recorded one,
+       another active master rebases the quarantine only once the recorded
+       Pod has answered as a non-master, or its own end is confirmed. Until
+       then the quarantine is held, neither rebased nor escalated, for a
+       bounded wait of 90 seconds (the bound of the exception above), and
+       then becomes `WriteQuarantinedMasterChanged`. Rule 2 is never
+       suspended, and two active masters always quarantine.
+       `docs/observability.md` states the mechanics of the wait.
+     - **Status:** `writeQuarantine.observedMasterAnsweredPodUID`, optional,
+       records that the recorded Pod answered during the wait; it stops
+       applying as its API comment states.
+
+     Why: in Kind run 45388185821 (the token rotation of scenario S14), the
+     quarantine recorded only the replacement, which had never answered, so
+     the old Pod's confirmed termination never matched it and the
+     quarantine became `WriteQuarantinedMasterChanged` once CUBRID moved the
+     role. When a quarantine starts does not change.
+
+     - **Escalation removed:** with the old Pod's confirmed end and a later
+       non-master answer from the recorded Pod, another active master now
+       rebases the quarantine, which can then be released automatically.
+       Before, it escalated to `WriteQuarantinedMasterChanged`.
+     - **Escalations added:** a master Pod replaced during the probes
+       without a confirmed end now escalates on the next pass. Before, only
+       another active master, or M verified as no active master, escalated
+       it. So does a recorded Pod followed after an earlier Pod's confirmed
+       end and then gone without its own, and one that gives no non-master
+       answer within the 90-second wait, even with no other active master.
+     - **Late observation of the end:** the kubelet reports a graceful
+       deletion's end before the Pod object is removed. If the Operator's
+       watch and reads see that report only after the pass that read the
+       replacement, the end counts as not confirmed, and the quarantine
+       escalates.
+     - **Evidence:** unit and fake-client tests only; Kind run 45388185821
+       is the failing case, and Kind is no evidence of VM faults.
+
   A fresh Node Lease plus Pod status saying no database is running is
   **not sufficient to verify a fence**. A Lease records kubelet activity,
   not linearizable absence of a DB process; status may be delayed and a

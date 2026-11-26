@@ -1101,31 +1101,55 @@ type WriteQuarantine struct {
 	// beside; empty for WriteQuarantinedMultipleMasters.
 	// +optional
 	ObservedMaster string `json:"observedMaster,omitempty"`
-	// observedMasterPodUID is the UID of observedMaster's Pod.
+	// observedMasterPodUID is the UID of observedMaster's Pod: the Pod read
+	// in the last observation that found one. An observation that reads
+	// observedMaster with no Pod keeps it. It is empty while no Pod of
+	// observedMaster was read since the quarantine started beside it.
 	// +optional
 	ObservedMasterPodUID string `json:"observedMasterPodUID,omitempty"`
 	// observedMasterRestartCount is the restart count of observedMaster's
 	// database container.
 	// +optional
 	ObservedMasterRestartCount int32 `json:"observedMasterRestartCount,omitempty"`
-	// observedMasterLeavingPodUID is the UID of observedMaster's Pod when
-	// the Operator saw it being deleted gracefully, or its termination
-	// confirmed. While it is set, observedMaster ceasing to claim an active
-	// master does not make the quarantine WriteQuarantinedMasterChanged: one
-	// other active master becomes the observed master instead.
+	// observedMasterLeavingPodUID is the UID of a Pod of observedMaster that
+	// is leaving: observedMasterPodUID when the Operator saw it being deleted
+	// gracefully or its termination confirmed, or an earlier Pod of
+	// observedMaster, replaced during the role probes or before the
+	// quarantine followed observedMaster to observedMasterPodUID. While it
+	// is set, observedMaster ceasing to claim an active master does not make
+	// the quarantine WriteQuarantinedMasterChanged at once.
 	// +optional
 	ObservedMasterLeavingPodUID string `json:"observedMasterLeavingPodUID,omitempty"`
 	// observedMasterLeavingConfirmed is set once the kubelet confirmed the
-	// termination of that Pod. Only then is the quarantine rebased on
-	// another active master.
+	// termination of that Pod. Only then can the quarantine be rebased on
+	// one other active master; when that Pod is not observedMasterPodUID,
+	// only once observedMasterPodUID has also answered as no active master
+	// during the wait for it (kept in observedMasterAnsweredPodUID), or
+	// ended.
 	// +optional
 	ObservedMasterLeavingConfirmed bool `json:"observedMasterLeavingConfirmed,omitempty"`
-	// observedMasterHoldUntil is when a deletion of observedMaster's Pod
-	// that is not confirmed stops holding the quarantine back from
-	// WriteQuarantinedMasterChanged: the Operator's time when it first saw
-	// the deletion, plus the Pod's grace period and 90 seconds.
+	// observedMasterHoldUntil is when a wait for observedMaster's Pod stops
+	// holding the quarantine back from WriteQuarantinedMasterChanged. For a
+	// deletion of observedMasterPodUID that is not confirmed: the Operator's
+	// time when it first saw the deletion, plus the Pod's grace period (at
+	// most 10 minutes of it) and 90 seconds. For a confirmed end of an
+	// earlier Pod: 90 seconds after the pass that recorded that end or
+	// followed observedMaster to another observedMasterPodUID, or, for a
+	// wait found without a deadline, after its first waiting pass.
 	// +optional
 	ObservedMasterHoldUntil *metav1.Time `json:"observedMasterHoldUntil,omitempty"`
+	// observedMasterAnsweredPodUID is observedMasterPodUID once that Pod has
+	// answered as no active master while the quarantine waited for it after
+	// the confirmed end of an earlier Pod. While the two are equal the wait
+	// is over: the Pod being silent later does not escalate the quarantine,
+	// and one other active master can rebase it. If the Pod claims the
+	// active master again, the departure and this field are cleared, the
+	// quarantine stays beside it, and a claim beside another active master
+	// escalates it. A new observedMasterPodUID never matches the field, and
+	// a container restart in the Pod clears it and gives the restarted
+	// process at least 90 seconds to answer.
+	// +optional
+	ObservedMasterAnsweredPodUID string `json:"observedMasterAnsweredPodUID,omitempty"`
 	// members are the members the quarantine is about: the unverified
 	// members, or the active masters.
 	// +listType=map

@@ -346,6 +346,22 @@ func (r *haRun) s14Token(variant string) {
 	logs := r.scenarioLogs("S14/" + variant)
 	// A token change injects no fault: nothing cuts the members off.
 	defer func() { logs.conclude(context.Background(), true, &result) }()
+	// A failed variant keeps the CubridCluster with its status, so that a
+	// write quarantine left in force shows the master and Pod it recorded
+	// (#938). The CubridCluster is one of tokenPlaces, which never shows a
+	// token, and the file is redacted as all evidence is.
+	defer func() {
+		if result.Result == evidence.Pass {
+			return
+		}
+		out, err := utils.RunQuiet(exec.Command("kubectl", "-n", r.namespace, "get", "cubridcluster", r.cluster,
+			"-o", "yaml", "--request-timeout=20s"))
+		if err != nil {
+			out += "\n" + err.Error()
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "the CubridCluster after S14/%s failed:\n%s\n", variant, redactor.Redact([]byte(out)))
+		addEvidence(&result, writeScenarioFile("S14/"+variant+"/cluster.yaml", []byte(out)))
+	}()
 	// Replacing the members takes their logs with them.
 	logs.beforeFault(context.Background())
 	var summary strings.Builder

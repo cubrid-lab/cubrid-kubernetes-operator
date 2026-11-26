@@ -397,6 +397,87 @@ Pod:
   ceasing to claim while its Pod is not seen being deleted, still makes it
   `WriteQuarantinedMasterChanged`. No rebase is made in a pass that could
   not read the members' Pods.
+- When the master's Pod is replaced during the role probes of the pass
+  that starts a `WriteQuarantinedMemberUnverified` quarantine or rebases
+  one, either Pod can have answered as the master (#938; ADR-0005,
+  section 8). The quarantine records the master in its Pod read after the
+  probes (`observedMasterPodUID`) and the departure of the Pod read before
+  them (`observedMasterLeavingPodUID`).
+  - That departure is confirmed (`observedMasterLeavingConfirmed`) only by
+    the kubelet's confirmed termination of that very Pod, read or recorded
+    in the same pass. It cannot be recorded in a later pass, because the
+    member's last Pod seen is then its next one.
+  - Without that confirmation, the next pass makes the quarantine
+    `WriteQuarantinedMasterChanged`. That includes a graceful deletion whose
+    end the Operator's watch and reads see only after the pass that read the
+    replacement; the kubelet itself reports the end before the Pod object
+    is removed.
+- **The wait for the recorded Pod.** A confirmed end of an earlier Pod
+  does not stand in for the recorded Pod: the Pod read after the probes, or
+  the next Pod the quarantine followed the master to after that end.
+  Another active master rebases the quarantine only once the recorded Pod
+  has answered as a non-master during the wait, or its own end is
+  confirmed. Until then the quarantine is held, neither rebased nor
+  escalated. Two active masters still make it
+  `WriteQuarantinedMasterChanged`.
+  - **What counts as an answer.** A non-master answer in the pass or the
+    pass before it, from the recorded Pod's current container start. An
+    answer in a pass in which the recorded Pod changed between the reads
+    before and after the probes does not count, and nor does an answer
+    while no Pod of the master is recorded, also one that reaches the
+    master's Service.
+  - **The answer is kept** in `observedMasterAnsweredPodUID`, and the wait
+    is over for good: later silence of that Pod does not escalate the
+    quarantine, and one other active master rebases it. A new Pod never
+    matches an earlier answer.
+  - **A container restart** in the recorded Pod forgets that Pod's own
+    answer. The restarted process then has until the later of the deadline
+    and 90 seconds after the restart to answer. A restart of a Pod that
+    never answered keeps the deadline, so a new 90 seconds always needs a
+    real non-master answer first.
+  - **A claim by the recorded Pod.** If the recorded Pod claims the active
+    master again, the departure and the answer are cleared, and the
+    quarantine stays beside it. A claim beside another active master makes
+    it `WriteQuarantinedMasterChanged`.
+  - **The deadline** is `observedMasterHoldUntil`: 90 seconds after the pass
+    that recorded the earlier end or followed the master to another Pod, in
+    place of any deletion-mark hold. A container restart does not set it
+    again, except as above. A waiting quarantine stored without a deadline,
+    as by an earlier version of the Operator, gets one 90 seconds after its
+    first waiting pass. After the deadline, a recorded Pod that stayed
+    silent or refused the token makes the quarantine
+    `WriteQuarantinedMasterChanged`, even with no other active master.
+  - **The recorded Pod's own end.** A recorded Pod marked for deletion is
+    held by its own mark, as above. One read terminated, or with its own
+    termination record, has its end confirmed, and the next active master
+    rebases the quarantine. If the master is found in neither Pod, the
+    recorded Pod needs its own confirmed end, or the quarantine becomes
+    `WriteQuarantinedMasterChanged`.
+  - **No Pod.** A pass that reads the master with no Pod keeps the last Pod
+    recorded (`observedMasterPodUID` is not cleared). A master with no Pod
+    after the probes of the starting pass is recorded with none
+    (`observedMasterPodUID` empty). The first Pod of it read later is not
+    judged a replacement lost without a confirmed end: that pass holds the
+    quarantine, also after the deadline set at the start, and follows the
+    master to the Pod with a fresh 90-second deadline. Without any Pod read
+    by the deadline set at the start, the quarantine becomes
+    `WriteQuarantinedMasterChanged`.
+  - **The description** in `RoutingReady`, `Ready` and Events says, while
+    the quarantine waits, the earlier Pod whose end was confirmed, the
+    recorded Pod whose answer or end it needs ("no Pod read yet" when none
+    is recorded), and the deadline. Once the wait is over, or with the
+    master's own end confirmed, it says that one other active master
+    rebases the quarantine. It does not call the old master the only active
+    master in either case.
+  - **Failed status writes.** A quarantine revision held in memory whose
+    status write failed is kept over the earlier revision the status read
+    still holds. The passes that record the earlier end, follow the master
+    to another Pod, or see a container restart in it raise the revision, so
+    a failed write does not lose their deadline. The first waiting pass of a
+    quarantine stored without a deadline, and the pass that records the
+    answer, may not raise the revision. A failed write there only restarts
+    the 90 seconds or keeps the wait going, which can escalate the
+    quarantine but never release it.
 - A member that gives no answer is not unverified while the node its Pod was
   last seen scheduled on carries the taint
   `node.kubernetes.io/out-of-service` with the effect `NoExecute` (ADR-0005,

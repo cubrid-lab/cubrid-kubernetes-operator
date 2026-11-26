@@ -77,6 +77,9 @@ type quarantineScenario struct {
 	// unstable and identitiesUnknown are passed to the next pass only.
 	unstable          map[string]bool
 	identitiesUnknown bool
+	// podsBefore are the members' Pods read before the probes of the next
+	// pass only; nil stands for the same Pods as identities.
+	podsBefore map[string]memberIdentity
 	// nodes are the members' last nodes; fences the members whose node
 	// carries the out-of-service taint in the next passes.
 	nodes        map[string]string
@@ -102,8 +105,8 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: "cluster-uid", Members: quarantineMembers, Observations: obs,
 		Identities: s.identities, Unstable: s.unstable, IdentitiesUnknown: s.identitiesUnknown,
-		LastResolvedPrimary: s.lastResolved,
-		Verifications:       s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
+		PodsBefore: s.podsBefore, LastResolvedPrimary: s.lastResolved,
+		Verifications: s.verifications, Quarantine: s.quarantine.DeepCopy(), Terminations: s.terminations,
 		LastRelease: s.lastRelease.DeepCopy(), ExemptionOwned: !s.exemptionNotOwned,
 		Nodes: s.nodes, Fences: s.fences, MemberFences: s.memberFences, ReturnRequest: s.returnRequest,
 		PendingSince: s.pendingSince,
@@ -120,7 +123,7 @@ func (s *quarantineScenario) pass(now time.Time, obs map[string]RoleObservation)
 	if d.Released != nil {
 		s.lastRelease = d.Released
 	}
-	s.unstable, s.identitiesUnknown = nil, false
+	s.unstable, s.identitiesUnknown, s.podsBefore = nil, false, nil
 	s.pendingSince = d.PendingSince
 	return d
 }

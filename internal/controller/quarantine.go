@@ -372,6 +372,9 @@ type quarantineInput struct {
 	// Unstable are the members whose Pod differed between the reads before
 	// and after the probes: their answers verify nothing in this pass.
 	Unstable map[string]bool
+	// PodsBefore are the members' Pods read before the probes; nil when
+	// they were not read.
+	PodsBefore map[string]memberIdentity
 	// IdentitiesUnknown says that the members' Pods could not be read. Only
 	// the rule of two active masters is applied then; the verifications are
 	// kept as they were, no quarantine is released, and the caller keeps the
@@ -1026,6 +1029,33 @@ func startQuarantine(in quarantineInput, masters, named []string) (*databasev1al
 	return newQuarantine(in, reason, master, named)
 }
 
+// recordMasterDeparture records, for q's master M recorded in its Pod read
+// after the probes, the departure of M's Pod read before them when the two
+// differ: M's Pod was replaced during the probes, and either Pod can have
+// given M's active-master claim (#938). The departure is confirmed when the
+// kubelet's confirmed termination of that Pod is read or recorded in this
+// pass; it cannot be recorded in a later one, since the member's last Pod
+// seen is then the next one. Without it, masterDeparture judges the old Pod
+// lost, as any recorded master Pod gone without a confirmed end.
+func recordMasterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine) {
+	m := q.ObservedMaster
+	before, ok := in.PodsBefore[m]
+	if in.IdentitiesUnknown || !ok || before.PodUID == "" || before.PodUID == q.ObservedMasterPodUID {
+		return
+	}
+	q.ObservedMasterLeavingPodUID = before.PodUID
+	q.ObservedMasterLeavingConfirmed = before.Terminated ||
+		slices.ContainsFunc(in.Terminations, func(t databasev1alpha1.MemberTermination) bool {
+			return t.Name == m && t.PodUID == before.PodUID
+		})
+	if q.ObservedMasterLeavingConfirmed {
+		// How long the quarantine waits for the recorded Pod to answer
+		// (masterDeparture).
+		until := metav1.NewTime(in.Now.Add(quarantineStartBound))
+		q.ObservedMasterHoldUntil = &until
+	}
+}
+
 // newQuarantine is a new quarantine with reason beside master about members.
 func newQuarantine(in quarantineInput, reason databasev1alpha1.WriteQuarantineReason, master string,
 	members []string) (*databasev1alpha1.WriteQuarantine, error) {
@@ -1042,6 +1072,9 @@ func newQuarantine(in quarantineInput, reason databasev1alpha1.WriteQuarantineRe
 	if master != "" {
 		q.ObservedMasterPodUID = in.Identities[master].PodUID
 		q.ObservedMasterRestartCount = in.Identities[master].RestartCount
+		if reason == databasev1alpha1.WriteQuarantinedMemberUnverified {
+			recordMasterDeparture(in, q)
+		}
 	}
 	for _, m := range members {
 		q.Members = append(q.Members, quarantineMember(in, m))
@@ -1103,6 +1136,8 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 		id := in.Identities[next]
 		q.ObservedMaster, q.ObservedMasterPodUID, q.ObservedMasterRestartCount = next, id.PodUID, id.RestartCount
 		q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
+		q.ObservedMasterAnsweredPodUID = ""
+		recordMasterDeparture(in, q)
 		q.Members = slices.DeleteFunc(q.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == next })
 		if !slices.ContainsFunc(q.Members, func(r databasev1alpha1.WriteQuarantineMember) bool { return r.Name == former }) {
 			q.Members = append(q.Members, quarantineMember(in, former))
@@ -1141,9 +1176,8 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	slices.SortFunc(q.Members, func(a, b databasev1alpha1.WriteQuarantineMember) int {
 		return ordinal[a.Name] - ordinal[b.Name]
 	})
-	if id := in.Identities[q.ObservedMaster]; q.ObservedMaster != "" && !in.IdentitiesUnknown &&
-		(id.PodUID != q.ObservedMasterPodUID || id.RestartCount != q.ObservedMasterRestartCount) {
-		q.ObservedMasterPodUID, q.ObservedMasterRestartCount, revised = id.PodUID, id.RestartCount, true
+	if followMaster(in, q) {
+		revised = true
 	}
 	if !revised {
 		return false, nil
@@ -1155,6 +1189,32 @@ func reviseQuarantine(in quarantineInput, q *databasev1alpha1.WriteQuarantine, m
 	q.Revision++
 	q.ReleaseToken, q.ReleaseCheckSince, q.ReleaseCheckLastTime = token, nil, nil
 	return true, nil
+}
+
+// followMaster records q's master in the Pod read in this pass and reports
+// whether that changed q. It does not follow the master to no Pod: while
+// the member has none, the last Pod read stays recorded, so that its
+// departure is judged as before (#938). Following the master to its next Pod
+// after a confirmed end starts the wait for that Pod (masterDeparture), with
+// its own deadline in place of any deletion-mark hold; a container restart
+// in the same Pod keeps the deadline.
+func followMaster(in quarantineInput, q *databasev1alpha1.WriteQuarantine) bool {
+	id := in.Identities[q.ObservedMaster]
+	if q.ObservedMaster == "" || in.IdentitiesUnknown || id.PodUID == "" ||
+		(id.PodUID == q.ObservedMasterPodUID && id.RestartCount == q.ObservedMasterRestartCount) {
+		return false
+	}
+	// A new Pod starts the wait with its own deadline; a container restart
+	// in the same Pod keeps the deadline. An answer recorded for another Pod
+	// does not match the new one, and one given before a restart is forgotten
+	// (forgetEarlierDeparture).
+	if q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != "" &&
+		q.ObservedMasterLeavingPodUID != id.PodUID && id.PodUID != q.ObservedMasterPodUID {
+		until := metav1.NewTime(in.Now.Add(quarantineStartBound))
+		q.ObservedMasterHoldUntil = &until
+	}
+	q.ObservedMasterPodUID, q.ObservedMasterRestartCount = id.PodUID, id.RestartCount
+	return true
 }
 
 // quarantineHoldGraceCap is the most of a Pod's deletion grace period that
@@ -1197,6 +1257,100 @@ const (
 	departureLost
 )
 
+// forgetEarlierDeparture clears q's departure of a Pod earlier than the one
+// q records for its master when the master's Pod in this pass, id, is
+// neither of them: that later Pod is gone or replaced as well. The earlier
+// end covers only its own Pod, so masterDeparture judges the later Pod's
+// departure anew, and without its own confirmed end it is lost. It also
+// forgets an answer of the recorded Pod given before a container restart
+// read in this pass, and then gives the restarted process at least
+// quarantineStartBound from now to answer.
+func forgetEarlierDeparture(q *databasev1alpha1.WriteQuarantine, id memberIdentity, recordedEnded bool, now time.Time) {
+	leaving, recorded := q.ObservedMasterLeavingPodUID, q.ObservedMasterPodUID
+	if recorded != "" && id.PodUID == recorded && id.RestartCount != q.ObservedMasterRestartCount &&
+		q.ObservedMasterAnsweredPodUID == recorded {
+		// The recorded Pod's container restarted: its answer before the
+		// restart no longer ends the wait, which starts again for the
+		// restarted process, with at least quarantineStartBound to answer.
+		q.ObservedMasterAnsweredPodUID = ""
+		if until := now.Add(quarantineStartBound); q.ObservedMasterHoldUntil == nil ||
+			q.ObservedMasterHoldUntil.Time.Before(until) {
+			next := metav1.NewTime(until)
+			q.ObservedMasterHoldUntil = &next
+		}
+	}
+	if leaving == "" || leaving == recorded {
+		return
+	}
+	// The recorded Pod itself being deleted, ended or replaced is judged on
+	// its own, by the mark, hold and confirmation that apply to any recorded
+	// Pod. With no Pod recorded, the first Pod read of the master is not a
+	// replacement: the wait goes on for it (recordedPodWait, followMaster).
+	if (recorded != "" && id.PodUID != leaving && id.PodUID != recorded) ||
+		(id.PodUID == recorded && (id.Deleting || id.Terminated)) || recordedEnded {
+		q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
+	}
+}
+
+// waitingForRecordedPod reports whether q holds the confirmed end of a Pod of
+// its master earlier than the Pod it records, and that Pod has not answered
+// as a non-master during the wait (ObservedMasterAnsweredPodUID): until it
+// answers or ends, q waits for it (masterDeparture).
+func waitingForRecordedPod(q *databasev1alpha1.WriteQuarantine) bool {
+	return q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != "" &&
+		q.ObservedMasterLeavingPodUID != q.ObservedMasterPodUID &&
+		(q.ObservedMasterAnsweredPodUID == "" || q.ObservedMasterAnsweredPodUID != q.ObservedMasterPodUID)
+}
+
+// recordedPodWait is the departure while q waits for its recorded Pod. The
+// confirmed end is an earlier Pod's, and the recorded Pod has neither
+// answered as a non-master nor ended. The quarantine waits, as for a Pod
+// marked for deletion: departureHeld until ObservedMasterHoldUntil, and
+// departureLost after it. The deadline is set quarantineStartBound after the
+// pass that recorded the earlier end (recordMasterDeparture) or followed the
+// master to the recorded Pod (reviseQuarantine), both of which raise the
+// revision. A wait found without one gets it here, in a pass that may not
+// raise the revision: a failed status write then only starts the deadline
+// again, which lengthens the wait and keeps the read-write path closed.
+func recordedPodWait(in quarantineInput, q *databasev1alpha1.WriteQuarantine) departure {
+	if q.ObservedMasterPodUID == "" && !in.IdentitiesUnknown && in.Identities[q.ObservedMaster].PodUID != "" {
+		// The first Pod of the master read since a start without one: this
+		// pass follows the master to it with its own deadline (followMaster).
+		return departureHeld
+	}
+	if q.ObservedMasterHoldUntil == nil {
+		until := metav1.NewTime(in.Now.Add(quarantineStartBound))
+		q.ObservedMasterHoldUntil = &until
+	}
+	if in.Now.After(q.ObservedMasterHoldUntil.Time) {
+		return departureLost
+	}
+	return departureHeld
+}
+
+// recordedPodAnswered reports whether q's master answered as a non-master
+// from the Pod q records for it: in this pass, or in the pass before it,
+// whose answer the verifications kept.
+func recordedPodAnswered(in quarantineInput, q *databasev1alpha1.WriteQuarantine) bool {
+	m, uid, restarts := q.ObservedMaster, q.ObservedMasterPodUID, q.ObservedMasterRestartCount
+	if uid == "" {
+		// No Pod of the master was read yet: an answer through its Service
+		// comes from no recorded Pod and does not count.
+		return false
+	}
+	id := in.Identities[m]
+	if !in.IdentitiesUnknown && id.PodUID == uid {
+		// Only an answer of the Pod's current container start counts.
+		restarts = id.RestartCount
+		if !in.Unstable[m] && nonMasterAnswer(in.Observations[m], in.Now) {
+			return true
+		}
+	}
+	return slices.ContainsFunc(in.Verifications, func(v databasev1alpha1.MemberVerification) bool {
+		return v.Name == m && v.PodUID == uid && v.RestartCount == restarts
+	})
+}
+
 // masterDeparture judges the recorded master's Pod leaving, and keeps what
 // must last in q: the Pod seen marked for deletion
 // (ObservedMasterLeavingPodUID), only the Pod the quarantine recorded for the
@@ -1207,9 +1361,12 @@ const (
 // a terminated state read or a termination record of that Pod UID. A mark
 // alone does not show the process ended: a Pod evicted from a node cut off
 // from the API server is marked while its database runs. The master
-// claiming an active master from another Pod clears it. Without the Pods'
-// reads nothing is set or confirmed (ADR-0005, section 8, as amended by
-// #870).
+// claiming an active master from another Pod clears it. A departure of an
+// earlier Pod than the one the quarantine records (recordMasterDeparture, or
+// the quarantine following the master to its next Pod) covers only that
+// Pod and the recorded one: with the master in neither, the recorded Pod's
+// departure is judged on its own. Without the Pods' reads nothing is set or
+// confirmed (ADR-0005, section 8, as amended by #870).
 func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, masters []string) departure {
 	m := q.ObservedMaster
 	if m == "" {
@@ -1222,12 +1379,14 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 		})
 	}
 	if !in.IdentitiesUnknown {
+		forgetEarlierDeparture(q, id, recorded(q.ObservedMasterPodUID), in.Now)
 		if slices.Contains(masters, m) && q.ObservedMasterLeavingPodUID != "" && id.PodUID != q.ObservedMasterLeavingPodUID {
 			// The master claims again from another Pod. After a confirmed end
 			// of the old Pod that is the master back; otherwise the old
 			// process may still run beside it.
 			confirmed := q.ObservedMasterLeavingConfirmed
 			q.ObservedMasterLeavingPodUID, q.ObservedMasterLeavingConfirmed, q.ObservedMasterHoldUntil = "", false, nil
+			q.ObservedMasterAnsweredPodUID = ""
 			if confirmed {
 				return departureNone
 			}
@@ -1255,6 +1414,13 @@ func masterDeparture(in quarantineInput, q *databasev1alpha1.WriteQuarantine, ma
 	switch {
 	case q.ObservedMasterLeavingPodUID == "":
 		return departureNone
+	case waitingForRecordedPod(q) && !recordedPodAnswered(in, q):
+		return recordedPodWait(in, q)
+	case waitingForRecordedPod(q):
+		// The recorded Pod answered as no active master during the wait:
+		// the wait is over for good, also when the Pod is silent later.
+		q.ObservedMasterAnsweredPodUID = q.ObservedMasterPodUID
+		return departureConfirmed
 	case q.ObservedMasterLeavingConfirmed:
 		return departureConfirmed
 	case q.ObservedMasterHoldUntil == nil || in.Now.After(q.ObservedMasterHoldUntil.Time):
@@ -1459,16 +1625,18 @@ func (r *CubridClusterReconciler) forgetQuarantines(key types.NamespacedName) {
 
 // restoreWriteQuarantine runs first in every pass. A quarantine the status
 // read holds is kept in memory. A quarantine held in memory that the status
-// read does not hold, because its status write failed or the cache is
-// behind, is put back into the status, so that the pass enforces it and
-// writes it again. A quarantine recorded for another cluster UID is reported
+// read does not hold, or holds only in an earlier revision of the same
+// generation, because its status write failed or the cache is behind, is put
+// back into the status, so that the pass enforces it and writes it again. A quarantine recorded for another cluster UID is reported
 // once and enforced.
 func (r *CubridClusterReconciler) restoreWriteQuarantine(ctx context.Context, cluster *databasev1alpha1.CubridCluster) {
 	q := cluster.Status.WriteQuarantine
 	switch held := r.heldQuarantine(cluster); {
-	case q != nil:
+	case q != nil && (held == nil || held.GenerationID != q.GenerationID || held.Revision <= q.Revision):
 		r.holdQuarantine(cluster, q)
 	case held != nil:
+		// No quarantine stored, or an earlier revision of the one held: a
+		// status write failed or the read is behind.
 		cluster.Status.WriteQuarantine = held.DeepCopy()
 		q = cluster.Status.WriteQuarantine
 		logf.FromContext(ctx).Info("Kept a write quarantine the stored status does not hold",
@@ -1685,7 +1853,7 @@ func (r *CubridClusterReconciler) reconcileWriteQuarantine(ctx context.Context, 
 	}
 	d, err := decideWriteQuarantine(quarantineInput{
 		Now: now, ClusterUID: string(cluster.UID), Members: members, Observations: obs, Identities: ids,
-		Unstable: unstable, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
+		Unstable: unstable, PodsBefore: before, IdentitiesUnknown: unknown != nil, LastResolvedPrimary: lastResolved,
 		Terminations:    terminations,
 		Verifications:   withAnswerTimes(cluster.Status.MemberVerifications, state.verifications),
 		Quarantine:      withHeldDeparture(cluster.Status.WriteQuarantine, r.heldQuarantine(cluster)),
@@ -1942,6 +2110,29 @@ func quarantineDescription(q *databasev1alpha1.WriteQuarantine, masters []string
 	case databasev1alpha1.WriteQuarantinedMultipleMasters:
 		why = "more than one active master: " + quarantineMemberText(q.Members)
 	case databasev1alpha1.WriteQuarantinedMemberUnverified:
+		if waitingForRecordedPod(q) {
+			deadline := "set by the next observation"
+			if q.ObservedMasterHoldUntil != nil {
+				deadline = q.ObservedMasterHoldUntil.UTC().Format(time.RFC3339)
+			}
+			recorded := "its Pod " + q.ObservedMasterPodUID
+			if q.ObservedMasterPodUID == "" {
+				recorded = "a Pod of it (no Pod read yet)"
+			}
+			why = fmt.Sprintf("started beside %s as the only active master; the kubelet confirmed the end of its "+
+				"Pod %s, and another active master rebases the quarantine only once %s answers as no "+
+				"active master or ends; without either by the deadline %s, the quarantine becomes "+
+				"WriteQuarantinedMasterChanged; members: %s",
+				q.ObservedMaster, q.ObservedMasterLeavingPodUID, recorded, deadline,
+				quarantineMemberText(q.Members))
+			break
+		}
+		if q.ObservedMasterLeavingConfirmed && q.ObservedMasterLeavingPodUID != "" {
+			why = fmt.Sprintf("started beside %s as the only active master; the kubelet confirmed the end of its "+
+				"Pod %s, and one other active master rebases the quarantine; members: %s", q.ObservedMaster,
+				q.ObservedMasterLeavingPodUID, quarantineMemberText(q.Members))
+			break
+		}
 		why = fmt.Sprintf("%s is the only active master, and not verified as no active master: %s",
 			q.ObservedMaster, quarantineMemberText(q.Members))
 	case databasev1alpha1.WriteQuarantinedMemberReturning:
