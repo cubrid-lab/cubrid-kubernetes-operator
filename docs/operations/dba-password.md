@@ -134,7 +134,7 @@ about 30 seconds; a check in which an HA slave cannot tell or is not asked is
 retried after about 30 seconds at most three times in a row, also when
 another member refused the value. The time the kubelet takes to update the mounted file
 (about a minute) also limits the rate. See
-[Changing the password is not supported](#changing-the-password-is-not-supported),
+[Changing the password](#changing-the-password),
 which describes how a changed value is reported.
 On a standalone cluster a wrong value also stops the next start of the DB
 container ([Restarting after a changed value](#restarting-after-a-changed-value)).
@@ -182,7 +182,7 @@ database, if one could tell, accepted it.
 | `DBAPasswordKeyEmpty` | The key is empty, or holds only a line feed |
 | `DBAPasswordValueInvalid` | The value exceeds 31 bytes, CUBRID's own bound, or contains NUL, CR, a line feed other than the one optional trailing newline, another ASCII control byte (including tab and Ctrl+C), or DEL. These bytes are refused because a terminal password prompt may interpret them as editing, signals or flow control |
 | `DBAPasswordSecretReadFailed` | The Operator could not read the Secret, for example for lack of permission; it retries with backoff |
-| `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused on at least one member: it is not that member's current DBA password. The message names the members that refused it and, on an HA cluster whose members disagree, those that accepted it (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
+| `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused on at least one member: it is not that member's current DBA password. The message names the members that refused it and, on an HA cluster whose members disagree, those that accepted it (see [Changing the password](#changing-the-password)) |
 
 The message names the Secret and the key, never the value. A new problem also
 records a Warning Event with the same reason.
@@ -208,8 +208,8 @@ treat a successful HA restart as proof that the Secret matches. Once the
 StatefulSet exists, the Operator reconciles the cluster again at least every
 5 minutes, and reads the Secret again each time, so a
 removed or unusable Secret is reported within about that time. A changed value
-that is still usable is reported as described under "Changing the password is
-not supported" below. A `True` condition says the Secret was usable when last
+that is still usable is reported as described under "Changing the password"
+below. A `True` condition says the Secret was usable when last
 checked, not that a login with it works; the interval is between checks, not a
 bound.
 
@@ -242,7 +242,7 @@ resolve, so no member runs and the HA bootstrap does not start until it does.
   `<cluster>-rw` and `<cluster>-ro`; Kind runs all members on one node.
 
 A changed value is reported on an HA cluster as on a standalone one (see
-[Changing the password is not supported](#changing-the-password-is-not-supported)),
+[Changing the password](#changing-the-password)),
 except that the Operator asks every member: the primary in
 `status.currentPrimary`, resolved and ready in the same reconcile, and each
 member that is ready as a slave (#1012). Each member keeps its own copy of the
@@ -304,21 +304,23 @@ in an offline backup of any value POC-64 set, nor in the database directory,
 restore the database and log in with the old password, and it may be open to
 an offline attack. Protect the backup bucket as you protect the Secret.
 
-## Changing the password is not supported
+## Changing the password
 
-The reference cannot change, and a changed value in the Secret is never
-applied. The running server keeps the password the database has; the kubelet
-updates the mounted file, but nothing sets it as the password.
+The reference cannot change, and the Operator never applies a changed value
+in the Secret by itself. The running server keeps the password the database
+has; the kubelet updates the mounted file, but nothing sets it as the
+password. A restore keeps the password of the database the backup was taken
+from.
 
-In v0.1 there is no supported way to change the DBA password of a running
-cluster, including after a suspected compromise of the current one. A
-restore keeps the password of the database the backup was taken from. The
-maintainers decided on 2026-11-20 that changing the password of an initialized
-cluster is not part of v0.1; it is tracked as backlog work in #1012.
-
-A manual procedure for HA clusters is being evaluated; see
-[A manual change on an HA cluster (draft)](#a-manual-change-on-an-ha-cluster-draft).
-It has been tried only in local Docker and is not supported yet.
+The supported way to change the DBA password of a running HA cluster, also
+after a suspected compromise of the current one, is the manual procedure
+under [Changing the password of a running HA cluster](#changing-the-password-of-a-running-ha-cluster):
+you change the password by hand on every member, put the new value in the
+Secret, and the Operator checks that every member accepts it. The procedure
+was validated on HA clusters only; it has not been tried on a standalone
+cluster. Rotation that the Operator applies by itself, without the manual
+steps, is backlog work in
+[#1166](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1166).
 
 **How a changed value is reported.** While the member of a standalone
 cluster is ready, or while an HA cluster has a resolved primary
@@ -385,16 +387,65 @@ kubelet takes to update the mounted file (up to its sync period, about a
 minute by default). An Operator that restarts keeps nothing about the check:
 it asks again at its next reconcile and reports the same state.
 
-### A manual change on an HA cluster (draft)
+### Changing the password of a running HA cluster
 
-> [!CAUTION]
-> **Draft.** The steps below were tried on a three-member CUBRID 11.4.7.1995
-> HA group in Docker, outside Kubernetes, with `docker exec -it` standing in
-> for `kubectl exec -it` ([POC-74](../poc/poc74/README.md), two trials, #1012),
-> and a Kind e2e step runs them on a three-member HA cluster with the Operator
-> and its Brokers ([Tested on Kind](#tested-on-kind)). They have **not** been
-> run on the VM lab, and they are not a supported procedure. Do not rely on
-> them for a production cluster.
+This is the supported way to change the DBA password of a running HA cluster
+(maintainer decision of 2026-11-26 on
+[#1012](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1012#issuecomment-7178159077)).
+The steps below were validated, all on CUBRID 11.4.7.1995:
+
+- in local Docker, on a three-member HA group outside Kubernetes, with
+  `docker exec -it` standing in for `kubectl exec -it`
+  ([POC-74](../poc/poc74/README.md), two trials);
+- on Kind, by an e2e step on a three-member HA cluster with the Operator and
+  its Brokers ([Tested on Kind](#tested-on-kind));
+- on the VM lab on 2026-11-26 UTC, on a new three-member HA cluster with
+  Brokers: the steps, the Secret update, then the deletion of a slave's Pod
+  and a failover (the primary's Pod deleted). Every member, and `-rw` and
+  `-ro`, accepted the new value and refused the old one before and after the
+  restart and the failover; every acknowledged write was on every member; no
+  copier or applier logged `-171`; and neither value was found in the
+  cluster's objects, the Operator and member logs, the members' files or the
+  run's evidence
+  ([result on #1012](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/1012#issuecomment-7178914940)).
+
+#### Rules for the change
+
+- **Use a maintenance window.** Between the first and the last
+  `set_password` the members have different passwords: about 4 seconds on
+  the VM lab, 61 seconds in POC-74. A failover in that window can promote a
+  member that still has the old password. If a failover happens during the
+  change, run steps 2 to 6 again on every member, typing at csql's prompt the
+  value that member currently accepts.
+- **Change every member.** A member that is down or being seeded during the
+  change keeps the old password. Run steps 2 to 6 on it once it is back and
+  in its HA group. Until then the Operator names it among the members that
+  refuse the Secret's value.
+- **Open sessions stay open.** `set_password` does not end sessions that
+  logged in before it. After a suspected compromise, also run the last steps
+  under [Ending open sessions](#ending-open-sessions), which restart the
+  Brokers and then the members.
+- **Old backups keep the old password.** A backup taken before the change
+  restores only with the old password, which the restored cluster's Secret
+  must then hold ([Restoring from a backup](#restoring-from-a-backup)). Record
+  which password belongs to which backup, for example by noting the time of
+  the change against the backups' completion times, and keep the old value as
+  safe as the new one for as long as you keep those backups.
+- **The procedure relies on a csql option that csql does not document.**
+  Step 4 runs csql with `--write-on-standby`, which csql's help does not
+  list. It worked in POC-74, on Kind and on the VM lab. The CUBRID engine
+  team has not confirmed that it is supported: nobody has an answer yet.
+  What else the option permits on a standby is not known.
+- **Expect `DBAPasswordRotationUnsupported` during the change.** From the
+  first `set_password` until every member's mounted file holds the new value
+  and the Operator's next check runs, the Secret's value is not the password
+  of every member, so the Operator reports `DBAPasswordSecretResolved=False`
+  with `DBAPasswordRotationUnsupported` and names the members
+  ([How a changed value is reported](#changing-the-password)). On the VM lab,
+  every member's mounted file held the new value about 1 minute after the
+  Secret update, and the Condition returned to `True` 5 minutes 22 seconds
+  after the update, at the Operator's 5-minute poll. If it stays `False`
+  after that, the members it names do not accept the Secret's value.
 
 **Do not use `ALTER USER dba PASSWORD` on a running HA member.** CUBRID
 replicates `ALTER USER`, like every DDL statement, as its SQL text. In POC-74
@@ -416,7 +467,13 @@ Before you start:
 - the new value follows [What the API accepts](#what-the-api-accepts), with
   any single quote doubled in the statement below.
 
-Steps, as tried in Docker:
+Steps. The same statements and options were used in POC-74, on Kind and on the
+VM lab. The csql commands connect to the member's own server by its hostname
+(`"$0@$(hostname)"`), as the Kind step and the VM-lab run did, and not as
+`<db>@localhost`: over the local Unix socket that `localhost` uses, csql can
+print the `-199`/`-111` pair of a lost session after a statement succeeded
+(#238). Seeing it after the change could make you think the change failed and
+run it again with the old password, which no longer works.
 
 1. On your workstation, write the statement into a file only you can read
    (`umask 077`, with an editor, not on a command line, so it is not in your
@@ -431,25 +488,25 @@ Steps, as tried in Docker:
    `kubectl exec -i <pod> -c <db container> -- bash -c 'umask 077; cat > /tmp/pwchange.sql' < pwchange.sql`.
 3. On the primary, start csql on a terminal and type the **current** password
    at its `Enter Password :` prompt:
-   `kubectl exec -it <primary pod> -c <db container> -- bash -c 'exec csql -u dba <db>@localhost'`.
+   `kubectl exec -it <primary pod> -c <db container> -- bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql -u dba "$0@$(hostname)"' <db>`.
    At the `csql>` prompt, enter `;read /tmp/pwchange.sql`, then `;run`. csql
    answers `2 command(s) successfully processed.`; then `;exit`. `;read`
    loads the file without showing it, so the new value is never typed or
    shown.
 4. Right after, do the same on each other member, with
-   `bash -c 'exec csql --sysadm --write-on-standby -u dba <db>@localhost'`
+   `bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql --sysadm --write-on-standby -u dba "$0@$(hostname)"' <db>`
    (a standby refuses the change otherwise; the prompt is `sysadm>`). Until
    every member is done, the members have different passwords, and a
    failover in between would promote a member that still has the old one.
 5. Remove the file from every member:
    `kubectl exec <pod> -c <db container> -- rm -f /tmp/pwchange.sql`, and
    delete your local copy.
-6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'exec csql -u dba -c "SELECT 1" <db>@localhost'`
+6. Check every member: `kubectl exec -it <pod> -c <db container> -- bash -c 'PATH="${CUBRID}/bin:${PATH}" exec csql -u dba -c "SELECT 1" "$0@$(hostname)"' <db>`
    must accept the new password and answer `Incorrect or missing password.`
    for the old one.
 7. Put the new value in the Secret. Until the kubelet updates every member's
    mounted file, the Operator reports `DBAPasswordRotationUnsupported`
-   ([How a changed value is reported](#changing-the-password-is-not-supported)).
+   ([How a changed value is reported](#changing-the-password)).
    It reports `True` only once every member accepts the Secret's value, so a
    member that was skipped in steps 3 and 4 stays reported by name.
    The Secret must hold the new value before any member is seeded again,
@@ -465,10 +522,70 @@ and a backup taken before the change restored with the old password only.
 Sessions that were logged in before the change stayed logged in and kept
 working, so after a suspected compromise this change alone does not end them.
 
-Not covered by POC-74: the Brokers and the `-rw` and `-ro` Services, drivers,
-`kubectl exec` itself, a member that is down or being seeded during the change
-(it keeps the old password), a lagging slave, what `--write-on-standby` (an
-option not listed in csql's help) changes beyond the password, and the VM lab.
+Not covered by POC-74, the Kind step or the VM-lab run: a member that is down
+or being seeded during the change (it keeps the old password), a lagging
+slave, an Operator restart during the change, `backupdb -C` after the change
+on Kubernetes, and what `--write-on-standby` changes beyond the password. Two
+cases are rules, not tested paths: a `set_password` that fails or is mistyped
+on one member part way through, and running the change again on every member
+after a failover in the window. The
+Brokers, the `-rw` and `-ro` Services and `kubectl exec` were covered on Kind
+and on the VM lab.
+
+#### Ending open sessions
+
+After a suspected compromise, end the sessions that logged in before the
+change. Run these steps after step 7, once `DBAPasswordSecretResolved` is
+`True` again, in a maintenance window: clients lose their connections, and the
+last member restart is a failover. The member restarts below are the Pod
+deletions the VM-lab run used for its slave restart and its failover; the
+Broker restart was not part of any validation run, and no run checked that an
+open session ended.
+
+8. Restart the Brokers. Every client session through `<cluster>-rw` and
+   `<cluster>-ro` goes through one of the two Broker Deployments, and
+   restarting them ends those sessions. The Deployments replace their Pods one
+   at a time, starting a new Broker before stopping an old one:
+
+   ```sh
+   NS="<namespace>"
+   CLUSTER="<cluster>"
+   kubectl -n "$NS" rollout restart deployment/"$CLUSTER"-broker-rw deployment/"$CLUSTER"-broker-ro
+   kubectl -n "$NS" rollout status deployment/"$CLUSTER"-broker-rw --timeout=10m
+   kubectl -n "$NS" rollout status deployment/"$CLUSTER"-broker-ro --timeout=10m
+   ```
+
+9. Restart the members one at a time, the slaves first and the primary last.
+   A member's restart ends the sessions logged in directly on its server, for
+   example a csql session in its container. A Pod deletion
+   bypasses the cluster's disruption budget
+   ([voluntary disruption](../architecture/voluntary-disruption.md#when-a-drain-is-blocked)),
+   so delete the next Pod only once the cluster is healthy again:
+
+   ```sh
+   kubectl -n "$NS" get cubridcluster "$CLUSTER" -o jsonpath='{.status.currentPrimary}{"\n"}'
+   # For each slave, then for the primary:
+   kubectl -n "$NS" delete pod <member> --timeout=5m
+   kubectl -n "$NS" wait pod/<member> --for=condition=Ready --timeout=10m
+   kubectl -n "$NS" get cubridcluster "$CLUSTER" \
+     -o jsonpath='{.status.currentPrimary}{"\n"}{range .status.conditions[*]}{.type}={.status}{"\n"}{end}'
+   ```
+
+   Go on only when `Ready`, `HAReady`, `ReplicationHealthy` and
+   `DBAPasswordSecretResolved` are `True`, `status.currentPrimary` names a
+   member, and step 6's check passes on the member that was restarted. The
+   Condition can still show `True` from before the restart, because the
+   Operator asks again only every 5 minutes, so it alone does not show that
+   the new Pod accepts the new value. The member's termination grace period is 120 seconds, so the
+   delete can take that long; if `kubectl wait` reports that the Pod is not
+   found, run it again once the StatefulSet has created the Pod. Deleting the
+   primary's Pod makes another member the master, and writes during the
+   switch fail: on the VM lab the new primary was there after 28 seconds and
+   2 writes failed, and the cluster ended with those four Conditions `True`.
+   A restarted
+   member starts heartbeat without a password check
+   ([Restarting after a changed value](#restarting-after-a-changed-value)),
+   so after the restarts check the new password on every member as in step 6.
 
 #### Tested on Kind
 

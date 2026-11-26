@@ -179,9 +179,12 @@ alignment gaps are tracked in the scenario contract.
   ([docs/operations/dba-password.md](./docs/operations/dba-password.md)).
   Every other database is created with an empty DBA password (#801), so
   every client the Broker NetworkPolicy admits can connect to it as `dba`.
-  Changing the password later is not supported; the Operator reports a
-  changed Secret value as `DBAPasswordRotationUnsupported` (on an HA cluster
-  it asks every member) and does not apply it.
+  The password of a running HA cluster is changed by hand on every member
+  and then in the Secret
+  ([the supported procedure](./docs/operations/dba-password.md#changing-the-password-of-a-running-ha-cluster)).
+  The Operator never applies a changed Secret value itself: it checks every
+  member and reports a value that is not every member's password as
+  `DBAPasswordRotationUnsupported`.
 - **No traffic is encrypted:** not between clients and Brokers, Brokers and
   the database, members, or the Operator and the Instance Manager. The
   Instance Manager requires a bearer token.
