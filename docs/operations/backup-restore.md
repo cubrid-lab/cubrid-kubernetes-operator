@@ -42,7 +42,9 @@ created backup. A recovery needs its own object-storage configuration and
 access to that manifest and its objects. Check the database name, full-backup
 level and engine series against the
 [restore contract](../adr/0008-restore-semantics.md). A password-bearing
-backup retains that password; follow the [DBA password guide](dba-password.md).
+backup retains that password, also after the password was
+[changed](dba-password.md#changing-the-password-of-a-running-ha-cluster); follow
+the [DBA password guide](dba-password.md).
 Do not print credential values to compare them.
 
 Plan a distinct recovery cluster name and fresh storage. There is no
